@@ -39,8 +39,8 @@
 
 ## 4. Native requirements (`native2`)
 
-Everything below already has an FFI entry **in the existing engine** — no new crate needed; the
-task is Dart wiring + one addition:
+Everything below is reimplemented in `native2/engine` (parity with the FFI entries the legacy
+engine already has); the task is the rewrite plus Dart wiring, with one addition:
 
 | Behaviour | FFI | Note |
 |---|---|---|

@@ -105,8 +105,9 @@ final class _Compound {
   final List<_AttrSel> attrs;
   final List<String> pseudos;
   final List<String> nots;
+  final List<String> has;
 
-  _Compound(this.tag, this.id, this.classes, this.attrs, this.pseudos, this.nots);
+  _Compound(this.tag, this.id, this.classes, this.attrs, this.pseudos, this.nots, this.has);
 
   static _Compound parse(String src) {
     String? tag;
@@ -115,6 +116,7 @@ final class _Compound {
     final attrs = <_AttrSel>[];
     final pseudos = <String>[];
     final nots = <String>[];
+    final has = <String>[];
 
     var i = 0;
     while (i < src.length) {
@@ -163,6 +165,8 @@ final class _Compound {
           final inner = src.substring(start, i - 1);
           if (name == 'not') {
             nots.add(inner);
+          } else if (name == 'has') {
+            has.add(inner);
           } else {
             pseudos.add('$name($inner)');
           }
@@ -183,7 +187,7 @@ final class _Compound {
         }
       }
     }
-    return _Compound(tag, id, classes, attrs, pseudos, nots);
+    return _Compound(tag, id, classes, attrs, pseudos, nots, has);
   }
 
   bool matches(Element el) {
@@ -203,6 +207,9 @@ final class _Compound {
     }
     for (final not in nots) {
       if (selectorMatches(el, not)) return false;
+    }
+    for (final inner in has) {
+      if (!el.descendants.any((d) => selectorMatches(d, inner))) return false;
     }
     return true;
   }
@@ -231,8 +238,23 @@ bool _matchPseudo(Element el, String pseudo) {
       return _matchNth(el, arg!);
     case 'nth-of-type':
       return _matchNthOrdinal(_siblingsOfType(el).toList().indexOf(el) + 1, arg!);
+    case 'contains':
+      return el.text.contains(_unquote(arg!));
+    case 'has':
+      // Parsed structurally in [_Compound.has]; kept here for compound
+      // strings that bypass the parser.
+      return el.descendants.any((d) => selectorMatches(d, arg!));
   }
   return true;
+}
+
+/// A quoted (`'x'`/`"x"`) pseudo argument, unquoted.
+String _unquote(String s) {
+  final t = s.trim();
+  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+    return t.substring(1, t.length - 1);
+  }
+  return t;
 }
 
 Iterable<Element> _siblingsOfType(Element el) => (el.parent?.elements ?? [el]).where((e) => e.tag == el.tag);

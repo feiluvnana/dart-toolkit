@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
 /// ANSI colour and weight for terminal text: `'Done!'.green`, `'Error!'.red.bold`.
@@ -25,13 +27,67 @@ extension AnsiText on String {
 
 /// Terminal output, prompts and progress, all one word.
 ///
+/// Prompts are async and never block the event loop: while a `Tui` or a pipe
+/// is active they keep resolving from queued input.
+///
 /// ```dart
 /// Cli.print('Done!'.green);
-/// final name = Cli.ask('Your name?');
-/// final ok   = Cli.confirm('Proceed?');
+/// final name = await Cli.ask('Your name?');
+/// final ok   = await Cli.confirm('Proceed?');
 /// final bar  = Cli.bar(total: 100);
 /// ```
 abstract final class Cli {
+  static final Queue<String> _pending = Queue<String>();
+  static final Queue<Completer<String?>> _waiters = Queue<Completer<String?>>();
+  static StreamSubscription<String>? _sub;
+  static bool _inputDone = false;
+
+  /// Overrides the line source (tests, or a `Tui`-driven prompt feeder).
+  /// `null` restores reading from `stdin`.
+  static set testLines(Stream<String>? lines) {
+    _sub?.cancel();
+    _sub = null;
+    _pending.clear();
+    _inputDone = false;
+    while (_waiters.isNotEmpty) {
+      _waiters.removeFirst().complete(null);
+    }
+    if (lines != null) _subscribe(lines);
+  }
+
+  static void _subscribe(Stream<String> lines) {
+    _sub = lines.listen(
+      (line) {
+        if (_waiters.isNotEmpty) {
+          _waiters.removeFirst().complete(line);
+        } else {
+          _pending.add(line);
+        }
+      },
+      onDone: () {
+        _inputDone = true;
+        while (_waiters.isNotEmpty) {
+          _waiters.removeFirst().complete(null);
+        }
+      },
+    );
+  }
+
+  static void _ensureInput() {
+    if (_sub != null) return;
+    _subscribe(stdin.transform(utf8.decoder).transform(const LineSplitter()));
+  }
+
+  /// Reads one input line without blocking the event loop.
+  static Future<String?> _readLine() {
+    _ensureInput();
+    if (_pending.isNotEmpty) return Future.value(_pending.removeFirst());
+    if (_inputDone) return Future.value(null);
+    final c = Completer<String?>();
+    _waiters.add(c);
+    return c.future;
+  }
+
   /// Writes [msg] and a newline.
   static void print(Object msg) => stdout.writeln(msg);
 
@@ -39,33 +95,34 @@ abstract final class Cli {
   static void out(Object msg) => stdout.write(msg);
 
   /// Asks a question and answers the line the user types.
-  static String ask(String msg) {
+  static Future<String> ask(String msg) async {
     stderr.write('$msg ');
-    return stdin.readLineSync() ?? '';
+    return await _readLine() ?? '';
   }
 
   /// Asks a yes/no question. Answers `true` for `y`/`yes`.
-  static bool confirm(String msg, {bool or = false}) {
+  static Future<bool> confirm(String msg, {bool or = false}) async {
     stderr.write('$msg [y/n] ');
-    final line = stdin.readLineSync()?.trim().toLowerCase();
+    final line = (await _readLine())?.trim().toLowerCase();
     if (line == null || line.isEmpty) return or;
     return line == 'y' || line == 'yes';
   }
 
   /// Asks the user to pick one of [options], by number. Answers the index.
-  static int choose(String msg, List<String> options, {int or = 0}) {
+  static Future<int> choose(String msg, List<String> options, {int or = 0}) async {
     stderr.writeln(msg);
     for (var i = 0; i < options.length; i++) {
       stderr.writeln('  ${i + 1}) ${options[i]}');
     }
     stderr.write('Choice [${or + 1}] ');
-    final n = int.tryParse(stdin.readLineSync()?.trim() ?? '');
+    final n = int.tryParse((await _readLine())?.trim() ?? '');
     if (n == null || n < 1 || n > options.length) return or;
     return n - 1;
   }
 
   /// A determinate progress [Bar] of [total] units.
-  static Bar bar({required int total, String? label, String? unit}) => Bar(total: total, label: label, unit: unit);
+  static Bar bar({required int total, String? label, String? unit, int size = 24}) =>
+      Bar(total: total, label: label, unit: unit, size: size);
 
   /// Shows [label] while [fn] runs, then clears it.
   static Future<T> spin<T>(String label, Future<T> Function() fn) async {
@@ -79,18 +136,87 @@ abstract final class Cli {
   }
 }
 
+/// The shared live region: every live [Bar] owns one line of it, so multiple
+/// bars redraw without corrupting each other. Text on `stdout` is untouched;
+/// bars draw on `stderr` only.
+final class _LiveRegion {
+  static final List<Bar> _bars = [];
+  static var _drawn = 0;
+
+  static bool get live => stderr.hasTerminal;
+
+  static void attach(Bar bar) {
+    if (!bar._live) return;
+    _bars.add(bar);
+    draw();
+  }
+
+  static void draw() {
+    if (!live || _bars.isEmpty) return;
+    final buf = StringBuffer();
+    if (_drawn > 0) buf.write('\x1b[${_drawn}A');
+    var i = 0;
+    for (final bar in _bars) {
+      buf.write('\r\x1b[K${bar._line}');
+      if (i < _bars.length - 1 || _drawn <= _bars.length) buf.write('\n');
+      i++;
+    }
+    if (_bars.length < _drawn) {
+      // Fewer bars than lines drawn: blank the leftover lines.
+      for (var k = _bars.length; k < _drawn; k++) {
+        buf.write('\r\x1b[K\n');
+      }
+      buf.write('\x1b[${_drawn - _bars.length}A');
+    }
+    stderr.write(buf.toString());
+    _drawn = _bars.length;
+  }
+
+  static void detach(Bar bar, String doneLine) {
+    if (!bar._live) {
+      if (doneLine.isNotEmpty) stderr.writeln(doneLine);
+      return;
+    }
+    _bars.remove(bar);
+    if (_drawn > 0) {
+      // Rewind over the drawn lines, clear them, print the completion above
+      // the remaining bars.
+      stderr.write('\x1b[${_drawn}A\r\x1b[K$doneLine\n');
+      _drawn = 0;
+      draw();
+      if (_bars.isEmpty) _drawn = 0;
+    } else if (doneLine.isNotEmpty) {
+      stderr.writeln(doneLine);
+    }
+  }
+}
+
 /// A live progress bar; [set] advances it, [done] finishes the line.
+///
+/// Each bar owns one line of the shared live region, so several bars tick
+/// side by side without corruption:
+///
+/// ```dart
+/// final bars = [for (final url in urls) Cli.bar(total: 100, label: url)];
+/// await urls.parallelize((u) => Http.get(u).pipe(File('f'), onProgress: (p) => bars[0].set(p)));
+/// for (final b in bars) { b.done(); }
+/// ```
 final class Bar {
   final int total;
   final String? label;
   final String? unit;
+
+  /// The bar width in cells.
+  final int size;
   final Stopwatch _clock = Stopwatch()..start();
   int _value = 0;
   int _drawn = -1;
   bool _live = false;
+  bool _done = false;
 
-  Bar({required this.total, this.label, this.unit}) {
+  Bar({required this.total, this.label, this.unit, this.size = 24}) {
     _live = stderr.hasTerminal;
+    _LiveRegion.attach(this);
   }
 
   /// The value shown.
@@ -98,6 +224,7 @@ final class Bar {
 
   /// Sets the completed amount to [v] (clamped to `[0, total]`).
   void set(int v) {
+    if (_done) return;
     _value = v < 0 ? 0 : (v > total ? total : v);
     _draw();
   }
@@ -105,24 +232,33 @@ final class Bar {
   /// Adds one unit.
   void tick() => set(_value + 1);
 
-  void _draw() {
-    if (!_live) return;
-    if (_value == _drawn) return;
-    _drawn = _value;
-    const width = 24;
+  String get _line {
     final ratio = total <= 0 ? 1.0 : _value / total;
-    final filled = (ratio * width).round();
-    final bar = '${'█' * filled}${'░' * (width - filled)}';
+    final filled = (ratio * size).round().clamp(0, size);
+    final bar = '${'█' * filled}${'░' * (size - filled)}';
     final prefix = label == null ? '' : '$label ';
     final suffix = unit == null ? '' : ' $_value/$total $unit';
-    stderr.write('\r$prefix[$bar] ${(ratio * 100).toStringAsFixed(0)}%$suffix');
+    return '$prefix[$bar] ${(ratio * 100).toStringAsFixed(0)}%$suffix';
+  }
+
+  void _draw() {
+    if (!_live || _done) return;
+    if (_value == _drawn) return;
+    _drawn = _value;
+    _LiveRegion.draw();
   }
 
   /// Finishes the bar, leaving a completion line.
   void done() {
-    if (_live) stderr.write('\r\x1b[K');
+    if (_done) return;
+    _done = true;
     final secs = _clock.elapsedMilliseconds / 1000;
     final prefix = label == null ? '' : '$label ';
-    if (_live || label != null) stderr.writeln('$prefix done ($_value/$total) in ${secs.toStringAsFixed(1)}s');
+    final line = '$prefix done ($_value/$total) in ${secs.toStringAsFixed(1)}s';
+    if (_live) {
+      _LiveRegion.detach(this, line);
+    } else if (label != null) {
+      stderr.writeln(line);
+    }
   }
 }

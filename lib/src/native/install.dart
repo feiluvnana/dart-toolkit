@@ -55,7 +55,7 @@ extension _Installer on NativeHandle {
     }
   }
 
-  /// [dest]'s crate: `native/` of `native/lib/<os>_<arch>/<file>`.
+  /// [dest]'s crate: `native2/` of `native2/lib/<os>_<arch>/<file>`.
   static String _crateOf(String dest) => File(dest).parent.parent.parent.path;
 
   /// Fetches this platform's build from the release `native-<hash of the sources>`, which

@@ -11,7 +11,7 @@ import 'support.dart';
 
 void main() {
   final file = NativeBridge.fileOf('native');
-  final built = '${Directory.current.path}/native/lib/${NativeBridge.target}/$file';
+  final built = '${Directory.current.path}/native2/lib/${NativeBridge.target}/$file';
 
   /// Why the native library does not load in a fresh process with `DART_TOOLKIT_NATIVE` set to
   /// [override]: the variable is read once, when the library is first asked for.
@@ -64,7 +64,7 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
 
   test('DART_TOOLKIT_NATIVE empty is unset, and relative is against the working directory', () async {
     expect(await reason(''), 'null');
-    expect(await reason('native/lib/${NativeBridge.target}/$file'), 'null');
+    expect(await reason('native2/lib/${NativeBridge.target}/$file'), 'null');
   });
 
   test('DART_TOOLKIT_NATIVE also says where the torrent library is: beside it', () async {
@@ -120,10 +120,10 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
 
     setUp(() async {
       root = '${tempDir('tk_pkg_')}';
-      File('$root/native/Cargo.toml')
+      File('$root/native2/Cargo.toml')
         ..createSync(recursive: true)
         ..writeAsStringSync('[package]\nname = "x"\n');
-      dest = '$root/native/lib/${NativeBridge.target}/$file';
+      dest = '$root/native2/lib/${NativeBridge.target}/$file';
       handle = NativeBridge.of('native', NativeBridge.main.abi, root: root);
       asked = [];
       served = {};
@@ -138,7 +138,7 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
 
     /// The asset and digest a release of [root]'s sources would publish.
     String asset() =>
-        '/releases/native-${NativeBridge.sourceHash('$root/native')}/${NativeBridge.assetOf('native', NativeBridge.target)}';
+        '/releases/native-${NativeBridge.sourceHash('$root/native2')}/${NativeBridge.assetOf('native', NativeBridge.target)}';
 
     void publish({String? digest}) {
       final gz = gzip.encode(File(built).readAsBytesSync());
@@ -176,7 +176,7 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
       expect(steps, contains('downloading dart_toolkit_native'));
       expect(handle.reason, isNull);
       expect(
-        Directory('$root/native/lib/${NativeBridge.target}').listSync().map((e) => e.path),
+        Directory('$root/native2/lib/${NativeBridge.target}').listSync().map((e) => e.path),
         isNot(contains(anyOf(endsWith('.gz'), endsWith('.tmp')))),
       );
       asked.clear();
@@ -192,7 +192,7 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
       await task;
       expect(steps, containsAll(['compiling dart_toolkit_native', 'compiling x']));
       expect(handle.reason, isNull);
-      expect(Directory('$root/native/target').existsSync(), isFalse, reason: 'the cargo tree it made is deleted');
+      expect(Directory('$root/native2/target').existsSync(), isFalse, reason: 'the cargo tree it made is deleted');
     });
 
     test('a release without a published digest is not trusted', () async {
@@ -226,14 +226,14 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
         ),
       );
       expect(
-        Directory('$root/native/target').existsSync(),
+        Directory('$root/native2/target').existsSync(),
         isFalse,
         reason: 'a failed build leaves no cargo tree (NAT-4)',
       );
     });
 
     test('a library at another ABI is replaced in its place', () async {
-      final torrent = '${Directory.current.path}/native/lib/${NativeBridge.target}/${NativeBridge.fileOf('torrent')}';
+      final torrent = '${Directory.current.path}/native2/lib/${NativeBridge.target}/${NativeBridge.fileOf('torrent')}';
       File(dest).parent.createSync(recursive: true);
       File(torrent).copySync(dest);
       expect(handle.reason, contains('reported ABI version ${NativeBridge.torrent.abi}'));

@@ -42,12 +42,13 @@ one-shots, `HashStream`), `hasher.dart` (`AlgoWriter` **not** extending `Writer`
 
 ## 4. Native requirements (`native2`)
 
-**Highest-value native wiring (hashes are small, hot, and already built).** Deadline exports
-already exist in `native/src/digest.rs` / `native/src/lib.rs`: `tk_digest_*` (sha1/sha256/sha512/
-md5/xxh — *real* xxh3 available in Rust), `tk_mac_new`, `tk_hmac`, `tk_bb3_*`(?), `crc32` in stree.
+**Highest-value native rewrite (hashes are small and hot).** Legacy `native/src/digest.rs` is
+the parity reference: `tk_digest_*` (sha1/sha256/sha512/md5/xxh — *real* xxh3 available),
+`tk_mac_new`, `tk_hmac`, `crc32` are reimplemented in `native2/engine` and differential-tested
+against it.
 
-- Rewire `AlgoWriter.write → tk_digest_new/update/finish` with the standard stop byte; keep a
-  pure-Dart `FallbackAlgo` behind a switch (r53 fallback), do not fork the algorithm set.
+- Rewire `AlgoWriter.write → tk_digest_new/update/finish` with the standard stop byte; the
+  pure-Dart fallback exists only until cutover, then is deleted (r50) — never fork the algorithm set.
 - `xxh3` returns the true `xxh64` + `xxh128` pair; the storage form must include a **digest kind
   tag** so `$lib` dedupe never mixes XXH64 and XXH3.
 - The rest (`hex/base32/crc32/b64`) stays Dart — no native needed, but the FFI can carry `crc32`.
@@ -61,9 +62,10 @@ md5/xxh — *real* xxh3 available in Rust), `tk_mac_new`, `tk_hmac`, `tk_bb3_*`(
 2. **Make `AlgoWriter` implement `Writer`** (r1 shape): `write(Object)` chunk, `flush` no-op, and a
    `digest()` terminal method (kept distinct from `close()` so a digest can be piped-into a file
    and still be read). Add `Hash.sha256` + `.writer()` factory mirroring the proposal noun.
-3. **Native digest binding (Phase 1):** `tk_digest_new(tag)` → handle; `tk_digest_update(h, ptr,
-   len)`; `tk_digest_finish(h, out(32)) ways`; `tk_digest_free`. `Hash.sha256(file)` uses the
-   native algo through `NativeInstall` with a Dart fallback; verify `xxh128`.
+3. **Native digest binding (rewrite):** `tk_digest_new(tag)` → handle; `tk_digest_update(h, ptr,
+   len)`; `tk_digest_finish(h, out(32)) ways`; `tk_digest_free`, reimplemented in
+   `native2/engine` and parity-tested against legacy. `Hash.sha256(file)` uses the rewritten
+   algo; the Dart fallback is deleted at cutover; verify `xxh128`.
 4. **Get `xxh3` correct:** switch the `xxh3` label to real XXH3; add `Hash.sha256.writer()`-style
    `Hash.xxh3.writer()` for `$lib`; document the XXH64 nuance in CHANGELOG.
 5. **Constant-time `checksum`/`verify`:** implement `_ct_eq(Uint8List a, Uint8List b)` (xor-accum
@@ -73,4 +75,4 @@ md5/xxh — *real* xxh3 available in Rust), `tk_mac_new`, `tk_hmac`, `tk_bb3_*`(
 7. **Tests** (`test/hash_test.dart` for lib2): `sha256(File)` == `sha256` of its bytes; the
    `pipe` form `makeFile.pipe(Hash.sha256.writer()) → digest == sha256(bytes)`; `xxh3` corpus
    vectors (and XXH64 no longer used by `$lib`); `ct_eq` sanity; HMAC known-answer; streaming a
-   16 MiB file stays linear; native==fallback equality across sha1/224/256/384/512, md5, xxh3.
+   16 MiB file stays linear; rewritten-vs-legacy byte parity across sha1/224/256/384/512, md5, xxh3.

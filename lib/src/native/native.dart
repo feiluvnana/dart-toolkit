@@ -5,7 +5,7 @@ part of '../native.dart';
 /// package's Rust sources.
 ///
 /// Loading one only reads files: `DART_TOOLKIT_NATIVE` (a path, and then nowhere else), beside
-/// the running executable, then `native/lib/<os>_<arch>/` inside the package. [install] is the
+/// the running executable, then `native2/lib/<os>_<arch>/` inside the package. [install] is the
 /// only thing that downloads or compiles.
 ///
 /// ```dart
@@ -93,15 +93,15 @@ final class NativeHandle {
   /// Where [_library] was opened from, so a worker isolate opens that file and looks nowhere else.
   String? _path;
 
-  /// Fills `native/lib/<os>_<arch>/` with this library at [abi]: the release of the package's
+  /// Fills `native2/lib/<os>_<arch>/` with this library at [abi]: the release of the package's
   /// sources from [releases], checked against its published SHA-256, else compiled with [cargo].
   /// One process at a time; one that waited for another's install finds it done. Reports on
   /// [work]: the bytes downloaded, then what cargo compiles. What [Native.install] runs.
   Future<void> install(Work work, {String releases = NativeBridge.releases, String cargo = 'cargo'}) =>
       _install(work, releases, cargo);
 
-  /// Compiles this library from the package's Rust sources into `native/lib/<os>_<arch>/`, as
-  /// `make native` does after an edit to `native/`; blocks until done. Answers the error, or
+  /// Compiles this library from the package's Rust sources into `native2/lib/<os>_<arch>/`, as
+  /// `make native` does after an edit to `native2/`; blocks until done. Answers the error, or
   /// `null` once it is there.
   String? build() => _build();
 
@@ -190,12 +190,12 @@ final class NativeHandle {
     return null;
   }
 
-  /// Where the package keeps this library, `native/lib/<os>_<arch>/<file>`; `null` without the
+  /// Where the package keeps this library, `native2/lib/<os>_<arch>/<file>`; `null` without the
   /// package's Rust sources (a compiled executable has no package).
   String? get _built {
     final root = _root ?? NativeBridge._packageRoot();
-    if (root == null || !File(_join([root, 'native', 'Cargo.toml'])).existsSync()) return null;
-    return _join([root, 'native', 'lib', NativeBridge.target, NativeBridge.fileOf(name)]);
+    if (root == null || !File(_join([root, 'native2', 'Cargo.toml'])).existsSync()) return null;
+    return _join([root, 'native2', 'lib', NativeBridge.target, NativeBridge.fileOf(name)]);
   }
 
   static int _version(DynamicLibrary lib) {
@@ -378,10 +378,10 @@ final class NativeHandle {
 /// Programs ask [Native].
 abstract final class NativeBridge {
   /// `dart_toolkit_native`: digests, archives, content-decoding, charsets, images, piece hashes.
-  static final main = NativeHandle._('native', 14);
+  static final main = NativeHandle._('native', 1);
 
   /// `dart_toolkit_torrent`: the BitTorrent engine.
-  static final torrent = NativeHandle._('torrent', 3);
+  static final torrent = NativeHandle._('torrent', 1);
 
   static List<NativeHandle> get _all => [main, torrent];
 
@@ -431,7 +431,7 @@ abstract final class NativeBridge {
     return '${hex(h >>> 32)}${hex(h & 0xffffffff)}';
   }
 
-  /// This platform's folder under `native/lib/`.
+  /// This platform's folder under `native2/lib/`.
   static String get target {
     final arch = switch (Abi.current()) {
       Abi.macosArm64 || Abi.linuxArm64 || Abi.windowsArm64 => 'arm64',

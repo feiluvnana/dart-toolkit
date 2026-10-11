@@ -1,12 +1,12 @@
-// The native libraries `dart_toolkit_native` and `dart_toolkit_torrent`, built where the package
-// looks for them: `native/lib/<os>_<arch>/`.
+// The rewritten native libraries (native2 ABI 1), built where the package
+// looks for them: `native2/lib/<os>_<arch>/`.
 //
 //   dart run tool/build_native.dart                  this machine                     (make native)
 //   dart run tool/build_native.dart --all            every target it can cross-build  (make native-all)
 //   dart run tool/build_native.dart --release        --all, then the GitHub release a first use
 //                                                    downloads from                   (make native-release)
 //   dart run tool/build_native.dart --copy-to <dir>  this machine's, beside an executable (make bench)
-//   dart run tool/build_native.dart --clean          cargo's tree and native/lib/ gone (make clean)
+//   dart run tool/build_native.dart --clean          cargo's tree and native2/lib/ gone (make clean)
 library;
 
 import 'dart:ffi';
@@ -19,7 +19,7 @@ import 'package:dart_toolkit/path.dart';
 import 'package:dart_toolkit/process.dart';
 import 'package:dart_toolkit/src/native.dart';
 
-/// Every target a release carries, by its `native/lib/` folder.
+/// Every target a release carries, by its `native2/lib/` folder.
 const targets = <String, String>{
   'linux_x64': 'x86_64-unknown-linux-gnu',
   'linux_arm64': 'aarch64-unknown-linux-gnu',
@@ -31,7 +31,7 @@ const targets = <String, String>{
 
 const crates = ['native', 'torrent'];
 
-final nativeDir = Path.cwd / 'native';
+final nativeDir = Path.cwd / 'native2';
 
 Path libOf(String folder, String crate) => nativeDir / 'lib' / folder / NativeBridge.fileOf(crate, folder);
 
@@ -46,7 +46,7 @@ Future<String?> failure(Run command) async => switch (await command.settled) {
   _ => null,
 };
 
-/// [crate] for [folder] into `native/lib/<folder>/`: the host through the package's own build,
+/// [crate] for [folder] into `native2/lib/<folder>/`: the host through the package's own build,
 /// another target through whichever cross tool is here.
 Future<bool> buildOne(String folder, String crate) async {
   Console.info('dart_toolkit_$crate for $folder');
@@ -104,9 +104,9 @@ Future<List<String>> buildAll() async {
 /// target and crate, each with its `.sha256` beside it, which a first use checks the download
 /// against. The sources must be committed, so the hash is what a checkout computes.
 Future<void> release() async {
-  final dirty = await Shell.run('git', args: ['status', '--porcelain', '--', 'native']).text;
+  final dirty = await Shell.run('git', args: ['status', '--porcelain', '--', 'native2']).text;
   if (dirty.trim().isNotEmpty) {
-    Console.exit('native/ has uncommitted changes; commit them first, so a checkout hashes the same');
+    Console.exit('native2/ has uncommitted changes; commit them first, so a checkout hashes the same');
   }
   final built = await buildAll();
   for (final crate in crates) {
@@ -156,10 +156,10 @@ Future<void> release() async {
 final optAll = Option.flag('all', 'Every target this machine can cross-build');
 final optRelease = Option.flag('release', '--all, then upload them as the GitHub release a first use downloads');
 final optCopyTo = Option.of<String>('copy-to', "This machine's libraries into a folder, beside an executable");
-final optClean = Option.flag('clean', "Remove cargo's tree and native/lib/");
+final optClean = Option.flag('clean', "Remove cargo's tree and native2/lib/");
 
 void main(List<String> args) => Cli(
-  'Build the native libraries into native/lib/<os>_<arch>/.',
+  'Build the native libraries into native2/lib/<os>_<arch>/.',
   values: [optAll, optRelease, optCopyTo, optClean],
   handler: (ctx) async {
     if (ctx(optClean)) {

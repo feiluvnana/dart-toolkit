@@ -44,8 +44,8 @@
 
 ## 4. Native requirements (`native2`)
 
-**Flagship-deadline native module** (proposal list has image; `native/src/image.rs` already exists
-with `tk_decode_*`/`tk_encode_*` primitives). native2 restructure (native2_architecture.md §5):
+**Flagship-deadline native module** (proposal list has image; `native/src/image.rs` is the parity
+reference for the `tk_decode_*`/`tk_encode_*` primitives). native2 rewrite (native2_architecture.md §5):
 
 1. **Delegate decode + encode, keep ops in Dart.** `tk_image_decode(bytes, fmt)` → RGBA buffer +
    w/h/stride; `tk_image_encode(rgba, w, h, fmt, quality)` → encoded wrap (u8 slice → `wrap`).

@@ -75,6 +75,13 @@ Nothing has run on Windows. Needs the Rust MSVC toolchain, `nasm`, PowerShell 7 
      `-q` in Windows Terminal, conhost, PowerShell 7 and VS Code, and note the results.
 11. **Required.** When Windows is green, state Windows support in README.
 
+## 2 · lib/ removal (after the roadmap, last)
+
+When `reports/roadmap.md` Phases A–F are green, Phase G moves `lib/lib2/` up to `lib/` and
+deletes the old tree (surface parity for `collection`, `pick`, `scrape`, `testing`, `torrent`,
+`xml`, `xpath` first; `example/`, `tool/` and tests migrated first). Do not start it early:
+until then this file's sections above still test the old surface.
+
 ---
 
 **Not to re-propose.** These were measured or argued and declined: user-agent rotation, GraphQL,
@@ -82,4 +89,4 @@ OpenGraph/JSON-LD helpers, websockets; autoscaled concurrency, bandwidth limits,
 prompt, OSC 52, notifications; extensions on `Future<Doc>`; a default warning for crawl failures;
 double-buffering the Tui frame, AVIF/JPEG XL/HEIC, torrent web seeds/MSE/v2, HTTP/2.
 
-When both sections are done, delete this file. The record is CHANGELOG and CONVENTIONS.
+When all three sections are done, delete this file. The record is CHANGELOG and CONVENTIONS.

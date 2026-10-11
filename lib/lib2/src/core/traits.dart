@@ -7,6 +7,10 @@ abstract interface class Reader {
 }
 
 /// Baseline writable byte sink: files, sockets, subprocess stdin, hash writers.
+///
+/// The [write] contract is precise: a `String` is UTF-8 encoded, a `List<int>` /
+/// `Uint8List` is written verbatim, and anything else is an [ArgumentError].
+/// Sinks must not stringify unknown objects.
 abstract interface class Writer {
   /// Writes [data] (a `String`, `List<int>` or `Uint8List`).
   Future<int> write(Object data);

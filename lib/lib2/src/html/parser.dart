@@ -55,6 +55,7 @@ Doc parseHtml(String source) {
     final selfClose = rawTag.endsWith('/');
     final (name, attrs) = _parseTag(selfClose ? rawTag.substring(0, rawTag.length - 1) : rawTag);
     i = end == -1 ? n : end + 1;
+    _autoClose(stack, name);
     final el = Element(name, attrs);
     stack.last.append(el);
     final lower = name.toLowerCase();
@@ -74,7 +75,92 @@ Doc parseHtml(String source) {
     }
   }
 
+  _implyStructure(root);
   return Doc(root);
+}
+
+/// Closes elements the HTML standard auto-closes: an open `<li>` before the
+/// next `<li>`, an open `<p>` before block starts, open cells before the next
+/// cell or row, an open row before the next row.
+void _autoClose(List<Element> stack, String name) {
+  String top() => stack.length > 1 ? stack.last.tag.toLowerCase() : '';
+  void popTop() {
+    if (stack.length > 1) stack.removeLast();
+  }
+
+  switch (name.toLowerCase()) {
+    case 'li':
+      if (top() == 'li') popTop();
+    case 'p':
+      if (top() == 'p') popTop();
+    case 'td' || 'th':
+      if (top() == 'td' || top() == 'th') popTop();
+    case 'tr':
+      while (top() == 'td' || top() == 'th' || top() == 'tr') {
+        popTop();
+      }
+    case 'tbody' || 'thead' || 'tfoot':
+      while (top() == 'td' ||
+          top() == 'th' ||
+          top() == 'tr' ||
+          top() == 'tbody' ||
+          top() == 'thead' ||
+          top() == 'tfoot') {
+        popTop();
+      }
+    case 'div' ||
+        'h1' ||
+        'h2' ||
+        'h3' ||
+        'h4' ||
+        'h5' ||
+        'h6' ||
+        'ul' ||
+        'ol' ||
+        'dl' ||
+        'table' ||
+        'blockquote' ||
+        'pre' ||
+        'hr' ||
+        'section' ||
+        'article':
+      if (top() == 'p') popTop();
+  }
+}
+
+/// Wraps a fragment without `<html>` in an implied `html > head + body` (as a
+/// browser does), so `find('body')` works on text-only pages. A document with
+/// `<html>` but no `<body>` gains an empty one.
+void _implyStructure(Element root) {
+  Element? htmlEl;
+  for (final child in root.children) {
+    if (child is Element && child.tag.toLowerCase() == 'html') {
+      htmlEl = child;
+      break;
+    }
+  }
+  if (htmlEl == null) {
+    htmlEl = Element('html');
+    final head = Element('head');
+    final body = Element('body');
+    final moved = List<Node>.of(root.children);
+    root.children.clear();
+    for (final child in moved) {
+      body.append(child);
+    }
+    htmlEl.append(head);
+    htmlEl.append(body);
+    root.append(htmlEl);
+    return;
+  }
+  var hasBody = false;
+  for (final child in htmlEl.children) {
+    if (child is Element && child.tag.toLowerCase() == 'body') {
+      hasBody = true;
+      break;
+    }
+  }
+  if (!hasBody) htmlEl.append(Element('body'));
 }
 
 (String, Map<String, String>) _parseTag(String src) {

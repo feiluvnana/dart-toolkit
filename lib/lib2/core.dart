@@ -4,5 +4,6 @@
 /// [Seeker]) and the universal [pipe] primitive that connects them. No dependencies.
 library;
 
+export 'src/core/errors.dart';
 export 'src/core/pipe.dart';
 export 'src/core/traits.dart';

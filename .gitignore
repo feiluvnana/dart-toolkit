@@ -9,6 +9,10 @@ coverage/
 native/target/
 native/lib/
 
+# The native2 rewrite: same rule — its build tree and staged libraries are never committed
+native2/target/
+native2/lib/
+
 # Agent config: the /optimize skills are shared; worktrees and local settings are not
 .claude/*
 !.claude/skills/

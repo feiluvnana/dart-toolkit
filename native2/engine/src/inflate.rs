@@ -1,15 +1,11 @@
-//! Streaming decompression for HTTP `content-encoding`.
+//! Streaming decompression for HTTP `content-encoding`, rewritten.
 //!
-//! One handle per body, fed bytes as they come off the socket and drained of what they
-//! decoded to; `tk_decompress_progress` is the file-to-file counterpart.
-//!
-//! **Output is bounded per call**: a 16 KiB zstd body can decode to half a gigabyte. A call
-//! writes at most its capacity and keeps the rest pending; one that fills it is followed by
-//! another with no input, until one returns less.
-//!
-//! **An early end is an error**: `tk_inflate_finish` asks the decoder whether its stream ended.
-//!
-//! Codec codes are the Dart `_Encoding` enum's: 1 gzip, 3 brotli, 4 zstd.
+//! One handle per body, fed bytes as they arrive off the socket and drained of what they
+//! decoded to. Output is bounded per call: a small body can decode to gigabytes, so a call
+//! writes at most its capacity and keeps the rest pending; a call that fills it is followed
+//! by another with no input, until one returns less. An early end is an error: finish asks
+//! the decoder whether its stream ended. Codec codes are the Dart `_Encoding` enum's:
+//! 1 gzip, 3 brotli, 4 zstd.
 
 use crate::{bytes, bytes_mut, guard, set_error, Handle, Msg};
 use brotli::writer::StandardAlloc;
@@ -40,10 +36,10 @@ impl Write for Sink {
 }
 
 impl Sink {
-    /// Moves what is buffered into `out`; returns how much.
+    /// Moves what is buffered into `out`; answers how much.
     fn drain_into(&self, out: &mut [u8]) -> usize {
-        let mut s = self.0.borrow_mut();
-        let (buf, off) = &mut *s;
+        let mut held = self.0.borrow_mut();
+        let (buf, off) = &mut *held;
         let n = (buf.len() - *off).min(out.len());
         out[..n].copy_from_slice(&buf[*off..*off + n]);
         *off += n;
@@ -74,7 +70,11 @@ impl Inflater {
     fn new(codec: u32) -> Result<Self, String> {
         let sink = Sink::default();
         let codec = match codec {
-            GZIP => Codec::Flate { decoder: Box::new(flate2::write::MultiGzDecoder::new(sink.clone())), sink, flushed: true },
+            GZIP => Codec::Flate {
+                decoder: Box::new(flate2::write::MultiGzDecoder::new(sink.clone())),
+                sink,
+                flushed: true,
+            },
             BROTLI => Codec::Brotli {
                 state: Box::new(BrotliState::new(StandardAlloc::default(), StandardAlloc::default(), StandardAlloc::default())),
                 done: false,
@@ -103,7 +103,7 @@ impl Inflater {
         }
     }
 
-    /// Decodes pending input into `out`, at most its length; returns how much was written.
+    /// Decodes pending input into `out`, at most its length; answers how much was written.
     fn fill(&mut self, out: &mut [u8]) -> Result<usize, String> {
         let mut written = 0;
         match &mut self.codec {
@@ -127,18 +127,23 @@ impl Inflater {
             },
             Codec::Zstd { decoder, hint } => {
                 while written < out.len() {
-                    let mut inb = InBuffer::around(&self.input[self.pos..]);
-                    let mut outb = OutBuffer::around(&mut out[written..]);
-                    *hint = decoder.run(&mut inb, &mut outb).map_err(|e| format!("zstd: {}", e))?;
-                    let (consumed, produced) = (inb.pos(), outb.pos());
+                    // A completed frame stays completed: running the decoder again would turn
+                    // it toward a following concatenated frame and lose the completion.
+                    if self.pos == self.input.len() && *hint == 0 {
+                        break;
+                    }
+                    let mut incoming = InBuffer::around(&self.input[self.pos..]);
+                    let mut outgoing = OutBuffer::around(&mut out[written..]);
+                    *hint = decoder.run(&mut incoming, &mut outgoing).map_err(|e| format!("zstd: {}", e))?;
+                    let (consumed, produced) = (incoming.pos(), outgoing.pos());
                     self.pos += consumed;
                     written += produced;
-                    // Out of input with room to spare means the decoder has nothing left.
+                    // Out of input with room to spare: the decoder has nothing left.
                     if consumed == 0 && produced == 0 || self.pos == self.input.len() && written < out.len() {
                         break;
                     }
                 }
-            }
+            },
             Codec::Brotli { state, done } => {
                 while !*done && written < out.len() {
                     let mut avail_in = self.input.len() - self.pos;
@@ -168,12 +173,12 @@ impl Inflater {
                         }
                     }
                 }
-            }
+            },
         }
         Ok(written)
     }
 
-    /// Whether the stream ended where the body did, once every byte of it has been drained.
+    /// Whether the stream ended where the body did, once every byte has been drained.
     fn finish(&mut self) -> Result<(), String> {
         if !self.fed {
             return Ok(());
@@ -203,7 +208,7 @@ pub extern "C" fn tk_inflate_new(codec: u32) -> Handle {
     }
 }
 
-/// Pushes `len` bytes and decodes into `out`, at most `cap`; returns how many were written.
+/// Pushes `len` bytes and decodes into `out`, at most `cap`; answers how many were written.
 /// Exactly `cap` means more is pending: call again with no bytes until it is less.
 #[no_mangle]
 pub unsafe extern "C" fn tk_inflate_into(h: Handle, ptr: *const u8, len: usize, out: *mut u8, cap: usize) -> i32 {
@@ -215,8 +220,8 @@ pub unsafe extern "C" fn tk_inflate_into(h: Handle, ptr: *const u8, len: usize, 
     })
 }
 
-/// Returns 0 when the stream the handle was fed ended properly, or -1 when the body stopped
-/// short of it. Called once, after the last `tk_inflate_into` has drained everything.
+/// Answers 0 when the fed stream ended properly, -1 when the body stopped short of it.
+/// Called once, after the last `tk_inflate_into` has drained everything.
 #[no_mangle]
 pub unsafe extern "C" fn tk_inflate_finish(h: Handle) -> i32 {
     guard(|| {
@@ -226,10 +231,102 @@ pub unsafe extern "C" fn tk_inflate_finish(h: Handle) -> i32 {
 }
 
 /// Releases the handle; whether the stream was whole is `tk_inflate_finish`'s question.
-
 #[no_mangle]
 pub unsafe extern "C" fn tk_inflate_free(h: Handle) {
     if !h.is_null() {
         drop(Box::from_raw(h as *mut Inflater));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn err() -> String {
+        let mut buf = vec![0u8; 1024];
+        let n = unsafe { tk_common::last_error(buf.as_mut_ptr(), buf.len()) };
+        String::from_utf8_lossy(&buf[..n.max(0) as usize]).to_string()
+    }
+
+    fn round_trip(codec: u32, data: &[u8]) -> Vec<u8> {
+        let h = tk_inflate_new(codec);
+        assert!(!h.is_null(), "new: {}", err());
+        let mut collected = Vec::new();
+        let mut out = vec![0u8; 65536];
+        for chunk in data.chunks(7) {
+            let n = unsafe { tk_inflate_into(h, chunk.as_ptr(), chunk.len(), out.as_mut_ptr(), out.len()) };
+            if n < 0 {
+                eprintln!("codec {} into failed: {}", codec, err());
+            }
+            assert!(n >= 0);
+            collected.extend_from_slice(&out[..n as usize]);
+        }
+        // Drain anything pending with no input.
+        loop {
+            let n = unsafe { tk_inflate_into(h, std::ptr::null(), 0, out.as_mut_ptr(), out.len()) };
+            if n < 0 {
+                eprintln!("codec {} drain failed: {}", codec, err());
+            }
+            assert!(n >= 0);
+            if n == 0 {
+                break;
+            }
+            collected.extend_from_slice(&out[..n as usize]);
+        }
+        let fin = unsafe { tk_inflate_finish(h) };
+        if fin != 0 {
+            eprintln!("codec {} finish failed: {}", codec, err());
+        }
+        assert_eq!(fin, 0);
+        unsafe { tk_inflate_free(h) };
+        collected
+    }
+
+    #[test]
+    fn gzip_and_zstd_round_trip() {
+        let data: Vec<u8> = (0..10000u32).map(|i| (i % 251) as u8).collect();
+        let mut gz = Vec::new();
+        {
+            let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
+            enc.write_all(&data).unwrap();
+            enc.finish().unwrap();
+        }
+        let got = round_trip(GZIP, &gz);
+        eprintln!("gzip: in={} gz={} out={}", data.len(), gz.len(), got.len());
+        if got != data {
+            let at = got.iter().zip(data.iter()).position(|(a, b)| a != b).unwrap_or(got.len().min(data.len()));
+            eprintln!("first diff at {}: got={:?} want={:?}", at, &got[at.saturating_sub(8)..(at + 8).min(got.len())], &data[at.saturating_sub(8)..(at + 8).min(data.len())]);
+        }
+        assert_eq!(got, data);
+        let zst = zstd::stream::encode_all(&data[..], 3).unwrap();
+        // Control: the reference decoder must read the test frame.
+        {
+            use std::io::Read;
+            let mut dec = zstd::stream::read::Decoder::new(&zst[..]).unwrap();
+            let mut ref_out = Vec::new();
+            dec.read_to_end(&mut ref_out).unwrap();
+            assert_eq!(ref_out, data);
+        }
+        let got = round_trip(ZSTD, &zst);
+        eprintln!("zstd: in={} zst={} out={}", data.len(), zst.len(), got.len());
+        assert_eq!(got, data);
+    }
+
+    #[test]
+    fn truncated_body_fails_finish() {
+        let data = b"hello world, hello world";
+        let mut gz = Vec::new();
+        {
+            let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
+            enc.write_all(&data[..]).unwrap();
+            enc.finish().unwrap();
+        }
+        let h = tk_inflate_new(GZIP);
+        let mut out = vec![0u8; 1024];
+        let n = unsafe { tk_inflate_into(h, gz.as_ptr(), gz.len() / 2, out.as_mut_ptr(), out.len()) };
+        assert!(n >= 0);
+        assert_eq!(unsafe { tk_inflate_finish(h) }, -1);
+        unsafe { tk_inflate_free(h) };
     }
 }

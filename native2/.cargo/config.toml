@@ -1,0 +1,6 @@
+# The MSVC runtime linked in, so the DLLs load on a PC without the VC++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

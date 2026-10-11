@@ -42,10 +42,11 @@ for a single member do not exist.**
 
 ## 4. Native requirements (`native2`)
 
-**Archive is propositionally the deadline flagship native module.** The existing engine already
-implements single-shot in-memory fns (`native/src/archive.rs`): `tk_archive_format`, `tk_archive_list`,
-`tk_archive_read`, `tk_archive_contents`, `tk_archive_create`, `tk_archive_compress`,
-`tk_archive_extract`. native2 evolution (native2_architecture.md §5):
+**Archive is propositionally the deadline flagship native module.** The legacy engine's
+single-shot in-memory fns (`native/src/archive.rs`) are the parity reference:
+`tk_archive_format`, `tk_archive_list`, `tk_archive_read`, `tk_archive_contents`,
+`tk_archive_create`, `tk_archive_compress`, `tk_archive_extract`. native2 rewrite
+(native2_architecture.md §5):
 
 1. Replace single-shot with a **stepper/handle** model: `ChunkReader`/`ChunkWriter` callbacks carry
    the entry name, size, crc, and the **stop byte**. `tk_archive_open_zip/tar/tar.gz` →

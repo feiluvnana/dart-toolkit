@@ -41,12 +41,12 @@ single-line, `write`, `close`, `cancel`, piping, tree-kill, and `Closeable` are 
 ## 4. Native requirements (`native2`)
 
 - **Tree kill is the native must** — long child chains (npm/yarn/cargo → gcc → linkers) must die
-  together. `native/src/lib.rs` already has `tk_chmod`, `tk_file_id`; **add `tk_kill_tree(pid,
-  {grace, force})`** (needs the `process` crate, which doesn't exist yet) implementing the
-  CSS-`not:x`-style coverage: on POSIX `kill(-pid)`; on Windows a **Job Object** (spawn children
-  into the same job, then `TerminateJobObject`, fall back to `taskkill /T /F`) — shared with the
-  chrome module's close (`browser_chrome.md` G10). ABI: `dart_toolkit_native` bump to include
-  `tk_kill_tree`; loader key stays `native`.
+  together. The rewrite adds **`tk_process_kill_tree(pid, {grace, force})`** in the new
+  `native2/engine` `process` crate implementing the CSS-`not:x`-style coverage: on POSIX
+  `kill(-pid)`; on Windows a **Job Object** (spawn children into the same job, then
+  `TerminateJobObject`, fall back to `taskkill /T /F`) — shared with the chrome module's
+  close (`browser_chrome.md` G10). ABI: new `native2` cdylib starting at 1; loader switches at
+  cutover.
 - Everything else stays `dart:io` (`Process.start`, streams, handle plumbing). The stop byte is
   the Dart `Process`'s `cancel()` setting a flag; the native kill runs while the Dart wait aborts.
 
@@ -60,9 +60,9 @@ single-line, `write`, `close`, `cancel`, piping, tree-kill, and `Closeable` are 
      each `line()` aborts cleanly when cancelled.
    - `p1.pipe(p2)` composes naturally from the two ends (no `dart:io` leaks).
 2. **`wait(timeout:)` / `cancel()`:** default timeout generous (PLAN.md catalog); on expiry send
-   SIGTERM/CTRL_BREAK, grace 4 s, then SIGKILL — then `tk_kill_tree`. `cancel()` does the same via
+   SIGTERM/CTRL_BREAK, grace 4 s, then SIGKILL — then `tk_process_kill_tree`. `cancel()` does the same via
    the stop byte. Mark `_Process` `Closeable`.
-3. **`tk_kill_tree` crate (Phase B):** Windows Job Object + POSIX `kill(-pgid)`; test with a shell
+3. **`tk_process_kill_tree` in the new `process` crate (Phase C rewrite):** Windows Job Object + POSIX `kill(-pgid)`; test with a shell
    launching a 3-level chain (`cmd /c "ping -t"`), assert all three die within grace; no zombie.
 4. **`eof`/`exit`:** expose `Future<int> exit` completing on child death; `eof` = stream done.
 5. **Typed errors:** wrap spawn/exec failures into the `Process`-scoped `ProcessException`; keep

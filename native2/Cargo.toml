@@ -1,0 +1,12 @@
+# native2: the rewritten native workspace. Greenfield — no path dependencies into
+# legacy `native/`, no shared code. See reports/native2_architecture.md and
+# reports/roadmap.md (Phase C).
+[workspace]
+members = ["common", "engine", "torrent"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

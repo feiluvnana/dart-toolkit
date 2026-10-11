@@ -44,13 +44,14 @@ heavy lifting (archive, image, hash, Chrome CDP, ratatui TUI) wrapped by dead-si
 
 The three most consequential findings:
 
-1. **`native2` ownership is missing.** `lib2` re-implements hash, archive and image in Dart
-   (`lib/lib2/src/hash/hash.dart`, `src/archive/archive.dart`, `src/image/image.dart`) when a
-   mature native layer already exists at `native/src/` (digest.rs, archive.rs, image.rs,
-   inflate.rs, text.rs, pieces.rs). The existing native layer, however, has **no Chrome CDP and no
-   TUI** — the two subsystems the proposal names as native (proposals/11_chrome.md,
-   proposals/12_tui.md). `native2` must both (a) re-wire the existing native calls under the
-   `lib2` surface and (b) add the two new native subsystems.
+1. **`native2` is a rewrite, and it is missing.** `lib2` carries hash, archive and image
+   as pure Dart (`lib/lib2/src/hash/hash.dart`, `src/archive/archive.dart`,
+   `src/image/image.dart`) only until each subsystem is rewritten. The legacy native layer at
+   `native/src/` (digest.rs, archive.rs, image.rs, inflate.rs, text.rs, pieces.rs) is frozen
+   reference material: `native2` reimplements it from scratch in a new `native2/` workspace
+   (same behaviour, new code, new ABI from 1), adds the two subsystems legacy never had —
+   Chrome CDP and TUI (proposals/11_chrome.md, proposals/12_tui.md) — then the legacy tree is
+   deleted and the Dart fallbacks go with it (r50).
 2. **The `Reader`/`Writer` streaming spine broke.** The proposal's headline cross-module glue
    (`Http.get(url).pipe(File(...))`, `.pipe(Archive.unpack(dst:))`,
    `page.shot().pipe(File(...))`, `Hash.sha256.writer()`) is gone: `Resp` buffers the whole body,

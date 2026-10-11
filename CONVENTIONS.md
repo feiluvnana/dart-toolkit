@@ -103,7 +103,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 |---|---|
 | 50 | **The native library does what Dart cannot do fast:** digests, archives, content decoding, legacy charsets, `chmod`, images, torrent hashing and the BitTorrent engine. No Dart fallback: without the library those calls are `UnsupportedError`. |
 | 51 | **No binary in git, the package or CI.** `Native.install()` is the only thing that downloads (from the release `native-<source hash>`, checked against its `.sha256`) or compiles. `Native.check()` reads files only. |
-| 52 | **An export change bumps its library's ABI** (`exports!(n)` and its `NativeHandle` together), so a stale library is refused at load; any change to `native/` wants a `make native-release`. |
+| 52 | **An export change bumps its library's ABI** (`exports!(n)` and its `NativeHandle` together), so a stale library is refused at load; any change to `native2/` wants a `make native-release`. |
 | 53 | **Long native work runs on a worker** and checks a stop byte, so a cancel always works; a worker is never killed mid-call. A handle the GC frees has a `NativeFinalizer`; `close()` waits for work in flight. |
 | 54 | **Cryptography beyond hashing is out of scope.** |
 

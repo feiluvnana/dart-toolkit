@@ -35,14 +35,16 @@ silently underperforms or cannot exist:
    released by an `…_free`, protected by a `NativeFinalizer` in Dart. Streams and state machines
    resume through the same handle (Rust `Box` is never leaked).
 3. **Cancellable long work only, on a worker, with a stop byte.** No FFI call on the caller that
-   can run long. The existing `tk_common` stop-flag/watch (`Watch`), progress callback and
-   `STOPPED` contract (`native/common/src/lib.rs`) are reused verbatim.
+   can run long. The stop-flag/watch (`Watch`), progress callback and `STOPPED` contract are
+   reimplemented in `native2/common` to the same semantics; the legacy
+   `native/common/src/lib.rs` is frozen reference material, shares no code with the rewrite,
+   and is deleted at cutover.
 4. **One ABI per reader/writer.** Every `…_new` that touches a Dart `Reader`/`Writer` takes paired
    C callbacks (`read_fn, read_ctx`) / (`write_fn, write_ctx`) so a native engine can pull from or
    push into a Dart stream without copying whole buffers into Rust.
 5. **Per-subsystem cdylibs** honour the startup budget (§9 r56): `dart_toolkit_native` (core data
    modules), `dart_toolkit_chrome`, `dart_toolkit_tui`, `dart_toolkit_torrent`. Each embeds
-   `tk_common::exports!(N)` and version-gates its own ABI. `torrent` already exists as its own
+   `tk_common::exports!(N)` and version-gates its own ABI from 1. `torrent` stays its own
    library — `chrome`/`tui` follow the pattern.
 6. **Errors map at the boundary.** Every export returns `i32` (≤0 = error), leaves the message in
    `tk_last_error`, and the Dart side maps `"cancelled"` → `CancelledException`, `"…"` = OS text →
@@ -57,25 +59,25 @@ silently underperforms or cannot exist:
 
 ### 3.1 Must be native (the proposal's "heavy lifting")
 
-| Subsystem | Required FFI surface (new unless noted) | Proposal ref |
+| Subsystem | Required FFI surface (rewritten; parity with legacy) | Proposal ref |
 |---|---|---|
-| Digests / MACs | `tk_digest*`, `tk_mac_new`, `tk_hmac`, `tk_digest_files` (**exists** — digest.rs) | 10:1–4 |
-| Archives | `tk_archive_format/list/extract/read/create/compress/decompress`, `tk_archive_contents*` (**exists** — archive.rs); add streaming unpack sink + decryption already present | 06:1–4 |
-| Image engine | `tk_image_load* / probe* / resize / crop / rotate / flip / pad / trim / adjust / grayscale / invert / sepia / blur / sharpen / denoise / vignette / composite / watermark / mask / draw_text / encode_memory / compress / similarity / crop_smart / grid / png` (**exists** — image.rs) | 08:1–4 |
+| Digests / MACs | `tk_digest*`, `tk_mac_new`, `tk_hmac`, `tk_digest_files` (rewrite — byte-parity with `native/src/digest.rs`, real XXH3) | 10:1–4 |
+| Archives | `tk_archive_format/list/extract/read/create/compress/decompress`, `tk_archive_contents*` (rewrite — parity with `native/src/archive.rs`), plus the new streaming unpack sink | 06:1–4 |
+| Image engine | `tk_image_load* / probe* / resize / crop / rotate / flip / pad / trim / adjust / grayscale / invert / sepia / blur / sharpen / denoise / vignette / composite / watermark / mask / draw_text / encode_memory / compress / similarity / crop_smart / grid / png` (rewrite — parity with `native/src/image.rs`) | 08:1–4 |
 | Chrome CDP | **new** `chrome` crate: launch/attach, WS connect, `cmd`/event pump, page tree | 11:1–4 |
 | TUI | **new** `tui` crate: `ratatui` frame buffer, `crossterm` raw mode/alt screen, diff render, event poll, clipboard/paste | 12:1–4 |
-| Content decode | `tk_inflate*`, `tk_decode_text`, `tk_decompress` (**exists**) | http/html/fs feeding |
-| Torrent engine | `tk_torrent_*` (**exists** — torrent crate) | legacy |
+| Content decode | `tk_inflate*`, `tk_decode_text`, `tk_decompress` (rewrite — parity) | http/html/fs feeding |
+| Torrent engine | `tk_torrent_*` (rewrite into `native2/torrent`) | legacy |
 
 ### 3.2 Must be driven by native (system interactions; partial in Dart today)
 
-| Interaction | Current `lib2` | Required |
+| Interaction | `lib2` fallback (until cutover) | Rewritten in `native2` |
 |---|---|---|
-| `chmod` | `io.Process.run('chmod', [...])` — process spawn, Windows no-op | `tk_chmod` FFI (exists, lib.rs:26) |
-| Copy file w/ progress+stop | `io.File.copy` | `tk_copy_file` FFI (exists, lib.rs:104) |
-| Cheap identity/existence | — | `tk_file_id` (exists, lib.rs:50), claimed-name locks `tk_claim/tk_unclaim` (exists) |
-| Atomic rename retries (Windows 5/32) | none | new `tk_rename` retry loop over `MoveFileExW` |
-| Process tree termination (Windows Job Objects, POSIX process groups) | `kill()` on one pid | new `tk_process_kill_tree(pid)`, `tk_process_register_child` |
+| `chmod` | `io.Process.run('chmod', [...])` — process spawn, Windows no-op | `tk_chmod` reimplemented (same Windows read-only-bit semantics) |
+| Copy file w/ progress+stop | `io.File.copy` — no progress, not cancellable | `tk_copy_file` reimplemented (source perms, removes dest on failure/stop) |
+| Cheap identity/existence | — | `tk_file_id` reimplemented; claimed-name locks `tk_claim/tk_unclaim` reimplemented |
+| Atomic rename over Windows-held target | Dart retry loop on error 5/32 | `tk_rename` retry loop over `MoveFileExW`, specified here first |
+| Process tree termination (Windows Job Objects, POSIX process groups) | `kill()` on one pid | new `tk_process_kill_tree(pid)`, `tk_process_register_child` in the new `process` crate |
 | Terminal raw-mode VT input, `chcp` code page | none in `lib2` | `tui` crate (§6) |
 | Browser alive-check / profile steal | polling HTTP | `chrome` crate (§7) |
 
@@ -134,33 +136,35 @@ backpressure.
 
 ---
 
-## 5. Crate layout (what to create / reuse in `native2`)
+## 5. Crate layout (what to create in `native2`)
 
 ```
-native/                       (existing tree, renamed conceptually to native2 root)
-├── Cargo.toml                workspace: members = common, src(engine), chrome, tui, torrent
-├── common/                   REUSE — tk_common (exports!, guard, bytes, handle, stop, Msg)
-├── src/                      REUSE — the engine crate:
-│   ├── lib.rs                tk_chmod/tk_copy_file/tk_file_id/tk_claim/tk_unclaim (+ new tk_rename)
-│   ├── archive.rs            exists — ADD i64 streaming unpack-sink + packed-stream create
-│   ├── digest.rs / pieces.rs / inflate.rs / text.rs   exist
-│   ├── image.rs              exists — ADD predictable `tk_image_info` naming parity
-│   └── font8x16.bin          exists
+native2/                      (greenfield workspace; shares no code with native/)
+├── Cargo.toml                workspace: members = common, engine, chrome, tui, torrent
+├── common/                   NEW — tk_common rewritten (exports!, guard, bytes, handle, stop, Msg)
+├── engine/                   NEW — the rewritten engine crate:
+│   ├── lib.rs                tk_chmod/tk_copy_file/tk_file_id/tk_claim/tk_unclaim/tk_rename
+│   ├── process.rs            NEW — tk_process_kill_tree/tk_process_register_child
+│   ├── archive.rs            rewritten — with the streaming unpack-sink + packed-stream create
+│   ├── digest.rs / pieces.rs / inflate.rs / text.rs   rewritten — parity with legacy
+│   ├── image.rs              rewritten — parity with legacy
+│   └── font8x16.bin          copied asset (data, not code)
 ├── chrome/                   NEW — cdylib `dart_toolkit_chrome`
 │   ├── Cargo.toml            tungstenite, serde_json, dirs, libc
 │   └── src/{lib,cdp,launcher,keymap}.rs
 ├── tui/                      NEW — cdylib `dart_toolkit_tui`
 │   ├── Cargo.toml            ratatui, crossterm, serde_json
 │   └── src/{lib,app,layout,term,events,diff}.rs
-└── torrent/                  REUSE — existing cdylib `dart_toolkit_torrent`
+└── torrent/                  NEW — cdylib `dart_toolkit_torrent`, engine rewritten
 ```
 
-ABI table (each library's `exports!` version bump rule — CONVENTIONS §8 r52):
+ABI table (each rewritten library starts at 1; the legacy versions are deleted at cutover,
+so no stale-lib confusion — CONVENTIONS §8 r52 applies from here on):
 
-| Library | Current ABI | After native2 |
+| Library | Legacy ABI (deleted) | `native2` ABI |
 |---|---|---|
-| `dart_toolkit_native` | 14 | 20 (export table gains `tk_rename`, streaming sinks; losing none) |
-| `dart_toolkit_torrent` | 3 | 3 |
+| `dart_toolkit_native` | 14 | 1 (new export table: `tk_rename`, `tk_process_*`, streaming sinks) |
+| `dart_toolkit_torrent` | 3 | 1 |
 | `dart_toolkit_chrome` | — | 1 |
 | `dart_toolkit_tui` | — | 1 |
 
@@ -236,12 +240,14 @@ The Rust side owns the WebSocket (tungstenite), the id→completer map, event di
 
 ## 9. Build & release
 
-- `make native` builds the four cdylibs via `tool/build_native.dart` (reuse the existing cross
-  matrix: macos_*, linux_*, windows_x64).
-- Each `native/` source change bumps its `exports!` version; `make native-release` uploads
-  `dart_toolkit_native-<hash>`, `dart_toolkit_chrome-<hash>`, `dart_toolkit_tui-<hash>` + `.sha256`
-  to the release named by the `native/` source hash (CONVENTIONS §8 r51). `Native.install()`/
-  `Native.check()` gain the two new library keys.
+- `make native` builds the four rewritten cdylibs from `native2/` via
+  `tool/build_native.dart` (reuse the existing cross matrix: macos_*, linux_*, windows_x64);
+  the legacy `native/` tree is frozen and is deleted at cutover.
+- Each `native2/` source change bumps its `exports!` version from here on;
+  `make native-release` uploads `dart_toolkit_native-<hash>`, `dart_toolkit_chrome-<hash>`,
+  `dart_toolkit_tui-<hash>` + `.sha256` to the release named by the `native2/` source hash
+  (CONVENTIONS §8 r51). `Native.install()`/`Native.check()` switch to the new libraries at
+  cutover and drop the legacy keys.
 - Benchmarks: add `tool/bench/tui_bench.dart` and `chrome_bench.dart`; page-turn of a 100×30 list
   must stay < 8 ms/frame (native diff), cold `dart run` of `lib2/tui.dart` under the 15 ms budget
   after `core`.
@@ -252,8 +258,9 @@ The Rust side owns the WebSocket (tungstenite), the id→completer map, event di
 
 1. `FnReader`/`FnWriter` in `lib2/src/core/pipe.dart`; worker harness in `lib2/src/async/task.dart`
    (real `Isolate`+`SendPort` or a dedicated native worker thread — see `async.md`).
-2. `tk_rename` + re-export existing `tk_chmod`/`tk_copy_file`/`tk_file_id` through
-   `lib2/src/fs/io.dart` (kills the `chmod` process spawn).
+2. `tk_rename` + the rewritten `tk_chmod`/`tk_copy_file`/`tk_file_id` wired through
+   `lib2/src/fs/io.dart` (kills the `chmod` process spawn at cutover; the Dart fallback
+   carries it until then).
 3. Hash-backed `writer()`/file hashing → `tk_digest_*`; fix `xxh3` to true XXH3 (native `xxhash`
    crate) and add `Hex`/`Base64`.
 4. Archive: streaming unpack sink + selective `extract` + zip-slip rejection (throws

@@ -18,6 +18,10 @@ Future<int> _pipe(Reader src, Writer dst, {int buf = 64 * 1024, void Function(in
 }
 
 /// Universally connects any [Reader] to any [Writer], returning the number of bytes moved.
+///
+/// [onProgress] is a display convenience only (a bytes-so-far tap for indicators):
+/// it is never a status source and producers report through the `Work`/`Status`
+/// model instead.
 Future<int> pipe(Reader src, Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) =>
     _pipe(src, dst, buf: buf, onProgress: onProgress);
 
@@ -39,6 +43,13 @@ extension BytesPipe on Uint8List {
 
 /// The body of an awaitable byte source pipes once it arrives.
 extension AwaitableBytesPipe on Future<Uint8List> {
+  Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async =>
+      (await this).pipe(dst, buf: buf, onProgress: onProgress);
+}
+
+/// The body of an awaitable [Reader] pipes once it arrives, so
+/// `Http.get(url).pipe(File('huge.iso'))` streams without buffering.
+extension AwaitableReaderPipe<T extends Reader> on Future<T> {
   Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async =>
       (await this).pipe(dst, buf: buf, onProgress: onProgress);
 }
@@ -65,16 +76,21 @@ final class BufferReader implements Reader, Closer {
 }
 
 /// An in-memory sink collecting everything written into it.
+///
+/// Copies every chunk: [pipe] reuses its buffer between writes.
 final class BufferWriter implements Writer {
-  final BytesBuilder _builder = BytesBuilder(copy: false);
+  final BytesBuilder _builder = BytesBuilder(copy: true);
 
   @override
   Future<int> write(Object data) async {
-    final bytes = data is List<int>
-        ? data
-        : data is String
-        ? utf8.encode(data)
-        : utf8.encode(data.toString());
+    final List<int> bytes;
+    if (data is String) {
+      bytes = utf8.encode(data);
+    } else if (data is List<int>) {
+      bytes = data;
+    } else {
+      throw ArgumentError.value(data, 'data', 'Must be String, List<int> or Uint8List');
+    }
     _builder.add(bytes);
     return bytes.length;
   }
@@ -84,4 +100,34 @@ final class BufferWriter implements Writer {
 
   /// Everything written so far.
   Uint8List take() => _builder.takeBytes();
+}
+
+/// Adapts a read callback as a [Reader], the seam native handles plug into.
+///
+/// The callback fills [buf] and answers how many bytes were written (`0` = end),
+/// mirroring [Reader.read]. Used to wrap FFI `read_fn` callbacks without
+/// leaking them across the module boundary.
+final class FnReader implements Reader {
+  final Future<int> Function(Uint8List buf) _read;
+
+  FnReader(this._read);
+
+  @override
+  Future<int> read(Uint8List buf) => _read(buf);
+}
+
+/// Adapts a write callback as a [Writer], the seam native sinks plug into.
+///
+/// The callback handles one chunk per call and answers the bytes accepted,
+/// mirroring [Writer.write] (a `String` is UTF-8, bytes verbatim).
+final class FnWriter implements Writer {
+  final Future<int> Function(Object data) _write;
+
+  FnWriter(this._write);
+
+  @override
+  Future<int> write(Object data) => _write(data);
+
+  @override
+  Future<void> flush() async {}
 }

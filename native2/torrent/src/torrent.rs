@@ -1,10 +1,13 @@
-//! BitTorrent client sessions through librqbit: one tokio runtime for the library, one session
-//! per `tk_torrent_session_new`; options, stats and file lists cross as JSON.
+//! BitTorrent client sessions through librqbit, rewritten for native2.
+//!
+//! Fresh implementation of the torrent client surface: one tokio runtime for the library,
+//! one session per `tk_torrent_session_new`; options, stats and file lists cross as JSON.
+//! Same FFI names, signatures, ticket protocol and JSON shapes as legacy.
 //!
 //! The calls that wait on the network (adding a magnet, waiting for completion, reading a
-//! stream) take a callback: they return a ticket at once, and the callback gets the result from
-//! a runtime thread (a Dart `NativeCallable.listener`); `tk_torrent_cancel(ticket)` stops one.
-//! Stats and controls return at once.
+//! stream) take a callback: they return a ticket at once, and the callback gets the result
+//! from a runtime thread; `tk_torrent_cancel(ticket)` stops one. Stats and controls return
+//! at once.
 
 use tk_common::{bytes, give, guard, text, Msg};
 use librqbit::{
@@ -34,8 +37,8 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Where a result goes: the code (a count or an id; negative is an error), and bytes the caller
-/// frees with `tk_free`: the data, or the error message.
+/// Where a result goes: the code (a count or an id; negative is an error), and bytes the
+/// caller frees with `tk_free`: the data, or the error message.
 type Done = extern "C" fn(code: i64, data: *mut u8, len: usize);
 
 /// The calls still running, by ticket. Whoever takes a ticket out, the task finishing or
@@ -45,8 +48,9 @@ fn pending() -> &'static Mutex<HashMap<u64, tokio::task::AbortHandle>> {
     P.get_or_init(Default::default)
 }
 
-/// [work]: with no [done], run here and returned (its bytes through [out]); else spawned under
-/// a fresh ticket, which is returned, and its result handed to [done] unless cancelled first.
+/// [work]: with no [done], run here and returned (its bytes through [out]); else spawned
+/// under a fresh ticket, which is returned, and its result handed to [done] unless
+/// cancelled first.
 fn run(
     done: Option<Done>,
     out: Option<(*mut *mut u8, *mut usize)>,

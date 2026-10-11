@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Native2 rewrite (reports Phase C).** The native layer is rewritten from scratch in a new
+`native2/` workspace (ABI 1 per cdylib); the legacy `native/` tree is deleted. Same FFI
+names and signatures throughout, differential-tested old-vs-new: digests/MACs, archives
+(zip/7z/rar/tar/streams, plus the new streaming stepper and in-memory packer), image
+codecs and ops, charset decode, torrent piece hashing and the librqbit client, file
+syscalls with a new Windows-held-target-retrying `tk_rename`, and a new
+`tk_process_kill_tree`. One behavior fix found by the rewrite: the xz multithreaded
+encoder now uses 1 MiB blocks so a cancel always lands promptly (a whole-archive block
+could block a stop for tens of seconds). JPEG search encodes are back on mozjpeg (nasm is
+a build requirement again). `lib2` binds only the new ABI; its Dart fallbacks are deleted
+(a missing library is `UnsupportedError`).
+
 ## 0.0.3
 
 A second review pass, on memory above all. Every bug below keeps a regression test.

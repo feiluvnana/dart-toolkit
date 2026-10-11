@@ -19,9 +19,13 @@ contract level, with per-module acceptance tests mirroring the legacy corpus.
 1. **Noun-first, noun-locked:** the 1-word table (00:76–92) is a *gate*. Each phase ends by running
    `api_names_test.dart` asserting `open/html/type/shot/draw/poll/box/ask/bar/print` etc. so
    drift is caught the same week it happens.
-2. **Own-first:** implement in `lib2` (pure Dart) to learn the shape; promote to `native2` only
-   for the deadline-native list (hash, archive, image, chrome, tui) — and land native *next to*
-   the Dart fallback behind the same `Native` seam (r53 flip, never fork).
+2. **Rewrite, then cut over:** `native2` is a greenfield rewrite in a new `native2/`
+   workspace — no code shared with the legacy `native/` tree, which is frozen the day the
+   rewrite starts. `lib2` carries a pure-Dart fallback only while each subsystem is being
+   rewritten; at cutover the fallback is deleted and without the library those calls are
+   `UnsupportedError` (r50). The rewrite covers everything legacy does (digests, archives,
+   image, content decode, torrent engine) plus the two missing subsystems (chrome, tui), so
+   no legacy code remains.
 3. **Security before speed:** zip-slip, tree-kill, symlink escapes, constant-time checks land in
    Phase A/B *before* any speed work; each carries a named `SecurityException`/typed error test.
 4. **Budget discipline:** re-check the 15 ms import budget at every phase end (`dart compile`,
@@ -65,22 +69,34 @@ platform), `hash` known-answer + `xxh3` vector, glob `**` suite — all green; `
 **Exit gate B:** `async_test` proves event loop stays live during isolate jobs; `http_test`
 streaming hash equality + resume + upload; `html` corpus parity; prompts resolve under load.
 
-### Phase C — native2 core wiring (weekday 3)
-1. **`DartNative` loader + sys libs** — cdylib layout (`dart_toolkit_native`,
-   `dart_toolkit_chrome`, `dart_toolkit_tui`, `dart_toolkit_torrent`), `Native.install()/
-   check()`, stop-byte into every handle. (`native2.md` §2,8)
-2. **hash → native** — `tk_digest_new/update/finish/free` (+ real XXH3), `tk_mac_new`,
-   `tk_hmac`; fallback bit. (`native2.md` §5) — RAM-drop: 16 MiB streaming equality.
-3. **archive streaming steppers → native** — `tk_archive_open/next/member` (zip, tar, tar.gz)
-   + zstd decode; `Archive.open(member).pipe` and RAM-ceiling unpack. (`archive.md` §5.3–4)
-4. **image native decode/encode** — jpg/webp/qoi/gif decode, jpg/webp encode w/ `quality`, then
-   the `Image.load()` pipe sink. (`image.md` §5.2–3)
-5. **fs `tk_rename`** (Windows retry) + `chmod`/copy/id native reuse; `tk_kill_tree` in the new
-   `process` crate. (`io_fs.md` §5.4, `process.md` §5.3)
+### Phase C — native2 rewrite + cutover (weekday 3)
+The legacy `native/` tree is frozen reference material. The rewrite lives in a greenfield
+`native2/` workspace (new crates, new ABI starting at 1 per cdylib, no `#[path]` into
+legacy), is differential-tested against the legacy cdylib, then replaces it: `native/` is
+deleted, `tool/build_native.dart` and the loader switch to the new cdylibs, and the `lib2`
+Dart fallbacks are deleted (r50). Order:
+1. **`native2/common` rewrite** — error slot, guard, (pointer, length) views, allocator,
+   handle protocol, stop-byte/watch, progress callback, `exports!(1)`. (`native2.md` §2,8)
+2. **`native2/engine` rewrite** — digests/MACs (`tk_digest_new/update/finish/free`, real
+   XXH3, `tk_mac_new`, `tk_hmac`, `tk_digest_files`) — RAM-drop: 16 MiB streaming equality
+   against the legacy cdylib, not against a Dart fallback. (`native2.md` §5)
+3. **`native2/engine` archives** — streaming steppers `tk_archive_open/next/member` (zip,
+   tar, tar.gz) + zstd decode from scratch; `Archive.open(member).pipe` and RAM-ceiling
+   unpack. (`archive.md` §5.3–4)
+4. **`native2/engine` image** — jpg/webp/qoi/gif decode, jpg/webp encode w/ `quality` from
+   scratch, then the `Image.load()` pipe sink. (`image.md` §5.2–3)
+5. **`native2/engine` fs + process** — `tk_chmod`/`tk_copy_file`/`tk_file_id` rewritten,
+   new `tk_rename` (Windows 5/32 retry) and `tk_process_kill_tree` in the new `process` crate.
+   (`io_fs.md` §5.4, `process.md` §5.3)
+6. **`native2/torrent` rewrite** — the BitTorrent engine rewritten into the new workspace.
+7. **Cutover** — parity gates green, then: delete `native/`, repoint `tool/build_native.dart`
+   + loader + `Native.install()/check()` at the new cdylibs, delete the `lib2` Dart
+   fallbacks. From here a missing library is `UnsupportedError`, never a silent fallback.
 
-**Exit gate C:** `native==fallback` equality across the whole hash set; `unpack(pack(d)) ≡ d`
-for zip/tar/tar.gz + image round-trips; Windows rename-retry test passes with a held handle;
-kill-tree reaps a 3-level chain.
+**Exit gate C:** new-vs-legacy byte parity across the whole hash set (`tk_digest*` vectors +
+16 MiB streaming); `unpack(pack(d)) ≡ d` for zip/tar/tar.gz through the rewritten stepper +
+image round-trips through the rewritten codecs; Windows rename-retry test passes with a held
+handle; kill-tree reaps a 3-level chain; `native/` deleted and the suite green without it.
 
 ### Phase D — Chrome CDP native + browser pipeline (weekday 4)
 1. **`chrome` crate ABI 1** — launch/attach worker, id/completer map, `open`, `eval`, `wait`,
@@ -115,6 +131,33 @@ the 12:4.1 example runs.
   quality knob, PNG-ignores-quality documented, `Picture` sixel, `BarGlyphs`/palette fallbacks.
 - CHANGELOG entries per module; docs per verb; release checklist in `Makefile`/`tool`.
 
+### Phase G — legacy `lib/` removal (last; only after A–F are green)
+`lib2` becomes the package: `lib/lib2/*` moves up to `lib/*` and the old tree is deleted.
+Prerequisites: Phase C cutover done (fallbacks gone, r50; `native/` already deleted), Phase D/E
+native crates (`chrome`, `tui`) landed, all Phase A–F exit gates green. Order:
+1. **Surface parity** — every `lib/*.dart` topic has a `lib2` successor or a written deferral.
+   The seven topics with no `lib2` equivalent today must each resolve first: `collection`,
+   `pick`, `scrape`, `testing`, `torrent` (Dart surface over `native2/torrent`), `xml`,
+   `xpath`. No silent loss: every old verb maps to a new noun, or gets a CHANGELOG deferral
+   line with a reason.
+2. **Consumer migration** — `example/` (keybox per `PLAN.md` §0 runs verbatim from `lib2`),
+   `tool/` (`build_native.dart`, benches, `module_bench.dart`), and the old `test/*_test.dart`
+   suite move to the `lib2` surface first. `Makefile` follows: `FORMATTED`, the `native*`
+   recipes and `audit` point at `native2/`; `test/layering_test.dart` is rewritten for the
+   `lib2` graph; the `api_names` noun gate keeps running at every step.
+3. **Deletion** — move `lib/lib2/*.dart` → `lib/*.dart` and `lib/lib2/src/*` → `lib/src/*`
+   (fixing imports/exports to the new paths), then delete the old `lib/src/` tree. One
+   commit, so a checkout never sees a half-moved package.
+4. **Docs & release** — README examples compile from the new paths (doc-examples test),
+   CHANGELOG carries one removal entry naming every dropped/deferred verb, version bump
+   per the owner's rule (CONVENTIONS §10 r63).
+
+**Exit gate G:** no import of the old surface remains (a search for
+`package:dart_toolkit/` imports that resolve outside the moved tree is empty);
+`dart analyze --fatal-infos`, `dart format --set-exit-if-changed lib test tool example`,
+and the full `dart test` suite are green with the old tree gone; `make` is green;
+keybox still runs per `PLAN.md` §0.
+
 ## 3. Cross-cutting work queue (r-numbers honoured)
 
 | Concern | Where | Gate |
@@ -122,20 +165,29 @@ the 12:4.1 example runs.
 | Error table (r15) lands typed exceptions per module | every module report §5 | each module test asserts the exact type thrown |
 | r56 budget per cdylib; `Native.install/check` | native2.md §2 | `timeImport` test in CI |
 | Stop-byte cancellation into every native handle | native2.md §3 | `async_test` cancel-case, `Tui ^C` case |
+| New-vs-legacy parity, then legacy deleted | r50 + native2.md §9 | parity suites green with `native/` gone |
 | `SecurityException`/named security errors | r15 + archive/fs | `archive_security_test` mandatory |
 | Constant-time comparisons | hash.md §5.5 | `ct_eq` test |
 | Legacy-corpus parity | html/image/cli/tui test files | parity suites green |
 | `api_names_test` noun gate | core.md §5.5 | runs at EVERY phase exit |
+| Legacy `lib/` removal | Phase G | gate G green with the old tree gone |
 
 ## 4. Definition of done (the whole *work week* closes)
 
-1. All Phase A–E acceptance suites green under `dart test` on Windows (CI: Linux + macOS tags).
-2. The proposal's own examples run verbatim from lib2 (`lib/lib2.dart`-exported APIs):
+1. All Phase A–G acceptance suites green under `dart test` on Windows (CI: Linux + macOS tags).
+2. The proposal's own examples run verbatim from lib2 (`lib/lib2.dart`-exported APIs,
+   pre-G paths; Phase G moves them up to `lib/`):
    `Http.get(...).pipe(File('huge.iso'))`, `...pipe(Archive.unpack(dst:))` ,
    `File('photo.jpg').pipe(Image.load())` → `img.fit(400,300).pipe(File('thumb.webp'))`,
    `Page.shot().pipe(File)`, `Tui.run((term) async { … })`, `Chan`/`Pool` crawler, `box(title:)`
    from inside `Tui`.
-3. `native==fallback` equality across hash/archive/image; budgets: `tui`< 15 ms, `cli` loads no
-   lib; no `dart:io` stdio dependency in `cli` interactive paths except the Tui-absent fallback.
+3. New-vs-legacy parity, then fallback deleted: the rewritten hash/archive/image output
+   is byte-identical to the legacy cdylib on the corpus vectors; after cutover the Dart
+   fallbacks are gone (r50) and the legacy `native/` tree is deleted. Budgets: `tui` < 15 ms,
+   `cli` loads no lib; no `dart:io` stdio dependency in `cli` interactive paths except the
+   Tui-absent fallback.
 4. CHANGELOG answered: every gap row in these 12 reports has a resolution line or is explicitly
    deferred with a reason.
+5. Legacy removed (Phase G gate): `lib/lib2/` moved up to `lib/`, the old `lib/src/` tree
+   deleted, `example/` + `tool/` + tests on the new surface, `make` green, keybox still
+   running per `PLAN.md` §0.
