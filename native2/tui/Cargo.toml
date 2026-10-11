@@ -1,0 +1,13 @@
+[package]
+name = "dart_toolkit_tui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tk_common = { path = "../common" }
+# Raw mode, alt screen, bracketed paste, mouse capture, event parsing.
+crossterm = "0.28"

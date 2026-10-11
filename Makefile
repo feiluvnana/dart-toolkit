@@ -2,7 +2,7 @@
 # or `cargo` command, so it runs the same from sh on macOS and Linux and from cmd on Windows.
 #
 #   make                 analyze, format check, catch check, tests
-#   make native          build the native libraries for this machine into native/lib/<os>_<arch>/
+#   make native          build the native libraries for this machine into native2/lib/<os>_<arch>/
 #   make native-all      every target this machine can cross-build
 #   make native-release  native-all, then the GitHub release a first use downloads from
 #   make bench           throughput per case (AOT) and startup cost per module
@@ -37,8 +37,8 @@ format:
 test:
 	$(DART) test
 
-## The native libraries (dart_toolkit_native, dart_toolkit_chrome, dart_toolkit_torrent). A program builds them on its
-## first use too; this is for after an edit to native2/.
+## The native libraries (dart_toolkit_native, dart_toolkit_chrome, dart_toolkit_tui,
+## dart_toolkit_torrent). A program builds them on its first use too; this is for after an edit to native2/.
 native:
 	$(DART) run tool/build_native.dart
 

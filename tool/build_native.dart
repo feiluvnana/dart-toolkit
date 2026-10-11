@@ -29,7 +29,7 @@ const targets = <String, String>{
   'windows_arm64': 'aarch64-pc-windows-msvc',
 };
 
-const crates = ['native', 'chrome', 'torrent'];
+const crates = ['native', 'chrome', 'tui', 'torrent'];
 
 final nativeDir = Path.cwd / 'native2';
 
@@ -38,6 +38,7 @@ Path libOf(String folder, String crate) => nativeDir / 'lib' / folder / NativeBr
 NativeHandle handleOf(String crate) => switch (crate) {
   'native' => NativeBridge.main,
   'chrome' => NativeBridge.chrome,
+  'tui' => NativeBridge.tui,
   _ => NativeBridge.torrent,
 };
 

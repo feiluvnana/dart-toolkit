@@ -2,7 +2,7 @@
 # legacy `native/`, no shared code. See reports/native2_architecture.md and
 # reports/roadmap.md (Phase C).
 [workspace]
-members = ["common", "engine", "chrome", "torrent"]
+members = ["common", "engine", "chrome", "tui", "torrent"]
 resolver = "2"
 
 [profile.release]

@@ -27,6 +27,23 @@ Deferred with reasons: mid-call cancel (the ABI carries stop bytes; Dart
 passes none yet — calls are bounded by their timeouts instead), download
 folder control, Job-Object tree kill (taskkill like the engine for now).
 
+**TUI engine (reports Phase E).** New `native2/tui` crate
+(`dart_toolkit_tui`, ABI 1) owning raw mode, the alternate screen, bracketed
+paste, mouse capture and key/pointer/resize/paste parsing (crossterm); layout,
+the cell grid, the diff and its ANSI encoding stay in Dart, the single source
+of truth. `lib2/tui` is a full app core: `Tui.run` (`draw`/`poll` loop),
+noun `TuiEvent`s (`Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`,
+`Interrupt` with second-^C-quits, `Suspend`/`Resume` on POSIX, `Post`),
+`Term.post`/`listen`/`defer`/`quit` (and `Tui.*` statics), clickable regions,
+hardware cursor, 24→256→16→none colour fallback, and widgets (`box`, `text`,
+`bar`, `list`/`menu`, `split`, `button`, `field`, `tabs`, `table`, `popup`,
+`board`, `log`, `markdown`) plus the `FakeTerminal` test seam (frames, diff
+counts, key/paste/pointer/resize injection). Without the library, owning the
+terminal is `UnsupportedError`. Deferred with reasons: `Picture` (sixel needs
+the image pipeline and a support matrix), focus traversal rings (focus stays
+caller-owned like `sel`), `while tryRecv case` (not legal Dart — drain loops
+instead), SGR extended mouse (basic capture for now).
+
 ## 0.0.3
 
 A second review pass, on memory above all. Every bug below keeps a regression test.

@@ -1,8 +1,9 @@
 part of '../native.dart';
 
 /// The package's native libraries: `dart_toolkit_native` (digests, archives, images,
-/// content-decoding, charsets), `dart_toolkit_chrome` (the CDP browser engine) and
-/// `dart_toolkit_torrent` (the BitTorrent engine), built from the package's Rust sources.
+/// content-decoding, charsets), `dart_toolkit_chrome` (the CDP browser engine),
+/// `dart_toolkit_tui` (terminal ownership and input) and `dart_toolkit_torrent`
+/// (the BitTorrent engine), built from the package's Rust sources.
 ///
 /// Loading one only reads files: `DART_TOOLKIT_NATIVE` (a path, and then nowhere else), beside
 /// the running executable, then `native2/lib/<os>_<arch>/` inside the package. [install] is the
@@ -37,7 +38,7 @@ abstract final class Native {
 ///
 /// {@category Native}
 final class NativeCheck {
-  /// Why each library that does not load does not, by name: `native`, `chrome`, `torrent`.
+  /// Why each library that does not load does not, by name: `native`, `chrome`, `tui`, `torrent`.
   final Map<String, String> missing;
 
   const NativeCheck._(this.missing);
@@ -386,7 +387,10 @@ abstract final class NativeBridge {
   /// `dart_toolkit_chrome`: the CDP browser engine.
   static final chrome = NativeHandle._('chrome', 1);
 
-  static List<NativeHandle> get _all => [main, chrome, torrent];
+  /// `dart_toolkit_tui`: terminal ownership and input.
+  static final tui = NativeHandle._('tui', 1);
+
+  static List<NativeHandle> get _all => [main, chrome, tui, torrent];
 
   /// Library [name] at [abi] for the package at [root], rather than this one: for tests.
   static NativeHandle of(String name, int abi, {required String root}) => NativeHandle._(name, abi, root);
