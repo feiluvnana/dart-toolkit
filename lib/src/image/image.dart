@@ -4,72 +4,47 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../core/native.dart' as l2native;
+import '../core/pipe.dart';
 import '../core/traits.dart';
+import '../fs/io.dart' as fs;
 
-/// An in-memory 8-bit RGBA raster with one-word transforms ([crop], [fit], [resize],
-/// [grayscale], [blur], [draw]) and codec load/save.
+export '../core/errors.dart';
+export '../core/pipe.dart';
+export '../core/traits.dart';
+
+/// An immutable in-memory 8-bit RGBA raster with one-word transforms ([crop],
+/// [fit], [resize], [grayscale], [blur], [draw]) and codec load/save.
 ///
 /// Codecs run natively (`tk_image_*`); without the library decode and encode
-/// are an [UnsupportedError] (r50), except QOI encode, which is the Dart codec
-/// (the engine has no QOI writer). [load] doubles
-/// as the pipe sink (`File('x.png').pipe(Image.load())`), and an image is a
-/// [Reader] of its PNG bytes (`img.pipe(File('copy.png'))`; other formats
-/// via [pipeTo]).
+/// are an [UnsupportedError] (rule 42), except QOI encode, which is the Dart codec
+/// (the engine has no QOI writer).
 ///
 /// ```dart
-/// final img = Image.blank(width: 100, height: 50);
-/// final cut = img.crop(x: 10, y: 10, width: 30, height: 20);
+/// final img = Image.empty(100, 50);
+/// final cut = img.crop(10, 10, 30, 20);
 /// final thumb = img.fit(150, 150);
-/// await thumb.save('thumb.png');
+/// await thumb.save(File('thumb.png'));
 /// ```
-final class Image implements Reader {
+final class Image {
   final int w;
   final int h;
-  final Uint8List bytes;
+  final Uint8List rgba;
 
-  /// PNG bytes cached for [read]; cleared by in-place ops ([fill]).
-  Uint8List? _pngCache;
-  int _readPos = 0;
-
-  Image._(this.w, this.h, this.bytes);
+  Image._(this.w, this.h, this.rgba);
 
   /// A blank [w]x[h] image filled with [color] (`0xAARRGGBB`).
-  factory Image.blank({required int width, required int height, int color = 0x00000000}) {
-    final img = Image._(width, height, Uint8List(width * height * 4));
-    if (color != 0) img.fill(color);
-    return img;
+  factory Image.empty(int w, int h, {int color = 0x00000000}) {
+    final img = Image._(w, h, Uint8List(w * h * 4));
+    return color == 0 ? img : img.fill(color);
   }
 
-  /// Wraps [bytes] (RGBA, `w*h*4`) as an image.
-  factory Image.fromBytes(Uint8List bytes, {required int width, required int height}) => Image._(width, height, bytes);
-
-  /// Loads an image from a path, `File` or raw bytes through the rewritten
-  /// native engine (PNG/JPEG/GIF/WebP/BMP/TIFF/QOI); without the library it is
-  /// an [UnsupportedError].
-  ///
-  /// With no argument it is the pipe sink instead: `await
-  /// File('x.png').pipe(Image.load())` collects the file, and `finish()` on
-  /// the returned [ImageDecodeSink] decodes it.
-  static dynamic load([Object? src]) {
-    if (src == null) return ImageDecodeSink();
-    return _load(src);
-  }
-
-  /// Loads an image from [src] (a path, `File` or raw bytes).
-  static Future<Image> _load(Object src) async {
-    final Uint8List data;
-    if (src is Uint8List) {
-      data = src;
-    } else if (src is List<int>) {
-      data = Uint8List.fromList(src);
-    } else {
-      data = await File(src is File ? src.path : src.toString()).readAsBytes();
+  /// Wraps [rgba] (`w*h*4` bytes) as an image.
+  factory Image.fromRgba(Uint8List rgba, int w, int h) {
+    if (rgba.length != w * h * 4) {
+      throw ArgumentError.value(rgba, 'rgba', 'Must hold w*h*4 bytes, holds ${rgba.length}');
     }
-    return decode(data);
+    return Image._(w, h, rgba);
   }
-
-  /// Reads the image file at [path] (see [decode] for the byte form).
-  static Future<Image> open(Object path) => _load(path);
 
   /// Decodes the image in [data] (format detected from magic bytes) through
   /// the native engine. Unknown bytes are a [FormatException]; without the
@@ -93,52 +68,43 @@ final class Image implements Reader {
     return null;
   }
 
-  /// Width.
-  int get width => w;
-
-  /// Height.
-  int get height => h;
-
   /// The pixel at ([x], [y]) as `0xAARRGGBB`.
   int pixel(int x, int y) {
     final i = (y * w + x) * 4;
-    return (bytes[i + 3] << 24) | (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+    return (rgba[i + 3] << 24) | (rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2];
   }
 
-  /// Fills every pixel with [color] (`0xAARRGGBB`), in place.
+  /// A copy filled with [color] (`0xAARRGGBB`); the receiver is unchanged.
   Image fill(int color) {
     final a = (color >>> 24) & 0xFF, r = (color >>> 16) & 0xFF, g = (color >>> 8) & 0xFF, b = color & 0xFF;
-    for (var i = 0; i < bytes.length; i += 4) {
-      bytes[i] = r;
-      bytes[i + 1] = g;
-      bytes[i + 2] = b;
-      bytes[i + 3] = a;
+    final out = Uint8List(rgba.length);
+    for (var i = 0; i < out.length; i += 4) {
+      out[i] = r;
+      out[i + 1] = g;
+      out[i + 2] = b;
+      out[i + 3] = a;
     }
-    _pngCache = null;
-    _readPos = 0;
-    return this;
+    return Image._(w, h, out);
   }
 
-  /// A [width]x[height] region anchored at ([x], [y]).
-  Image crop({int x = 0, int y = 0, int? width, int? height}) {
-    final cw = width ?? w - x;
-    final ch = height ?? h - y;
-    final out = Uint8List(cw * ch * 4);
-    for (var row = 0; row < ch; row++) {
+  /// A [w]x[h] region anchored at ([x], [y]).
+  Image crop(int x, int y, int w, int h) {
+    final out = Uint8List(w * h * 4);
+    for (var row = 0; row < h; row++) {
       final sy = y + row;
-      if (sy < 0 || sy >= h) continue;
-      for (var col = 0; col < cw; col++) {
+      if (sy < 0 || sy >= this.h) continue;
+      for (var col = 0; col < w; col++) {
         final sx = x + col;
-        if (sx < 0 || sx >= w) continue;
-        final src = (sy * w + sx) * 4;
-        final dst = (row * cw + col) * 4;
-        out[dst] = bytes[src];
-        out[dst + 1] = bytes[src + 1];
-        out[dst + 2] = bytes[src + 2];
-        out[dst + 3] = bytes[src + 3];
+        if (sx < 0 || sx >= this.w) continue;
+        final src = (sy * this.w + sx) * 4;
+        final dst = (row * w + col) * 4;
+        out[dst] = rgba[src];
+        out[dst + 1] = rgba[src + 1];
+        out[dst + 2] = rgba[src + 2];
+        out[dst + 3] = rgba[src + 3];
       }
     }
-    return Image._(cw, ch, out);
+    return Image._(w, h, out);
   }
 
   /// Scales to the largest size fitting inside [maxW]x[maxH], preserving aspect ratio.
@@ -158,10 +124,10 @@ final class Image implements Reader {
         final sx = (x * w / nw).floor().clamp(0, w - 1);
         final src = (sy * w + sx) * 4;
         final dst = (y * nw + x) * 4;
-        out[dst] = bytes[src];
-        out[dst + 1] = bytes[src + 1];
-        out[dst + 2] = bytes[src + 2];
-        out[dst + 3] = bytes[src + 3];
+        out[dst] = rgba[src];
+        out[dst + 1] = rgba[src + 1];
+        out[dst + 2] = rgba[src + 2];
+        out[dst + 3] = rgba[src + 3];
       }
     }
     return Image._(nw, nh, out);
@@ -169,7 +135,7 @@ final class Image implements Reader {
 
   /// A greyscale copy using luma weights.
   Image grayscale() {
-    final out = Uint8List.fromList(bytes);
+    final out = Uint8List.fromList(rgba);
     for (var i = 0; i < out.length; i += 4) {
       final v = (0.299 * out[i] + 0.587 * out[i + 1] + 0.114 * out[i + 2]).round().clamp(0, 255);
       out[i] = v;
@@ -179,14 +145,11 @@ final class Image implements Reader {
     return Image._(w, h, out);
   }
 
-  /// A copy scaled so its longest side is at most [max].
-  Image thumbnail(int max) => w >= h ? fit(max, (max * h / w).round()) : fit((max * w / h).round(), max);
-
   /// A blurred copy (separable box blur, [radius] pixels each way; `0` is a
   /// copy). A solid image stays solid.
   Image blur(int radius) {
     if (radius < 0) throw ArgumentError.value(radius, 'radius', 'Must be non-negative');
-    if (radius == 0) return Image._(w, h, Uint8List.fromList(bytes));
+    if (radius == 0) return Image._(w, h, Uint8List.fromList(rgba));
     final tmp = Uint8List(w * h * 4);
     final out = Uint8List(w * h * 4);
     final window = 2 * radius + 1;
@@ -195,7 +158,7 @@ final class Image implements Reader {
         for (var c = 0; c < 4; c++) {
           var sum = 0;
           for (var k = -radius; k <= radius; k++) {
-            sum += bytes[((y * w + (x + k).clamp(0, w - 1)) * 4) + c];
+            sum += rgba[((y * w + (x + k).clamp(0, w - 1)) * 4) + c];
           }
           tmp[((y * w + x) * 4) + c] = sum ~/ window;
         }
@@ -221,7 +184,7 @@ final class Image implements Reader {
     if (opacity < 0 || opacity > 1 || !opacity.isFinite) {
       throw ArgumentError.value(opacity, 'opacity', 'Must be 0 to 1');
     }
-    final out = Uint8List.fromList(bytes);
+    final out = Uint8List.fromList(rgba);
     for (var sy = 0; sy < src.h; sy++) {
       final dy = y + sy;
       if (dy < 0 || dy >= h) continue;
@@ -230,9 +193,9 @@ final class Image implements Reader {
         if (dx < 0 || dx >= w) continue;
         final s = (sy * src.w + sx) * 4;
         final d = (dy * w + dx) * 4;
-        final a = src.bytes[s + 3] / 255 * opacity;
+        final a = src.rgba[s + 3] / 255 * opacity;
         for (var c = 0; c < 3; c++) {
-          out[d + c] = (src.bytes[s + c] * a + out[d + c] * (1 - a)).round().clamp(0, 255);
+          out[d + c] = (src.rgba[s + c] * a + out[d + c] * (1 - a)).round().clamp(0, 255);
         }
         out[d + 3] = (255 * (a + (out[d + 3] / 255) * (1 - a))).round().clamp(0, 255);
       }
@@ -264,67 +227,42 @@ final class Image implements Reader {
     }
   }
 
-  /// Encodes this image as PNG bytes.
-  Uint8List toBytes() => encode(format: 'png');
-
-  /// Reads this image's PNG bytes as a [Reader] (cached after the first
-  /// pass), so `img.pipe(File('copy.png'))` streams a copy.
-  @override
-  Future<int> read(Uint8List buf) async {
-    final png = _pngCache ??= encode(format: 'png');
-    if (_readPos >= png.length) return 0;
-    final n = buf.length < png.length - _readPos ? buf.length : png.length - _readPos;
-    buf.setRange(0, n, png, _readPos);
-    _readPos += n;
-    return n;
-  }
-
-  /// Pipes this image to [dst] encoded as [format] (`png` default;
-  /// [quality] for JPEG/WebP), answering the bytes written.
-  Future<int> pipeTo(Writer dst, {String format = 'png', int? quality}) async {
-    final data = encode(format: format, quality: quality);
-    await dst.write(data);
-    await dst.flush();
-    return data.length;
-  }
-
-  /// Writes this image to [dst] (`png` default; the extension picks the
-  /// format for `.png`/`.jpg`/`.jpeg`/`.webp`/`.gif`/`.qoi`/`.bmp`).
-  /// [quality] (0–100) applies to JPEG/WebP only; PNG ignores it.
-  Future<void> save(Object dst, {String? format, int? quality}) async {
-    final path = dst is File ? dst.path : dst.toString();
-    await File(path).writeAsBytes(encode(format: format ?? _formatFor(path), quality: quality));
+  /// Writes this image to [to] (the extension picks the format; `png`
+  /// default). [quality] (0–100) applies to JPEG/WebP only; PNG ignores it.
+  /// The write is atomic: the encoding pipes through a temporary sibling.
+  Future<void> save(fs.File to, {int? quality}) async {
+    await encode(format: _formatFor(to.path), quality: quality).pipe(to);
   }
 
   /// Composes a `w x h` [Image] of the raw pixel buffer length check.
   @override
   String toString() => 'Image(${w}x$h)';
+
+  /// Reads the image file at [path] through the native engine.
+  static Future<Image> _nativeLoadPath(String path) async => decode(await File(path).readAsBytes());
 }
 
-/// A [Writer] collecting an encoded image; [finish] decodes what arrived —
-/// the `Image.load()` pipe sink: `await File('x.png').pipe(Image.load())`.
-final class ImageDecodeSink implements Writer {
-  final BytesBuilder _builder = BytesBuilder(copy: true);
+/// `File('photo.jpg').image()`, `Http.get(u).image()`.
+extension SourceImage on Source {
+  /// Decodes this source as an image: a file loads by path, anything else
+  /// decodes its bytes.
+  Future<Image> image() async =>
+      this is fs.File ? Image._nativeLoadPath((this as fs.File).path) : Image.decode(await bytes());
+}
 
-  @override
-  Future<int> write(Object data) async {
-    final List<int> bytes;
-    if (data is String) {
-      throw ArgumentError.value(data, 'data', 'An image sink takes bytes, not text');
-    } else if (data is List<int>) {
-      bytes = data;
-    } else {
-      throw ArgumentError.value(data, 'data', 'Must be List<int> or Uint8List');
-    }
-    _builder.add(bytes);
-    return bytes.length;
-  }
-
-  @override
-  Future<void> flush() async {}
-
-  /// Decodes everything written so far.
-  Future<Image> finish() => Image.decode(_builder.takeBytes());
+/// Chained transforms on a future image: `File('a.png').image().fit(8, 8)`.
+extension FutureImage on Future<Image> {
+  Future<Image> fit(int w, int h) async => (await this).fit(w, h);
+  Future<Image> resize(int w, int h) async => (await this).resize(w, h);
+  Future<Image> crop(int x, int y, int w, int h) async => (await this).crop(x, y, w, h);
+  Future<Image> blur(int radius) async => (await this).blur(radius);
+  Future<Image> grayscale() async => (await this).grayscale();
+  Future<Image> fill(int color) async => (await this).fill(color);
+  Future<Image> draw(Image src, {int x = 0, int y = 0, double opacity = 1.0}) async =>
+      (await this).draw(src, x: x, y: y, opacity: opacity);
+  Future<Uint8List> encode({String format = 'png', int? quality}) async =>
+      (await this).encode(format: format, quality: quality);
+  Future<void> save(fs.File to, {int? quality}) async => (await this).save(to, quality: quality);
 }
 
 bool _isPng(List<int> b) =>
@@ -390,7 +328,7 @@ String _formatFor(String path) {
 /// The native image calls behind decode/encode (cutover: the engine owns every
 /// codec; RGBA crosses through `from_rgba`/`to_rgba`, so no finalizer is needed).
 abstract final class _ImageNative {
-  static ffi.DynamicLibrary get _lib => l2native.Lib2Native.require();
+  static ffi.DynamicLibrary get _lib => l2native.require();
 
   static final loadMemory = _lib
       .lookupFunction<
@@ -442,32 +380,29 @@ abstract final class _ImageNative {
 
 /// Decodes [data] through the native library into RGBA. Corrupt data is a
 /// [FormatException] naming what the library said; without the library it is
-/// an [UnsupportedError] (r50: no Dart fallback at cutover).
+/// an [UnsupportedError] (rule 42: no Dart fallback at cutover).
 Image _nativeDecode(Uint8List data) {
-  if (!l2native.Lib2Native.isAvailable) {
-    throw UnsupportedError('Cannot decode image without dart_toolkit_native: ${l2native.Lib2Native.reason}');
-  }
-  return l2native.Lib2Native.withBytes(data, (p, n) {
+  return l2native.withBytes(data, (p, n) {
     final h = _ImageNative.loadMemory(p, n, 0, 0);
-    if (h == ffi.nullptr) throw FormatException('Invalid image: ${l2native.Lib2Native.lastError()}');
+    if (h == ffi.nullptr) throw FormatException('Invalid image: ${l2native.lastError()}');
     try {
-      final dims = l2native.Lib2Native.alloc(8).cast<ffi.Uint32>();
+      final dims = l2native.alloc(8).cast<ffi.Uint32>();
       try {
         if (_ImageNative.dimensions(h, dims, dims + 1) < 0) {
-          throw l2native.NativeException('decode image', l2native.Lib2Native.lastError());
+          throw l2native.NativeException('decode image', l2native.lastError());
         }
         final (w, hh) = (dims[0], dims[1]);
         final size = w * hh * 4;
-        final buf = l2native.Lib2Native.alloc(size);
+        final buf = l2native.alloc(size);
         try {
           final got = _ImageNative.toRgba(h, buf, size);
-          if (got < 0) throw l2native.NativeException('decode image', l2native.Lib2Native.lastError());
+          if (got < 0) throw l2native.NativeException('decode image', l2native.lastError());
           return Image._(w, hh, Uint8List.fromList(buf.asTypedList(got)));
         } finally {
-          l2native.Lib2Native.free(buf, size);
+          l2native.free(buf, size);
         }
       } finally {
-        l2native.Lib2Native.free(dims.cast(), 8);
+        l2native.free(dims.cast(), 8);
       }
     } finally {
       _ImageNative.free(h);
@@ -476,16 +411,13 @@ Image _nativeDecode(Uint8List data) {
 }
 
 /// Encodes [img] as [formatCode] at [quality] through the native library, via
-/// a RGBA handle. Without the library it is an [UnsupportedError] (r50).
+/// a RGBA handle. Without the library it is an [UnsupportedError] (rule 42).
 Uint8List _encodeNative(Image img, int formatCode, int quality, String format) {
-  if (!l2native.Lib2Native.isAvailable) {
-    throw UnsupportedError('Cannot encode $format without dart_toolkit_native: ${l2native.Lib2Native.reason}');
-  }
-  return l2native.Lib2Native.withBytes(img.bytes, (p, n) {
+  return l2native.withBytes(img.rgba, (p, n) {
     final h = _ImageNative.fromRgba(p, n, img.w, img.h);
-    if (h == ffi.nullptr) throw l2native.NativeException('encode $format', l2native.Lib2Native.lastError());
+    if (h == ffi.nullptr) throw l2native.NativeException('encode $format', l2native.lastError());
     try {
-      return l2native.Lib2Native.take(
+      return l2native.take(
         'encode $format',
         (out, len) => _ImageNative.encodeMemory(h, formatCode, quality, false, out, len),
       );
@@ -520,8 +452,8 @@ Uint8List _encodeQoi(Image img) {
     }
   }
 
-  for (var i = 0; i < img.bytes.length; i += 4) {
-    final r = img.bytes[i], g = img.bytes[i + 1], b = img.bytes[i + 2], a = img.bytes[i + 3];
+  for (var i = 0; i < img.rgba.length; i += 4) {
+    final r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2], a = img.rgba[i + 3];
     if (r == pr && g == pg && b == pb && a == pa) {
       if (++run == 62) flushRun();
       continue;

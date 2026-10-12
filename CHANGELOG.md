@@ -2,87 +2,88 @@
 
 ## Unreleased
 
-**Native2 rewrite (reports Phase C).** The native layer is rewritten from scratch in a new
-`native2/` workspace (ABI 1 per cdylib); the legacy `native/` tree is deleted. Same FFI
-names and signatures throughout, differential-tested old-vs-new: digests/MACs, archives
-(zip/7z/rar/tar/streams, plus the new streaming stepper and in-memory packer), image
-codecs and ops, charset decode, torrent piece hashing and the librqbit client, file
-syscalls with a new Windows-held-target-retrying `tk_rename`, and a new
-`tk_process_kill_tree`. One behavior fix found by the rewrite: the xz multithreaded
-encoder now uses 1 MiB blocks so a cancel always lands promptly (a whole-archive block
-could block a stop for tens of seconds). JPEG search encodes are back on mozjpeg (nasm is
-a build requirement again). `lib2` binds only the new ABI; its Dart fallbacks are deleted
-(a missing library is `UnsupportedError`).
+An API redesign: objects first, one form for each thing, the same readings on every source, and
+clearer names. **Every script needs updating**; the old → new for each module is below. Heavy work
+now runs in native libraries rewritten from scratch, one per subsystem.
 
-**Chrome CDP engine (reports Phase D).** New `native2/chrome` crate
-(`dart_toolkit_chrome`, ABI 1): hidden launch, held-profile refusal, OS
-alive-check, tree-kill reaper with temp-profile delete, and CDP over a
-blocking websocket (one short-lived connection per call) — open/navigate,
-eval, wait, coord click, type, screenshot, print-to-PDF, raw send.
-`lib2/chrome` speaks only through it (a missing library is
-`UnsupportedError`): `Browser.open`/`newTab`/`pages`/`alive`, `Page.goto`,
-`html`, `type`, `pdf`, pipeable `shot`, real-coordinate `click`; `content`,
-`waitFor`, `screenshot` and `newPage` stay as deprecated delegates.
-Deferred with reasons: mid-call cancel (the ABI carries stop bytes; Dart
-passes none yet — calls are bounded by their timeouts instead), download
-folder control, Job-Object tree kill (taskkill like the engine for now).
+**Shape**
 
-**TUI engine (reports Phase E).** New `native2/tui` crate
-(`dart_toolkit_tui`, ABI 1) owning raw mode, the alternate screen, bracketed
-paste, mouse capture and key/pointer/resize/paste parsing (crossterm); layout,
-the cell grid, the diff and its ANSI encoding stay in Dart, the single source
-of truth. `lib2/tui` is a full app core: `Tui.run` (`draw`/`poll` loop),
-noun `TuiEvent`s (`Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`,
-`Interrupt` with second-^C-quits, `Suspend`/`Resume` on POSIX, `Post`),
-`Term.post`/`listen`/`defer`/`quit` (and `Tui.*` statics), clickable regions,
-hardware cursor, 24→256→16→none colour fallback, and widgets (`box`, `text`,
-`bar`, `list`/`menu`, `split`, `button`, `field`, `tabs`, `table`, `popup`,
-`board`, `log`, `markdown`) plus the `FakeTerminal` test seam (frames, diff
-counts, key/paste/pointer/resize injection). Without the library, owning the
-terminal is `UnsupportedError`. Deferred with reasons: focus traversal rings
-(focus stays caller-owned like `sel`), `while tryRecv case` (not legal Dart —
-drain loops instead), SGR extended mouse (basic capture for now).
+- Files, directories, processes, browsers, pools and channels are objects: `File('a').text()`,
+  `Process('git', ['status']).text()`, `Chrome().open(url)`, `Pool(4)`, `Chan<int>(10)`. A
+  constructor starts nothing; work starts at the first call.
+- Anything readable is a `Source` and anything writable a `Target`. Every source has the same
+  readings: `text`, `bytes`, `lines`, `json`, `html`, `image`, `hash`, `unpack` and
+  `pipe(dst, resume:)`. `Http.get(u).json()` needs one `await`.
+- `close()` is the only way to end anything. Values (`Image`, `Doc`, `Json`) are immutable.
+- The method is called on the source: `dir.pack(zip)`, `file.copy(dst)`, `file.symlink(link)`.
+- Removed: XML, XPath and `Table` (`xml.dart`, `xpath.dart`, `collection.dart`), the `scrape`
+  crawler, `pick`, the Dart torrent client (the native engine stays), `Native.install()`
+  (build with `make native` or fetch the release asset), and `example/monitor`.
 
-**Polish (reports Phase F).** `Archive.pack` routes `.tar.xz`/`.txz`,
-`.tar.zst`/`.tzst` and `.tar.bz2`/`.tbz2` to their native create codes (which
-differ from the read codes — tar.xz=4, tar.zst=5, tar.bz2=6; packing `.tar.zst`
-as code 6 wrote bz2, found by the new round-trip tests). Shared `BarGlyphs`
-(fill/empty/head with blocks/line/dots/squares/arrow/ascii presets) wired
-into the TUI `bar` and the CLI `Bar` (`ascii` where the terminal cannot draw
-Unicode). New half-block `picture` widget (RGBA frames, transparency,
-animation); sixel output stays deferred. Verified: webp `quality` moves bytes
-while PNG ignores it (both documented). `su`/`ch` stay post-1.0 per the plan.
+**Per module**
 
-**Legacy removal (reports Phase G).** `lib2/` moves up to `lib/`: the package
-surface is `archive`, `async`, `chrome`, `cli`, `collection`, `core`, `hash`,
-`html`, `http`, `image`, `json`, `native`, `path`, `process`, `tui`, `xml`,
-`xpath`. Ported along: `xml`/`xpath` with the shared markup tree (dropped from
-the port: form `submission`, `Xml.read`/`save`, `XmlResponse` — they need the
-retired `Request`/`Response`/`Task`/`FileBridge` stack — and the HTML-only test
-halves, since `lib2/html.dart` is a different API), and `collection`'s `Table`
-(`save` is now `Future<File> save(to, {overwrite})`, `show` writes `dart:io`
-stdout directly; the link-through-write `save` case and the legacy-`Doc`
-coercion kind are gone with `FileBridge`/old-`Doc`).
-Retired with reasons (all recoverable from git history): the `scrape` crawler
-(needs a crawler redesign on the lib2 HTTP surface — no `Batch`/`Store`/scopes
-there), `pick` (needs key-reader wiring through the TUI engine), the old
-`testing.dart` VT-emulator `FakeTerminal` (superseded by the lib2 seam of the
-same name), the `torrent` client (needs a lib2 `Store` + torrent seam; the
-rewritten engine stays in `native2/torrent/`), the keybox/puremedia/annasarchive
-examples (old-stack TUI/Jobs/Clients or `scrape`), the throughput benches (their
-surfaces are gone; `tool/module_bench.dart` keeps the import budget), the old
-test suite (replaced by the phase gates), `Native.install()` programmatic
-first-use download (until then `dart run tool/build_native.dart`, i.e. `make
-native`, or a release asset unzipped into `native2/lib/<os>_<arch>/`; the old
-`UnsupportedError` hint naming it is fixed), and `PLAN.md` itself (its keybox +
-old-stack Windows sections are moot; lib2 Windows coverage is the gate suites).
-`tool/build_native.dart` is rewritten plain-`dart:` (its SHA-256 is the one
-documented bootstrap exception), `tool/module_bench.dart` keeps the startup
-budget over the new topics, `test/layering_test.dart` now enforces no
-`package:` imports in `lib/` with `dart:ffi` only behind the three native
-seams, and `test/api_names.txt` is regenerated for the new surface. Follow-ups
-queued: reconciling `CONVENTIONS.md` with the lib2 nouns, sixel `picture`,
-torrent surface + seam, crawler redesign, key-reader `pick`.
+- **path:** `File`/`Dir` objects replace `Path`/`Link`. `write` is atomic. `exists()`, `size()`,
+  `isLink()` and `target()` are methods. `copy`/`move` take and return a `File`.
+  `Dir.files()`/`dirs()`/`find(glob)`. Hardlinks are removed.
+- **http:** requests are lazy, so `Http.get(u).text()` takes one await. `download`, `head` and
+  `patch` are removed; `.pipe(File(p), resume: true)` resumes a download. Bodies are
+  `json:`/`form:`/`body:` (a `Source`). `HttpException(status:)` replaces
+  `StatusException`/`ClientException`.
+- **json / html:** an immutable `Json` (`get<T>(path, or:)`, `[]`, `value`, `encode()`,
+  `save()`). `doc.drop(css)` returns a new `Doc`. `prev`/`next`. `TextNode` is `Text`.
+  `page.html()` and `source.html()` give a `Doc`. `Html.read`/`decode` are removed.
+- **archive:** `dir.pack(file)`, `source.unpack(dir)` (streams from any source, a download
+  included), `file.entries()`, `file.entry(name)`. `Archive.pack/unpack/list/extract/open` are
+  removed; in-memory `Archive.zip/unzip/gzip/gunzip` stay.
+- **hash:** `Hash.sha256(data, key:)` and `source.hash(algo)`. Digests have
+  `.hex`/`.base64`/`.toInt()`. `Mac`, `writer()`, `file()`, `Hash.values`, `Hex.encode` and
+  `Base64.encode` are removed.
+- **image:** `source.image()`, with `fit`/`crop`/`resize`/`blur`/`grayscale`/`draw` chaining on
+  `Future<Image>`. `Image.empty`/`fromRgba`/`formatOf`, `w`/`h`, `save(File)`. `fill` returns a
+  copy. `Image.load`/`open`/`blank`, `width`/`height` and the pipe sink are removed.
+- **process:** `Process(cmd, args, dir:, env:, input:)` starts on its first call.
+  `text()`/`lines()` throw `ProcessException` on a non-zero exit, `check()` answers yes or no,
+  and `close()` kills the tree. `run`, `exec`, `code`, `ProcessResult` and `cancel` are removed.
+- **async:** `Task.run` always uses an isolate. `Pool(n)` takes closures (`run`, `map`). `Chan`
+  keeps `send`/`recv`/`close` plus `Chan.post`. `Worker`, `Task.all/bg` and `CancelToken` are
+  removed.
+- **cli:** `Cli.bar(max)` with `set`/`tick`/`close`. `Cli.out` and the public `testLines` are
+  removed (`CliFake.lines` in `testing.dart`).
+- **chrome:** `Chrome()` launches on the first `open`, and `Chrome(port:)` attaches. `navigate`,
+  `screenshot`, `pdf`. `Browser`, `launch`, `connect`, `goto`, `shot`, `fill` and `send` are
+  removed.
+- **tui:** `term.draw/poll/post/listen/defer/close`. `selected:`, `onPress:`, `style:`,
+  `scrollUp`/`scrollDown`, `picture(List<Image>)`. New `ui.spinner(label)` and `SpinGlyphs`
+  (shared with `cli`). `menu`, `gap`, `board`, `log` and the `Tui.*` statics are removed.
+- **native and testing:** `Native.ok`/`reason` replace `Lib2Native`/`Lib2Chrome`/`Lib2Tui`.
+  Test seams (`FakeTerminal`, `CliFake`, `BufferReader`/`BufferWriter`, `NativeReset`) move to
+  `testing.dart`. There is one shared error table: `MissingException`, `SecurityException`,
+  `NativeException`, `HttpException`, `ProcessException`.
+
+**Fixed**
+
+- Unpacking an archive with subfolders into a destination reached through a symlink (the macOS
+  temp folder) was refused as an escape.
+- Killing a process tree on macOS missed the children: the child lookup raced the Dart VM's own
+  child reaping.
+- `File.write` and saving JSON were not atomic.
+- HTTP bodies are decoded in the charset they declare (`Content-Type`, else `<meta charset>`),
+  so pages in EUC-KR, Shift_JIS or windows-1252 read correctly.
+- Chrome hides the marks automation leaves again (`navigator.webdriver`, the headless user
+  agent), which bot checks look for.
+- The xz multithreaded encoder uses 1 MiB blocks, so stopping it takes effect promptly.
+
+**Native**
+
+- The native layer is rewritten from scratch, one library per subsystem:
+  `dart_toolkit_native` (digests, archives, images, charsets, file syscalls, process tree
+  kill), `dart_toolkit_chrome` (launch and CDP), `dart_toolkit_tui` (raw mode, input, the
+  alternate screen) and `dart_toolkit_torrent`. There is no Dart fallback: without a library,
+  its calls are an `UnsupportedError` saying how to build it.
+- The sources live in `native/`. `dart_toolkit_native` is at
+  ABI 2 (the streaming unpack sink); libraries built before this release are refused at load,
+  so rebuild with `make native`.
+- JPEG encoding uses mozjpeg again, so building needs `nasm`.
 
 ## 0.0.3
 

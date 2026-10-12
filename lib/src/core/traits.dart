@@ -1,31 +1,41 @@
 import 'dart:typed_data';
 
-/// Baseline readable byte source: everything that can produce bytes implements it.
-abstract interface class Reader {
-  /// Fills [buf] with the next bytes and answers how many were written. `0` means end.
-  Future<int> read(Uint8List buf);
-}
-
-/// Baseline writable byte sink: files, sockets, subprocess stdin, hash writers.
-///
-/// The [write] contract is precise: a `String` is UTF-8 encoded, a `List<int>` /
-/// `Uint8List` is written verbatim, and anything else is an [ArgumentError].
-/// Sinks must not stringify unknown objects.
-abstract interface class Writer {
-  /// Writes [data] (a `String`, `List<int>` or `Uint8List`).
-  Future<int> write(Object data);
-
-  /// Flushes anything buffered.
-  Future<void> flush();
-}
-
-/// Resource that can be closed.
+/// Something that ends. A [Reader]'s `close` may throw: a process reports a failed exit there.
 abstract interface class Closer {
   Future<void> close();
 }
 
-/// Stream or file that supports seeking.
+/// Reads bytes into [buf]; `0` means the end.
+abstract interface class Reader implements Closer {
+  Future<int> read(Uint8List buf);
+}
+
+/// Writes [data] in order; [flush] pushes what is buffered. [close] completes the target
+/// (a file is renamed into place on close).
+abstract interface class Writer implements Closer {
+  Future<int> write(Uint8List data);
+  Future<void> flush();
+}
+
+/// Moves the read position to [offset].
 abstract interface class Seeker {
-  /// Moves to [offset] and answers the new position.
   Future<int> seek(int offset);
+}
+
+/// Anything a reading or `pipe` can read: a file, a response, a process's stdout, a page.
+/// [from] starts the bytes at an offset (a resumed transfer).
+abstract interface class Source {
+  Future<Reader> reader({int from = 0});
+
+  /// The body's length when the source knows it (a response's
+  /// `content-length`), else null. A sizing hint for streaming sinks, never a
+  /// status source.
+  int? get lengthHint;
+}
+
+/// Anything `pipe` can write: a file, a process's stdin. With `resume`, the writer appends
+/// to what [size] reports instead of replacing it.
+abstract interface class Target {
+  Future<Writer> writer({bool resume = false});
+  Future<int> size();
 }

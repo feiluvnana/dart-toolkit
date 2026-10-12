@@ -1,0 +1,11 @@
+# The native workspace: one cdylib per subsystem (engine, chrome, tui, torrent) on a shared
+# `common` crate. See CONVENTIONS.md §7 for the contract.
+[workspace]
+members = ["common", "engine", "chrome", "tui", "torrent"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

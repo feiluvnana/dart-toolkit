@@ -4,7 +4,7 @@
 /// `switch` over it is exhaustive.
 ///
 /// `key` reads the pressed name on a [KeyPress] and is `null` otherwise, so
-/// the proposal's `if (ev.key == 'q') break` works on any event.
+/// `if (ev.key == 'q') break` works on any event.
 sealed class TuiEvent {
   const TuiEvent();
 
@@ -204,7 +204,7 @@ final class Paste extends TuiEvent {
 }
 
 /// What a [Pointer] event did.
-enum PointerKind { press, release, drag, move, wheelUp, wheelDown }
+enum PointerKind { press, release, drag, move, scrollUp, scrollDown }
 
 /// A click, drag, move or wheel turn at column [x], row [y] (0-based, of the
 /// app's rows). Only with `pointer: true` on [Tui.run].

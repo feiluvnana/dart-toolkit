@@ -4,13 +4,17 @@ import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../core/decoding.dart';
+import '../core/native.dart' as native;
 import '../core/traits.dart';
 import '../fs/io.dart' as fs;
-import '../json/json.dart';
 
-/// What the network said, as text: the base of [ClientException] and
-/// [StatusException], so `on HttpException` catches every way a request fails
-/// but running out of time (a [TimeoutException]).
+export '../core/errors.dart';
+export '../core/pipe.dart';
+export '../core/traits.dart';
+
+/// What the network said, as text: `on HttpException` catches every way a
+/// request fails but running out of time (a [TimeoutException]).
 class HttpException implements Exception {
   /// What went wrong.
   final String message;
@@ -18,55 +22,24 @@ class HttpException implements Exception {
   /// The URL that was asked for, when there is one.
   final Uri? uri;
 
-  const HttpException(this.message, {this.uri});
+  /// The non-2xx status, or null for a network failure.
+  final int? status;
+
+  /// What the transport threw (a `SocketException`) on a network failure.
+  final Object? cause;
+
+  const HttpException(this.message, {this.uri, this.status, this.cause});
 
   @override
   String toString() => uri == null ? 'HttpException: $message' : 'HttpException: $message from $uri';
 }
 
-/// The network said no before an answer came: a refused or reset connection,
-/// a TLS failure, too many redirects. An [HttpException], as a non-2xx
-/// [StatusException] is.
-class ClientException extends HttpException {
-  /// What the transport threw (a `SocketException`) when this wraps one.
-  final Object? cause;
-
-  const ClientException(super.message, {super.uri, this.cause});
-}
-
-/// A non-2xx answer: an [HttpException] that keeps the [response], so an
-/// API's error body is still there:
+/// A streaming HTTP response. A [Source], so the readings (`text`, `bytes`,
+/// `lines`, `pipe` …) work on it — strictly: a reading on a non-2xx throws an
+/// [HttpException], so check [ok] first when a non-2xx is data.
 ///
-/// ```dart
-/// try {
-///   await Http.get(url).json();
-/// } on StatusException catch (e) {
-///   print(e.response.text());
-/// }
-/// ```
-final class StatusException extends HttpException {
-  /// The answer, body read.
-  final Resp response;
-
-  StatusException(this.response)
-    : super('${response.status} ${response.reason} from ${response.url}', uri: Uri.tryParse(response.url));
-
-  @override
-  String toString() => message;
-}
-
-/// A streaming HTTP response, itself a [Reader] for zero-allocation piping:
-///
-/// ```dart
-/// await Http.get('https://example.com/huge.iso').pipe(File('huge.iso'));
-/// final data = await Http.get('https://api.site.com/users').json();
-/// ```
-///
-/// The body streams: it is never pre-read. Read it once — with [pipe],
-/// [bytes], [text], [json] — then [close]. A second reading answers `0`/throws.
-/// [text], [bytes] and [json] are strict: a non-2xx throws a [StatusException]
-/// holding the error body (r44); check [ok] first when a non-2xx is data.
-final class Resp implements Reader, Closer {
+/// The body streams: it is never pre-read. Read it once, then [close].
+final class Resp implements Source, Reader, Decoding {
   /// The status code, e.g. `200`.
   final int status;
 
@@ -87,24 +60,19 @@ final class Resp implements Reader, Closer {
   Resp._(this.status, this.headers, this.url, this.reason, Stream<Uint8List> body, this._client)
     : _it = StreamIterator(body);
 
-  /// A response already in hand (error bodies kept by [StatusException]).
-  Resp.detached(this.status, this.headers, Uint8List body, this.url, {this.reason = ''})
-    : _client = _closedClient,
-      _it = StreamIterator(Stream.value(body));
-
-  static io.HttpClient get _closedClient => io.HttpClient()..close(force: true);
-
   /// Whether the status is 2xx.
   bool get ok => status >= 200 && status < 300;
 
-  /// Whether the status is 4xx.
-  bool get isClientError => status >= 400 && status < 500;
-
-  /// Whether the status is 5xx.
-  bool get isServerError => status >= 500;
-
   /// One header, or `null`.
   String? header(String name) => headers[name.toLowerCase()];
+
+  /// The body's length from `content-length`, or null without one.
+  @override
+  int? get lengthHint => int.tryParse(header('content-length') ?? '');
+
+  /// [bytes] of this body as text, in the charset the response declares.
+  @override
+  String decode(Uint8List bytes) => _decodeBody(bytes, header('content-type'));
 
   /// Fills [buf] with the next body bytes and answers how many were written.
   /// `0` means the body ended.
@@ -126,55 +94,24 @@ final class Resp implements Reader, Closer {
     return n;
   }
 
-  /// The body bytes. Strict: a non-2xx throws a [StatusException].
-  Future<Uint8List> bytes({Duration? timeout}) async {
-    final collected = await _collect(timeout: timeout);
-    return Uint8List.fromList(collected);
-  }
-
-  /// The body decoded as UTF-8. Strict: a non-2xx throws a [StatusException].
-  Future<String> text({Duration? timeout}) async {
-    final collected = await _collect(timeout: timeout);
-    return utf8.decode(collected, allowMalformed: true);
-  }
-
-  /// The body parsed as JSON. Strict: a non-2xx throws a [StatusException].
-  Future<dynamic> json({Duration? timeout}) async => Json.parse(await text(timeout: timeout));
-
-  Future<List<int>> _collect({Duration? timeout}) async {
-    if (_done && _carry.isEmpty) {
-      // Already consumed through read(): the remainder is nothing.
-      _throwIfError(const []);
-      return const [];
+  /// This response's body, strictly: a non-2xx throws an [HttpException].
+  /// [from] must be 0 on a response that is already sent.
+  @override
+  Future<Reader> reader({int from = 0}) async {
+    if (from != 0) {
+      throw ArgumentError.value(from, 'from', 'Only 0: a sent response cannot seek');
     }
-    final collected = await _drain(timeout: timeout);
-    _throwIfError(collected);
-    return collected;
+    return _bodyReader();
   }
 
-  /// Collects the remaining body without status checks (retries, error keeps).
-  Future<Uint8List> drain({Duration? timeout}) async => Uint8List.fromList(await _drain(timeout: timeout));
-
-  Future<List<int>> _drain({Duration? timeout}) async {
-    Future<List<int>> collect() async {
-      final out = <int>[..._carry];
-      _carry.clear();
-      final chunk = Uint8List(64 * 1024);
-      while (true) {
-        final n = await read(chunk);
-        if (n <= 0) break;
-        out.addAll(chunk.sublist(0, n));
-      }
-      return out;
-    }
-
-    return timeout == null ? collect() : collect().timeout(timeout);
-  }
-
-  void _throwIfError(List<int> collected) {
+  /// The strict body reader: a non-2xx closes the response and throws an
+  /// [HttpException] carrying its status.
+  Future<Reader> _bodyReader() async {
     if (!ok) {
-      throw StatusException(Resp.detached(status, headers, Uint8List.fromList(collected), url, reason: reason));
+      await close();
+      throw HttpException('$status $reason from $url', uri: Uri.tryParse(url), status: status);
     }
+    return this;
   }
 
   Future<void> _release() async {
@@ -199,199 +136,189 @@ final class Resp implements Reader, Closer {
   }
 }
 
-/// A tiny HTTP/1.1 client on `dart:io`: `Http.get`, [post], [put], [delete], [head].
+/// A request that is sent on first use: `await` gives the [Resp]; a reading or `pipe` reads
+/// the body. Sending late lets `pipe(file, resume: true)` add a `Range` header.
+final class Request implements Future<Resp>, Source, Decoding {
+  Request._(this._method, this._url, this._headers, this._timeout, this._retry, this._body);
+
+  final String _method;
+  final String _url;
+  final Map<String, String>? _headers;
+  final Duration? _timeout;
+  final int? _retry;
+  final _Body? _body;
+  Future<Resp>? _sent;
+  int _from = 0;
+  Map<String, String>? _responseHeaders;
+
+  Future<Resp> get _resp => _sent ??= Http._withRetry(
+    _method,
+    _url,
+    headers: {...?_headers, if (_from > 0) 'range': 'bytes=$_from-'},
+    timeout: _timeout,
+    retry: _retry,
+    body: _body,
+  );
+
+  /// The body's length from the response's `content-length` once sent,
+  /// else null.
+  @override
+  int? get lengthHint => int.tryParse(_responseHeaders?['content-length'] ?? '');
+
+  /// [bytes] of the body as text, in the charset the response declared.
+  @override
+  String decode(Uint8List bytes) => _decodeBody(bytes, _responseHeaders?['content-type']);
+
+  @override
+  Future<Reader> reader({int from = 0}) async {
+    if (_sent != null && from != _from) throw StateError('Request already sent');
+    _from = from;
+    final resp = await _resp;
+    _responseHeaders = resp.headers;
+    if (from > 0 && resp.status == 200) {
+      // The server ignored Range: restart. pipe() sees `from` bytes too many; signal it.
+      await resp.close();
+      throw HttpException('Server does not support resume', uri: Uri.parse(_url), status: 200);
+    }
+    return resp._bodyReader();
+  }
+
+  @override
+  Stream<Resp> asStream() => _resp.asStream();
+  @override
+  Future<Resp> catchError(Function onError, {bool Function(Object error)? test}) =>
+      _resp.catchError(onError, test: test);
+  @override
+  Future<R> then<R>(FutureOr<R> Function(Resp value) onValue, {Function? onError}) =>
+      _resp.then(onValue, onError: onError);
+  @override
+  Future<Resp> timeout(Duration timeLimit, {FutureOr<Resp> Function()? onTimeout}) =>
+      _resp.timeout(timeLimit, onTimeout: onTimeout);
+  @override
+  Future<Resp> whenComplete(FutureOr<void> Function() action) => _resp.whenComplete(action);
+}
+
+/// A request body: exactly one of JSON, form fields, or a streamed [Source].
+sealed class _Body {
+  const _Body();
+}
+
+/// A JSON body, sent as `application/json`.
+final class _JsonBody extends _Body {
+  final Object? value;
+  const _JsonBody(this.value);
+}
+
+/// Form fields, sent as `application/x-www-form-urlencoded`.
+final class _FormBody extends _Body {
+  final Map<String, String> fields;
+  const _FormBody(this.fields);
+}
+
+/// A streamed body: read chunk by chunk, never materialised.
+final class _SourceBody extends _Body {
+  final Source source;
+  const _SourceBody(this.source);
+}
+
+/// The [_Body] for [json]/[form]/[body]: none gives null, more than one is an
+/// [ArgumentError].
+_Body? _bodyOf(String method, {Object? json, Map<String, String>? form, Source? body}) {
+  var seen = 0;
+  if (json != null) seen++;
+  if (form != null) seen++;
+  if (body != null) seen++;
+  if (seen > 1) {
+    throw ArgumentError.value(
+      {'json': json, 'form': form, 'body': body},
+      'body',
+      'Give $method exactly one of json:, form: or body:',
+    );
+  }
+  if (json != null) return _JsonBody(json);
+  if (form != null) return _FormBody(form);
+  if (body != null) return _SourceBody(body);
+  return null;
+}
+
+/// A tiny HTTP/1.1 client on `dart:io`: `Http.get`, [post], [put], [delete].
 ///
 /// ```dart
-/// final res = await Http.get('https://api.example.com/data');
-/// if (res.ok) print(await res.json());
+/// final data = await Http.get('https://api.example.com/data').text();
 /// await Http.get('https://example.com/huge.iso').pipe(File('huge.iso'));
 /// ```
 ///
-/// Every request is retried twice on 5xx or network errors ([retry]), with
-/// 30 s per response by default ([timeout]). A [body] that is a [Reader]
-/// (e.g. a `File`) streams with chunked encoding — never materialised; a
-/// `Map` body is form-encoded, `json:` is sent as JSON.
+/// A request is sent on first use, so `pipe(file, resume: true)` can still
+/// ask for the rest with `Range`. Every request is retried twice on 5xx or
+/// network errors ([retry]), with 30 s per response by default ([timeout]).
 abstract final class Http {
-  /// The default per-response timeout.
-  static const Duration defaultTimeout = Duration(seconds: 30);
+  static const Duration _timeout = Duration(seconds: 30);
+  static const int _retries = 2;
 
-  /// The default retry count on 5xx or network errors.
-  static const int defaultRetries = 2;
+  /// A GET of [url], sent on first use: `await` gives the [Resp], a reading
+  /// or `pipe` reads the body.
+  static Request get(String url, {Map<String, String>? headers, Duration? timeout, int? retry}) =>
+      Request._('GET', url, headers, timeout, retry, null);
 
-  /// Sends a GET to [url].
-  static Future<Resp> get(String url, {Map<String, String>? headers, Duration? timeout, int? retry}) =>
-      _withRetry('GET', url, headers: headers, timeout: timeout, retry: retry);
-
-  /// Sends a HEAD to [url].
-  static Future<Resp> head(String url, {Map<String, String>? headers, Duration? timeout, int? retry}) =>
-      _withRetry('HEAD', url, headers: headers, timeout: timeout, retry: retry);
-
-  /// Sends a POST; [json] is serialised and sent as JSON, [body] is sent as
-  /// form fields (a `Map`), verbatim (a `String`/bytes), or streamed (a
-  /// [Reader], e.g. a `File`).
-  static Future<Resp> post(
+  /// A POST; exactly one of [json] (sent as JSON), [form] (sent as
+  /// form fields) or [body] (a [Source], streamed with chunked encoding —
+  /// never materialised).
+  static Request post(
     String url, {
     Object? json,
-    Object? body,
+    Map<String, String>? form,
+    Source? body,
     Map<String, String>? headers,
     Duration? timeout,
     int? retry,
-  }) => _withRetry('POST', url, json: json, body: body, headers: headers, timeout: timeout, retry: retry);
+  }) => Request._('POST', url, headers, timeout, retry, _bodyOf('POST', json: json, form: form, body: body));
 
-  /// Sends a PUT.
-  static Future<Resp> put(
+  /// A PUT; the body works like [post]'s.
+  static Request put(
     String url, {
     Object? json,
-    Object? body,
+    Map<String, String>? form,
+    Source? body,
     Map<String, String>? headers,
     Duration? timeout,
     int? retry,
-  }) => _withRetry('PUT', url, json: json, body: body, headers: headers, timeout: timeout, retry: retry);
+  }) => Request._('PUT', url, headers, timeout, retry, _bodyOf('PUT', json: json, form: form, body: body));
 
-  /// Sends a PATCH.
-  static Future<Resp> patch(
+  /// A DELETE; the body works like [post]'s.
+  static Request delete(
     String url, {
     Object? json,
-    Object? body,
+    Map<String, String>? form,
+    Source? body,
     Map<String, String>? headers,
     Duration? timeout,
     int? retry,
-  }) => _withRetry('PATCH', url, json: json, body: body, headers: headers, timeout: timeout, retry: retry);
-
-  /// Sends a DELETE.
-  static Future<Resp> delete(
-    String url, {
-    Object? json,
-    Object? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retry,
-  }) => _withRetry('DELETE', url, json: json, body: body, headers: headers, timeout: timeout, retry: retry);
-
-  /// Streams [url] into the [Writer] [dst] (e.g. a `File`), returning the bytes copied.
-  ///
-  /// A non-2xx throws a [StatusException] and writes nothing. With [resume]
-  /// and a `File` destination, an interrupted download continues: the
-  /// existing size is asked for with `Range`, a `206` is appended, a `200`
-  /// restarts from the beginning.
-  static Future<int> download(
-    String url,
-    Writer dst, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retry,
-    bool resume = false,
-  }) async {
-    if (resume && dst is fs.File) return _downloadResume(url, dst, headers: headers, timeout: timeout, retry: retry);
-    final resp = await _withRetry('GET', url, headers: headers, timeout: timeout, retry: retry);
-    try {
-      if (!resp.ok) {
-        final body = await resp.drain(timeout: timeout ?? defaultTimeout);
-        throw StatusException(Resp.detached(resp.status, resp.headers, body, resp.url, reason: resp.reason));
-      }
-      var total = 0;
-      final chunk = Uint8List(64 * 1024);
-      while (true) {
-        final n = await resp.read(chunk);
-        if (n <= 0) break;
-        await dst.write(Uint8List.sublistView(chunk, 0, n));
-        total += n;
-      }
-      await dst.flush();
-      return total;
-    } finally {
-      await resp.close();
-    }
-  }
-
-  static Future<int> _downloadResume(
-    String url,
-    fs.File dst, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retry,
-  }) async {
-    var existing = 0;
-    try {
-      if (await dst.exists) existing = await dst.size;
-    } catch (_) {
-      existing = 0; // A missing file starts from the beginning.
-    }
-    final reqHeaders = <String, String>{...?headers};
-    if (existing > 0) reqHeaders.putIfAbsent('range', () => 'bytes=$existing-');
-    final resp = await _withRetry('GET', url, headers: reqHeaders, timeout: timeout, retry: retry);
-    try {
-      if (resp.status == 206) {
-        final sink = dst.writer(append: true);
-        try {
-          var total = 0;
-          final chunk = Uint8List(64 * 1024);
-          while (true) {
-            final n = await resp.read(chunk);
-            if (n <= 0) break;
-            await sink.write(Uint8List.sublistView(chunk, 0, n));
-            total += n;
-          }
-          await sink.flush();
-          return existing + total;
-        } finally {
-          await sink.close();
-        }
-      }
-      if (!resp.ok) {
-        final body = await resp.drain(timeout: timeout ?? defaultTimeout);
-        throw StatusException(Resp.detached(resp.status, resp.headers, body, resp.url, reason: resp.reason));
-      }
-      // The server ignored the range: restart from the beginning.
-      final sink = dst.writer();
-      try {
-        var total = 0;
-        final chunk = Uint8List(64 * 1024);
-        while (true) {
-          final n = await resp.read(chunk);
-          if (n <= 0) break;
-          await sink.write(Uint8List.sublistView(chunk, 0, n));
-          total += n;
-        }
-        await sink.flush();
-        return total;
-      } finally {
-        await sink.close();
-      }
-    } finally {
-      await resp.close();
-    }
-  }
+  }) => Request._('DELETE', url, headers, timeout, retry, _bodyOf('DELETE', json: json, form: form, body: body));
 
   static Future<Resp> _withRetry(
     String method,
     String url, {
-    Object? json,
-    Object? body,
     Map<String, String>? headers,
     Duration? timeout,
     int? retry,
+    _Body? body,
   }) async {
-    final attempts = (retry ?? defaultRetries) + 1;
+    final attempts = (retry ?? _retries) + 1;
     Object? lastError;
     for (var attempt = 1; attempt <= attempts; attempt++) {
       try {
-        final resp = await _send(
-          method,
-          url,
-          json: json,
-          body: body,
-          headers: headers,
-          timeout: timeout ?? defaultTimeout,
-        );
+        final resp = await _send(method, url, headers: headers, timeout: timeout ?? _timeout, body: body);
         if (resp.status >= 500 && attempt < attempts) {
-          final body = await resp.drain(timeout: timeout ?? defaultTimeout);
-          lastError = StatusException(Resp.detached(resp.status, resp.headers, body, resp.url, reason: resp.reason));
+          lastError = HttpException(
+            '${resp.status} ${resp.reason} from ${resp.url}',
+            uri: Uri.tryParse(url),
+            status: resp.status,
+          );
           await resp.close();
           continue;
         }
         return resp;
-      } on StatusException {
+      } on HttpException {
         rethrow;
       } catch (e) {
         lastError = e;
@@ -399,32 +326,24 @@ abstract final class Http {
         if (!_retryable(e)) break;
       }
     }
-    if (lastError is StatusException) throw lastError;
-    throw ClientException('Request failed: $lastError', uri: Uri.tryParse(url), cause: lastError);
+    if (lastError is HttpException) throw lastError;
+    throw HttpException('Request failed: $lastError', uri: Uri.tryParse(url), cause: lastError);
   }
 
-  static bool _retryable(Object e) =>
-      e is io.SocketException || e is io.HttpException || e is TimeoutException || e is ClientException;
+  static bool _retryable(Object e) => e is io.SocketException || e is io.HttpException || e is TimeoutException;
 
   static Future<Resp> _send(
     String method,
     String url, {
-    Object? json,
-    Object? body,
     Map<String, String>? headers,
     required Duration timeout,
+    _Body? body,
   }) async {
     final client = io.HttpClient();
     try {
       final request = await client.openUrl(method, Uri.parse(url)).timeout(timeout);
       headers?.forEach(request.headers.set);
-      if (json != null) {
-        request.headers.contentType = io.ContentType.json;
-        final payload = Json.dump(json);
-        request.write(payload);
-      } else if (body != null) {
-        await _writeBody(request, body);
-      }
+      if (body != null) await _writeBody(request, body);
       final response = await request.close().timeout(timeout);
       final respHeaders = <String, String>{};
       response.headers.forEach((name, values) => respHeaders[name.toLowerCase()] = values.join(', '));
@@ -447,48 +366,60 @@ abstract final class Http {
     }
   }
 
-  /// Writes [body] into [request]: a `Map` is form-encoded (never
-  /// stringified), `json:` is JSON, a [Reader] streams chunked.
-  static Future<void> _writeBody(io.HttpClientRequest request, Object body) async {
-    if (body is Reader) {
-      if (body is fs.File) {
-        try {
-          request.contentLength = await body.size;
-        } catch (_) {
-          request.contentLength = -1;
+  /// Writes [body] into [request]: JSON as `application/json`, form fields
+  /// URL-encoded, a [Source] streamed with chunked encoding (never
+  /// materialised; a file sends its size as `content-length`).
+  static Future<void> _writeBody(io.HttpClientRequest request, _Body body) async {
+    switch (body) {
+      case _JsonBody(:final value):
+        request.headers.contentType = io.ContentType.json;
+        request.write(jsonEncode(value));
+      case _FormBody(:final fields):
+        request.headers.contentType = io.ContentType('application', 'x-www-form-urlencoded', charset: 'utf-8');
+        request.write(Uri(queryParameters: fields).query);
+      case _SourceBody(:final source):
+        request.bufferOutput = false;
+        if (source case final fs.File file) {
+          try {
+            request.contentLength = await file.size();
+          } catch (_) {
+            request.contentLength = -1;
+          }
         }
-      } else {
-        request.contentLength = -1;
-      }
-      final chunk = Uint8List(64 * 1024);
-      while (true) {
-        final n = await body.read(chunk);
-        if (n <= 0) break;
-        request.add(chunk.sublist(0, n));
-      }
-      return;
+        final reader = await source.reader();
+        try {
+          final chunk = Uint8List(64 * 1024);
+          while (true) {
+            final n = await reader.read(chunk);
+            if (n <= 0) break;
+            request.add(chunk.sublist(0, n));
+          }
+        } finally {
+          await reader.close();
+        }
     }
-    if (body is Map) {
-      request.headers.contentType = io.ContentType('application', 'x-www-form-urlencoded', charset: 'utf-8');
-      request.write(
-        body.entries
-            .map((e) => '${Uri.encodeQueryComponent('${e.key}')}=${Uri.encodeQueryComponent('${e.value}')}')
-            .join('&'),
-      );
-      return;
-    }
-    if (body is String) {
-      request.write(body);
-      return;
-    }
-    if (body is Uint8List) {
-      request.add(body);
-      return;
-    }
-    if (body is List<int>) {
-      request.add(body);
-      return;
-    }
-    throw ArgumentError.value(body, 'body', 'Must be a Map, String, List<int>, Uint8List or Reader');
   }
+}
+
+/// An HTTP body as text, decoded like a browser does: the `Content-Type` charset, else (for
+/// HTML) a `<meta charset>` in the first 1024 bytes, else UTF-8. Malformed bytes become U+FFFD
+/// (web bodies are often slightly broken); a legacy charset decodes in the native engine.
+String _decodeBody(Uint8List bytes, String? contentType) {
+  final label = (_declaredCharset(contentType) ?? _metaCharset(bytes, contentType))?.toLowerCase();
+  return switch (label) {
+    null || 'utf-8' || 'utf8' || 'unicode-1-1-utf-8' => utf8.decode(bytes, allowMalformed: true),
+    'us-ascii' || 'ascii' => ascii.decode(bytes, allowInvalid: true),
+    final other => native.decodeCharset(other, bytes),
+  };
+}
+
+final _charsetParam = RegExp(r'''charset\s*=\s*["']?([A-Za-z0-9._:\-]+)''', caseSensitive: false);
+final _metaTag = RegExp(r'''<meta[^>]+charset\s*=\s*["']?([A-Za-z0-9._:\-]+)''', caseSensitive: false);
+
+String? _declaredCharset(String? contentType) => contentType == null ? null : _charsetParam.firstMatch(contentType)?[1];
+
+String? _metaCharset(Uint8List bytes, String? contentType) {
+  if (contentType != null && !contentType.toLowerCase().contains('html')) return null;
+  final head = latin1.decode(Uint8List.sublistView(bytes, 0, bytes.length < 1024 ? bytes.length : 1024));
+  return _metaTag.firstMatch(head)?[1];
 }

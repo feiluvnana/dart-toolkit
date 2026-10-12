@@ -1,138 +1,139 @@
-// ignore_for_file: avoid_annotating_with_dynamic, avoid_dynamic_calls
-import 'dart:collection';
 import 'dart:convert';
-import 'dart:io';
 
-/// High-performance, dead-simple JSON parsing, serialization and safe navigation.
-///
-/// ```dart
-/// final data = Json.parse('{"server": {"host": "localhost"}}');
-/// final host = data.get('server.host', '0.0.0.0');
-/// final text = Json.dump(data, pretty: true);
-/// final config = await Json.read('config.json');
-/// await Json.write('config.json', config);
-/// ```
-abstract final class Json {
-  /// Parses [src] into a [JsonMap], [JsonList] or scalar.
-  static dynamic parse(String src) => _wrap(jsonDecode(src));
+import '../core/errors.dart';
+import '../core/pipe.dart';
+import '../core/traits.dart';
 
-  /// Serialises [val] to JSON; [pretty] indents with two spaces.
-  static String dump(Object? val, {bool pretty = false}) {
-    final raw = _unwrap(val);
-    return pretty ? const JsonEncoder.withIndent('  ').convert(raw) : jsonEncode(raw);
-  }
+export '../core/errors.dart';
+export '../core/pipe.dart';
+export '../core/traits.dart';
 
-  /// Reads and parses the JSON file at [src] (a path `String`).
-  static Future<dynamic> read(Object src) async => parse(await _read(src));
+/// An immutable JSON value. `Json.parse` reads text; `Json(value)` wraps a Map/List/scalar.
+final class Json {
+  /// Wraps [value] (a Map, List or scalar), deep-copied into unmodifiable
+  /// collections, so the [Json] never changes under its readers.
+  Json(Object? value) : value = _frozen(value);
 
-  /// Writes [val] as JSON to [dst] (a path `String`).
-  static Future<void> write(Object dst, Object? val, {bool pretty = false}) async {
-    final path = dst is String ? dst : dst.toString();
-    await File(path).writeAsString(dump(val, pretty: pretty));
-  }
+  /// Parses JSON [text] into an immutable value.
+  static Json parse(String text) => Json._(_frozenDecoded(jsonDecode(text)));
 
-  /// Safe nested lookup from [target]: `Json.get(data, 'server.ports.0', 80)`.
-  static T? get<T>(Object? target, String path, [T? fallback]) => _safeGet<T>(target, path, fallback);
+  Json._(this.value);
 
-  static Future<String> _read(Object src) {
-    if (src is String) return File(src).readAsString();
-    if (src is File) return src.readAsString();
-    throw ArgumentError.value(src, 'src', 'Must be a path String or File');
-  }
-}
+  /// The plain value: an unmodifiable `Map<String, Object?>`, `List<Object?>`, or a scalar.
+  final Object? value;
 
-dynamic _wrap(dynamic val) {
-  if (val is Map) return JsonMap(Map<String, dynamic>.from(val));
-  if (val is List) return JsonList(val);
-  return val;
-}
-
-dynamic _unwrap(dynamic val) {
-  if (val is JsonMap) return val._inner;
-  if (val is JsonList) return val._inner;
-  return val;
-}
-
-/// A JSON object wrapper giving instance [get] for safe dot-path traversal.
-final class JsonMap with MapMixin<String, dynamic> {
-  final Map<String, dynamic> _inner;
-
-  JsonMap(this._inner);
-
-  @override
-  dynamic operator [](Object? key) => _wrap(_inner[key]);
-
-  @override
-  void operator []=(String key, dynamic value) => _inner[key] = _unwrap(value);
-
-  @override
-  void clear() => _inner.clear();
-
-  @override
-  Iterable<String> get keys => _inner.keys;
-
-  @override
-  dynamic remove(Object? key) => _inner.remove(key);
-
-  /// Safely extracts a nested value by dot notation (`'server.host'`).
-  T? get<T>(String path, [T? fallback]) => _safeGet<T>(this, path, fallback);
-
-  /// A plain [Map] view.
-  Map<String, dynamic> toMap() => Map<String, dynamic>.from(_inner);
-
-  @override
-  String toString() => _inner.toString();
-}
-
-/// A JSON array wrapper giving instance [get] for safe dot-path traversal.
-final class JsonList with ListMixin<dynamic> {
-  final List<dynamic> _inner;
-
-  JsonList(this._inner);
-
-  @override
-  int get length => _inner.length;
-
-  @override
-  set length(int newLength) => _inner.length = newLength;
-
-  @override
-  dynamic operator [](int index) => _wrap(_inner[index]);
-
-  @override
-  void operator []=(int index, dynamic value) => _inner[index] = _unwrap(value);
-
-  /// Safely extracts a nested value by dot notation (`'ports.0'`).
-  T? get<T>(String path, [T? fallback]) => _safeGet<T>(this, path, fallback);
-
-  /// A plain [List] view.
-  List<dynamic> asList() => List<dynamic>.from(_inner);
-
-  @override
-  String toString() => _inner.toString();
-}
-
-T? _safeGet<T>(Object? target, String path, [T? fallback]) {
-  if (target == null) return fallback;
-  dynamic current = target;
-  for (final part in path.split('.')) {
-    if (current is Map) {
-      if (!current.containsKey(part)) return fallback;
-      current = current[part];
-    } else if (current is List) {
-      final idx = int.tryParse(part);
-      if (idx == null || idx < 0 || idx >= current.length) return fallback;
-      current = current[idx];
-    } else {
-      return fallback;
+  /// The value at a dotted [path] (`'server.ports.0'`) typed as [T]; [or] when it is
+  /// missing or another type, else a MissingException naming the path.
+  T get<T>(String path, {Object? or = _absent}) {
+    Object? current = value;
+    for (final part in path.split('.')) {
+      if (current is Map) {
+        if (!current.containsKey(part)) return _miss(path, or);
+        current = current[part];
+      } else if (current is List) {
+        final idx = int.tryParse(part);
+        if (idx == null || idx < 0 || idx >= current.length) return _miss(path, or);
+        current = current[idx];
+      } else {
+        return _miss(path, or);
+      }
     }
+    if (current is T) return current;
+    return _miss(path, or);
   }
-  if (current is T) return current;
-  return fallback;
+
+  /// One step: a key on an object, an index on an array, as a Json.
+  Json operator [](Object key) {
+    final v = value;
+    if (key is String && v is Map) {
+      if (!v.containsKey(key)) throw MissingException(key, where: 'JSON');
+      return Json._(v[key]);
+    }
+    if (key is int && v is List) {
+      if (key < 0 || key >= v.length) throw MissingException('$key', where: 'JSON');
+      return Json._(v[key]);
+    }
+    throw ArgumentError.value(key, 'key', 'A String on an object, an int on an array');
+  }
+
+  /// Encodes this value as JSON; [pretty] indents with two spaces.
+  String encode({bool pretty = false}) =>
+      pretty ? const JsonEncoder.withIndent('  ').convert(value) : jsonEncode(value);
+
+  /// Saves the encoding to [to] (atomically for a file).
+  Future<void> save(Target to, {bool pretty = false}) => utf8.encode(encode(pretty: pretty)).pipe(to);
+
+  @override
+  String toString() => encode();
+
+  @override
+  bool operator ==(Object other) => other is Json && _deepEquals(other.value, value);
+
+  @override
+  int get hashCode => _deepHash(value);
 }
 
-/// Safe path lookup on anything: `data.get('server.host', 'localhost')`.
-extension JsonGet on Object? {
-  /// Extracts a nested value by dot notation, returning [fallback] when absent or mistyped.
-  T? get<T>(String path, [T? fallback]) => _safeGet<T>(this, path, fallback);
+/// No `or:` was given to [Json.get].
+const _absent = Object();
+
+T _miss<T>(String path, Object? or) {
+  if (!identical(or, _absent)) return or as T;
+  throw MissingException(path, where: 'JSON');
+}
+
+/// [value] deep-copied into unmodifiable collections (object keys are strings,
+/// as JSON requires).
+Object? _frozen(Object? value) {
+  if (value is Map) {
+    return Map<String, Object?>.unmodifiable({for (final e in value.entries) '${e.key}': _frozen(e.value)});
+  }
+  if (value is List) {
+    return List<Object?>.unmodifiable([for (final e in value) _frozen(e)]);
+  }
+  return value;
+}
+
+/// Decoded JSON deep-copied into unmodifiable collections.
+Object? _frozenDecoded(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return Map<String, Object?>.unmodifiable({for (final e in value.entries) e.key: _frozenDecoded(e.value)});
+  }
+  if (value is List) {
+    return List<Object?>.unmodifiable([for (final e in value) _frozenDecoded(e)]);
+  }
+  return value;
+}
+
+bool _deepEquals(Object? a, Object? b) {
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key) || !_deepEquals(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_deepEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
+}
+
+int _deepHash(Object? value) {
+  if (value is Map) {
+    return Object.hashAll([for (final e in value.entries) Object.hash(e.key, _deepHash(e.value))]);
+  }
+  if (value is List) {
+    return Object.hashAll([for (final e in value) _deepHash(e)]);
+  }
+  return value.hashCode;
+}
+
+/// `File('a.json').json()`, `Http.get(u).json()`.
+extension SourceJson on Source {
+  /// The body parsed as JSON.
+  Future<Json> json() async => Json.parse(await text());
 }

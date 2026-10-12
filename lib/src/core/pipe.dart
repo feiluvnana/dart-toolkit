@@ -1,133 +1,113 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'decoding.dart';
 import 'traits.dart';
 
-Future<int> _pipe(Reader src, Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async {
-  final chunk = Uint8List(buf);
-  var total = 0;
-  while (true) {
-    final n = await src.read(chunk);
-    if (n <= 0) break;
-    await dst.write(Uint8List.sublistView(chunk, 0, n));
-    total += n;
-    onProgress?.call(total);
+const _chunk = 64 * 1024;
+
+/// The readings every [Source] has. Other modules add `json`, `html`, `image`, `hash` and
+/// `unpack` in their own files, so an import costs only what it uses (rule 50).
+extension SourceReadings on Source {
+  /// Every byte.
+  Future<Uint8List> bytes() async {
+    final r = await reader();
+    final out = BytesBuilder(copy: false);
+    final chunk = Uint8List(_chunk);
+    try {
+      while (true) {
+        final n = await r.read(chunk);
+        if (n <= 0) break;
+        out.add(Uint8List.fromList(Uint8List.sublistView(chunk, 0, n)));
+      }
+    } finally {
+      await r.close();
+    }
+    return out.takeBytes();
   }
-  await dst.flush();
-  return total;
+
+  /// Every byte as text: UTF-8 (malformed bytes are a FormatException), or the charset an
+  /// HTTP response declares.
+  Future<String> text() async {
+    final data = await bytes();
+    return switch (this) {
+      final Decoding source => source.decode(data),
+      _ => utf8.decode(data),
+    };
+  }
+
+  /// The text, line by line, streamed (a response in a legacy charset is decoded whole first).
+  Stream<String> lines() async* {
+    if (this is Decoding) {
+      yield* Stream.fromIterable(const LineSplitter().convert(await text()));
+      return;
+    }
+    final r = await reader();
+    final chunk = Uint8List(_chunk);
+    final controller = StreamController<List<int>>();
+    // decode incrementally: feed chunks through utf8 + LineSplitter
+    final out = controller.stream.transform(utf8.decoder).transform(const LineSplitter());
+    () async {
+      try {
+        while (true) {
+          final n = await r.read(chunk);
+          if (n <= 0) break;
+          controller.add(Uint8List.fromList(Uint8List.sublistView(chunk, 0, n)));
+        }
+        await r.close();
+      } catch (e, s) {
+        controller.addError(e, s);
+      } finally {
+        await controller.close();
+      }
+    }();
+    yield* out;
+  }
+
+  /// Copies every byte into [dst] and answers how many. With [resume], it continues from
+  /// what [dst] already holds (`Range` for HTTP, a seek for a file). [onProgress] hears the
+  /// running total; it is a display aid, not a status source.
+  Future<int> pipe(Target dst, {bool resume = false, void Function(int bytes)? onProgress}) async {
+    final from = resume ? await dst.size() : 0;
+    final r = await reader(from: from);
+    final w = await dst.writer(resume: resume);
+    var total = 0;
+    final chunk = Uint8List(_chunk);
+    try {
+      while (true) {
+        final n = await r.read(chunk);
+        if (n <= 0) break;
+        await w.write(Uint8List.sublistView(chunk, 0, n));
+        total += n;
+        onProgress?.call(from + total);
+      }
+      await w.flush();
+    } finally {
+      await r.close();
+      await w.close();
+    }
+    return total;
+  }
 }
 
-/// Universally connects any [Reader] to any [Writer], returning the number of bytes moved.
-///
-/// [onProgress] is a display convenience only (a bytes-so-far tap for indicators):
-/// it is never a status source and producers report through the `Work`/`Status`
-/// model instead.
-Future<int> pipe(Reader src, Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) =>
-    _pipe(src, dst, buf: buf, onProgress: onProgress);
-
-/// `src.pipe(dst)`.
-extension ReaderPipe on Reader {
-  Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) =>
-      _pipe(this, dst, buf: buf, onProgress: onProgress);
-}
-
-/// A byte buffer pipes as one write.
+/// Bytes in hand pipe like any source (a screenshot, an encoded image).
 extension BytesPipe on Uint8List {
-  Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async {
-    await dst.write(this);
-    await dst.flush();
+  Future<int> pipe(Target dst, {void Function(int bytes)? onProgress}) async {
+    final w = await dst.writer();
+    try {
+      await w.write(this);
+      await w.flush();
+    } finally {
+      await w.close();
+    }
     onProgress?.call(length);
     return length;
   }
 }
 
-/// The body of an awaitable byte source pipes once it arrives.
-extension AwaitableBytesPipe on Future<Uint8List> {
-  Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async =>
-      (await this).pipe(dst, buf: buf, onProgress: onProgress);
-}
-
-/// The body of an awaitable [Reader] pipes once it arrives, so
-/// `Http.get(url).pipe(File('huge.iso'))` streams without buffering.
-extension AwaitableReaderPipe<T extends Reader> on Future<T> {
-  Future<int> pipe(Writer dst, {int buf = 64 * 1024, void Function(int bytes)? onProgress}) async =>
-      (await this).pipe(dst, buf: buf, onProgress: onProgress);
-}
-
-/// An in-memory readable buffer.
-final class BufferReader implements Reader, Closer {
-  final Uint8List _bytes;
-  int _pos = 0;
-
-  BufferReader(this._bytes);
-
-  @override
-  Future<int> read(Uint8List buf) async {
-    if (_pos >= _bytes.length) return 0;
-    final available = _bytes.length - _pos;
-    final n = buf.length < available ? buf.length : available;
-    buf.setRange(0, n, _bytes, _pos);
-    _pos += n;
-    return n;
-  }
-
-  @override
-  Future<void> close() async {}
-}
-
-/// An in-memory sink collecting everything written into it.
-///
-/// Copies every chunk: [pipe] reuses its buffer between writes.
-final class BufferWriter implements Writer {
-  final BytesBuilder _builder = BytesBuilder(copy: true);
-
-  @override
-  Future<int> write(Object data) async {
-    final List<int> bytes;
-    if (data is String) {
-      bytes = utf8.encode(data);
-    } else if (data is List<int>) {
-      bytes = data;
-    } else {
-      throw ArgumentError.value(data, 'data', 'Must be String, List<int> or Uint8List');
-    }
-    _builder.add(bytes);
-    return bytes.length;
-  }
-
-  @override
-  Future<void> flush() async {}
-
-  /// Everything written so far.
-  Uint8List take() => _builder.takeBytes();
-}
-
-/// Adapts a read callback as a [Reader], the seam native handles plug into.
-///
-/// The callback fills [buf] and answers how many bytes were written (`0` = end),
-/// mirroring [Reader.read]. Used to wrap FFI `read_fn` callbacks without
-/// leaking them across the module boundary.
-final class FnReader implements Reader {
-  final Future<int> Function(Uint8List buf) _read;
-
-  FnReader(this._read);
-
-  @override
-  Future<int> read(Uint8List buf) => _read(buf);
-}
-
-/// Adapts a write callback as a [Writer], the seam native sinks plug into.
-///
-/// The callback handles one chunk per call and answers the bytes accepted,
-/// mirroring [Writer.write] (a `String` is UTF-8, bytes verbatim).
-final class FnWriter implements Writer {
-  final Future<int> Function(Object data) _write;
-
-  FnWriter(this._write);
-
-  @override
-  Future<int> write(Object data) => _write(data);
-
-  @override
-  Future<void> flush() async {}
+/// `page.screenshot().pipe(File('s.png'))` without an extra await.
+extension FutureBytesPipe on Future<Uint8List> {
+  Future<int> pipe(Target dst, {void Function(int bytes)? onProgress}) async =>
+      (await this).pipe(dst, onProgress: onProgress);
 }

@@ -4,14 +4,9 @@
 build/
 coverage/
 
-# The native libraries: cargo's build tree, and native/lib/, which a first use fills (a download
-# from the release of these sources, else a build); no binary is committed
+# The native libraries: the build tree and staged libraries are never committed
 native/target/
 native/lib/
-
-# The native2 rewrite: same rule — its build tree and staged libraries are never committed
-native2/target/
-native2/lib/
 
 # Agent config: the /optimize skills are shared; worktrees and local settings are not
 .claude/*

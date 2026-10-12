@@ -28,3 +28,14 @@ final class MissingException implements Exception {
   @override
   String toString() => message;
 }
+
+/// What the native layer failed with: `Cannot <op>: <what it said>`.
+final class NativeException implements Exception {
+  final String op;
+  final String message;
+
+  const NativeException(this.op, this.message);
+
+  @override
+  String toString() => 'Cannot $op: $message';
+}

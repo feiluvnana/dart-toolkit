@@ -1,17 +1,9 @@
 # Conventions
 
-> Status after Phase G: the package surface is `lib2` (moved up to `lib/`).
-> Rules below naming removed nouns (`Batch`, `parallelize`, `Store`, `Secret`,
-> scopes, `Shell`, `Cli.run`, `TuiApp`, `save`/`Saveable`, first-use install)
-> describe the pre-cutover model; reconciling this file with the lib2 surface
-> is follow-up work, not part of the removal.
+**Dead-simple calls; one form for each thing; every part works alone and plugs into every other
+through sources and targets.** The package optimises for these, in this order:
 
-**One way to do each thing; every method has one behaviour; everything is async; every part works
-on its own and plugs into every other through four shapes and one status model.**
-
-The package optimises for these, in this order:
-
-1. **How fast it runs:** startup, throughput and memory, measured (§9).
+1. **How fast it runs:** throughput and memory first, then startup, always measured (§8).
 2. **How little a script writes, and how easily its author finds the way**, ranked equal.
 3. Coherence, documentation and feature count.
 
@@ -19,115 +11,106 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 ---
 
-## 1. The shapes
+## 1. Shape
 
 | # | Rule |
 |---|---|
-| 1 | **Four shapes.** A method returns a value, a `Task<T>`, a `Batch<I, T>` or a `Stream<E>`; something you start is a resource with `close()`. Nothing else is returned for work: no progress callbacks, no handle with its own state machine. |
-| 2 | **Async only.** Everything that touches the disk, the network, a process, a native library or the terminal is async; there are no `…Sync` twins. Pure computation on values in memory is synchronous (`path.name`, `doc['a']`, `image.resize(…)`). A reading that does I/O is a method, never a getter. |
-| 3 | **A `Task` is a `Future`.** It starts at once; `statuses` gives the warnings so far and the current status first, so a display attached late misses nothing. A task made while another work's body runs is part of it: its progress and warnings show as that work's. |
-| 4 | **One batch builder: `parallelize`.** No module ships a batch overload or its own scheduler; `Pool.map` and the crawl are built on it. Values come back in input order. |
-| 5 | **A stream ends when its source ends;** cancelled, it ends with a `CancelledException`, so `await for` throws it. |
-| 6 | **One way to start and end a resource:** `X.start(…)` (or `launch`/`connect` where there are two real ways) and `close()`. Nothing is called `dispose`, `stop`, `kill` or `done`. Resources still open when `Cli.run` ends are closed. |
+| 1 | **Objects first.** Values (`Image`, `Doc`, `Json`) and resources (`File`, `Dir`, `Process`, `Chrome`, `Pool`, `Chan`) are objects you call methods on. A static exists only as an entry point with no value to hold: `Http.get/post/put/delete`, `Task.run`, `Tui.run`, `Cli.*`, `File.temp`/`Dir.temp`, and the in-memory builders (`Json.parse`, `Html.parse`, `Html.escape`, `Image.decode/empty/fromRgba/formatOf`, `Hash.sha256(data)`, `Archive.zip/unzip/gzip/gunzip`, `Hex`/`Base64.decode`, `Chan.post`). |
+| 2 | **One form per operation.** No aliases, no `@Deprecated` names, no backward-compatibility shims. The public names are a reviewed list (`test/api_names.txt`). |
+| 3 | **Topic imports.** One public library per topic, and a script imports what it uses. Every topic re-exports core (traits, readings, errors). `lib/` imports only `dart:` and relative paths; shared private code lives once in `src/`. Test seams are in `testing.dart` only. `test/layering_test.dart` enforces the graph. |
+| 4 | **The shared interfaces are one list:** `Source`, `Target`, `Reader`, `Writer`, `Closer`, `Seeker`. A module implements them and adds no parallel one. |
+| 5 | **Constructors are synchronous and start nothing.** Work starts at the first method: `Process(…)` spawns, `Chrome()` launches and `Http.get(…)` sends on first use. |
+| 6 | **`close()` is the only end verb,** and it is idempotent. Nothing is called `cancel`, `kill`, `quit`, `done`, `stop` or `dispose`. Closing a process or a browser kills its whole tree; closing a writer completes its target. |
+| 7 | **Values are immutable.** An operation returns a new value: `img.fill(c)`, `doc.drop(css)`, `j['a']`. |
+| 8 | **I/O is async, and pure computation in memory is sync.** There are no `…Sync` twins. A reading that does I/O is a method, never a getter (`file.size()`, `file.exists()`). |
+| 9 | **The receiver is the source:** `file.copy(dst)`, `dir.pack(zip)`, `file.symlink(link)`, `src.pipe(dst)`. |
+| 10 | **Arguments are objects:** `File`, `Dir`, `Source`, `Target`. A path is a `String` only in a constructor (`File('a.txt')`). |
+| 11 | **Sources and targets.** Anything readable is a `Source` (a file, a request, a response, a process's stdout, a page, an archive entry); anything writable is a `Target` (a file, a process's stdin). `pipe` opens them. `Reader`/`Writer` are the chunk level beneath, and a script rarely sees them. |
+| 12 | **The same readings work on every source, with one meaning each:** `text()` (the whole body as text), `bytes()`, `lines()`, `json()` (a `Json`), `html()` (a `Doc`), `image()` (an `Image`), `hash(algo)`, `unpack(dir)`, `pipe(dst, resume:)`. Each lives in the module of its result type. Readings that return a value chain on its `Future` (`Http.get(u).json()`, `File(p).image().fit(…).save(…)`). |
+| 13 | **Building and storing values:** `X.parse(text)` for text, `X.decode(bytes)` for bytes, `x.encode()` back to text or bytes, and `x.save(target)` to store it atomically. |
+| 14 | **Requests are lazy.** `Http.get(u)` is sent on its first reading or pipe, so `pipe(file, resume: true)` can ask for the rest with `Range`. `await Http.get(u)` gives the `Resp` (status, headers). |
 
-## 2. Status
-
-| # | Rule |
-|---|---|
-| 7 | **One `Status` model**, one meaning per state: `Waiting`, `Running`, `Paused`, `Done(value, fresh)`, `Skipped(reason)`, `Failed(error, stackTrace)`, `Stopped(reason)`, and `Warned` notes that are not states. |
-| 8 | **Producers report amounts, never rates,** in a `Unit` (bytes, items, none). Whoever draws computes speed and ETA with one meter. |
-| 9 | **Every producer names its item:** a file's `folder/name`, a URL's host and path. Nothing guesses a label from text. |
-| 10 | **"Nothing had to be done" is `Done(fresh: false)`,** never a `Skipped` holding a value. `Skipped` has no value. |
-| 11 | **Every retry is a `Warned(RetryWarning(attempt, of, wait, cause))`,** from every source. |
-
-## 3. Outcomes and errors
+## 2. Parameters
 
 | # | Rule |
 |---|---|
-| 12 | **`await` means success or throw;** `.settled` never throws. A batch throws once, at the end, one `BatchException` with every failure and every success. |
-| 13 | **A cancel is `Stopped`, never `Failed`,** thrown once to the awaiter, and never an unhandled error. A timeout is a `Failed(TimeoutException)`. |
-| 14 | **A bug is never turned into a value.** An `Error` from your code ends a batch at once and is rethrown as it is. |
-| 15 | **The error table, everywhere.** `MissingException(what, where:)` (a reading found nothing), `PathNotFoundException` (an input is not there), `PathExistsException` (`conflict: fail`), `FormatException` and its subtypes (content not valid; `Invalid <FORMAT> in <file>, line n: <why>`), the `HttpException` family, `ShellException`, `TimeoutException`, `CancelledException(reason)`, `BatchException`, `NativeException` (valid input the native layer failed on), and `ArgumentError`/`StateError` for the caller's mistakes only. Runtime facts are never `ArgumentError`/`StateError`. The native layer's errors are mapped at the boundary. |
-| 16 | **Every failure names its subject:** the file, URL, selector, column or key it was about. A wrapper keeps its cause and the trace where it was caught. |
-| 17 | **Nothing is swallowed unexplained.** An empty `catch` is typed where it can be and says why on its line; `make check` refuses one without. |
-| 18 | **Retry never repeats what would fail the same way:** an `Error`, a `FormatException`, a `MissingException`, a cancel, a command that cannot run. The innermost policy wins: an error an inner loop gave up on is not retried by an outer one. |
-| 19 | **Exit codes:** usage 64, timeout 124, cannot run 126, not found 127, ^C 130, a signal 128+n, anything else 1. `cli.run` is the only thing that exits. |
+| 15 | **Named parameters only** for options; required arguments are positional (`fit(w, h)`, `Pool(4)`, `Cli.bar(100)`). No option objects or builders, and no optional positional parameters. |
+| 16 | **One parameter, one meaning; one behaviour per method.** A mode is a separate method (`text()` vs `check()`), never a flag that switches the algorithm or the result type. An invalid combination or an out-of-range value is an `ArgumentError` at the call. |
+| 17 | **No `Object` parameter,** with one exception: data that is text or bytes takes a `String` (UTF-8) or a `List<int>`, checked; anything else is an `ArgumentError`. |
+| 18 | **Defaults are one table:** 30 s per response, per browser call and per `wait`; 2 retries on network errors and 5xx; UTF-8; `find` is recursive; links are never followed. `Duration.zero` never means "none". Environment variables are `DART_TOOLKIT_<NAME>`. |
+| 19 | **Callbacks are `on<Event>`** (`onProgress:`, `onPress:`, `onError:`). A progress callback is a display aid, not a status source. |
 
-## 4. Configuration
+## 3. Names
 
 | # | Rule |
 |---|---|
-| 20 | **One behaviour per method.** A mode is a separate method or a sealed setting value (`Quality`, `Retry`, `Browser`, `Render`, `Command`); no flag switches the algorithm, the result type or the meaning of another parameter, and nothing is silently ignored. Every invalid combination or out-of-range value is an `ArgumentError` at the call. |
-| 21 | **Scopes are `X.scope(body, {…})`, body first,** and hold until the body's result (a future, task, batch or stream) has finished. An inner scope inherits what it does not set. A scope changes settings; it never turns behaviour on. |
-| 22 | **Defaults are one table, the same inside and outside a scope:** `concurrency` 4 (a crawl 8, 4 per host); `Retry.network` for every request, none for local work; 30 s per response and per Chrome render; `Conflict.skip`; `Original.keep` (in-place compress: `trash`); `recursive: false`; links never followed; UTF-8; `Store.memory()`. `Duration.zero` is never "none". |
-| 23 | **One word per idea:** `to:` a file, `into:` a folder (exactly one of them), `conflict:`, `original:`, `only:`/`ignore:`/`gitignore:`/`hidden:`, `concurrency:`, `retry:`, `store:`, `timeout:`, `unsafe:`, `title` first positional, `label`, `step`. Type parameters are `<I, T>`, item first. Callbacks are `on<Event>`. |
-| 24 | **One way to remember:** `store:` on everything that keeps state between runs, and a typed `Key<T>` for your own. The default writes nothing. Every write is atomic and the store's lock serialises writers; a feature's sub-store carries a version, and another version is a `FormatException` naming the folder. Starting over is `store.clear()`. A store keeps what is needed to continue, never results. |
-| 25 | **Credentials are `Secret`s,** bound to an origin, never following a redirect elsewhere, printed as `•••` everywhere. |
-| 26 | **Environment variables** are `DART_TOOLKIT_<NAME>`, read only through `Env`. |
+| 20 | **The clearest name wins;** a multi-word name is fine when it is clearer. Common abbreviations are allowed: `w`, `h`, `Resp`, `Chan`, `recv`, `attr`, `prev`, `eval`, `html`, `json`, `url`, `id`, `pdf`, `chmod`, `gzip`/`gunzip`, `temp`. |
+| 21 | **Getters are nouns, actions are verbs, bools are adjectives or `isX`.** Readings are named for what they return (`json()`, `title()`); widgets are nouns (`ui.box`); colour getters are adjectives (`'x'.red`). |
+| 22 | **One word per idea, everywhere:** `or:` (the value when nothing is there, or the default answer), `timeout:`, `retry:`, `headers:`, `resume:`, `selected:`, `label:`, `value`/`max` (progress), `close()`, `text()`. A word never means two things (`print` is stdout, `poll` is a TUI wait). |
+| 23 | **A name never repeats its receiver,** and there are no filler verbs. Extensions on core types add no processing: on `String`, only the terminal colours; on `List<int>`, only `hex`, `base64` and `toInt()`. |
 
-## 5. Surface
+## 4. Outcomes and errors
 
 | # | Rule |
 |---|---|
-| 27 | **Topic imports.** One public library per topic; a script imports what it uses. A topic re-exports `core` and the public libraries its own code imports; one whose code needs none of `Io`, `Store`, `Border`, `Detachable` and the `Terminal` seam builds on core's foundations (`src/base.dart`) and re-exports those (`src/foundations.dart`). Shared private code lives in one `lib/src/<name>.dart` reached through a hidden `…Internals`/`…Bridge`, never copied, never public. `test/layering_test.dart` enforces the graph. |
-| 28 | **One name per operation; no aliases.** The public names are a reviewed list (`test/api_names.txt`). |
-| 29 | **`X.read(path)`, `x.save(path)`, `X.parse(text)`, `X.decode(bytes)`, `x.encode()`** for every type with a file form; `save` comes from `Saveable`: a `Task<Path>`, atomic, `conflict:` (overwrite by default: the value in hand is the newer version), and it never makes folders. |
-| 30 | **`String` carries conversions, never processing.** Conversion getters to library types stay (`'…'.path`, `.url`, `.json`, `.html`, `.xml`, `to<T>()`, the colours); text processing is Dart's `String` and `RegExp`. Natural order is `compareNatural`. |
-| 31 | **Text with a grammar has an opt-in type:** `Mode`, `Glob`, `Css`, `XPath`, `JsonPath`, `Hex`, `Mime` are extension types that implement `String` and are checked when made (`'755'.mode`). Parameters stay `String`, so plain text works and a checked value passes. |
-| 32 | **The absence doors:** a reading's `or:`, a nullable type argument (`to<int?>()`), and the thunk `(() => …).orNull` / `.or(v)`. A reading is total otherwise: it throws a `MissingException` naming what was missing. |
-| 33 | **No `Object` parameter.** Every public parameter checks something: a sealed type, an enum, a typed value. |
-| 34 | **Names are concise whole words** (allowlisted abbreviations only), with no filler verbs and never repeating their receiver. Siblings that do the same thing share one verb and one parameter order. |
-| 35 | **The shared interfaces are one list** (`Task`, `Batch`, `Stream`, resource, `Work`, `Status`, `Store`, `Serializer`, `Saveable`, `Secret`, `Detachable`, scope, setting value, fake). A module implements them and adds no parallel one. |
+| 24 | **`await` means success or throw.** The readings of a request or a process are strict: a non-2xx is an `HttpException(status:)`, a non-zero exit a `ProcessException(code:, err:)`. `check()` answers yes or no instead. |
+| 25 | **The error table is complete.** `MissingException(what, where:)`: a reading found nothing. `SecurityException`: refused (an escape, a link, a NUL byte). `NativeException(op, message)`: valid input the native layer failed on. `HttpException(message, uri:, status:, cause:)`. `ProcessException(command, code, err)`. Dart's `FormatException` (invalid content), `TimeoutException`, `UnsupportedError` (no native library, no terminal), and `ArgumentError`/`StateError` for the caller's mistakes only. No other public exception type. |
+| 26 | **A bug is never turned into a value.** An `Error` from your code is rethrown as it is. |
+| 27 | **Every failure names its subject:** the file, URL, selector, key or command. A wrapper keeps its cause. |
+| 28 | **Nothing is swallowed unexplained.** An empty `catch` is typed where it can be and says why on its line; `make catches` refuses one without. |
+| 29 | **Retry never repeats what would fail the same way:** an `Error`, a `FormatException`, a `MissingException`, a 4xx. |
+| 30 | **Exit codes:** usage 64, timeout 124, cannot run 126, not found 127 (a command that can't start is `ProcessException(code: 127)`), ^C 130. |
 
-## 6. Cleanup and robustness
+## 5. Robustness
 
 | # | Rule |
 |---|---|
-| 36 | **One way to clean up: `work.defer`,** for user code and library code. Cleanups run once, last first, however the work ends; `work.ended` says how. One that throws is a `Warned`, never the outcome. The work is over only after its cleanups have run. |
-| 37 | **Every long operation is atomic and cancellable.** Writes go to a temporary sibling renamed over the target (with the Windows retry); an overwrite is a rename over, never delete-first; a stopped operation leaves nothing half-done, a `.part` only where `resume:` keeps it. |
-| 38 | **Folders are never in conflict:** they merge, and the policy applies to each file inside. A name `Conflict.rename` picks is claimed, so two items never pick one. |
-| 39 | **A replaced original is never lost:** the result is in place before the original is trashed or deleted. `trash()` refuses where the platform would delete for good. |
-| 40 | **Nothing lands in the working directory unless asked.** |
-| 41 | **Untrusted archives are contained:** no entry escapes, no link is followed or written through, no setuid survives, output is capped; `unsafe: true` lifts it. |
-| 42 | **A child never outlives a stop:** processes and browsers die as a tree on cancel, timeout and signal. The library installs no signal handling of its own; `Cli` decides. An interactive child owns the terminal and its ^C. |
-| 43 | **Parse the real world,** bound every depth, and make an unterminated construct a `FormatException`, never a hang. Every in-house parser has a differential test against the reference package (dev only). |
-| 44 | **Readings decide their policy:** `Shell.run(…).text` captures, `.output` streams; a response's readings in hand are lenient, `await url.get()` is strict. |
+| 31 | **Every write is atomic.** It goes to a temporary sibling renamed over the target (with the Windows held-target retry); an overwrite is a rename-over, never delete-first. A failed write leaves the old content and no temporary file. A move has its destination complete before the source is gone. Only `resume:` writes into a partial file. |
+| 32 | **Nothing lands in the working directory unless asked:** a destination is always given. |
+| 33 | **Untrusted archives are contained.** Every member is checked before it is written: absolute paths, NUL bytes, `..` escapes and links are refused. The checks run against the canonical destination, for files and streams alike. Output is capped relative to the input, and setuid/setgid don't survive. |
+| 34 | **A child never outlives its `close`:** processes and browsers die as a tree on `close` and on a timeout. The library installs no signal handling of its own. |
+| 35 | **Parse the real world,** bound every depth, and make an unterminated construct a `FormatException`, never a hang. |
+| 36 | **Every wait is bounded:** network, browser and process waits all have a timeout (rule 18). |
 
-## 7. The terminal
+## 6. The terminal
 
 | # | Rule |
 |---|---|
-| 45 | **Two UIs, never mixed:** `Console` (`cli`) prints inline above the scrollback; `Tui` (`tui`) owns the screen or an inline region. What both draw is a `Tally`, in the shared terminal library. A Tui app is `draw` and `update` only: everything that happens is an event named by one noun for what arrived (`Start`, `KeyPress`, `Pointer`, `Interrupt`, `Post`, never past tense or an `On`/`Event` affix), and its side effects are `Tui.post`/`listen`/`defer`/`focus`. |
-| 46 | **Where lines go:** `info`/`ok`/`line` to stdout; `debug`, `warn`, `error`, prompts and everything an indicator draws to stderr. So `app --json \| jq` gets only data. |
-| 47 | **A live region exists only on an ANSI terminal;** elsewhere each item writes one line when it ends. Durable lines print once, above the region, from the outermost display. |
-| 48 | **Customization is a theme of builders over typed views,** with one shared `Palette`; the views have the same names in both UIs; an ASCII palette is picked where the terminal cannot draw Unicode. |
-| 49 | **One seam per side effect,** each with a shipped fake: `Http.scope(client: Client.fake(…))`, `Shell.scope(runner: Runner.fake(…))`, `Io.scope(terminal: FakeTerminal(…), stdin:, stdout:, stderr:)` (`FakeTerminal` behind its own `testing.dart`), `Clock.scope(clock: Clock.fake())`, `Env.scope`, `Store.memory()`, `cli.test(args)`. |
+| 37 | **Two UIs, never mixed:** `Cli` prints inline (prompts, bars, a spinner); `Tui` owns the screen through the `Tui.run` loop (draw, then poll). |
+| 38 | **Where lines go:** `Cli.print` writes to stdout; prompts, bars and spinners write to stderr. So `app \| jq` gets only data. |
+| 39 | **Live drawing happens only on an ANSI terminal;** elsewhere a bar prints one line when it ends. ASCII glyphs are used where the terminal can't draw Unicode. |
+| 40 | **A TUI app is a loop over events,** each named by a noun: `Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`, `Focus`, `Blur`, `Suspend`, `Resume`, `Interrupt`, `Post`. Side effects go through the `Term`: `post`, `listen`, `defer`, `close`. ^C reaches the app, and a second ^C within 2 s always quits. |
+| 41 | **One seam per side effect, with a shipped fake,** all in `testing.dart`: `FakeTerminal`, `CliFake`, `BufferReader`/`BufferWriter`, `NativeReset`. |
 
-## 8. Native
-
-| # | Rule |
-|---|---|
-| 50 | **The native library does what Dart cannot do fast:** digests, archives, content decoding, legacy charsets, `chmod`, images, torrent hashing and the BitTorrent engine. No Dart fallback: without the library those calls are `UnsupportedError`. |
-| 51 | **No binary in git, the package or CI.** `Native.install()` is the only thing that downloads (from the release `native-<source hash>`, checked against its `.sha256`) or compiles. `Native.check()` reads files only. |
-| 52 | **An export change bumps its library's ABI** (`exports!(n)` and its `NativeHandle` together), so a stale library is refused at load; any change to `native2/` wants a `make native-release`. |
-| 53 | **Long native work runs on a worker** and checks a stop byte, so a cancel always works; a worker is never killed mid-call. A handle the GC frees has a `NativeFinalizer`; `close()` waits for work in flight. |
-| 54 | **Cryptography beyond hashing is out of scope.** |
-
-## 9. Performance
+## 7. Native
 
 | # | Rule |
 |---|---|
-| 55 | **Measure back to back, or not at all.** Startup drifts and jumps in bands; a claim is medians of alternating rounds from one sitting (`tool/module_bench.dart`), and says when a delta is a band jump. `dart run` startup is the in-process front end, so measure cold `dart run`, never a cached kernel. A script that returns from `main` also waits for the front end's last background optimisations, one that exits (as `Cli.run` does) does not: measure both. |
-| 56 | **A topic import costs at most 15 ms of startup over `core`.** The lever is what a library compiles: a module does not import another to add one method, and rarely used heavy code goes behind its own import (`xpath`, `pick`). `dart:ffi` costs every program that compiles it, so it is imported only where a native call is the only way. A library boundary costs too: split one only where an import then compiles less. |
-| 57 | **Nothing third-party at runtime.** |
-| 58 | **Small work stays on the caller; a batch goes to a worker,** and an isolate is sent only what it needs (closures built in top-level functions). |
-| 59 | **Throughput is `make bench`:** AOT, one process per case with its own peak RSS; `make bench-check` fails on a regression. |
+| 42 | **The native libraries do what Dart can't do fast:** digests, archives and streaming unpack, content decoding, images, file syscalls, the process tree kill, the browser engine, the terminal engine and torrents. There is no Dart fallback: without the library, the call is an `UnsupportedError` saying how to build it. |
+| 43 | **One library per subsystem** (`dart_toolkit_native`, `_chrome`, `_tui`, `_torrent`), so an import compiles only the FFI it needs. `dart:ffi` appears only in the seam files. |
+| 44 | **One handle protocol.** `tk_x_new` does no long work and returns null with `tk_last_error` on failure. Every call returns ≤ 0 on an error, with the message in `tk_last_error`. `tk_x_free` is idempotent and null-safe. The Dart owner holds a `NativeFinalizer`, and `close()` waits for work in flight. Errors are mapped to the table (rule 25) at the boundary. |
+| 45 | **An export change bumps its library's ABI** (`exports!(n)` and the Dart constant together), so a stale library is refused at load. |
+| 46 | **No binary in git, in the package or in CI.** Libraries are built with `make native` or fetched from the release `native-<hash of native/>`. The loader looks in `native/lib/<os>_<arch>/`, beside the executable, or where `DART_TOOLKIT_NATIVE`, `DART_TOOLKIT_CHROME_LIB` or `DART_TOOLKIT_TUI_LIB` point; `DART_TOOLKIT_CHROME` names the browser executable. Any change to `native/` wants a `make native-release` once committed. |
+| 47 | **Native code never spawns a helper process to inspect processes:** dart:io reaps every child of the VM, so the helper's exit races it. Use the OS (libproc, `/proc`); `taskkill` on Windows is the exception. |
+| 48 | **Cryptography beyond hashing is out of scope.** |
 
-## 10. Tests, docs, release
+## 8. Performance
 
 | # | Rule |
 |---|---|
-| 60 | **A fixed bug keeps a test** that fails before the fix; a Windows-only change keeps a Windows test. A race that cannot fail on demand gets the strongest deterministic assertion available. |
-| 61 | **Tests are one file per library** (plus `<module>_diff_test.dart` for replaced packages), groups named for what they test, shared fixtures in `test/support.dart`, no upper-bound timing assertions. |
-| 62 | **Docs:** `README.md` is organised by use case (*I want to … → snippet → what to know*); reference detail lives in dartdoc. A doc comment says what the signature cannot: what it throws, which scope it reads, how it cancels. Every README example compiles (a test extracts them). |
-| 63 | **No CI.** `make` (analyze, format, catch check, tests) is the gate, run by hand; a Windows run is a step of the release checklist, and every Windows-only path is in `PLAN.md` until it has run on a real PC. Nothing generated is committed. The version number is the owner's. |
+| 49 | **Measure back to back, or not at all.** A claim is the median of alternating rounds from one sitting (`tool/module_bench.dart`), measured on a cold `dart run`. |
+| 50 | **A topic import costs at most 15 ms of startup over `core`.** A module doesn't import another to add one method, and a reading lives in the module of its result type, so importing `http` doesn't compile the HTML parser. |
+| 51 | **Nothing third-party at runtime.** |
+| 52 | **Small work stays on the caller; heavy work goes to `Task.run` or a `Pool`.** An isolate is sent only what it needs: a job is a top-level function bound to plain values, never a closure built inside `main`. |
+
+## 9. Tests, docs and release
+
+| # | Rule |
+|---|---|
+| 53 | **A fixed bug keeps a test that fails before the fix;** a Windows-only change keeps a Windows test. |
+| 54 | **Tests are one file per library** (`test/<library>_test.dart`), with groups named for what they test and no upper-bound timing assertions. Tests may import `src/`. |
+| 55 | **`make` is the gate** (analyze `--fatal-infos`, format, catch check, tests), run by hand; there is no CI. |
+| 56 | **Docs move with the code.** `README.md` is organised by use case (*I want to … → snippet → what to know*), and every README example compiles. A dartdoc says what the signature can't (what it throws, its defaults, when work starts). An API change updates README, CHANGELOG and, where it is a rule, this file, in the same change. |
+| 57 | **The repo keeps rules and releases, not process.** A decision becomes a rule here, and a change becomes a CHANGELOG entry. One `PLAN.md` may exist while its work is open, and is deleted when that work is done; audits, proposals and reports never live in files. |
+| 58 | **`example/` holds real scripts on the public API only.** They are analyzed and formatted, not tested. |
+| 59 | **The version number is the owner's.** |

@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 /// The import graph stays shallow: a topic imports `dart:` and its own
-/// `src/` tree only — never `package:` (r56: only what a program uses should
+/// `src/` tree only — never `package:` (rule 50: only what a program uses should
 /// compile), and `src/` files import `dart:` plus relative paths only.
 void main() {
   test('lib/ imports dart: and itself only', () {
@@ -17,7 +17,7 @@ void main() {
   test('dart:ffi compiles only behind the native seams', () {
     final ffiImport = RegExp(r'''^\s*import\s+'dart:ffi''', multiLine: true);
     // The three seams plus the modules that bind native symbols through them:
-    // nothing purely Dart may compile FFI (r56).
+    // nothing purely Dart may compile FFI (rule 50).
     final allowed = {
       'lib/src/core/native.dart',
       'lib/src/chrome/native.dart',
@@ -37,7 +37,7 @@ void main() {
       expect(
         allowed.contains(normalized),
         isTrue,
-        reason: '${entity.path} compiles dart:ffi outside a native seam (r56)',
+        reason: '${entity.path} compiles dart:ffi outside a native seam (rule 43)',
       );
     }
   });

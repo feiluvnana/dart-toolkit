@@ -8,19 +8,47 @@ const Set<String> _void = {
 const Set<String> _rawText = {'script', 'style'};
 const Set<String> _escapableRaw = {'title', 'textarea'};
 
+/// One open element: its tag, attributes and child nodes so far. The parser
+/// collects mutable lists here; [assembleDocument] freezes them into a [Doc].
+final class _Frame {
+  final String tag;
+  final Map<String, String> attrs;
+  final List<Node> kids = [];
+
+  _Frame(this.tag, this.attrs);
+
+  /// This frame frozen into an [Element]. Nobody's parent is wired yet:
+  /// [assembleDocument] wires the whole tree once, after implying structure.
+  Element freeze() => Element(tag, attrs, kids);
+}
+
 /// Parses an HTML [source] into a [Doc] using a tolerant stack machine.
 Doc parseHtml(String source) {
-  final root = Element('#document');
-  final stack = <Element>[root];
+  final root = _Frame('#document', {});
+  final stack = <_Frame>[root];
   final html = source;
   var i = 0;
   final n = html.length;
+
+  Element closeFrame(_Frame frame) => frame.freeze();
+
+  void closeTo(String name) {
+    var s = stack.length - 1;
+    while (s >= 1 && stack[s].tag.toLowerCase() != name) {
+      s--;
+    }
+    if (s < 1) return; // no match: stray closer, ignored
+    while (stack.length > s) {
+      final shut = closeFrame(stack.removeLast());
+      stack.last.kids.add(shut);
+    }
+  }
 
   while (i < n) {
     if (html[i] != '<') {
       final next = html.indexOf('<', i);
       final text = next == -1 ? html.substring(i) : html.substring(i, next);
-      if (text.isNotEmpty) stack.last.append(TextNode(decodeEntities(text)));
+      if (text.isNotEmpty) stack.last.kids.add(Text(decodeEntities(text)));
       i = next == -1 ? n : next;
       continue;
     }
@@ -41,12 +69,7 @@ Doc parseHtml(String source) {
       final end = html.indexOf('>', i);
       final name = html.substring(i + 2, end == -1 ? n : end).trim().toLowerCase();
       i = end == -1 ? n : end + 1;
-      for (var s = stack.length - 1; s >= 1; s--) {
-        if (stack[s].tag.toLowerCase() == name) {
-          stack.removeRange(s, stack.length);
-          break;
-        }
-      }
+      closeTo(name);
       continue;
     }
 
@@ -56,36 +79,45 @@ Doc parseHtml(String source) {
     final (name, attrs) = _parseTag(selfClose ? rawTag.substring(0, rawTag.length - 1) : rawTag);
     i = end == -1 ? n : end + 1;
     _autoClose(stack, name);
-    final el = Element(name, attrs);
-    stack.last.append(el);
+    final frame = _Frame(name, attrs);
     final lower = name.toLowerCase();
-    if (_void.contains(lower) || selfClose) continue;
-    stack.add(el);
+    if (_void.contains(lower) || selfClose) {
+      stack.last.kids.add(closeFrame(frame));
+      continue;
+    }
+    stack.add(frame);
 
     if (_rawText.contains(lower)) {
       final closeIdx = _indexOfIgnoreCase(html, '</$lower', i);
       final text = closeIdx == -1 ? html.substring(i) : html.substring(i, closeIdx);
-      if (text.isNotEmpty) el.append(TextNode(text));
+      if (text.isNotEmpty) frame.kids.add(Text(text));
       i = closeIdx == -1 ? n : closeIdx;
     } else if (_escapableRaw.contains(lower)) {
       final closeIdx = _indexOfIgnoreCase(html, '</$lower', i);
       final text = closeIdx == -1 ? html.substring(i) : html.substring(i, closeIdx);
-      if (text.isNotEmpty) el.append(TextNode(decodeEntities(text)));
+      if (text.isNotEmpty) frame.kids.add(Text(decodeEntities(text)));
       i = closeIdx == -1 ? n : closeIdx;
     }
   }
 
-  _implyStructure(root);
-  return Doc(root);
+  // Frames left open at the end close in order, innermost first.
+  while (stack.length > 1) {
+    final shut = closeFrame(stack.removeLast());
+    stack.last.kids.add(shut);
+  }
+  return assembleDocument(root.kids);
 }
 
 /// Closes elements the HTML standard auto-closes: an open `<li>` before the
 /// next `<li>`, an open `<p>` before block starts, open cells before the next
 /// cell or row, an open row before the next row.
-void _autoClose(List<Element> stack, String name) {
+void _autoClose(List<_Frame> stack, String name) {
   String top() => stack.length > 1 ? stack.last.tag.toLowerCase() : '';
   void popTop() {
-    if (stack.length > 1) stack.removeLast();
+    if (stack.length > 1) {
+      final shut = stack.removeLast().freeze();
+      stack.last.kids.add(shut);
+    }
   }
 
   switch (name.toLowerCase()) {
@@ -126,41 +158,6 @@ void _autoClose(List<Element> stack, String name) {
         'article':
       if (top() == 'p') popTop();
   }
-}
-
-/// Wraps a fragment without `<html>` in an implied `html > head + body` (as a
-/// browser does), so `find('body')` works on text-only pages. A document with
-/// `<html>` but no `<body>` gains an empty one.
-void _implyStructure(Element root) {
-  Element? htmlEl;
-  for (final child in root.children) {
-    if (child is Element && child.tag.toLowerCase() == 'html') {
-      htmlEl = child;
-      break;
-    }
-  }
-  if (htmlEl == null) {
-    htmlEl = Element('html');
-    final head = Element('head');
-    final body = Element('body');
-    final moved = List<Node>.of(root.children);
-    root.children.clear();
-    for (final child in moved) {
-      body.append(child);
-    }
-    htmlEl.append(head);
-    htmlEl.append(body);
-    root.append(htmlEl);
-    return;
-  }
-  var hasBody = false;
-  for (final child in htmlEl.children) {
-    if (child is Element && child.tag.toLowerCase() == 'body') {
-      hasBody = true;
-      break;
-    }
-  }
-  if (!hasBody) htmlEl.append(Element('body'));
 }
 
 (String, Map<String, String>) _parseTag(String src) {
@@ -225,7 +222,7 @@ const Map<String, String> _entities = {
   'gt': '>',
   'quot': '"',
   'apos': "'",
-  'nbsp': '\u00A0',
+  'nbsp': ' ',
   'copy': '©',
   'reg': '®',
   'hellip': '…',

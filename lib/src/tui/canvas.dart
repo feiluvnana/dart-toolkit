@@ -1,38 +1,22 @@
 /// The immediate-mode canvas: widgets paint cells into [grid] inside [bounds],
 /// flowing down from the cursor. `split` carves bounded child canvases;
 /// `popup` paints centered overlays last. Caller-owned state throughout
-/// (`sel`, `FieldState`, focus flags) — the proposal's style.
+/// (`selected`, `FieldState`, focus flags).
 ///
 /// ```dart
 /// term.draw((ui) {
 ///   ui.box(title: 'Menu', build: (menu) {
-///     menu.list(['Overview', 'Settings'], sel: sel);
+///     menu.list(['Overview', 'Settings'], selected: sel);
 ///   });
 /// });
 /// ```
 library;
 
-import 'dart:typed_data';
-
+import '../image/image.dart';
 import 'buffer.dart';
 import 'events.dart';
 import 'layout.dart';
 import 'width.dart';
-
-/// A clickable region: painted by [button], fired by `Term.click`.
-final class Clickable {
-  final Rect rect;
-  final void Function() onPressed;
-  Clickable(this.rect, this.onPressed);
-}
-
-/// A board row: a labeled fraction with trailing text.
-final class BoardRow {
-  final String label;
-  final num val;
-  final num max;
-  const BoardRow(this.label, this.val, this.max);
-}
 
 /// Editable single-line text: the caller owns it, paints it with
 /// `ui.field(state)`, and feeds it events with `state.handle(ev)`.
@@ -104,7 +88,7 @@ final class Canvas {
   final Grid grid;
   Rect bounds;
   int _cy;
-  final List<Clickable> clickables = [];
+  final List<({Rect rect, void Function() onPress})> clickables = [];
   final List<void Function(Canvas)> _overlays = [];
 
   /// Hardware cursor position (column, row), set by [field] when focused.
@@ -161,59 +145,54 @@ final class Canvas {
   }
 
   /// A line of text, wrapped to the bounds.
-  void text(
-    Object content, {
-    TuiColor? fg,
-    TuiColor? bg,
-    bool bold = false,
-    bool dim = false,
-    bool italic = false,
-    bool underline = false,
-    bool reverse = false,
-  }) {
-    final style = CellStyle(bold: bold, dim: dim, italic: italic, underline: underline, reverse: reverse);
-    for (final line in wrap(content.toString(), bounds.w)) {
+  void text(String s, {TuiColor? fg, TuiColor? bg, CellStyle style = const CellStyle()}) {
+    for (final line in wrap(s, bounds.w)) {
       if (_cy >= bounds.y + bounds.h) return;
       grid.write(bounds.x, _cy, line, fg: fg, bg: bg, attrs: style);
       _cy++;
     }
   }
 
+  /// A spinner and its [label] on one line: the frame comes from the clock, so it turns
+  /// whenever the loop redraws (poll with a `timeout` to keep it moving). [fg] colours the
+  /// spinner; [style] applies to the label.
+  void spinner(String label, {TuiColor? fg, CellStyle style = const CellStyle(), SpinGlyphs glyphs = SpinGlyphs.dots}) {
+    if (_cy >= bounds.y + bounds.h) return;
+    final frame = glyphs.frame();
+    grid.write(bounds.x, _cy, frame, fg: fg);
+    final at = textWidth(frame) + 1;
+    if (at < bounds.w) grid.write(bounds.x + at, _cy, truncate(label, bounds.w - at), attrs: style);
+    _cy++;
+  }
+
   /// A labeled gauge filling the bounds width ([glyphs] picks the set;
   /// [BarGlyphs.ascii] where the terminal cannot draw Unicode).
-  void bar({
-    required num val,
-    required num max,
-    String? label,
-    String? unit,
-    int? width,
-    BarGlyphs glyphs = BarGlyphs.blocks,
-  }) {
+  void bar(num value, num max, {String? label, String? unit, int? width, BarGlyphs glyphs = BarGlyphs.line}) {
     if (_cy >= bounds.y + bounds.h) return;
     final w = (width ?? bounds.w).clamp(10, bounds.w);
-    final ratio = max <= 0 ? 1.0 : (val / max).clamp(0.0, 1.0);
+    final ratio = max <= 0 ? 1.0 : (value / max).clamp(0.0, 1.0);
     final pct = '${(ratio * 100).toStringAsFixed(0)}%';
-    final suffix = unit == null ? '' : ' $val/$max $unit';
+    final suffix = unit == null ? '' : ' $value/$max $unit';
     final fixed = '${label == null ? '' : '$label '}$pct$suffix ';
     final glyphsWidth = (w - textWidth(fixed) - 2).clamp(1, w);
     grid.write(bounds.x, _cy, '$fixed[${glyphs.draw(ratio, glyphsWidth)}]', fg: TuiColor.green);
     _cy++;
   }
 
-  /// A scrollable list: only the viewport rows around [sel] paint, so a
+  /// A scrollable list: only the viewport rows around [selected] paint, so a
   /// 10 000-row list never ports all rows. The selection is reversed.
-  void list(List<String> items, {int sel = 0}) {
+  void list(List<String> items, {int selected = 0}) {
     final height = bounds.y + bounds.h - _cy;
     if (height <= 0) return;
     var start = 0;
     if (items.length > height) {
-      start = (sel - height ~/ 2).clamp(0, items.length - height);
+      start = (selected - height ~/ 2).clamp(0, items.length - height);
     }
     for (var i = 0; i < height && start + i < items.length; i++) {
       final index = start + i;
-      final marker = index == sel ? '▸' : ' ';
+      final marker = index == selected ? '▸' : ' ';
       final line = truncate('$marker ${items[index]}', bounds.w);
-      if (index == sel) {
+      if (index == selected) {
         grid.write(bounds.x, _cy, line, attrs: const CellStyle(reverse: true));
       } else {
         grid.write(bounds.x, _cy, line);
@@ -221,10 +200,6 @@ final class Canvas {
       _cy++;
     }
   }
-
-  /// A selectable menu of values, labeled per row.
-  void menu<T>(List<T> items, {required String Function(T) label, required int sel}) =>
-      list([for (final item in items) label(item)], sel: sel);
 
   /// Splits the remaining bounds: [vert] stacks rows, else columns. Children
   /// paint their share; [flex] weights shares (equal when omitted).
@@ -247,21 +222,14 @@ final class Canvas {
     _cy = rest.y + rest.h;
   }
 
-  /// [n] blank lines.
-  void gap([int n = 1]) {
-    for (var i = 0; i < n && _cy < bounds.y + bounds.h; i++) {
-      _cy++;
-    }
-  }
-
   /// A labeled button: paints (reversed when [focused]) and registers its
-  /// region; `Term.click` fires [onPressed] for pointer presses inside it.
-  void button(String label, {required void Function() onPressed, bool focused = false}) {
+  /// region; a pointer press inside it fires [onPress].
+  void button(String label, {required void Function() onPress, bool focused = false}) {
     if (_cy >= bounds.y + bounds.h) return;
     final text = '[ $label ]';
     final x = bounds.x;
     grid.write(x, _cy, truncate(text, bounds.w), attrs: CellStyle(reverse: focused));
-    clickables.add(Clickable(Rect(x, _cy, textWidth(text).clamp(0, bounds.w), 1), onPressed));
+    clickables.add((rect: Rect(x, _cy, textWidth(text).clamp(0, bounds.w), 1), onPress: onPress));
     _cy++;
   }
 
@@ -290,7 +258,7 @@ final class Canvas {
   }
 
   /// A tab row; the selected tab is reversed.
-  void tabs(List<String> labels, {required int sel}) {
+  void tabs(List<String> labels, {required int selected}) {
     if (_cy >= bounds.y + bounds.h) return;
     var x = bounds.x;
     for (var i = 0; i < labels.length; i++) {
@@ -300,7 +268,7 @@ final class Canvas {
         x,
         _cy,
         tab,
-        attrs: CellStyle(reverse: i == sel, bold: i == sel),
+        attrs: CellStyle(reverse: i == selected, bold: i == selected),
       );
       x += textWidth(tab) + 1;
     }
@@ -348,30 +316,6 @@ final class Canvas {
       ui.clickables.addAll(overlay.clickables);
       if (overlay.cursorPos != null) ui.cursorPos = overlay.cursorPos;
     });
-  }
-
-  /// Status rows: a label and a fraction bar each.
-  void board(List<BoardRow> rows) {
-    for (final row in rows) {
-      if (_cy >= bounds.y + bounds.h) return;
-      bar(val: row.val, max: row.max, label: row.label);
-    }
-  }
-
-  /// Trailing viewport over [lines]: the last rows that fit, scrolled up by
-  /// [offset].
-  void log(List<String> lines, {int offset = 0}) {
-    final height = bounds.y + bounds.h - _cy;
-    if (height <= 0) return;
-    final end = (lines.length - offset).clamp(0, lines.length);
-    final start = (end - height).clamp(0, end);
-    for (var i = start; i < end; i++) {
-      for (final wrapped in wrap(lines[i], bounds.w)) {
-        if (_cy >= bounds.y + bounds.h) return;
-        grid.write(bounds.x, _cy, wrapped);
-        _cy++;
-      }
-    }
   }
 
   /// Minimal Markdown: `#`/`##` headings bold, `- ` bullets, `**bold**`,
@@ -446,30 +390,26 @@ final class Canvas {
 
   /// Pixels drawn as half-block cells: two picture rows a cell, the upper
   /// pixel `▀`'s foreground and the lower its background (a lone lower pixel
-  /// is `▄`). [frames] are RGBA bytes, [width]×[height] each; more than one
-  /// animates, [every] apart (frame picked by the clock). A pixel more than
-  /// half transparent shows what is behind it (the cell is left alone).
-  /// Larger than the bounds, it scales down to fit. Sixel output stays
-  /// deferred (terminal support matrix + image pipeline).
-  void picture(
-    List<Uint8List> frames, {
-    required int width,
-    required int height,
-    Duration every = const Duration(milliseconds: 100),
-  }) {
+  /// is `▄`). [frames] are images of one size (else an [ArgumentError]); more
+  /// than one animates, [every] apart (frame picked by the clock). A pixel
+  /// more than half transparent shows what is behind it (the cell is left
+  /// alone). Larger than the bounds, it scales down to fit. Sixel output
+  /// stays deferred (terminal support matrix + image pipeline).
+  void picture(List<Image> frames, {Duration every = const Duration(milliseconds: 100)}) {
     if (frames.isEmpty) throw ArgumentError.value(frames, 'frames', 'Invalid frames: none');
+    final width = frames.first.w, height = frames.first.h;
     if (width < 1 || height < 1) {
       throw ArgumentError.value((width, height), 'size', 'Invalid size, expected at least 1×1');
     }
     for (final f in frames) {
-      if (f.length != width * height * 4) {
-        throw ArgumentError.value(f.length, 'frames', 'Invalid frame: expected ${width * height * 4} RGBA bytes');
+      if (f.w != width || f.h != height) {
+        throw ArgumentError.value((f.w, f.h), 'frames', 'Invalid frame: every frame is $width×$height');
       }
     }
     if (every <= Duration.zero) throw ArgumentError.value(every, 'every', 'Invalid interval, expected more than zero');
     final frame = frames.length == 1
-        ? frames[0]
-        : frames[DateTime.now().microsecondsSinceEpoch ~/ every.inMicroseconds % frames.length];
+        ? frames[0].rgba
+        : frames[DateTime.now().microsecondsSinceEpoch ~/ every.inMicroseconds % frames.length].rgba;
     final availH = (bounds.y + bounds.h - _cy) * 2;
     if (bounds.w <= 0 || availH <= 0) return;
     final fit = [width / bounds.w, height / availH, 1.0].reduce((a, b) => a > b ? a : b);

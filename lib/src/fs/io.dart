@@ -9,25 +9,21 @@ import '../core/native.dart' as l2native;
 import '../core/traits.dart';
 
 export '../core/errors.dart';
+export '../core/pipe.dart';
+export '../core/traits.dart';
 
 /// The native `tk_chmod`/`tk_copy_file`/`tk_file_id`/`tk_rename` calls behind
 /// [File] (cutover: the engine owns them). Looked up once per isolate from
-/// [l2native.Lib2Native.require], so a missing library throws
+/// [l2native.require], so a missing library throws
 /// [UnsupportedError] before reaching them.
 abstract final class _FsNative {
-  static ffi.DynamicLibrary get _lib => l2native.Lib2Native.require();
+  static ffi.DynamicLibrary get _lib => l2native.require();
 
   static final chmod = _lib
       .lookupFunction<
         ffi.Int32 Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr, ffi.Uint32),
         int Function(ffi.Pointer<ffi.Uint8>, int, int)
       >('tk_chmod');
-
-  static final fileId = _lib
-      .lookupFunction<
-        ffi.Int32 Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr, ffi.Pointer<ffi.Uint64>),
-        int Function(ffi.Pointer<ffi.Uint8>, int, ffi.Pointer<ffi.Uint64>)
-      >('tk_file_id');
 
   static final copyFile = _lib
       .lookupFunction<
@@ -72,83 +68,14 @@ Exception _fsFileError(String message, String path, String op) {
 
 /// Renames [src] over [dst] through `tk_rename` (atomic replace; on Windows a
 /// held target waits with backoff and retries). Without the library it is an
-/// [UnsupportedError] (r50: no Dart fallback).
+/// [UnsupportedError] (rule 42: no Dart fallback).
 Future<void> renameFile(String src, String dst) async {
-  final rc = l2native.Lib2Native.withText(src, (sp, sn) {
-    return l2native.Lib2Native.withText(dst, (dp, dn) {
+  final rc = l2native.withText(src, (sp, sn) {
+    return l2native.withText(dst, (dp, dn) {
       return _FsNative.rename(sp, sn, dp, dn);
     });
   });
-  if (rc < 0) throw _fsFileError(l2native.Lib2Native.lastError(), src, 'Cannot rename');
-}
-
-/// A filesystem path: `operator /` to join, [name] for the last segment, [isLink] and
-/// [target] for symlinks, and sandbox-safe [resolve]/[starts]/[equals].
-final class Path {
-  final String _str;
-
-  Path(Object path) : _str = path is Path ? path._str : path.toString();
-
-  /// The path as written.
-  String get str => _str;
-
-  /// The last segment.
-  String get name {
-    final clean = _str.replaceAll('\\', '/');
-    final i = clean.lastIndexOf('/');
-    return i == -1 ? clean : clean.substring(i + 1);
-  }
-
-  /// The directory holding this path.
-  Path get parent => Path(io.File(_str).parent.path);
-
-  /// The absolute form.
-  Path get absolute => Path(io.File(_str).absolute.path);
-
-  /// Whether a symlink sits at this path.
-  bool get isLink => io.Link(_str).existsSync();
-
-  /// The symlink's target; throws when this is not a link.
-  Future<String> get target => io.Link(_str).target();
-
-  /// Whether anything exists at this path.
-  Future<bool> get exists => io.FileSystemEntity.isDirectory(_str).then((d) => d || io.File(_str).existsSync());
-
-  /// Joins a segment: `root / 'a' / 'b.txt'`.
-  Path operator /(Object other) {
-    var base = _str;
-    final sep = io.Platform.pathSeparator;
-    if (base.isNotEmpty && !base.endsWith('/') && !base.endsWith(sep)) base = '$base$sep';
-    return Path('$base$other');
-  }
-
-  /// The canonical path after following every symlink.
-  Future<Path> resolve() async {
-    final type = await io.FileSystemEntity.type(_str, followLinks: false);
-    return switch (type) {
-      io.FileSystemEntityType.notFound => absolute,
-      _ => Path(await io.File(_str).resolveSymbolicLinks()),
-    };
-  }
-
-  /// Whether this path is [root] itself or sits below it, compared on the
-  /// canonical form: `.`/`..` collapsed, separators unified, case folded where
-  /// the platform's filesystem is case-insensitive (Windows, macOS).
-  bool starts(Path root) => _startsIn(_canonical(_str), _canonical(root._str));
-
-  /// Whether this path names the same file as [other], compared on the
-  /// canonical form (see [starts]).
-  bool equals(Object other) =>
-      other is Path ? _canonical(_str) == _canonical(other._str) : _canonical(_str) == _canonical(other.toString());
-
-  @override
-  String toString() => _str;
-
-  @override
-  bool operator ==(Object other) => other is Path && other._str == _str;
-
-  @override
-  int get hashCode => _str.hashCode;
+  if (rc < 0) throw _fsFileError(l2native.lastError(), src, 'Cannot rename');
 }
 
 /// Whether canonical [here] is [there] itself or below it.
@@ -196,8 +123,8 @@ final _driveRoot = RegExp(r'^[A-Za-z]:([/\\]|$)');
 ///
 /// Both the lexical join and the absolute canonical forms are checked, so the
 /// target is [root] itself or sits below it on any platform.
-Future<Path> sandbox(Object root, String member) async {
-  final base = root is Path ? root._str : root.toString();
+Future<String> sandbox(Object root, String member) async {
+  final base = root.toString();
   if (member.contains('\x00')) throw SecurityException('Refused member with NUL byte');
   final m = member.replaceAll('\\', '/');
   if (m.isEmpty) throw SecurityException('Refused empty member');
@@ -208,180 +135,289 @@ Future<Path> sandbox(Object root, String member) async {
   final rootAbs = _canonical(io.File(base).absolute.path);
   final targetAbs = _canonical(io.File(joined).absolute.path);
   if (!_startsIn(targetAbs, rootAbs)) throw SecurityException('Refused escape outside $base: $member');
-  return Path(joined);
+  return joined;
 }
 
-/// A file: [text], [bytes], [write], [atomic] and the streaming [read]/[write] of a [Reader]
-/// and [Writer], plus [seek] as a [Seeker] for range-resume. `File.open` gives a reader
-/// over an open handle.
+/// Joins [b] under [a] with the platform separator (skipped when [a] already
+/// ends with one).
+String _join(String a, String b) {
+  final sep = io.Platform.pathSeparator;
+  if (a.isNotEmpty && !a.endsWith('/') && !a.endsWith(sep)) a = '$a$sep';
+  return '$a$b';
+}
+
+/// A file. A [Source] and a [Target]: `pipe` opens a reader/writer inside, so
+/// [text]/[bytes]/[lines] stay one-shot and [write] replaces atomically.
 ///
-/// The [Writer] contract holds everywhere: a `String` is UTF-8 encoded, a
+/// The one `Object` parameter is text-or-bytes: a `String` is UTF-8 encoded, a
 /// `List<int>`/`Uint8List` is written verbatim, anything else is an
 /// [ArgumentError]. A reading on a missing file throws [io.PathNotFoundException].
-final class File implements Reader, Writer, Closer, Seeker {
-  final String _path;
-  io.RandomAccessFile? _raf;
-
-  File(Object path) : _path = path is Path ? path.str : path.toString();
+final class File implements Source, Target {
+  File(this.path);
 
   /// The path as written.
-  String get str => _path;
-
-  @override
-  String toString() => _path;
-
-  /// The path as a [Path].
-  Path get path => Path(_path);
+  final String path;
 
   /// The last segment.
-  String get name => Path(_path).name;
-
-  /// Opens this file for reading and answers a reader over it. The reader
-  /// honours [seek] for range-resume.
-  static Future<File> open(Object path) async {
-    final f = File(path);
-    f._raf = await io.File(f._path).open(mode: io.FileMode.read);
-    return f;
+  String get name {
+    final clean = path.replaceAll('\\', '/');
+    final i = clean.lastIndexOf('/');
+    return i == -1 ? clean : clean.substring(i + 1);
   }
+
+  /// The directory holding this file.
+  Dir get parent => Dir(io.File(path).parent.path);
 
   /// Whether anything sits at this path.
-  Future<bool> get exists => io.File(_path).exists();
+  Future<bool> exists() => io.File(path).exists();
 
-  /// Size in bytes.
-  Future<int> get size => io.File(_path).length();
+  /// Size in bytes, or 0 when missing ([Target] needs 0 for resume).
+  @override
+  Future<int> size() async {
+    try {
+      return await io.File(path).length();
+    } on io.PathNotFoundException {
+      return 0;
+    }
+  }
+
+  /// Whether a symlink sits at this path.
+  Future<bool> isLink() => io.FileSystemEntity.isLink(path);
+
+  /// The symlink's target as a [File], or null when this is not a link.
+  Future<File?> target() async {
+    if (!await isLink()) return null;
+    return File(await io.Link(path).target());
+  }
 
   /// The whole file decoded as UTF-8.
-  Future<String> text() => io.File(_path).readAsString();
+  Future<String> text() => io.File(path).readAsString();
 
   /// The whole file as bytes.
-  Future<Uint8List> bytes() => io.File(_path).readAsBytes();
+  Future<Uint8List> bytes() => io.File(path).readAsBytes();
 
   /// A stream of the file's UTF-8 lines.
-  Stream<String> lines() => io.File(_path).openRead().transform(utf8.decoder).transform(const LineSplitter());
+  Stream<String> lines() => io.File(path).openRead().transform(utf8.decoder).transform(const LineSplitter());
 
-  /// Writes [data] (`String` or `List<int>`), replacing the file; answers the bytes written.
-  @override
-  Future<int> write(Object data) async {
+  /// Replaces the file with [data] (`String` or `List<int>`), atomically: a
+  /// temporary sibling is renamed over the target (held-target retries on
+  /// Windows), so a failed write leaves the old content and no temp behind.
+  Future<void> write(Object data) async {
     final bytes = _writeBytes(data);
-    await io.File(_path).writeAsBytes(bytes, flush: false);
-    return bytes.length;
-  }
-
-  /// Appends [data] (`String` or `List<int>`) to the file, creating it if needed.
-  Future<int> append(Object data) async {
-    final bytes = _writeBytes(data);
-    await io.File(_path).writeAsBytes(bytes, mode: io.FileMode.append);
-    return bytes.length;
-  }
-
-  /// Writes [data] (`String` or `List<int>`) to a temporary sibling, then renames it
-  /// atomically over this file (Windows: held-target retries, see [renameFile]).
-  Future<void> atomic(Object data) async {
-    final bytes = _writeBytes(data);
-    final tmp = io.File('$_path.tmp_${DateTime.now().microsecondsSinceEpoch}');
-    await tmp.writeAsBytes(bytes);
-    await renameFile(tmp.path, _path);
-  }
-
-  /// Copies this file to [dst] atomically (via a temporary sibling renamed
-  /// over the target) with `tk_copy_file` (source permission bits kept,
-  /// partial destination removed). Without the library it is an
-  /// [UnsupportedError] (r50: no Dart fallback).
-  Future<void> copy(Object dst) async {
-    final target = Path(dst).str;
-    final tmp = '$target.tmp_${DateTime.now().microsecondsSinceEpoch}';
+    final tmp = '$path.tmp_${DateTime.now().microsecondsSinceEpoch}';
     try {
-      await _nativeCopy(_path, tmp);
-      await renameFile(tmp, target);
+      await io.File(tmp).writeAsBytes(bytes);
+    } catch (_) {
+      await _gone(tmp);
+      rethrow;
+    }
+    try {
+      await renameFile(tmp, path);
     } catch (_) {
       await _gone(tmp);
       rethrow;
     }
   }
 
-  /// Moves (renames) this file to [dst] (held-target retries on Windows);
-  /// across volumes it copies and then drops the source, so the destination
-  /// is complete before the source is touched.
-  Future<void> move(Object dst) async {
-    final target = Path(dst).str;
+  /// Appends [data] (`String` or `List<int>`) to the file, creating it if needed.
+  Future<void> append(Object data) async {
+    final bytes = _writeBytes(data);
+    await io.File(path).writeAsBytes(bytes, mode: io.FileMode.append);
+  }
+
+  /// Copies this file to [to] atomically (via a temporary sibling renamed
+  /// over the target) with `tk_copy_file` (source permission bits kept,
+  /// partial destination removed); answers [to]. Without the library it is an
+  /// [UnsupportedError] (rule 42: no Dart fallback).
+  Future<File> copy(File to) async {
+    final tmp = '${to.path}.tmp_${DateTime.now().microsecondsSinceEpoch}';
     try {
-      await renameFile(_path, target);
-      return;
+      await _nativeCopy(path, tmp);
+      await renameFile(tmp, to.path);
+    } catch (_) {
+      await _gone(tmp);
+      rethrow;
+    }
+    return to;
+  }
+
+  /// Moves (renames) this file to [to] (held-target retries on Windows);
+  /// across volumes it copies and then drops the source, so the destination
+  /// is complete before the source is touched; answers [to].
+  Future<File> move(File to) async {
+    try {
+      await renameFile(path, to.path);
+      return to;
     } on io.FileSystemException catch (e) {
       if (!_isCrossVolume(e)) rethrow;
     }
-    await copy(target);
+    await copy(to);
     await drop();
-  }
-
-  /// The identity of this file (device+inode / volume+index via `tk_file_id`):
-  /// a renamed file keeps it, another file put in its place has another.
-  /// Without the library it is an [UnsupportedError] (r50: no Dart fallback).
-  Future<(int, int)?> id() async {
-    final out = l2native.Lib2Native.alloc(16).cast<ffi.Uint64>();
-    try {
-      return l2native.Lib2Native.withText(_path, (ptr, len) => _FsNative.fileId(ptr, len, out)) < 0
-          ? null
-          : (out[0], out[1]);
-    } finally {
-      l2native.Lib2Native.free(out.cast(), 16);
-    }
+    return to;
   }
 
   /// Deletes this file if it exists.
   Future<void> drop() async {
-    final f = io.File(_path);
+    final f = io.File(path);
     if (await f.exists()) await f.delete();
   }
 
-  /// Makes [dst] a hard link to this file.
-  Future<void> hardlink(Object dst) => io.Link(Path(dst).str).create(_path);
-
   /// Changes the permission bits (octal [mode]) through `tk_chmod`: one
   /// system call, and on Windows the owner's write bit maps to read-only.
-  /// Without the native library it is an [UnsupportedError] (r50: no Dart
+  /// Without the native library it is an [UnsupportedError] (rule 42: no Dart
   /// fallback, no process spawn).
   Future<void> chmod(int mode) async {
-    final rc = l2native.Lib2Native.withText(_path, (ptr, len) => _FsNative.chmod(ptr, len, mode));
-    if (rc < 0) throw _fsFileError(l2native.Lib2Native.lastError(), _path, 'Cannot chmod');
+    final rc = l2native.withText(path, (ptr, len) => _FsNative.chmod(ptr, len, mode));
+    if (rc < 0) throw _fsFileError(l2native.lastError(), path, 'Cannot chmod');
   }
 
-  /// A [Writer] over this file, appending when [append] is set.
-  FileWriter writer({bool append = false}) => FileWriter(this, append: append);
+  /// Makes [link] a symbolic link to this file; answers [link].
+  Future<File> symlink(File link) async {
+    await io.Link(link.path).create(path);
+    return link;
+  }
 
   /// A uniquely named temporary file.
   static Future<File> temp({String? ext}) async {
     final dir = await io.Directory.systemTemp.createTemp('tk_');
-    return File(Path(dir.path) / 'temp${ext ?? '.tmp'}');
+    return File(_join(dir.path, 'temp${ext ?? '.tmp'}'));
   }
+
+  /// A file's unpacking goes by path, so there is no streamed length to hint.
+  @override
+  int? get lengthHint => null;
+
+  /// A reader over this file starting at [from], so a half-read file resumes:
+  /// `await src.pipe(dst, resume: true)`.
+  @override
+  Future<Reader> reader({int from = 0}) async {
+    if (from < 0) throw ArgumentError.value(from, 'from', 'Must be non-negative');
+    final raf = await io.File(path).open(mode: io.FileMode.read);
+    try {
+      await raf.setPosition(from);
+    } catch (_) {
+      await raf.close();
+      rethrow;
+    }
+    return _FileReader(raf);
+  }
+
+  /// A writer for this file. It replaces atomically: chunks go to a temporary
+  /// sibling that [Writer.close] renames over the target (on an error the
+  /// temp is deleted and the old content stays). With [resume], it appends to
+  /// the file itself, so a partial file survives a crash.
+  @override
+  Future<Writer> writer({bool resume = false}) async {
+    if (resume) return _AppendWriter(io.File(path).openWrite(mode: io.FileMode.append));
+    final tmp = '$path.tmp_${DateTime.now().microsecondsSinceEpoch}';
+    return _AtomicWriter(io.File(tmp).openWrite(), tmp, path);
+  }
+
+  @override
+  String toString() => path;
+
+  @override
+  bool operator ==(Object other) => other is File && other.path == path;
+
+  @override
+  int get hashCode => path.hashCode;
+}
+
+/// A reader over an open file, with seeking for range-resume.
+final class _FileReader implements Reader, Seeker {
+  final io.RandomAccessFile _raf;
+  var _closed = false;
+
+  _FileReader(this._raf);
 
   @override
   Future<int> read(Uint8List buf) async {
-    final raf = _raf ??= await io.File(_path).open(mode: io.FileMode.read);
-    return raf.readInto(buf);
+    if (_closed) throw StateError('Cannot read: file is closed');
+    return _raf.readInto(buf);
   }
 
-  /// Moves the read position to [offset] (from the start) and answers it, so a
-  /// half-read file can resume: `await f.seek(saved); await f.pipe(dst);`.
+  /// Moves the read position to [offset] (from the start) and answers it.
   @override
   Future<int> seek(int offset) async {
     if (offset < 0) throw ArgumentError.value(offset, 'offset', 'Must be non-negative');
-    final raf = _raf ??= await io.File(_path).open(mode: io.FileMode.read);
-    await raf.setPosition(offset);
+    await _raf.setPosition(offset);
     return offset;
   }
 
   @override
-  Future<void> flush() async => _raf?.flush();
-
-  @override
   Future<void> close() async {
-    await _raf?.close();
-    _raf = null;
+    if (_closed) return;
+    _closed = true;
+    await _raf.close();
   }
 }
 
-/// [data] as bytes under the [Writer] contract.
+/// A [Writer] that replaces its target atomically: chunks land in a temporary
+/// sibling; [close] renames it over the target, so the file is never
+/// half-written. On an error the temp is deleted and the old content stays.
+final class _AtomicWriter implements Writer {
+  final io.IOSink _sink;
+  final String _tmp;
+  final String _target;
+  var _closed = false;
+
+  _AtomicWriter(this._sink, this._tmp, this._target);
+
+  @override
+  Future<int> write(Uint8List data) async {
+    _sink.add(data);
+    return data.length;
+  }
+
+  @override
+  Future<void> flush() => _sink.flush();
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    try {
+      await _sink.close();
+    } catch (_) {
+      await _gone(_tmp);
+      rethrow;
+    }
+    try {
+      await renameFile(_tmp, _target);
+    } catch (_) {
+      await _gone(_tmp);
+      rethrow;
+    }
+  }
+}
+
+/// A [Writer] that appends to the file itself: a partial file survives a
+/// crash, so a resumed transfer can continue from [File.size].
+final class _AppendWriter implements Writer {
+  final io.IOSink _sink;
+  var _closed = false;
+
+  _AppendWriter(this._sink);
+
+  @override
+  Future<int> write(Uint8List data) async {
+    _sink.add(data);
+    return data.length;
+  }
+
+  @override
+  Future<void> flush() => _sink.flush();
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _sink.close();
+  }
+}
+
+/// [data] as bytes: a `String` is UTF-8 encoded, a `List<int>`/`Uint8List` is
+/// written verbatim, anything else is an [ArgumentError].
 List<int> _writeBytes(Object data) {
   if (data is String) return utf8.encode(data);
   if (data is List<int>) return data;
@@ -393,12 +429,12 @@ List<int> _writeBytes(Object data) {
 /// copy removes [dst]. [dst] must not exist.
 Future<void> _nativeCopy(String src, String dst) async {
   final s = utf8.encode(src), d = utf8.encode(dst);
-  final rc = l2native.Lib2Native.withBytes(s, (sp, sn) {
-    return l2native.Lib2Native.withBytes(d, (dp, dn) {
+  final rc = l2native.withBytes(s, (sp, sn) {
+    return l2native.withBytes(d, (dp, dn) {
       return _FsNative.copyFile(sp, sn, dp, dn, ffi.nullptr, ffi.nullptr);
     });
   });
-  if (rc < 0) throw _fsFileError(l2native.Lib2Native.lastError(), src, 'Cannot copy');
+  if (rc < 0) throw _fsFileError(l2native.lastError(), src, 'Cannot copy');
 }
 
 /// Deletes the file at [path] when there is one; never throws.
@@ -417,64 +453,57 @@ bool _isCrossVolume(io.FileSystemException e) {
   return m.contains('cross-device') || m.contains('different volume') || m.contains('exdev');
 }
 
-/// A [Writer] over a file, buffered through an `IOSink`.
-final class FileWriter implements Writer, Closer {
-  final File file;
-  final bool append;
-  io.IOSink? _sink;
-
-  FileWriter(this.file, {this.append = false});
-
-  io.IOSink get _live => _sink ??= io.File(file._path).openWrite(mode: append ? io.FileMode.append : io.FileMode.write);
-
-  @override
-  Future<int> write(Object data) async {
-    final bytes = _writeBytes(data);
-    _live.add(bytes);
-    return bytes.length;
-  }
-
-  @override
-  Future<void> flush() => _live.flush();
-
-  @override
-  Future<void> close() async {
-    await _sink?.close();
-    _sink = null;
-  }
-}
-
-/// A directory: [make], [drop], [find] (recursive glob) and [watch].
+/// A directory: [make] it, [drop] it, list [files]/[dirs], recursive [find] by
+/// glob, [watch] it — and [file]/[dir] for children by name.
 final class Dir {
-  final String _path;
-
-  Dir(Object path) : _path = path is Path ? path.str : path.toString();
+  Dir(this.path);
 
   /// The path as written.
-  String get str => _path;
-
-  @override
-  String toString() => _path;
-
-  /// The path as a [Path].
-  Path get path => Path(_path);
+  final String path;
 
   /// The last segment.
-  String get name => Path(_path).name;
+  String get name {
+    final clean = path.replaceAll('\\', '/');
+    final i = clean.lastIndexOf('/');
+    return i == -1 ? clean : clean.substring(i + 1);
+  }
+
+  /// The directory holding this directory.
+  Dir get parent => Dir(io.File(path).parent.path);
 
   /// Creates a unique temporary directory.
   static Future<Dir> temp() async => Dir((await io.Directory.systemTemp.createTemp('tk_dir_')).path);
 
   /// Whether anything sits at this path.
-  Future<bool> get exists => io.Directory(_path).exists();
+  Future<bool> exists() => io.Directory(path).exists();
 
   /// Creates this directory (and parents).
-  Future<void> make() => io.Directory(_path).create(recursive: true);
+  Future<void> make() => io.Directory(path).create(recursive: true);
 
   /// Deletes this directory and everything in it.
   Future<void> drop() async {
-    final d = io.Directory(_path);
+    final d = io.Directory(path);
     if (await d.exists()) await d.delete(recursive: true);
+  }
+
+  /// The files directly below this directory, sorted by path.
+  Future<List<File>> files() async {
+    final out = <File>[];
+    await for (final entity in io.Directory(path).list(recursive: false, followLinks: false)) {
+      if (entity is io.File) out.add(File(entity.path));
+    }
+    out.sort((a, b) => a.path.compareTo(b.path));
+    return out;
+  }
+
+  /// The folders directly below this directory, sorted by path.
+  Future<List<Dir>> dirs() async {
+    final out = <Dir>[];
+    await for (final entity in io.Directory(path).list(recursive: false, followLinks: false)) {
+      if (entity is io.Directory) out.add(Dir(entity.path));
+    }
+    out.sort((a, b) => a.path.compareTo(b.path));
+    return out;
   }
 
   /// Every file below this directory matched by the glob [pattern], against the
@@ -486,28 +515,38 @@ final class Dir {
   /// `[`/`{` is a [FormatException]; an absolute pattern or one with a `..`
   /// segment is an [ArgumentError]. A missing directory is a
   /// [io.PathNotFoundException].
-  Future<List<File>> find(String pattern, {bool recursive = true}) async {
-    final matcher = _checkedGlob(pattern);
-    if (!await io.Directory(_path).exists()) {
-      throw io.PathNotFoundException(_path, const io.OSError('No such file or directory', 2), 'Cannot list');
+  Future<List<File>> find(String glob) async {
+    final matcher = _checkedGlob(glob);
+    if (!await io.Directory(path).exists()) {
+      throw io.PathNotFoundException(path, const io.OSError('No such file or directory', 2), 'Cannot list');
     }
     final out = <File>[];
-    final stream = recursive
-        ? io.Directory(_path).list(recursive: true, followLinks: false)
-        : io.Directory(_path).list(recursive: false, followLinks: false);
+    final stream = io.Directory(path).list(recursive: true, followLinks: false);
     await for (final entity in stream) {
       if (entity is! io.File) continue;
-      final rel = _relativeTo(_path, entity.path);
+      final rel = _relativeTo(path, entity.path);
       if (matcher.hasMatch(rel)) out.add(File(entity.path));
     }
     return out;
   }
 
-  /// Every immediate entry.
-  Stream<io.FileSystemEntity> list() => io.Directory(_path).list();
-
   /// A stream of changes below this directory.
-  Stream<WatchEvent> watch() => io.Directory(_path).watch().map(WatchEvent._);
+  Stream<WatchEvent> watch() => io.Directory(path).watch().map(WatchEvent._);
+
+  /// The file [name] directly below this directory.
+  File file(String name) => File(_join(path, name));
+
+  /// The folder [name] directly below this directory.
+  Dir dir(String name) => Dir(_join(path, name));
+
+  @override
+  String toString() => path;
+
+  @override
+  bool operator ==(Object other) => other is Dir && other.path == path;
+
+  @override
+  int get hashCode => path.hashCode;
 }
 
 /// [child] relative to [start], with forward slashes.
@@ -667,38 +706,4 @@ final class WatchEvent {
 
   @override
   String toString() => '${type.name}: $path';
-}
-
-/// A symbolic link: [make] it, read its [target], [drop] it.
-final class Link {
-  final String _path;
-
-  Link(Object path) : _path = path is Path ? path.str : path.toString();
-
-  /// The path as written.
-  String get str => _path;
-
-  @override
-  String toString() => _path;
-
-  /// The path as a [Path].
-  Path get path => Path(_path);
-
-  /// Whether a link sits at this path.
-  Future<bool> get exists => io.Link(_path).exists();
-
-  /// Whether a link (not its target) sits here.
-  bool existsSync() => io.Link(_path).existsSync();
-
-  /// Creates this link pointing at [target].
-  Future<void> make({required Object target}) => io.Link(_path).create(Path(target).str);
-
-  /// The link's target.
-  Future<String> get target => io.Link(_path).target();
-
-  /// Deletes this link.
-  Future<void> drop() async {
-    final l = io.Link(_path);
-    if (await l.exists()) await l.delete();
-  }
 }

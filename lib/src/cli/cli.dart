@@ -5,6 +5,8 @@ import 'dart:io';
 
 import '../tui/buffer.dart';
 
+part '../testing/cli_fake.dart';
+
 /// ANSI colour and weight for terminal text: `'Done!'.green`, `'Error!'.red.bold`.
 extension AnsiText on String {
   String get _on => '\x1b[0m';
@@ -36,7 +38,7 @@ extension AnsiText on String {
 /// Cli.print('Done!'.green);
 /// final name = await Cli.ask('Your name?');
 /// final ok   = await Cli.confirm('Proceed?');
-/// final bar  = Cli.bar(total: 100);
+/// final bar  = Cli.bar(100);
 /// ```
 abstract final class Cli {
   static final Queue<String> _pending = Queue<String>();
@@ -44,9 +46,8 @@ abstract final class Cli {
   static StreamSubscription<String>? _sub;
   static bool _inputDone = false;
 
-  /// Overrides the line source (tests, or a `Tui`-driven prompt feeder).
-  /// `null` restores reading from `stdin`.
-  static set testLines(Stream<String>? lines) {
+  /// Points the line source at [lines] (`null` restores `stdin`).
+  static void _useLines(Stream<String>? lines) {
     _sub?.cancel();
     _sub = null;
     _pending.clear();
@@ -91,10 +92,7 @@ abstract final class Cli {
   }
 
   /// Writes [msg] and a newline.
-  static void print(Object msg) => stdout.writeln(msg);
-
-  /// Writes [msg] without a newline.
-  static void out(Object msg) => stdout.write(msg);
+  static void print(String msg) => stdout.writeln(msg);
 
   /// Asks a question and answers the line the user types.
   static Future<String> ask(String msg) async {
@@ -122,15 +120,10 @@ abstract final class Cli {
     return n - 1;
   }
 
-  /// A determinate progress [Bar] of [total] units ([glyphs] picks the set;
+  /// A determinate progress [Bar] of [max] units ([glyphs] picks the set;
   /// [BarGlyphs.ascii] where the terminal cannot draw Unicode).
-  static Bar bar({
-    required int total,
-    String? label,
-    String? unit,
-    int size = 24,
-    BarGlyphs glyphs = BarGlyphs.blocks,
-  }) => Bar(total: total, label: label, unit: unit, size: size, glyphs: glyphs);
+  static Bar bar(int max, {String? label, String? unit, int size = 24, BarGlyphs glyphs = BarGlyphs.line}) =>
+      Bar(max, label: label, unit: unit, size: size, glyphs: glyphs);
 
   /// Shows [label] while [fn] runs, then clears it.
   static Future<T> spin<T>(String label, Future<T> Function() fn) async {
@@ -151,16 +144,16 @@ final class _LiveRegion {
   static final List<Bar> _bars = [];
   static var _drawn = 0;
 
-  static bool get live => stderr.hasTerminal;
+  static bool get _live => stderr.hasTerminal;
 
-  static void attach(Bar bar) {
+  static void _attach(Bar bar) {
     if (!bar._live) return;
     _bars.add(bar);
-    draw();
+    _draw();
   }
 
-  static void draw() {
-    if (!live || _bars.isEmpty) return;
+  static void _draw() {
+    if (!_live || _bars.isEmpty) return;
     final buf = StringBuffer();
     if (_drawn > 0) buf.write('\x1b[${_drawn}A');
     var i = 0;
@@ -180,7 +173,7 @@ final class _LiveRegion {
     _drawn = _bars.length;
   }
 
-  static void detach(Bar bar, String doneLine) {
+  static void _detach(Bar bar, String doneLine) {
     if (!bar._live) {
       if (doneLine.isNotEmpty) stderr.writeln(doneLine);
       return;
@@ -191,7 +184,7 @@ final class _LiveRegion {
       // the remaining bars.
       stderr.write('\x1b[${_drawn}A\r\x1b[K$doneLine\n');
       _drawn = 0;
-      draw();
+      _draw();
       if (_bars.isEmpty) _drawn = 0;
     } else if (doneLine.isNotEmpty) {
       stderr.writeln(doneLine);
@@ -199,18 +192,18 @@ final class _LiveRegion {
   }
 }
 
-/// A live progress bar; [set] advances it, [done] finishes the line.
+/// A live progress bar; [set] advances it, [close] finishes the line.
 ///
 /// Each bar owns one line of the shared live region, so several bars tick
 /// side by side without corruption:
 ///
 /// ```dart
-/// final bars = [for (final url in urls) Cli.bar(total: 100, label: url)];
-/// await urls.parallelize((u) => Http.get(u).pipe(File('f'), onProgress: (p) => bars[0].set(p)));
-/// for (final b in bars) { b.done(); }
+/// final bar = Cli.bar(100, label: 'Downloading');
+/// bar.set(50);
+/// bar.close();
 /// ```
 final class Bar {
-  final int total;
+  final int max;
   final String? label;
   final String? unit;
 
@@ -225,18 +218,18 @@ final class Bar {
   bool _live = false;
   bool _done = false;
 
-  Bar({required this.total, this.label, this.unit, this.size = 24, this.glyphs = BarGlyphs.blocks}) {
+  Bar(this.max, {this.label, this.unit, this.size = 24, this.glyphs = BarGlyphs.line}) {
     _live = stderr.hasTerminal;
-    _LiveRegion.attach(this);
+    _LiveRegion._attach(this);
   }
 
   /// The value shown.
   int get value => _value;
 
-  /// Sets the completed amount to [v] (clamped to `[0, total]`).
-  void set(int v) {
+  /// Sets the completed amount to [value] (clamped to `[0, max]`).
+  void set(int value) {
     if (_done) return;
-    _value = v < 0 ? 0 : (v > total ? total : v);
+    _value = value < 0 ? 0 : (value > max ? max : value);
     _draw();
   }
 
@@ -244,10 +237,10 @@ final class Bar {
   void tick() => set(_value + 1);
 
   String get _line {
-    final ratio = total <= 0 ? 1.0 : _value / total;
+    final ratio = max <= 0 ? 1.0 : _value / max;
     final bar = glyphs.draw(ratio, size);
     final prefix = label == null ? '' : '$label ';
-    final suffix = unit == null ? '' : ' $_value/$total $unit';
+    final suffix = unit == null ? '' : ' $_value/$max $unit';
     return '$prefix[$bar] ${(ratio * 100).toStringAsFixed(0)}%$suffix';
   }
 
@@ -255,18 +248,18 @@ final class Bar {
     if (!_live || _done) return;
     if (_value == _drawn) return;
     _drawn = _value;
-    _LiveRegion.draw();
+    _LiveRegion._draw();
   }
 
   /// Finishes the bar, leaving a completion line.
-  void done() {
+  void close() {
     if (_done) return;
     _done = true;
     final secs = _clock.elapsedMilliseconds / 1000;
     final prefix = label == null ? '' : '$label ';
-    final line = '$prefix done ($_value/$total) in ${secs.toStringAsFixed(1)}s';
+    final line = '$prefix done ($_value/$max) in ${secs.toStringAsFixed(1)}s';
     if (_live) {
-      _LiveRegion.detach(this, line);
+      _LiveRegion._detach(this, line);
     } else if (label != null) {
       stderr.writeln(line);
     }

@@ -242,6 +242,29 @@ final class BarGlyphs {
   }
 }
 
+/// A spinner's frames, shown [every] apart. Shared by both UIs like [BarGlyphs]; where the
+/// terminal cannot draw Unicode, reach for [SpinGlyphs.ascii].
+final class SpinGlyphs {
+  final List<String> frames;
+  final Duration every;
+
+  const SpinGlyphs(this.frames, {this.every = const Duration(milliseconds: 80)});
+
+  /// Braille dots turning: `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`.
+  static const dots = SpinGlyphs(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']);
+
+  /// A quarter circle going round: `◜◝◞◟`.
+  static const arc = SpinGlyphs(['◜', '◝', '◞', '◟'], every: Duration(milliseconds: 120));
+
+  /// Only ASCII: `-\|/`.
+  static const ascii = SpinGlyphs(['-', r'\', '|', '/'], every: Duration(milliseconds: 120));
+
+  /// The frame for [at] (now by default): the spinner moves with the clock, so any redraw
+  /// shows it turning.
+  String frame([DateTime? at]) =>
+      frames[(at ?? DateTime.now()).microsecondsSinceEpoch ~/ every.inMicroseconds % frames.length];
+}
+
 /// Cell text attributes.
 final class CellStyle {
   final bool bold, dim, italic, underline, reverse;
