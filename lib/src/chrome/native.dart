@@ -13,10 +13,11 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import '../core/errors.dart';
+import '../core/jobs.dart';
 import '../core/native_status.dart';
 
 /// ABI of `dart_toolkit_chrome` this seam binds.
-const _chromeAbi = 1;
+const _chromeAbi = 2;
 
 /// The `chrome` cdylib binding: opened once, on first use.
 abstract final class _Chrome {
@@ -247,3 +248,54 @@ Uint8List take(String op, int Function(ffi.Pointer<ffi.Pointer<ffi.Uint8>> out, 
 /// The last error message the library recorded (call on the same thread,
 /// synchronously after the failing call).
 String lastError() => _Chrome.lastError();
+
+/// The chrome's job surface for [nativeJob]/[nativeCount]: CDP calls run on the
+/// library's worker threads and answer through a listener (rule 52).
+final JobLibrary chromeJobs = _ChromeJobs();
+
+final class _ChromeJobs implements JobLibrary {
+  static final _rc = require()
+      .lookupFunction<ffi.Int32 Function(ffi.Pointer<ffi.Void>), int Function(ffi.Pointer<ffi.Void>)>('tk_job_rc');
+  static final _take = require()
+      .lookupFunction<
+        ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Uint8>>, ffi.Pointer<ffi.IntPtr>),
+        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Uint8>>, ffi.Pointer<ffi.IntPtr>)
+      >('tk_job_take');
+  static final _error = require()
+      .lookupFunction<
+        ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
+        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int)
+      >('tk_job_error');
+  static final _free = require()
+      .lookupFunction<ffi.Void Function(ffi.Pointer<ffi.Void>), void Function(ffi.Pointer<ffi.Void>)>('tk_job_free');
+  static final _freeGiven = require()
+      .lookupFunction<
+        ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
+        void Function(ffi.Pointer<ffi.Uint8>, int)
+      >('tk_free');
+
+  @override
+  int jobRc(ffi.Pointer<ffi.Void> job) => _rc(job);
+
+  @override
+  int jobTake(ffi.Pointer<ffi.Void> job, ffi.Pointer<ffi.Pointer<ffi.Uint8>> out, ffi.Pointer<ffi.IntPtr> len) =>
+      _take(job, out, len);
+
+  @override
+  int jobError(ffi.Pointer<ffi.Void> job, ffi.Pointer<ffi.Uint8> buf, int cap) => _error(job, buf, cap);
+
+  @override
+  void jobFree(ffi.Pointer<ffi.Void> job) => _free(job);
+
+  @override
+  void freeGiven(ffi.Pointer<ffi.Uint8> ptr, int len) => _freeGiven(ptr, len);
+
+  @override
+  ffi.Pointer<ffi.Uint8> alloc(int size) => _Chrome.alloc(size);
+
+  @override
+  void free(ffi.Pointer<ffi.Uint8> ptr, int size) => _Chrome.free(ptr, size);
+
+  @override
+  String lastError() => _Chrome.lastError();
+}

@@ -20,6 +20,9 @@ fn kill_tree(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        if pid == 0 || pid == std::process::id() {
+            return Err(format!("refused to kill pid {}", pid));
+        }
         // No console window flash: the kill runs hidden.
         let status = std::process::Command::new("taskkill")
             .args(["/T", "/F", "/PID", &pid.to_string()])
@@ -36,9 +39,25 @@ fn kill_tree(pid: u32) -> Result<(), String> {
     }
 }
 
+/// `pid` as a signal target, or `None` when `kill()` would read it as more than one process or
+/// as one we must never touch: `0` is the caller's process group, any `u32` above `i32::MAX`
+/// casts negative (`-1` signals EVERY process the user owns, another negative a whole group),
+/// `1` is launchd/init, and the caller itself is never part of a tree it kills.
+#[cfg(not(windows))]
+pub(crate) fn signalable(pid: u32) -> Option<i32> {
+    let p = i32::try_from(pid).ok()?;
+    if p <= 1 || pid == std::process::id() {
+        return None;
+    }
+    Some(p)
+}
+
 #[cfg(not(windows))]
 fn kill_tree_unix(pid: u32) -> Result<(), String> {
-    let pid = pid as i32;
+    // Never a group, never everyone, never launchd or ourselves: see [`signalable`].
+    let Some(pid) = signalable(pid) else {
+        return Err(format!("refused to signal pid {}: not a single other process", pid));
+    };
     // Stop it first: nothing under it starts meanwhile.
     // SAFETY: kill with a signal number is async-signal-safe; ESRCH means already gone.
     let stopped = unsafe { libc::kill(pid, libc::SIGSTOP) } == 0;
@@ -46,7 +65,10 @@ fn kill_tree_unix(pid: u32) -> Result<(), String> {
         return Ok(());
     }
     for child in children_of(pid) {
-        kill_tree_unix(child as u32)?;
+        // A child the guard refuses (it can't be one, but never trust a list) is skipped.
+        if signalable(child as u32).is_some() {
+            kill_tree_unix(child as u32)?;
+        }
     }
     // SAFETY: as above; the process cannot have been reaped without us (we never wait).
     unsafe {
@@ -115,10 +137,17 @@ fn children_of(pid: i32) -> Vec<i32> {
 mod tests {
     use super::*;
 
+    /// Never signal a sentinel pid in a test: `u32::MAX as i32` is -1, and `kill(-1, …)`
+    /// reaches every process the user owns. The guard is tested as a pure function.
     #[test]
-    fn killing_a_gone_pid_is_not_an_error() {
-        // i32::MAX is not a live pid on any test machine.
-        assert_eq!(tk_process_kill_tree(i32::MAX as u32), 0);
+    #[cfg(not(windows))]
+    fn group_and_everyone_pids_are_refused() {
+        assert_eq!(signalable(u32::MAX), None);
+        assert_eq!(signalable(i32::MAX as u32 + 1), None);
+        assert_eq!(signalable(0), None);
+        assert_eq!(signalable(1), None);
+        assert_eq!(signalable(std::process::id()), None);
+        assert_eq!(signalable(4242), Some(4242));
     }
 
     #[test]

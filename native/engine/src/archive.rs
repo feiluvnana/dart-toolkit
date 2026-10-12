@@ -8,7 +8,11 @@
 //! and the in-memory packer (`tk_archive_pack_create/add/finish`) behind the same surface.
 
 use crate::handover::{OWNED, own};
-use crate::{bytes, bytes_mut, create_file, give, guard, live, opt_text, pump, read_file, stopped, text, watch, Handle, Watched};
+use crate::{
+    bytes, bytes_mut, create_file, give, guard, live, opt_text, pump, read_file, set_error, stopped, text, watch,
+    Handle, Watched,
+};
+use crate::{Done, Progress, done_bytes, done_count, spawn, throttle_progress};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -41,6 +45,8 @@ const RATIO: u64 = 200;
 /// ...and at least this much.
 const FLOOR: u64 = 1 << 30;
 
+/// Progress for the small sync codec calls (≤1 MiB): the async forms report
+/// throttled `(id, done, total)` instead.
 pub type ProgressCb = Option<unsafe extern "C" fn(
     completed: u64,
     total: u64,
@@ -52,18 +58,25 @@ pub type ProgressCb = Option<unsafe extern "C" fn(
 
 pub type ContentsCb = Option<unsafe extern "C" fn(code: i32, head: *mut u8, head_len: usize, data: *mut u8, data_len: usize)>;
 
-/// Tells `cb` how far the call is, then fails once the caller has stopped it.
-#[inline]
-unsafe fn report_progress(
-    cb: ProgressCb,
-    completed: u64,
+/// Throttled pack/extract progress as bytes: at most every 50 ms, plus a final
+/// report ending at the total. Unknown totals pass `u64::MAX` (time alone
+/// throttles); the final call passes actuals so it ends at total.
+fn tell(
+    progress: Progress,
+    id: i64,
+    done: u64,
     total: u64,
-    bytes: u64,
-    bytes_total: u64,
-    name: &str,
+    last: &mut std::time::Instant,
 ) -> Result<(), String> {
-    if let Some(f) = cb {
-        f(completed, total, bytes, bytes_total, name.as_ptr(), name.len());
+    throttle_progress(progress, id, done, total, last);
+    stopped()
+}
+
+/// The final report, always firing: `total` is the honest total (actual bytes
+/// when the estimate was unknown), so progress ends at total.
+fn tell_final(progress: Progress, id: i64, done: u64, total: u64) -> Result<(), String> {
+    if let Some(f) = progress {
+        unsafe { f(id, done, total) };
     }
     stopped()
 }
@@ -205,7 +218,7 @@ impl Policy {
     fn charge(&mut self, size: u64, name: &str) -> Result<(), String> {
         if size > self.budget {
             return Err(format!(
-                "{}: extracting it would write more than {} bytes, 200× the archive and at least 1 GiB; unarchive with unsafe: true if that is expected",
+                "{}: extracting it would write more than {} bytes, 200× the archive and at least 1 GiB; unpack(dir, trusted: true) if that is expected",
                 name, self.limit
             ));
         }
@@ -241,10 +254,11 @@ impl Policy {
         }
     }
 
-    /// Records a symlink at `at` pointing at `target`, refused when it escapes.
+    /// Records a symlink at `at` pointing at `target`. Every link is refused
+    /// unless trusted; a trusted link still may not escape through a planted parent.
     fn link(&mut self, at: &Path, name: &str, target: &str) -> Result<(), String> {
         if !self.trusted {
-            escapes(name, target)?;
+            return Err(format!("{}: refused link member to {}", name, target));
         }
         if let Some(parent) = at.parent() {
             self.contains(parent)?;
@@ -334,7 +348,9 @@ fn resolve_link(path: &Path, hops: u32) -> Option<PathBuf> {
 }
 
 /// Whether the link `name -> target` escapes: absolute targets and `..` past the member's
-/// own directory are refused.
+/// own directory are refused. (Kept for the unit test: extraction now refuses every link
+/// unless trusted, so this no longer gates a write.)
+#[allow(dead_code)]
 fn escapes(name: &str, target: &str) -> Result<(), String> {
     let refuse = || format!("{}: link to {} leads out of the destination", name, target);
     if target.starts_with('/') || target.starts_with('\\') || Path::new(target).is_absolute() {
@@ -857,23 +873,39 @@ fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-/// Writes the entries of the archive at `path` as [record]s back to back; freed with `tk_free`.
+/// Writes the entries of the archive at `path` as [record]s back to back on a
+/// worker thread, answering through `done`. Replaces the blocking
+/// `tk_archive_list`: one way to list.
 #[no_mangle]
-pub unsafe extern "C" fn tk_archive_list(
+pub unsafe extern "C" fn tk_archive_list_async(
     path: *const u8,
     plen: usize,
     pw: *const u8,
     pwlen: usize,
-    out: *mut *mut u8,
-    out_len: *mut usize,
+    done: Done,
+    stop: *const u8,
 ) -> i32 {
-    guard(|| {
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(String, Option<String>), String> {
+        Ok((text(path, plen)?.to_string(), opt_text(pw, pwlen)?.map(str::to_string)))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (path, pw) = args;
         let mut buf = Vec::new();
-        for e in list(text(path, plen)?, opt_text(pw, pwlen)?)? {
+        for e in list(&path, pw.as_deref())? {
             record(&e, &mut buf);
         }
-        Ok(give(buf, out, out_len))
-    })
+        Ok(done_bytes(buf))
+    });
+    0
 }
 
 // ---- extract
@@ -893,6 +925,9 @@ fn copy_capped(from: &mut dyn Read, to: &mut Vec<u8>, max: u64, name: &str) -> R
 }
 
 /// Writes one file entry: charged, contained, fresh (never through a link), then mode/mtime.
+/// The bytes stream through a cap, never through memory whole: a member that
+/// lies about its size fails once past it, and a huge honest member holds no
+/// more than the pipe buffers.
 fn write_file(
     pol: &mut Policy,
     target: &Path,
@@ -913,9 +948,15 @@ fn write_file(
         std::fs::remove_file(target).map_err(|e| format!("{}: {}", target.display(), e))?;
     }
     let mut to = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| format!("{}: {}", target.display(), e))?;
-    let mut buf = Vec::new();
-    copy_capped(from, &mut buf, size, name)?;
-    to.write_all(&buf).map_err(|e| format!("{}: {}", target.display(), e))?;
+    // Past `size` the member lies: drop the partial file, it is not output.
+    let mut limited = from.take(size.saturating_add(1));
+    let n = std::io::copy(&mut limited, &mut to).map_err(|e| format!("{}: {}", target.display(), e))? as u64;
+    if n > size {
+        drop(to);
+        let _ = std::fs::remove_file(target);
+        return Err(format!("{}: larger than its header says ({} bytes)", name, size));
+    }
+    to.flush().map_err(|e| format!("{}: {}", target.display(), e))?;
     set_mode(target, mode, pol.trusted);
     if let Some(s) = mtime {
         let _ = to.set_modified(unix_time(s));
@@ -985,34 +1026,30 @@ fn extract_tar(
     reader: Box<dyn Read>,
     root: &Path,
     pol: &mut Policy,
-    progress: ProgressCb,
+    progress: Progress,
+    id: i64,
     dirs: &mut Vec<(PathBuf, Option<u32>, Option<i64>)>,
 ) -> Result<(i32, u64), String> {
+    let mut last = std::time::Instant::now();
     let mut t = tar::Archive::new(reader);
     // Without it the crate keeps the permission bits and drops setuid, setgid, sticky.
     t.set_preserve_permissions(pol.trusted);
     t.set_preserve_mtime(true);
-    let mut idx = 0u64;
     let (mut count, mut bytes_done) = (0i32, 0u64);
-    unsafe {
-        report_progress(progress, 0, 0, 0, 0, "")?;
-    }
+        tell(progress, id, 0, u64::MAX, &mut last)?;
     for e in t.entries().map_err(|e| e.to_string())? {
         let mut e = e.map_err(|e| e.to_string())?;
         let name = e.path().map_err(|e| e.to_string())?.to_string_lossy().to_string();
         let target = inside(root, &name)?;
-        unsafe {
-            report_progress(progress, idx, 0, bytes_done, 0, &name)?;
-        }
+            tell(progress, id, bytes_done, u64::MAX, &mut last)?;
         if !pol.wants(&name) {
-            idx += 1;
             continue;
         }
         let kind = e.header().entry_type();
-        if kind.is_symlink() {
+        if kind.is_symlink() || kind.is_hard_link() {
             let link = e.link_name().map_err(|e| e.to_string())?.map(|l| l.to_string_lossy().to_string());
             if !pol.trusted {
-                escapes(&name, link.as_deref().unwrap_or(""))?;
+                return Err(format!("{}: refused link member to {}", name, link.as_deref().unwrap_or("")));
             }
             if let Some(parent) = target.parent() {
                 pol.contains(parent)?;
@@ -1029,7 +1066,6 @@ fn extract_tar(
             std::fs::create_dir_all(&target).map_err(|e| format!("{}: {}", target.display(), e))?;
             let mtime = e.header().mtime().ok().map(|m| m as i64);
             dirs.push((target, e.header().mode().ok(), mtime));
-            idx += 1;
             continue;
         }
         let fsize = e.size();
@@ -1037,15 +1073,26 @@ fn extract_tar(
             bytes_done += fsize;
             count += 1;
         }
-        idx += 1;
-        unsafe {
-            report_progress(progress, idx, 0, bytes_done, 0, &name)?;
-        }
+            tell(progress, id, bytes_done, u64::MAX, &mut last)?;
     }
+    // Past the end-of-archive blocks the stream may hold trailing padding (or a
+    // codec trailer): drain it, so a caller feeding the whole stream never sees
+    // a closed channel. A drain error never fails a successful extract.
+    let mut back = t.into_inner();
+    let _ = std::io::copy(&mut back, &mut std::io::sink());
     Ok((count, bytes_done))
 }
 
-fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, flags: u32, progress: ProgressCb) -> Result<i32, String> {
+fn extract(
+    path: &str,
+    dest: &str,
+    password: Option<&str>,
+    only: Option<&str>,
+    flags: u32,
+    progress: Progress,
+    id: i64,
+) -> Result<i32, String> {
+    let mut last = std::time::Instant::now();
     let kind = detect_read(path)?;
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     // Members are joined under the canonical root, the same one the policy checks against:
@@ -1060,7 +1107,6 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
     match kind {
         "zip" => {
             let mut z = zip_open(path)?;
-            let total = z.len() as u64;
             // Raw, so an encrypted entry counts without its password; only extracted counts.
             for i in 0..z.len() {
                 if let Ok(f) = z.by_index_raw(i) {
@@ -1069,9 +1115,7 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                     }
                 }
             }
-            unsafe {
-                report_progress(progress, 0, total, 0, total_bytes, "")?;
-            }
+                tell(progress, id, 0, total_bytes, &mut last)?;
             for i in 0..z.len() {
                 // Raw first: an entry not wanted is never opened, so never decrypted.
                 let name = zip_name(&z.by_index_raw(i).map_err(|e| e.to_string())?).to_string();
@@ -1079,9 +1123,7 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 if !pol.wants(&name) {
                     continue;
                 }
-                unsafe {
-                    report_progress(progress, i as u64, total, bytes_done, total_bytes, &name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
                 let mut f = match password {
                     Some(pw) => z.by_index_decrypt(i, pw.as_bytes()).map_err(|e| e.to_string())?,
                     None => z.by_index(i).map_err(|e| e.to_string())?,
@@ -1102,9 +1144,7 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 write_file(&mut pol, &target, &mut f, size, &name, mtime, mode)?;
                 bytes_done += size;
                 count += 1;
-                unsafe {
-                    report_progress(progress, (i + 1) as u64, total, bytes_done, total_bytes, &name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
             }
         }
         "7z" => {
@@ -1120,18 +1160,13 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
             }
             pol.charge(wanted, path)?;
             pol.budget = u64::MAX;
-            let total = reader.archive().files.len() as u64;
             total_bytes = wanted;
             let mut idx = 0u64;
-            unsafe {
-                report_progress(progress, 0, total, 0, total_bytes, "")?;
-            }
+                tell(progress, id, 0, total_bytes, &mut last)?;
             reader
                 .for_each_entries(|e, r| {
                     let name = e.name().to_string();
-                    unsafe {
-                        report_progress(progress, idx, total, bytes_done, total_bytes, &name).map_err(seven_other)?;
-                    }
+                        tell(progress, id, bytes_done, total_bytes, &mut last).map_err(seven_other)?;
                     if !pol.wants(&name) {
                         // A solid block is one stream: an entry not wanted is still read past.
                         std::io::copy(r, &mut std::io::sink()).map_err(sevenz_rust2::Error::io)?;
@@ -1160,28 +1195,20 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                     bytes_done += e.size();
                     count += 1;
                     idx += 1;
-                    unsafe {
-                        report_progress(progress, idx, total, bytes_done, total_bytes, &name).map_err(seven_other)?;
-                    }
+                        tell(progress, id, bytes_done, total_bytes, &mut last).map_err(seven_other)?;
                     Ok(true)
                 })
                 .map_err(seven_err)?;
         }
         "rar" => {
             let mut a = rar(path, password).open_for_processing().map_err(|e| e.to_string())?;
-            let mut idx = 0u64;
-            unsafe {
-                report_progress(progress, 0, 0, 0, 0, "")?;
-            }
+                tell(progress, id, 0, u64::MAX, &mut last)?;
             while let Some(h) = a.read_header().map_err(|e| e.to_string())? {
                 let name = h.entry().filename.to_string_lossy().to_string();
                 let target = inside(root, &name)?;
-                unsafe {
-                    report_progress(progress, idx, 0, bytes_done, 0, &name)?;
-                }
+                    tell(progress, id, bytes_done, u64::MAX, &mut last)?;
                 if !pol.wants(&name) {
                     a = h.skip().map_err(|e| e.to_string())?;
-                    idx += 1;
                     continue;
                 }
                 let is_file = h.entry().is_file();
@@ -1201,6 +1228,10 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 }
                 a = h.extract_with_base(dest).map_err(|e| e.to_string())?;
                 if target.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                    if !pol.trusted {
+                        let _ = std::fs::remove_file(&target);
+                        return Err(format!("{}: refused link member", name));
+                    }
                     pol.links.push(target.clone());
                     pol.checked.clear();
                 }
@@ -1211,35 +1242,32 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                     bytes_done += fsize;
                     count += 1;
                 }
-                idx += 1;
-                unsafe {
-                    report_progress(progress, idx, 0, bytes_done, 0, &name)?;
-                }
+                    tell(progress, id, bytes_done, u64::MAX, &mut last)?;
             }
         }
         _ => {
-            let (c, b) = extract_tar(tar_reader(path, kind)?, root, &mut pol, progress, &mut dirs)?;
+            let (c, b) = extract_tar(tar_reader(path, kind)?, root, &mut pol, progress, id, &mut dirs)?;
             count += c;
             bytes_done += b;
         }
     }
     pol.finish()?;
     apply_dirs(dirs, pol.trusted);
-    unsafe {
-        report_progress(progress, count as u64, count as u64, bytes_done, total_bytes, "")?;
-    }
+        tell_final(progress, id, bytes_done, total_bytes.max(bytes_done))?;
     Ok(count)
 }
 
-/// Extracts the archive at `path` into `dest`; answers the number of files written.
+/// Extracts the archive at `path` into `dest` on a worker thread; answers the
+/// number of files written through `done`.
 ///
 /// `only`, when not null, is a glob the entry names must match. `flags` is `TRUSTED` and
 /// `FOLD_CASE`. An untrusted archive may write at most `RATIO` times its size (at least
-/// `FLOOR`), loses setuid, setgid and sticky, and may not make a link that leads out.
-/// `progress`, when not null, hears each entry; `stop`, when not null, is a byte that stops the
-/// call once set.
+/// `FLOOR`), loses setuid, setgid and sticky, and makes no link. `progress`
+/// hears throttled byte counts; `stop` is a byte stopping the call once set.
+/// Replaces the blocking `tk_archive_extract`: one way to extract.
 #[no_mangle]
-pub unsafe extern "C" fn tk_archive_extract(
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn tk_archive_extract_async(
     path: *const u8,
     plen: usize,
     dest: *const u8,
@@ -1249,11 +1277,34 @@ pub unsafe extern "C" fn tk_archive_extract(
     only: *const u8,
     olen: usize,
     flags: u32,
-    progress: ProgressCb,
+    done: Done,
     stop: *const u8,
+    progress: Progress,
+    id: i64,
 ) -> i32 {
-    let _watch = watch(stop);
-    guard(|| extract(text(path, plen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, opt_text(only, olen)?, flags, progress))
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(String, String, Option<String>, Option<String>, u32), String> {
+        Ok((
+            text(path, plen)?.to_string(),
+            text(dest, dlen)?.to_string(),
+            opt_text(pw, pwlen)?.map(str::to_string),
+            opt_text(only, olen)?.map(str::to_string),
+            flags,
+        ))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (path, dest, pw, only, flags) = args;
+        extract(&path, &dest, pw.as_deref(), only.as_deref(), flags, progress, id).map(done_count)
+    });
+    0
 }
 
 // ---- streaming unpack
@@ -1290,10 +1341,25 @@ impl Read for ChannelReader {
 struct Unpack {
     tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
     worker: Option<std::thread::JoinHandle<Result<i32, String>>>,
+    /// The worker's outcome once joined early (a write after it ended): later
+    /// writes replay it (trailing bytes after success are dropped), and
+    /// `finish` answers it without joining twice.
+    result: Option<Result<i32, String>>,
     head: Vec<u8>,
     dest: String,
     flags: u32,
     hint: u64,
+    /// Progress for the worker, set at open: the streaming worker reports
+    /// through it, throttled.
+    progress: Progress,
+    id: i64,
+}
+
+/// A `push` outcome: sent, or the queue full (the caller sends on a worker
+/// thread instead of blocking the event loop).
+enum Push {
+    Sent,
+    Busy,
 }
 
 impl Unpack {
@@ -1305,39 +1371,71 @@ impl Unpack {
         }
         let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
         let head = std::mem::take(&mut self.head);
-        let (dest, flags, hint) = (self.dest.clone(), self.flags, self.hint);
+        let (dest, flags, hint, progress, id) =
+            (self.dest.clone(), self.flags, self.hint, self.progress, self.id);
         let _ = tx.send(head);
         self.tx = Some(tx);
-        self.worker = Some(std::thread::spawn(move || unpack_stream(rx, &dest, flags, hint)));
+        self.worker = Some(std::thread::spawn(move || unpack_stream(rx, &dest, flags, hint, progress, id)));
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+    fn write(&mut self, data: &[u8]) -> Result<Push, String> {
         if self.worker.is_none() {
             // Fill the head for sniffing first.
             let want = (512 - self.head.len()).min(data.len());
             self.head.extend_from_slice(&data[..want]);
             let rest = &data[want..];
             if self.head.len() < 512 {
-                return Ok(());
+                return Ok(Push::Sent);
             }
             self.ensure_worker();
             if rest.is_empty() {
-                return Ok(());
+                return Ok(Push::Sent);
             }
             return self.push(rest);
         }
         self.push(data)
     }
 
-    fn push(&mut self, data: &[u8]) -> Result<(), String> {
-        match self.tx.as_ref().map(|tx| tx.send(data.to_vec())) {
-            Some(Ok(())) => Ok(()),
-            // The channel broke: the worker is gone, so it already failed.
-            _ => Err("unpack: the worker already failed".to_string()),
+    fn push(&mut self, data: &[u8]) -> Result<Push, String> {
+        if let Some(prev) = self.result.as_ref() {
+            // The worker already ended and was joined: trailing bytes after a
+            // success are dropped; a failure repeats its own reason.
+            return match prev {
+                Ok(_) => Ok(Push::Sent),
+                Err(m) => Err(m.clone()),
+            };
+        }
+        match self.tx.as_ref().map(|tx| tx.try_send(data.to_vec())) {
+            Some(Ok(())) => Ok(Push::Sent),
+            // The queue is full: the caller sends on a worker thread instead
+            // of blocking the event loop.
+            Some(Err(std::sync::mpsc::TrySendError::Full(_))) => Ok(Push::Busy),
+            // The channel broke: the worker is gone. Join it for its reason, so
+            // a mid-stream refusal surfaces as itself, never "already failed".
+            _ => {
+                drop(self.tx.take());
+                let joined = match self.worker.take() {
+                    Some(w) => w.join().unwrap_or_else(|_| Err("unpack worker panicked".to_string())),
+                    None => Err("unpack: the worker already failed".to_string()),
+                };
+                match joined {
+                    Ok(n) => {
+                        self.result = Some(Ok(n));
+                        Ok(Push::Sent)
+                    }
+                    Err(m) => {
+                        self.result = Some(Err(m.clone()));
+                        Err(m)
+                    }
+                }
+            }
         }
     }
 
     fn finish(&mut self) -> Result<i32, String> {
+        if let Some(prev) = self.result.take() {
+            return prev;
+        }
         // Even a short stream starts the worker: the head is all there is.
         self.ensure_worker();
         // End the input, then join the worker for its count or its reason.
@@ -1404,7 +1502,14 @@ fn rechain_tar(mut decoder: Box<dyn Read>) -> Result<Box<dyn Read>, String> {
 }
 
 /// Unpacks the stream in `rx` (head first) into `dest`; answers the files written.
-fn unpack_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, dest: &str, flags: u32, hint: u64) -> Result<i32, String> {
+fn unpack_stream(
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    dest: &str,
+    flags: u32,
+    hint: u64,
+    progress: Progress,
+    id: i64,
+) -> Result<i32, String> {
     // Gather the head for sniffing: 512 bytes, or the whole stream.
     let mut head = Vec::new();
     while head.len() < 512 {
@@ -1413,9 +1518,71 @@ fn unpack_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, dest: &str, flags: u32,
             Err(_) => break,
         }
     }
+    let existed = Path::new(dest).exists();
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     // The canonical root, the same one the policy checks against (see `extract`).
     let root = canonicalize_safe(Path::new(dest)).map_err(|e| format!("{}: {}", dest, e))?;
+    let before = snapshot(&root, existed);
+    let out = unpack_stream_inner(rx, head, dest, &root, flags, hint, progress, id);
+    if out.is_err() {
+        cleanup(&root, &before, existed);
+    }
+    out
+}
+
+/// The entries under `root` right now, so a failed unpack removes only what it
+/// added. `existed` tells whether `root` itself predates this unpack.
+fn snapshot(root: &Path, existed: bool) -> std::collections::HashSet<PathBuf> {
+    let mut out = std::collections::HashSet::new();
+    if existed {
+        out.insert(root.to_path_buf());
+        for e in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+            out.insert(e.path().to_path_buf());
+        }
+    }
+    out
+}
+
+/// Removes everything under `root` that `before` does not hold (files first,
+/// then the new folders deepest-first, each only when empty), so a failed
+/// stream leaves the destination as it was. A `root` this unpack created is
+/// removed again when empty.
+fn cleanup(root: &Path, before: &std::collections::HashSet<PathBuf>, existed: bool) {
+    let mut dirs = Vec::new();
+    for e in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .contents_first(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let p = e.path().to_path_buf();
+        if before.contains(&p) {
+            continue;
+        }
+        if e.file_type().is_dir() {
+            dirs.push(p);
+        } else {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+    for d in dirs.iter().rev() {
+        let _ = std::fs::remove_dir(d);
+    }
+    if !existed {
+        let _ = std::fs::remove_dir(root);
+    }
+}
+
+fn unpack_stream_inner(
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    head: Vec<u8>,
+    dest: &str,
+    root: &Path,
+    flags: u32,
+    hint: u64,
+    progress: Progress,
+    id: i64,
+) -> Result<i32, String> {
     let input = ChannelReader { rx, buf: Vec::new(), at: 0 };
     let kind = sniff_stream(&head)?;
     match kind {
@@ -1425,7 +1592,7 @@ fn unpack_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, dest: &str, flags: u32,
             let tar_input = if kind == "tar" { decoded } else { rechain_tar(decoded)? };
             let mut pol = Policy::new_stream(&root, flags, hint)?;
             let mut dirs = Vec::new();
-            let (count, _) = extract_tar(tar_input, &root, &mut pol, None, &mut dirs)?;
+            let (count, _) = extract_tar(tar_input, &root, &mut pol, progress, id, &mut dirs)?;
             pol.finish()?;
             apply_dirs(dirs, pol.trusted);
             Ok(count)
@@ -1463,7 +1630,7 @@ fn unpack_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, dest: &str, flags: u32,
                 return Err(m);
             }
             let tmp_str = tmp.to_string_lossy().to_string();
-            let out = extract(&tmp_str, dest, None, None, flags, None);
+            let out = extract(&tmp_str, dest, None, None, flags, progress, id);
             let _ = std::fs::remove_file(&tmp);
             out
         }
@@ -1472,12 +1639,30 @@ fn unpack_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, dest: &str, flags: u32,
 
 /// Opens a streaming unpack into `dest`. The format is sniffed from the first 512 bytes
 /// written. `hint` is the expected compressed size (0: unknown) for the write budget.
+/// `progress`/`id` travel with the worker, which reports through them, throttled.
 #[no_mangle]
-pub unsafe extern "C" fn tk_unpack_open(dest: *const u8, dlen: usize, flags: u32, hint: u64) -> Handle {
+pub unsafe extern "C" fn tk_unpack_open(
+    dest: *const u8,
+    dlen: usize,
+    flags: u32,
+    hint: u64,
+    progress: Progress,
+    id: i64,
+) -> Handle {
     let mut out: Handle = std::ptr::null_mut();
     let code = guard(|| {
         let dest = text(dest, dlen)?.to_string();
-        out = Box::into_raw(Box::new(Unpack { tx: None, worker: None, head: Vec::new(), dest, flags, hint })) as Handle;
+        out = Box::into_raw(Box::new(Unpack {
+            tx: None,
+            worker: None,
+            result: None,
+            head: Vec::new(),
+            dest,
+            flags,
+            hint,
+            progress,
+            id,
+        })) as Handle;
         Ok(0)
     });
     if code < 0 {
@@ -1486,20 +1671,73 @@ pub unsafe extern "C" fn tk_unpack_open(dest: *const u8, dlen: usize, flags: u32
     out
 }
 
-/// Feeds bytes; blocks while 8 chunks are queued. <0 when the worker already failed.
+/// Feeds bytes; answers 0 once queued, 1 when the queue is full (send on a
+/// worker thread instead), or <0 with the worker's own reason.
+/// Never blocks: a full queue is `Busy`, not a wait.
 #[no_mangle]
 pub unsafe extern "C" fn tk_unpack_write(h: Handle, data: *const u8, len: usize) -> i32 {
     guard(|| {
         let u = live::<Unpack>(h)?;
-        u.write(bytes(data, len))?;
-        Ok(0)
+        match u.write(bytes(data, len))? {
+            Push::Sent => Ok(0),
+            Push::Busy => Ok(1),
+        }
     })
 }
 
-/// Ends the input, joins the worker; answers the file count or <0 (tk_last_error says why).
+/// Feeds bytes from a worker thread, waiting for room when the queue is full:
+/// the event loop never blocks on backpressure. Answers 0, or <0 when the
+/// worker is gone (the finish still holds its reason).
 #[no_mangle]
-pub unsafe extern "C" fn tk_unpack_finish(h: Handle) -> i32 {
-    guard(|| live::<Unpack>(h)?.finish())
+pub unsafe extern "C" fn tk_unpack_write_async(h: Handle, data: *const u8, len: usize, done: Done, stop: *const u8) -> i32 {
+    if h.is_null() {
+        set_error("null handle");
+        return -1;
+    }
+    // Only the channel sender crosses threads (it is Sync-safe): the session
+    // itself stays with the caller, so a concurrent write or finish is sound.
+    let tx = match unsafe { live::<Unpack>(h) } {
+        Ok(u) => match u.tx.clone() {
+            Some(tx) => tx,
+            None => {
+                set_error("unpack cannot queue before its first bytes");
+                return -1;
+            }
+        },
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let chunk = unsafe { bytes(data, len).to_vec() };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        match tx.send(chunk) {
+            Ok(()) => Ok(done_count(0)),
+            Err(_) => Err("unpack: the worker is gone".to_string()),
+        }
+    });
+    0
+}
+
+/// Ends the input and joins the worker on a worker thread, answering the file
+/// count through `done`. Ownership moves to the job: Dart must not free after
+/// queueing. Replaces the blocking `tk_unpack_finish`: one way to finish.
+#[no_mangle]
+pub unsafe extern "C" fn tk_unpack_finish_async(h: Handle, done: Done, stop: *const u8) -> i32 {
+    if h.is_null() {
+        set_error("null handle");
+        return -1;
+    }
+    // Ownership moves to the worker thread; the caller's handle is spent.
+    let mut unpack = unsafe { *Box::from_raw(h as *mut Unpack) };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        unpack.finish().map(done_count)
+    });
+    0
 }
 
 /// Drops an unpack session, started or not.
@@ -2067,8 +2305,10 @@ fn create(
     password: Option<&str>,
     names: Option<&str>,
     level: i32,
-    progress: ProgressCb,
+    progress: Progress,
+    id: i64,
 ) -> Result<i32, String> {
+    let mut last = std::time::Instant::now();
     // Refused before anything is touched: the destination's folder is not created for nothing.
     match format {
         RAR => return Err(format!("{}: rar can only be read; write .zip or .7z instead", dest)),
@@ -2085,7 +2325,6 @@ fn create(
     }
     let items = walk(src_path, Path::new(dest), names)?;
     let files = items.iter().filter(|i| !matches!(i.2, ItemKind::Dir)).count() as i32;
-    let total_items = items.len() as u64;
     let total_bytes: u64 = items
         .iter()
         .filter(|i| matches!(i.2, ItemKind::File))
@@ -2093,11 +2332,8 @@ fn create(
         .map(|m| m.len())
         .sum();
 
-    unsafe {
-        report_progress(progress, 0, total_items, 0, total_bytes, "")?;
-    }
+        tell(progress, id, 0, total_bytes, &mut last)?;
 
-    let mut completed: u64 = 0;
     let mut bytes_done: u64 = 0;
 
     match format {
@@ -2123,9 +2359,7 @@ fn create(
                 if let Some(pw) = password {
                     opts = opts.with_aes_encryption(zip::AesMode::Aes256, pw);
                 }
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
                 match kind {
                     ItemKind::Dir => {
                         w.add_directory(name, opts).map_err(|e| e.to_string())?;
@@ -2141,10 +2375,7 @@ fn create(
                         bytes_done += flen;
                     }
                 }
-                completed += 1;
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
             }
             // The central directory is still buffered; dropping the writer would swallow its error.
             w.finish().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())?;
@@ -2173,12 +2404,9 @@ fn create(
                     entry.windows_attributes = 0x8000 | (0o120777 << 16);
                     let text = target.to_string_lossy().into_owned().into_bytes();
                     z.push_archive_entry(entry, Some(std::io::Cursor::new(text))).map_err(seven_err)?;
-                    completed += 1;
                     continue;
                 }
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
                 #[allow(unused_mut)]
                 let mut entry = sevenz_rust2::SevenZArchiveEntry::from_path(path, name.clone());
                 #[cfg(unix)]
@@ -2198,10 +2426,7 @@ fn create(
                 };
                 z.push_archive_entry(entry, reader).map_err(seven_err)?;
                 bytes_done += flen;
-                completed += 1;
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
             }
             z.finish().map_err(seven_err)?;
         }
@@ -2217,9 +2442,7 @@ fn create(
             let mut b = tar::Builder::new(encoder(codec, BufWriter::new(create_file(out)?), level, size)?);
             b.follow_symlinks(false);
             for (name, path, kind) in &items {
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
                 let flen = if matches!(kind, ItemKind::File) { path.metadata().map_or(0, |m| m.len()) } else { 0 };
                 match kind {
                     ItemKind::Dir => {
@@ -2237,21 +2460,20 @@ fn create(
                     }
                 }
                 bytes_done += flen;
-                completed += 1;
-                unsafe {
-                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name)?;
-                }
+                    tell(progress, id, bytes_done, total_bytes, &mut last)?;
             }
             b.into_inner().map_err(|e| e.to_string())?.finish().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())?;
         }
         _ => unreachable!(),
     }
+    // The final report always fires, ending at the total.
+    tell_final(progress, id, bytes_done, total_bytes.max(bytes_done))?;
     Ok(files)
 }
 
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn tk_archive_create(
+pub unsafe extern "C" fn tk_archive_create_async(
     format: u32,
     src: *const u8,
     slen: usize,
@@ -2264,22 +2486,37 @@ pub unsafe extern "C" fn tk_archive_create(
     names: *const u8,
     nlen: usize,
     level: i32,
-    progress: ProgressCb,
+    done: Done,
     stop: *const u8,
+    progress: Progress,
+    id: i64,
 ) -> i32 {
-    let _watch = watch(stop);
-    guard(|| {
-        create(
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(u32, String, String, String, Option<String>, Option<String>, i32), String> {
+        Ok((
             format,
-            text(src, slen)?,
-            text(dest, dlen)?,
-            text(out, olen)?,
-            opt_text(pw, pwlen)?,
-            opt_text(names, nlen)?,
+            text(src, slen)?.to_string(),
+            text(dest, dlen)?.to_string(),
+            text(out, olen)?.to_string(),
+            opt_text(pw, pwlen)?.map(str::to_string),
+            opt_text(names, nlen)?.map(str::to_string),
             level,
-            progress,
-        )
-    })
+        ))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (format, src, dest, out, pw, names, level) = args;
+        create(format, &src, &dest, &out, pw.as_deref(), names.as_deref(), level, progress, id)
+            .map(done_count)
+    });
+    0
 }
 
 // ---- compressed streams
@@ -2300,31 +2537,71 @@ pub unsafe extern "C" fn tk_compress(
     let _watch = watch(stop);
     guard(|| {
         let (src, dest) = (text(src, slen)?, text(dest, dlen)?);
-        validate_codec_level(codec, level)?;
-        let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-        let tell = |done: u64| -> Result<(), String> {
-            if let Some(cb) = progress {
-                unsafe { cb(0, 1, done, size, std::ptr::null(), 0) };
-            }
-            stopped()
-        };
-        let mut from = Watched(BufReader::new(read_file(src)?));
-        let mut enc = encoder(Some(codec), BufWriter::new(create_file(dest)?), level, size)?;
-        let mut buf = vec![0u8; 1 << 20];
-        let mut done = 0u64;
-        tell(0)?;
-        loop {
-            let n = from.read(&mut buf).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            enc.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-            done += n as u64;
-            tell(done)?;
-        }
-        enc.finish().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())?;
+        let _ = progress;
+        compress_file(codec, src, dest, level, None, 0)?;
         Ok(0)
     })
+}
+
+/// The async form: the same encode on a worker thread, answering through
+/// `done`. Replaces the blocking call above 1 MiB (the sync form stays for
+/// small inputs, whose progress never reports).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn tk_compress_async(
+    codec: u32,
+    src: *const u8,
+    slen: usize,
+    dest: *const u8,
+    dlen: usize,
+    level: i32,
+    done: Done,
+    stop: *const u8,
+    progress: Progress,
+    id: i64,
+) -> i32 {
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(u32, String, String, i32), String> {
+        Ok((codec, text(src, slen)?.to_string(), text(dest, dlen)?.to_string(), level))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (codec, src, dest, level) = args;
+        compress_file(codec, &src, &dest, level, progress, id)?;
+        Ok(done_count(0))
+    });
+    0
+}
+
+fn compress_file(codec: u32, src: &str, dest: &str, level: i32, progress: Progress, id: i64) -> Result<(), String> {
+    validate_codec_level(codec, level)?;
+    let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let mut last = std::time::Instant::now();
+    let mut tell = |done: u64| -> Result<(), String> { tell(progress, id, done, size, &mut last) };
+    let mut from = Watched(BufReader::new(read_file(src)?));
+    let mut enc = encoder(Some(codec), BufWriter::new(create_file(dest)?), level, size)?;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut done = 0u64;
+    tell(0)?;
+    loop {
+        let n = from.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        enc.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        done += n as u64;
+        tell(done)?;
+    }
+    enc.finish().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())?;
+    tell_final(progress, id, done, size)?;
+    Ok(())
 }
 
 /// Decodes the stream at `src` into `dest`; `codec` is one of the codec codes or DETECT
@@ -2344,53 +2621,103 @@ pub unsafe extern "C" fn tk_decompress(
     let _watch = watch(stop);
     guard(|| {
         let (src, dest) = (text(src, slen)?, text(dest, dlen)?);
-        let codec = if codec == DETECT {
-            sniff_codec(src).ok_or_else(|| format!("{}: not a gzip, xz, zstd or bzip2 stream", src))?
-        } else {
-            match codec {
-                GZIP | XZ | ZSTD | BZIP2 => codec,
-                c => return Err(format!("unknown codec {}", c)),
-            }
-        };
-        let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-        let limit = if flags & TRUSTED != 0 { u64::MAX } else { FLOOR.max(size.saturating_mul(RATIO)) };
-        let result = (|| {
-            let f = read_file(src)?;
-            let mut decoder: Box<dyn Read> = match codec {
-                GZIP => Box::new(flate2::read::GzDecoder::new(f)),
-                XZ => Box::new(xz2::read::XzDecoder::new(f)),
-                ZSTD => Box::new(zstd::stream::read::Decoder::new(f).map_err(|e| e.to_string())?),
-                _ => Box::new(bzip2::read::BzDecoder::new(f)),
-            };
-            let mut to = BufWriter::new(create_file(dest)?);
-            let mut buf = vec![0u8; 1 << 20];
-            let mut done = 0u64;
-            loop {
-                let n = decoder.read(&mut buf).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                done += n as u64;
-                if done > limit {
-                    return Err(format!(
-                        "{}: decompresses to more than {} bytes, 200× the file and at least 1 GiB; unarchive with unsafe: true if that is expected",
-                        src, limit
-                    ));
-                }
-                to.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-                if let Some(cb) = progress {
-                    unsafe { cb(0, 1, done, size, std::ptr::null(), 0) };
-                }
-                stopped()?;
-            }
-            to.flush().map_err(|e| e.to_string())?;
-            Ok(0)
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(dest);
-        }
-        result
+        let _ = progress;
+        decompress_file(codec, src, dest, flags, None, 0)?;
+        Ok(0)
     })
+}
+
+/// The async form: the same decode on a worker thread, answering through
+/// `done`. Replaces the blocking call above 1 MiB (the sync form stays for
+/// small inputs, whose progress never reports).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn tk_decompress_async(
+    codec: u32,
+    src: *const u8,
+    slen: usize,
+    dest: *const u8,
+    dlen: usize,
+    flags: u32,
+    done: Done,
+    stop: *const u8,
+    progress: Progress,
+    id: i64,
+) -> i32 {
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(u32, String, String, u32), String> {
+        Ok((codec, text(src, slen)?.to_string(), text(dest, dlen)?.to_string(), flags))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (codec, src, dest, flags) = args;
+        decompress_file(codec, &src, &dest, flags, progress, id)?;
+        Ok(done_count(0))
+    });
+    0
+}
+
+fn decompress_file(
+    codec: u32,
+    src: &str,
+    dest: &str,
+    flags: u32,
+    progress: Progress,
+    id: i64,
+) -> Result<(), String> {
+    let codec = if codec == DETECT {
+        sniff_codec(src).ok_or_else(|| format!("{}: not a gzip, xz, zstd or bzip2 stream", src))?
+    } else {
+        match codec {
+            GZIP | XZ | ZSTD | BZIP2 => codec,
+            c => return Err(format!("unknown codec {}", c)),
+        }
+    };
+    let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let limit = if flags & TRUSTED != 0 { u64::MAX } else { FLOOR.max(size.saturating_mul(RATIO)) };
+    let mut last = std::time::Instant::now();
+    let result = (|| {
+        let f = read_file(src)?;
+        let mut decoder: Box<dyn Read> = match codec {
+            GZIP => Box::new(flate2::read::GzDecoder::new(f)),
+            XZ => Box::new(xz2::read::XzDecoder::new(f)),
+            ZSTD => Box::new(zstd::stream::read::Decoder::new(f).map_err(|e| e.to_string())?),
+            _ => Box::new(bzip2::read::BzDecoder::new(f)),
+        };
+        let mut to = BufWriter::new(create_file(dest)?);
+        let mut buf = vec![0u8; 1 << 20];
+        let mut done = 0u64;
+        loop {
+            let n = decoder.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            done += n as u64;
+            if done > limit {
+                return Err(format!(
+                    "{}: decompresses to more than {} bytes, 200× the file and at least 1 GiB; unpack(dir, trusted: true) if that is expected",
+                    src, limit
+                ));
+            }
+            to.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            tell(progress, id, done, size, &mut last)?;
+            stopped()?;
+        }
+        to.flush().map_err(|e| e.to_string())?;
+        tell_final(progress, id, done, size)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
 }
 
 // ---- streaming stepper (new in native)
@@ -2402,6 +2729,7 @@ pub unsafe extern "C" fn tk_decompress(
 // extract one member at a time.
 
 /// One stepped member's metadata.
+#[derive(Clone)]
 struct Meta {
     name: String,
     size: u64,
@@ -2409,17 +2737,7 @@ struct Meta {
 }
 
 enum Stepper {
-    Indexed {
-        kind: String,
-        path: String,
-        password: Option<String>,
-        budget: u64,
-        limit: u64,
-        metas: Vec<Meta>,
-        pos: usize,
-        buf: Vec<u8>,
-        at: usize,
-    },
+    Indexed(Indexed),
     TarLive {
         reader: Box<dyn Read>,
         remaining: u64,
@@ -2427,6 +2745,33 @@ enum Stepper {
         ended: bool,
         pending_name: Option<String>,
     },
+}
+
+/// One stepped archive with its handle kept open: opened once, never per
+/// entry. `next` reports the metadata at `pos`; the first `entry_read` after
+/// it decompresses that entry into `buf` (a skipped entry is never
+/// decompressed), and later reads serve `buf` from `at`.
+struct Indexed {
+    path: String,
+    open: Open,
+    metas: Vec<Meta>,
+    pos: usize,
+    /// The entry `next` reported last: decompressed on first `entry_read`.
+    pending: Option<usize>,
+    /// The entry decompressed into `buf`.
+    loaded: Option<usize>,
+    buf: Vec<u8>,
+    at: usize,
+    budget: u64,
+    limit: u64,
+}
+
+/// An open indexed archive: zip and 7z keep their reader (random access, or a
+/// resumed sequential walk); RAR has none, so it reopens and scans per entry.
+enum Open {
+    Zip { archive: zip::ZipArchive<BufReader<File>>, password: Option<String> },
+    Seven(sevenz_rust2::SevenZReader<File>),
+    Rar { path: String, password: Option<String> },
 }
 
 /// Opens `path` for stepping; `flags` carries TRUSTED/FOLD_CASE for the read budget.
@@ -2454,23 +2799,23 @@ pub unsafe extern "C" fn tk_archive_open(
                 ended: false,
                 pending_name: None,
             },
-            _ => Stepper::Indexed {
-                kind,
-                path,
-                password,
-                budget: limit,
-                limit,
-                metas: Vec::new(),
-                pos: 0,
-                buf: Vec::new(),
-                at: 0,
-            },
+            _ => {
+                let (open, metas) = open_indexed(&kind, &path, password.as_deref())?;
+                Stepper::Indexed(Indexed {
+                    path,
+                    open,
+                    metas,
+                    pos: 0,
+                    pending: None,
+                    loaded: None,
+                    buf: Vec::new(),
+                    at: 0,
+                    budget: limit,
+                    limit,
+                })
+            }
         };
         out = Box::into_raw(Box::new(stepper)) as Handle;
-        // Indexed kinds scan metadata now; tar kinds stream on demand.
-        if let Stepper::Indexed { kind, path, metas, .. } = &mut * (out as *mut Stepper) {
-            scan_metas(kind, path, metas)?;
-        }
         Ok(0)
     });
     if code < 0 {
@@ -2479,23 +2824,31 @@ pub unsafe extern "C" fn tk_archive_open(
     out
 }
 
-/// Scans indexed-kind metadata: names, sizes, folder flags. No data is read.
-fn scan_metas(kind: &str, path: &str, metas: &mut Vec<Meta>) -> Result<(), String> {
+/// Opens an indexed archive once with its entry metadata: names, sizes,
+/// folder flags. No data is read; entries decompress on first `entry_read`.
+fn open_indexed(kind: &str, path: &str, password: Option<&str>) -> Result<(Open, Vec<Meta>), String> {
     match kind {
         "zip" => {
-            let mut z = zip_open(path)?;
-            for i in 0..z.len() {
-                let f = z.by_index_raw(i).map_err(|e| e.to_string())?;
+            let file = File::open(path).map_err(|e| e.to_string())?;
+            let mut archive = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+            let mut metas = Vec::with_capacity(archive.len());
+            for i in 0..archive.len() {
+                let f = archive.by_index_raw(i).map_err(|e| e.to_string())?;
                 metas.push(Meta { name: zip_name(&f), size: f.size(), dir: f.is_dir() });
             }
+            Ok((Open::Zip { archive, password: password.map(str::to_string) }, metas))
         }
         "7z" => {
-            let reader = sevenz_rust2::SevenZReader::open(path, sevenz_rust2::Password::from("")).map_err(seven_err)?;
+            let pw = sevenz_rust2::Password::from(password.unwrap_or(""));
+            let reader = sevenz_rust2::SevenZReader::open(path, pw).map_err(seven_err)?;
+            let mut metas = Vec::with_capacity(reader.archive().files.len());
             for f in &reader.archive().files {
                 metas.push(Meta { name: f.name().to_string(), size: f.size(), dir: f.is_directory() });
             }
+            Ok((Open::Seven(reader), metas))
         }
         "rar" => {
+            let mut metas = Vec::new();
             let mut a = rar(path, None).open_for_listing().map_err(|e| e.to_string())?;
             while let Some(h) = a.read_header().map_err(|e| e.to_string())? {
                 let e = h.entry();
@@ -2506,47 +2859,43 @@ fn scan_metas(kind: &str, path: &str, metas: &mut Vec<Meta>) -> Result<(), Strin
                 });
                 a = h.skip().map_err(|e| e.to_string())?;
             }
+            Ok((Open::Rar { path: path.to_string(), password: password.map(str::to_string) }, metas))
         }
-        other => return Err(format!("{}: cannot step a {} stream", path, other)),
+        other => Err(format!("{}: cannot step a {} stream", path, other)),
     }
-    Ok(())
 }
 
-/// Extracts the indexed current member's bytes, charging the budget.
-fn indexed_bytes(session: &mut Stepper, index: usize) -> Result<Vec<u8>, String> {
-    let Stepper::Indexed { kind, path, password, budget, limit, metas, .. } = session else {
-        unreachable!()
-    };
-    let meta = &metas[index];
-    let mut charge = |size: u64| -> Result<(), String> {
-        if size > *budget {
-            return Err(format!(
-                "{}: extracting it would write more than {} bytes, 200× the archive and at least 1 GiB; unarchive with unsafe: true if that is expected",
-                meta.name, *limit
-            ));
-        }
-        *budget -= size;
-        Ok(())
-    };
-    charge(meta.size)?;
-    let mut out = vec![0u8; meta.size.min(1 << 30) as usize];
+/// Decompresses `metas[index]` into the session's buffer, charging the budget
+/// first. Skipped entries are never decompressed.
+fn indexed_decompress(session: &mut Indexed, index: usize) -> Result<(), String> {
+    let meta = session.metas.get(index).cloned().ok_or("stepper has no such entry".to_string())?;
+    if meta.size > session.budget {
+        return Err(format!(
+            "{}: extracting it would write more than {} bytes, 200× the archive and at least 1 GiB; unpack(dir, trusted: true) if that is expected",
+            meta.name, session.limit
+        ));
+    }
+    session.budget -= meta.size;
     // Sized exactly; large members grow as they are read.
-    out.clear();
-    match kind.as_str() {
-        "zip" => {
-            let mut z = zip_open(path)?;
-            let at = (0..z.len())
-                .find(|&i| z.by_index_raw(i).is_ok_and(|f| zip_name(&f) == meta.name))
-                .ok_or_else(|| format!("{}: no entry {}", path, meta.name))?;
+    let mut out = Vec::with_capacity(meta.size.min(1 << 30) as usize);
+    match &mut session.open {
+        Open::Zip { archive, password } => {
+            // Metas walk the archive in order, so the position is the index.
+            // Verified, with a name search as fallback.
+            let at = if archive.by_index_raw(index).is_ok_and(|f| zip_name(&f) == meta.name) {
+                index
+            } else {
+                (0..archive.len())
+                    .find(|&i| archive.by_index_raw(i).is_ok_and(|f| zip_name(&f) == meta.name))
+                    .ok_or_else(|| format!("{}: no entry {}", session.path, meta.name))?
+            };
             let mut f = match password {
-                Some(pw) => z.by_index_decrypt(at, pw.as_bytes()).map_err(|e| e.to_string())?,
-                None => z.by_index(at).map_err(|e| e.to_string())?,
+                Some(pw) => archive.by_index_decrypt(at, pw.as_bytes()).map_err(|e| e.to_string())?,
+                None => archive.by_index(at).map_err(|e| e.to_string())?,
             };
             copy_capped(&mut f, &mut out, meta.size, &meta.name)?;
         }
-        "7z" => {
-            let pw = sevenz_rust2::Password::from(password.as_deref().unwrap_or(""));
-            let mut reader = sevenz_rust2::SevenZReader::open(path.as_str(), pw).map_err(seven_err)?;
+        Open::Seven(reader) => {
             let mut found = false;
             reader
                 .for_each_entries(|e, r| {
@@ -2560,10 +2909,10 @@ fn indexed_bytes(session: &mut Stepper, index: usize) -> Result<Vec<u8>, String>
                 })
                 .map_err(seven_err)?;
             if !found {
-                return Err(format!("{}: no entry {}", path, meta.name));
+                return Err(format!("{}: no entry {}", session.path, meta.name));
             }
         }
-        _ => {
+        Open::Rar { path, password } => {
             let mut a = rar(path, password.as_deref()).open_for_processing().map_err(|e| e.to_string())?;
             let mut found = false;
             while let Some(h) = a.read_header().map_err(|e| e.to_string())? {
@@ -2585,7 +2934,11 @@ fn indexed_bytes(session: &mut Stepper, index: usize) -> Result<Vec<u8>, String>
             }
         }
     }
-    Ok(out)
+    session.buf = out;
+    session.at = 0;
+    session.loaded = Some(index);
+    session.pending = None;
+    Ok(())
 }
 
 /// Reads exactly `buf.len()` bytes or fails (tar headers and pax records are fixed-shape).
@@ -2734,18 +3087,20 @@ pub unsafe extern "C" fn tk_archive_next(
 ) -> i32 {
     guard(|| {
         let session = live::<Stepper>(h)?;
-        if matches!(session, Stepper::Indexed { .. }) {
-            let (mname, msize, mdir, idx) = match session {
-                Stepper::Indexed { metas, pos, .. } => {
-                    if *pos >= metas.len() {
-                        return Ok(0);
-                    }
-                    let meta = &metas[*pos];
-                    (meta.name.clone(), meta.size, meta.dir, *pos)
-                }
+        if matches!(session, Stepper::Indexed(_)) {
+            let session = match session {
+                Stepper::Indexed(s) => s,
                 _ => unreachable!(),
             };
-            let bytes = indexed_bytes(session, idx)?;
+            if session.pos >= session.metas.len() {
+                return Ok(0);
+            }
+            // Metadata only: the bytes decompress on first `entry_read`, so a
+            // skipped entry costs nothing.
+            let (mname, msize, mdir) = {
+                let meta = &session.metas[session.pos];
+                (meta.name.clone(), meta.size, meta.dir)
+            };
             let name = mname.as_bytes();
             if name.len() > name_cap {
                 return Err(format!("entry name needs {} bytes, buffer holds {}", name.len(), name_cap));
@@ -2756,14 +3111,8 @@ pub unsafe extern "C" fn tk_archive_next(
                 *size_out = msize;
                 *dir_out = u8::from(mdir);
             }
-            match session {
-                Stepper::Indexed { buf, at, pos, .. } => {
-                    *buf = bytes;
-                    *at = 0;
-                    *pos = idx + 1;
-                }
-                _ => unreachable!(),
-            }
+            session.pending = Some(session.pos);
+            session.pos += 1;
             Ok(1)
         } else {
             let Stepper::TarLive { reader, remaining, pad, ended, pending_name, .. } = session else {
@@ -2785,11 +3134,15 @@ pub unsafe extern "C" fn tk_archive_entry_read(h: Handle, buf: *mut u8, cap: usi
         let cap = cap.min(i32::MAX as usize);
         let out = bytes_mut(buf, cap);
         match session {
-            Stepper::Indexed { buf, at, .. } => {
-                let left = buf.len() - *at;
+            Stepper::Indexed(s) => {
+                let idx = s.pending.or(s.loaded).ok_or("no current entry: call next first".to_string())?;
+                if s.pending.is_some() || s.loaded != Some(idx) {
+                    indexed_decompress(s, idx)?;
+                }
+                let left = s.buf.len() - s.at;
                 let n = left.min(cap);
-                out[..n].copy_from_slice(&buf[*at..*at + n]);
-                *at += n;
+                out[..n].copy_from_slice(&s.buf[s.at..s.at + n]);
+                s.at += n;
                 Ok(n as i32)
             }
             Stepper::TarLive { reader, remaining, .. } => {
@@ -2849,11 +3202,17 @@ pub unsafe extern "C" fn tk_archive_pack_create(format: u32, level: i32) -> Hand
 
 /// Adds `name` with `data` to the packer. Names are stored verbatim — even empty,
 /// absolute, NUL-holding or escaping ones, which exist to be refused at unpack, never at pack.
+/// A name over 65535 bytes is refused: the zip format cannot store it, and the
+/// zip crate would panic (non-unwinding) instead of failing.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_pack_add(h: Handle, name: *const u8, nlen: usize, data: *const u8, len: usize) -> i32 {
     guard(|| {
         let packer = live::<Packer>(h)?;
-        packer.entries.push((text(name, nlen)?.to_string(), bytes(data, len).to_vec()));
+        let member = text(name, nlen)?;
+        if member.len() > 65535 {
+            return Err(format!("archive member name too long ({} bytes, max 65535): {}", member.len(), member));
+        }
+        packer.entries.push((member.to_string(), bytes(data, len).to_vec()));
         Ok(0)
     })
 }
@@ -2909,6 +3268,7 @@ mod tests {
     use super::*;
 
     /// A 64 MiB tar.xz create must abort promptly once the stop byte is set.
+    /// Drives the async export: queues, then takes the job the worker reports.
     #[test]
     fn stop_byte_aborts_a_big_create() {
         let dir = std::env::temp_dir().join(format!("n2_stop_{}", std::process::id()));
@@ -2924,9 +3284,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(500));
             flag.store(1, std::sync::atomic::Ordering::Relaxed);
         });
+        let (tx, rx) = std::sync::mpsc::channel::<usize>();
+        *TEST_TX.lock().unwrap() = Some(tx);
         let start = std::time::Instant::now();
         let rc = unsafe {
-            tk_archive_create(
+            tk_archive_create_async(
                 TAR_XZ,
                 src.as_os_str().as_encoded_bytes().as_ptr(),
                 src.as_os_str().len(),
@@ -2939,15 +3301,31 @@ mod tests {
                 std::ptr::null(),
                 0,
                 9,
-                None,
+                Some(test_done),
                 &flag as *const _ as *const u8,
+                None,
+                0,
             )
         };
+        assert_eq!(rc, 0, "async create did not queue");
+        let job = rx.recv_timeout(std::time::Duration::from_secs(25)).expect("no job came back");
+        let job = job as *mut tk_common::Job;
+        let code = unsafe { tk_common::job_rc(job) };
+        unsafe { tk_common::job_free(job) };
         let _ = stopper.join();
-        eprintln!("stopped create rc={} after {:?}", rc, start.elapsed());
-        assert!(rc < 0, "create ignored the stop byte");
+        eprintln!("stopped create rc={} after {:?}", code, start.elapsed());
+        assert!(code < 0, "create ignored the stop byte");
         assert!(start.elapsed() < std::time::Duration::from_secs(25));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    static TEST_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<usize>>> =
+        std::sync::Mutex::new(None);
+
+    unsafe extern "C" fn test_done(job: *mut tk_common::Job) {
+        if let Some(tx) = TEST_TX.lock().unwrap().as_ref() {
+            let _ = tx.send(job as usize);
+        }
     }
 
     #[test]
@@ -2998,21 +3376,32 @@ mod tests {
         assert_eq!(&buf[29..], b"sub/b.bin");
     }
 
-    /// Drives the streaming unpack C API over `data` in `chunk`-byte writes;
-    /// answers `tk_unpack_finish` (the file count, or <0 with the reason in
-    /// the error slot).
+    /// Drives the streaming unpack over `data` in `chunk`-byte writes through
+    /// the session directly; answers the file count, or -1 with the session
+    /// holding its reason.
     fn unpack_bytes(data: &[u8], dest: &std::path::Path, chunk: usize) -> i32 {
-        let dest_str = dest.to_string_lossy().to_string();
-        let h = unsafe { tk_unpack_open(dest_str.as_ptr(), dest_str.len(), 0, data.len() as u64) };
-        assert!(!h.is_null());
+        let mut u = Unpack {
+            tx: None,
+            worker: None,
+            result: None,
+            head: Vec::new(),
+            dest: dest.to_string_lossy().to_string(),
+            flags: 0,
+            hint: data.len() as u64,
+            progress: None,
+            id: 0,
+        };
         for piece in data.chunks(chunk) {
-            if unsafe { tk_unpack_write(h, piece.as_ptr(), piece.len()) } < 0 {
-                break;
+            loop {
+                match u.write(piece) {
+                    Ok(Push::Sent) => break,
+                    // Test sizes never saturate the queue; yield and retry.
+                    Ok(Push::Busy) => std::thread::yield_now(),
+                    Err(_) => return u.finish().unwrap_or(-1),
+                }
             }
         }
-        let out = unsafe { tk_unpack_finish(h) };
-        unsafe { tk_unpack_free(h) };
-        out
+        u.finish().unwrap_or(-1)
     }
 
     /// Packs two members in memory; answers the archive bytes.

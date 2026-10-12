@@ -1,8 +1,9 @@
-/// Where the three native seams report, so [Native] checks them without
-/// importing them (importing a seam compiles its FFI).
+/// Where the three native seams report, so a used seam's failure is still
+/// visible without importing it (importing a seam compiles its FFI).
 ///
-/// A seam registers on first use; [Native.ok] covers the seams used so far —
-/// true when none failed (and when none was touched yet).
+/// A seam registers on first use. [Native] does not consult these: it loads
+/// the engine itself and checks the other libraries by path, so a fresh
+/// script with a missing file is not vacuously ok.
 library;
 
 /// What one native seam says about its library.

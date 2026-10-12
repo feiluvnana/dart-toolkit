@@ -78,10 +78,10 @@ Future<void> main() async {
 
     test('close() kills and reaps; second close is quiet', () async {
       final p = Process(dart, ['${tmp.path}/sleep.dart']);
-      unawaited(p.exitCode); // starts the child; the exit is awaited below
+      final exit = _exitOf(p); // starts the child; the exit is awaited below
       await Future<void>.delayed(const Duration(milliseconds: 500));
       await p.close();
-      expect(await p.exitCode, isNot(0));
+      expect(await exit, isNot(0));
       await p.close();
     }, timeout: const Timeout(Duration(seconds: 30)));
 
@@ -94,6 +94,18 @@ Future<void> main() async {
 
     test('one-shot captures through text()', () async {
       expect(await Process(dart, ['--version']).check(), isTrue);
+    });
+
+    test('dir: takes a Located working directory', () async {
+      io.File('${tmp.path}/pwd.dart').writeAsStringSync(r'''
+import 'dart:io';
+Future<void> main() async {
+  print(Directory.current.path);
+}
+''');
+      final fromDir = await Process(dart, ['${tmp.path}/pwd.dart'], dir: Dir(tmp.path)).text();
+      // macOS symlinks /var to /private/var: compare resolved.
+      expect(fromDir.trim(), io.Directory(tmp.path).resolveSymbolicLinksSync());
     });
   });
 
@@ -133,7 +145,7 @@ Future<void> main(List<String> args) async {
     test('close() reaps a 3-level chain', () async {
       final pids = '${tmp.path}/pids.txt';
       final p = Process(dart, ['${tmp.path}/level1.dart', '${tmp.path}/level2.dart', '${tmp.path}/sleep.dart', pids]);
-      unawaited(p.exitCode); // starts the child; the chain records its pids below
+      final exit = _exitOf(p); // starts the child; the chain records its pids below
       // Wait for the chain to record its pids.
       for (var i = 0; i < 100 && !io.File(pids).existsSync(); i++) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -146,7 +158,7 @@ Future<void> main(List<String> args) async {
       await p.close();
       expect(await _alive(mid), isFalse);
       expect(await _alive(leaf), isFalse);
-      expect(await p.exitCode, isNot(0));
+      expect(await exit, isNot(0));
       await p.close(); // second close is quiet
     }, timeout: const Timeout(Duration(seconds: 60)));
   });
@@ -202,6 +214,70 @@ Future<void> main(List<String> args) async {
       }
     }, testOn: '!windows');
   });
+
+  group('hang regressions', () {
+    test(
+      'line() waits for new data when stdout ends without a newline',
+      () async {
+        final p = Process('sh', ['-c', 'printf abc; sleep 1; printf "def\\n"']);
+        expect(await p.line(), 'abcdef');
+        await p.wait();
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test(
+      'input larger than the pipe buffer streams: sort of 10 MB',
+      () async {
+        final input = 'x\n' * (5 * 1024 * 1024);
+        expect(await Process('sort', [], input: input).text(), input);
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
+      'input to a child that exits early is not a broken pipe',
+      () async {
+        expect(await Process('true', [], input: 'y\n' * (512 * 1024)).check(), isTrue);
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test(
+      'readings close stdin: cat text() is empty, not a hang',
+      () async {
+        expect(await Process('cat', []).text(), '');
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test(
+      'errors() after stderr ended yields the tail and ends',
+      () async {
+        final p = Process('sh', ['-c', 'echo oops >&2']);
+        await p.wait();
+        expect(await p.errors().toList(), ['oops']);
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test(
+      'close() after a normal exit is quiet and keeps the exit',
+      () async {
+        final p = Process('sh', ['-c', 'exit 3']);
+        await expectLater(p.wait(), throwsA(isA<ProcessException>().having((e) => e.code, 'code', 3)));
+        await p.close();
+        await expectLater(p.wait(), throwsA(isA<ProcessException>().having((e) => e.code, 'code', 3)));
+      },
+      testOn: '!windows',
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+  });
 }
 
 /// Whether [pid] still names a live process.
@@ -213,3 +289,6 @@ Future<bool> _alive(int pid) async {
   final r = await io.Process.run('ps', ['-p', '$pid']);
   return r.exitCode == 0;
 }
+
+/// [p]'s exit code through `wait()` (which starts it): 0, or the failing code.
+Future<int> _exitOf(Process p) => p.wait().then((_) => 0, onError: (Object e) => e is ProcessException ? e.code : -1);

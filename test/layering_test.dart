@@ -16,9 +16,11 @@ void main() {
 
   test('dart:ffi compiles only behind the native seams', () {
     final ffiImport = RegExp(r'''^\s*import\s+'dart:ffi''', multiLine: true);
-    // The three seams plus the modules that bind native symbols through them:
-    // nothing purely Dart may compile FFI (rule 50).
+    // The three seams plus the modules that bind native symbols through them,
+    // and the job runner they all share: nothing purely Dart may compile FFI
+    // (rule 50).
     final allowed = {
+      'lib/src/core/jobs.dart',
       'lib/src/core/native.dart',
       'lib/src/chrome/native.dart',
       'lib/src/tui/native.dart',

@@ -185,7 +185,7 @@ void main() {
           expect(png.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10]);
           final path = '${tmp.path}/shot.png';
           await page.screenshot().pipe(File(path));
-          final back = await Image.decode(await io.File(path).readAsBytes());
+          final back = Image.decode(await io.File(path).readAsBytes());
           expect(back.w, greaterThan(0));
           expect(back.h, greaterThan(0));
           await page.close();
@@ -204,6 +204,143 @@ void main() {
         final pdf = await page.pdf();
         expect(utf8.decode(pdf.sublist(0, 5)), '%PDF-');
         await page.close();
+      } finally {
+        await chrome.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('an attached pages() does not close the owner tabs on exit', () async {
+      final owner = Chrome(executable: exe);
+      try {
+        final keep = <Page>[
+          await owner.open('$base/spa'),
+          await owner.open('$base/spa'),
+          await owner.open('$base/spa'),
+        ];
+        final endpoint = (await owner.pages()).first.endpoint;
+        final port = Uri.parse(endpoint).port;
+        final before = (await owner.pages()).length;
+        expect(before, greaterThanOrEqualTo(3));
+        final tmp = await io.Directory.systemTemp.createTemp('tk_attach_');
+        try {
+          io.File('${tmp.path}/second.dart').writeAsStringSync(r'''
+import 'package:dart_toolkit/chrome.dart';
+Future<void> main(List<String> args) async {
+  final chrome = Chrome(port: int.parse(args[0]));
+  final pages = await chrome.pages();
+  print('second script saw ${pages.length} pages');
+  // Nudge the GC while alive, then exit without closing anything.
+  var sink = 0;
+  for (var i = 0; i < 500000; i++) {
+    sink += '$i'.length;
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 500));
+  if (sink == -1) print('unreachable');
+}
+''');
+          final res = await io.Process.run(io.Platform.executable, [
+            '--packages=${io.Directory.current.path}/.dart_tool/package_config.json',
+            '${tmp.path}/second.dart',
+            '$port',
+          ]);
+          expect(res.exitCode, 0, reason: '${res.stdout}${res.stderr}');
+        } finally {
+          await tmp.delete(recursive: true);
+        }
+        expect((await owner.pages()).length, before);
+        expect(keep.length, 3);
+      } finally {
+        await owner.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('automation marks stay hidden: navigator.webdriver is not true', () async {
+      final chrome = Chrome(executable: exe);
+      try {
+        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
+        expect(await page.eval('navigator.webdriver'), isNot(true));
+        await page.close();
+      } finally {
+        await chrome.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('headless launch reports a Chrome user agent without HeadlessChrome', () async {
+      final chrome = Chrome(executable: exe);
+      try {
+        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
+        final ua = (await page.eval('navigator.userAgent')).toString();
+        expect(ua, contains('Chrome/'));
+        expect(ua, isNot(contains('HeadlessChrome')));
+        await page.close();
+      } finally {
+        await chrome.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('a failing eval reports the thrown description, not raw exceptionDetails', () async {
+      final chrome = Chrome(executable: exe);
+      try {
+        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
+        await expectLater(
+          page.eval('noSuchVariable_xyz'),
+          throwsA(
+            predicate(
+              (e) => e.toString().contains('ReferenceError:') && !e.toString().contains('exceptionDetails'),
+              'an error naming ReferenceError: without exceptionDetails',
+            ),
+          ),
+        );
+        await page.close();
+      } finally {
+        await chrome.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('a failed launch leaves no temp profile behind', () async {
+      final before = await _tempProfiles();
+      final chrome = Chrome(executable: '/nonexistent-chrome-xyz');
+      await expectLater(chrome.open('$base/spa'), throwsA(isA<NativeException>()));
+      final after = await _tempProfiles()
+        ..removeAll(before);
+      expect(after, isEmpty, reason: 'temp profiles left behind: $after');
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('the event loop stays free during navigate: a 5 ms timer keeps ticking', () async {
+      final chrome = Chrome(executable: exe);
+      try {
+        final page = await chrome.open('$base/spa');
+        var last = DateTime.now();
+        var worst = Duration.zero;
+        final tick = Timer.periodic(const Duration(milliseconds: 5), (_) {
+          final now = DateTime.now();
+          final gap = now.difference(last);
+          last = now;
+          if (gap > worst) worst = gap;
+        });
+        try {
+          await page.navigate('$base/form');
+          await page.wait('#go');
+        } finally {
+          tick.cancel();
+        }
+        expect(worst, lessThan(const Duration(milliseconds: 50)), reason: 'worst timer gap was $worst');
+        await page.close();
+      } finally {
+        await chrome.close();
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('closing a page fails its in-flight calls with StateError(closed)', () async {
+      final chrome = Chrome(executable: exe);
+      try {
+        final page = await chrome.open('$base/spa');
+        final waiting = page.wait('#never-appears', timeout: const Duration(seconds: 30));
+        final check = expectLater(waiting, throwsA(isA<StateError>()));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await page.close();
+        await check;
+        await expectLater(page.navigate('$base/spa'), throwsA(isA<StateError>()));
       } finally {
         await chrome.close();
       }

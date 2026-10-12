@@ -1,7 +1,7 @@
 /// # HTTP
 ///
 /// A small HTTP/1.1 client — `Http.get`, `post`, `put`, `delete` — returning a
-/// lazy `Request`: `await` gives the streaming `Resp`, a reading or `pipe`
+/// lazy `Request`: `await` gives the streaming `Response`, a reading or `pipe`
 /// reads the body. A non-2xx reading throws an `HttpException`;
 /// `pipe(file, resume: true)` resumes with `Range`.
 library;

@@ -92,6 +92,18 @@ void main() {
       if (await tmp.exists()) await tmp.delete(recursive: true);
     });
 
+    test('text() on malformed UTF-8 is a FormatException naming the file', () async {
+      final path = '${tmp.path}/bad.txt';
+      await io.File(path).writeAsBytes([0x68, 0x69, 0xFF, 0xFE, 0x0A]);
+      await expectLater(
+        File(path).text(),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains(path))),
+      );
+      // Well-formed text still reads.
+      await io.File(path).writeAsString('hi ✓\n');
+      expect(await File(path).text(), 'hi ✓\n');
+    });
+
     test('write over a held handle lands the new bytes', () async {
       // The holder lives in a child process: the native rename retries
       // synchronously (blocking this isolate's event loop), so a Timer-based
@@ -174,6 +186,25 @@ Future<void> main(List<String> args) async {
       } finally {
         await dir.drop();
       }
+    }, testOn: '!windows');
+
+    test('write keeps the mode bits', () async {
+      final f = File('${tmp.path}/script.sh');
+      await f.write('#!/bin/sh\n');
+      await f.chmod(493); // 0755
+      await f.write('#!/bin/sh\necho hi\n');
+      expect(io.FileStat.statSync(f.path).mode & 511, 493); // 0777 mask, 0755 kept
+      expect(await f.text(), '#!/bin/sh\necho hi\n');
+    }, testOn: '!windows');
+
+    test('write through a symlink keeps the link and lands in the target', () async {
+      final target = File('${tmp.path}/real.txt');
+      await target.write('old');
+      final link = await target.symlink(File('${tmp.path}/link.txt'));
+      expect(await link.isLink(), isTrue);
+      await link.write('new');
+      expect(await io.FileSystemEntity.isLink(link.path), isTrue);
+      expect(await target.text(), 'new');
     }, testOn: '!windows');
   });
 }

@@ -24,27 +24,56 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'errors.dart';
+import 'jobs.dart';
 import 'native_status.dart';
 
 /// ABI of `dart_toolkit_native` this seam binds.
-const _nativeAbi = 2;
+const _nativeAbi = 3;
 
 /// Whether every native library loads (dart_toolkit_native, _chrome, _tui).
 abstract final class Native {
-  /// Whether every native library used so far loads.
-  static bool get ok {
-    for (final check in NativeStatus.checks) {
-      if (!check.value.loads()) return false;
+  /// Whether every native library is there: the engine loads itself, and the
+  /// chrome and tui library files exist. The chrome/tui seams are not compiled
+  /// for this check (startup budget): only their files are looked up by path.
+  /// In a fresh script with a missing file, the answer is not vacuously true.
+  static bool get ok => reason == null;
+
+  /// The first library that is missing, and why (`null` when all load).
+  static String? get reason {
+    if (_Engine._load() == null) {
+      return _Engine._reason ?? 'dart_toolkit_native did not load';
     }
-    return true;
+    final chrome = _missingLib('chrome', 'DART_TOOLKIT_CHROME_LIB');
+    if (chrome != null) return 'dart_toolkit_chrome library file not found: $chrome';
+    final tui = _missingLib('tui', 'DART_TOOLKIT_TUI_LIB');
+    if (tui != null) return 'dart_toolkit_tui library file not found: $tui';
+    return null;
   }
 
-  /// The first library that does not load, and why (`null` when all do).
-  static String? get reason {
-    for (final check in NativeStatus.checks) {
-      if (!check.value.loads()) return check.value.reason() ?? check.key;
+  /// The candidate for library [name] when none exists, else `null`. The env
+  /// override names its file; otherwise beside the executable, else the built
+  /// copy — the same files the seams open, without compiling them.
+  static String? _missingLib(String name, String envKey) {
+    final env = io.Platform.environment[envKey];
+    if (env != null) {
+      final path = io.File(env).absolute.path;
+      return io.File(path).existsSync() ? null : path;
     }
-    return null;
+    final beside = _join([io.File(io.Platform.resolvedExecutable).parent.path, _Engine._fileOf(name)]);
+    if (io.File(beside).existsSync()) return null;
+    final built = _builtLib(name);
+    if (built != null && io.File(built).existsSync()) return null;
+    return built ?? beside;
+  }
+
+  /// `native/lib/<os>_<arch>/<file>` inside the package, or `null` without
+  /// the package sources (a compiled executable has no package).
+  static String? _builtLib(String name) {
+    final root = _Engine._packageRoot();
+    if (root == null || !io.File(_join([root, 'native', 'Cargo.toml'])).existsSync()) {
+      return null;
+    }
+    return _join([root, 'native', 'lib', _Engine._target, _Engine._fileOf(name)]);
   }
 }
 
@@ -337,3 +366,54 @@ final _decodeText = require()
 
 final _release = require()
     .lookupFunction<ffi.Void Function(ffi.Pointer<ffi.Uint8>), void Function(ffi.Pointer<ffi.Uint8>)>('tk_release');
+
+/// The engine's job surface for [nativeJob]/[nativeCount]: long calls run on the
+/// library's worker threads and answer through a listener (rule 52).
+final JobLibrary engineJobs = _EngineJobs();
+
+final class _EngineJobs implements JobLibrary {
+  static final _rc = require()
+      .lookupFunction<ffi.Int32 Function(ffi.Pointer<ffi.Void>), int Function(ffi.Pointer<ffi.Void>)>('tk_job_rc');
+  static final _take = require()
+      .lookupFunction<
+        ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Uint8>>, ffi.Pointer<ffi.IntPtr>),
+        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Uint8>>, ffi.Pointer<ffi.IntPtr>)
+      >('tk_job_take');
+  static final _error = require()
+      .lookupFunction<
+        ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
+        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int)
+      >('tk_job_error');
+  static final _free = require()
+      .lookupFunction<ffi.Void Function(ffi.Pointer<ffi.Void>), void Function(ffi.Pointer<ffi.Void>)>('tk_job_free');
+  static final _freeGiven = require()
+      .lookupFunction<
+        ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
+        void Function(ffi.Pointer<ffi.Uint8>, int)
+      >('tk_free');
+
+  @override
+  int jobRc(ffi.Pointer<ffi.Void> job) => _rc(job);
+
+  @override
+  int jobTake(ffi.Pointer<ffi.Void> job, ffi.Pointer<ffi.Pointer<ffi.Uint8>> out, ffi.Pointer<ffi.IntPtr> len) =>
+      _take(job, out, len);
+
+  @override
+  int jobError(ffi.Pointer<ffi.Void> job, ffi.Pointer<ffi.Uint8> buf, int cap) => _error(job, buf, cap);
+
+  @override
+  void jobFree(ffi.Pointer<ffi.Void> job) => _free(job);
+
+  @override
+  void freeGiven(ffi.Pointer<ffi.Uint8> ptr, int len) => _freeGiven(ptr, len);
+
+  @override
+  ffi.Pointer<ffi.Uint8> alloc(int size) => _Engine.alloc(size);
+
+  @override
+  void free(ffi.Pointer<ffi.Uint8> ptr, int size) => _Engine.free(ptr, size);
+
+  @override
+  String lastError() => _Engine.lastError();
+}

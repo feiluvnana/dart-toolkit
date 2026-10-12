@@ -244,7 +244,186 @@ macro_rules! exports {
         pub unsafe extern "C" fn tk_free(ptr: *mut u8, len: usize) {
             $crate::free(ptr, len)
         }
+        $crate::jobs!();
     };
+}
+
+// ---- long calls on worker threads (the job protocol)
+
+// (The `jobs!()` macro above expands the four job exports in each cdylib.)
+
+/// A long call's outcome, held until Dart takes it: `rc` carries a small
+/// integer answer (a count, 0 for ok) or a negative error, `out` carries
+/// bytes, `err` the message. The error stays on the job, never in the
+/// thread-local slot, because the work ran on another thread.
+pub struct Job {
+    /// The outcome: a count or 0 on success, negative on failure.
+    pub rc: i32,
+    /// The outcome bytes on success.
+    pub out: Vec<u8>,
+    /// The failure message.
+    pub err: String,
+}
+
+/// A long call's end, invoked once from the worker thread with the job held.
+/// Dart takes the outcome (`tk_job_rc/take/error`) and frees it (`tk_job_free`).
+pub type Done = Option<unsafe extern "C" fn(job: *mut Job)>;
+
+/// Progress from the worker thread: Dart's `id`, units done and total.
+pub type Progress = Option<unsafe extern "C" fn(id: i64, done: u64, total: u64)>;
+
+/// One unit of pool work.
+type Task = Box<dyn FnOnce() + Send + 'static>;
+
+/// The shared worker pool: one thread per CPU, at least two. Long calls run
+/// here, never on the caller's thread, so the event loop stays responsive.
+fn pool() -> &'static std::sync::mpsc::Sender<Task> {
+    static POOL: std::sync::OnceLock<(std::sync::mpsc::Sender<Task>, Vec<std::thread::JoinHandle<()>>)> =
+        std::sync::OnceLock::new();
+    &POOL
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Task>();
+            let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+            let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+            let mut workers = Vec::with_capacity(n);
+            for _ in 0..n {
+                let rx = rx.clone();
+                workers.push(std::thread::spawn(move || loop {
+                    let task = rx.lock().expect("job pool gone").recv();
+                    match task {
+                        Ok(work) => {
+                            // A panicking job must not take its worker down.
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+                        }
+                        Err(_) => break,
+                    }
+                }));
+            }
+            (tx, workers)
+        })
+        .0
+}
+
+/// Runs `work` on the shared pool, then calls `done` with its job. A panic in
+/// `work` becomes a failing job, never a lost thread.
+pub fn spawn(done: Done, work: impl FnOnce() -> Result<Job, String> + Send + 'static) {
+    let done = done.expect("a job needs its done callback");
+    pool()
+        .send(Box::new(move || {
+            let job = match work() {
+                Ok(job) => job,
+                Err(err) => Job { rc: -1, out: Vec::new(), err },
+            };
+            unsafe { done(Box::into_raw(Box::new(job))) };
+        }))
+        .expect("job pool gone");
+}
+
+/// A successful job carrying `out` bytes.
+pub fn done_bytes(out: Vec<u8>) -> Job {
+    Job { rc: 0, out, err: String::new() }
+}
+
+/// A successful job carrying the count `n`.
+pub fn done_count(n: i32) -> Job {
+    Job { rc: n, out: Vec::new(), err: String::new() }
+}
+
+/// Reads the job's outcome code (a count, 0, or negative).
+/// SAFETY: `j` is a live job handed to a `Done` callback.
+pub unsafe fn job_rc(j: *mut Job) -> i32 {
+    if j.is_null() {
+        return -1;
+    }
+    (*j).rc
+}
+
+/// Hands the job's bytes to the caller (`give` buffer, freed with `tk_free`);
+/// a failed job answers its code instead.
+pub unsafe fn job_take(j: *mut Job, out: *mut *mut u8, len: *mut usize) -> i32 {
+    if j.is_null() || out.is_null() || len.is_null() {
+        return -1;
+    }
+    let job = &mut *j;
+    if job.rc < 0 {
+        return job.rc;
+    }
+    let mut boxed = std::mem::take(&mut job.out).into_boxed_slice();
+    *out = boxed.as_mut_ptr();
+    *len = boxed.len();
+    std::mem::forget(boxed);
+    0
+}
+
+/// Copies the job's error message into `buf` (up to `cap`); answers its full length.
+pub unsafe fn job_error(j: *mut Job, buf: *mut u8, cap: usize) -> i32 {
+    if j.is_null() {
+        return -1;
+    }
+    let raw = (*j).err.as_bytes();
+    let n = raw.len().min(cap);
+    bytes_mut(buf, n).copy_from_slice(&raw[..n]);
+    raw.len() as i32
+}
+
+/// Releases a job taken by a `Done` callback.
+pub unsafe fn job_free(j: *mut Job) {
+    if !j.is_null() {
+        drop(Box::from_raw(j));
+    }
+}
+
+/// The four job exports every long-call library carries. Expanded in the
+/// cdylib itself, like [`exports`].
+#[macro_export]
+macro_rules! jobs {
+    () => {
+        /// A taken job's outcome code.
+        #[no_mangle]
+        pub unsafe extern "C" fn tk_job_rc(j: *mut $crate::Job) -> i32 {
+            $crate::job_rc(j)
+        }
+        /// A taken job's bytes (`give` buffer); a failed job answers its code.
+        #[no_mangle]
+        pub unsafe extern "C" fn tk_job_take(
+            j: *mut $crate::Job,
+            out: *mut *mut u8,
+            len: *mut usize,
+        ) -> i32 {
+            $crate::job_take(j, out, len)
+        }
+        /// A taken job's error message into `buf`; answers its full length.
+        #[no_mangle]
+        pub unsafe extern "C" fn tk_job_error(j: *mut $crate::Job, buf: *mut u8, cap: usize) -> i32 {
+            $crate::job_error(j, buf, cap)
+        }
+        /// Releases a job taken by a `Done` callback.
+        #[no_mangle]
+        pub unsafe extern "C" fn tk_job_free(j: *mut $crate::Job) {
+            $crate::job_free(j)
+        }
+    };
+}
+
+/// Reports throttled progress: at most every 50 ms, plus the final
+/// `done == total`. `last` tracks the previous report.
+pub fn throttle_progress(
+    cb: Progress,
+    id: i64,
+    done: u64,
+    total: u64,
+    last: &mut std::time::Instant,
+) {
+    let Some(f) = cb else {
+        return;
+    };
+    let now = std::time::Instant::now();
+    if done >= total || now.duration_since(*last) >= std::time::Duration::from_millis(50) {
+        *last = now;
+        unsafe {
+            f(id, done, total);
+        }
+    }
 }
 
 #[cfg(test)]

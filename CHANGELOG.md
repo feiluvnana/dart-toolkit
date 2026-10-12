@@ -85,6 +85,116 @@ now runs in native libraries rewritten from scratch, one per subsystem.
   so rebuild with `make native`.
 - JPEG encoding uses mozjpeg again, so building needs `nasm`.
 
+**Fixed** (hardening phases 1 and 4: data loss, crashes, and the terminal)
+
+- `pipe` no longer corrupts files over 64 KiB (file writers await `writeFrom`; process
+  stdin copies and flushes per MiB). A failed `pipe` aborts the writer instead of closing
+  it, so the old file and no temp remain; `Writer` gains `abort()`, and its `write` lets
+  the caller reuse `data` once the future completes.
+- `Archive.zip` cannot double-free after a failed finish, and member names over 65535
+  bytes are an `ArgumentError`, not a native panic.
+- Streaming unpack handles trailing padding, and a mid-stream refusal surfaces as itself
+  (e.g. `SecurityException`) through `unpackFinish` instead of "the worker already failed".
+- Both unpack paths refuse every link member unless `unpack(dir, trusted: true)`, which
+  also lifts the size cap (its message names the parameter); a failed stream removes what
+  it created.
+- `Process` hangs fixed: `line()` waits for new data, `input:` streams past the pipe
+  buffer (a broken pipe is a child that stopped reading), readings close stdin unless a
+  writer was taken, `errors()` ends on the buffered tail, and `close()` skips the kill
+  once the exit completed. `Chan(0)` is an `ArgumentError`.
+- `Task.run` answers an unsendable result with `StateError` and an uncaught async error
+  with the remote error and stack (isolate `onExit`/`onError`) instead of hanging; a dead
+  `Pool` worker's ports are disposed so the script exits after `close()`; `Chan<int?>`
+  keeps nulls, `post` after `close()` answers `false`, and cancelling `recv()` removes
+  its waiter.
+- `Native.ok` loads the engine itself and checks the chrome/tui library files by path,
+  so a fresh script with `DART_TOOLKIT_NATIVE=/nonexistent.dylib` is not vacuously ok.
+- `Chrome(port:).pages()` borrows tabs (release frees without closing), and a failed
+  launch deletes its owned temp profile.
+- `drop()` copies are wired, so selectors run on them; the `Element` constructor is private.
+- HTML serialisation escapes text and `&` in attributes, drops void closers, and keeps the
+  doctype; the parser reads `<`/`>` in text and quoted attributes literally, maps bad
+  code points to U+FFFD, and ships the full HTML5 entity table (`entities.dart`).
+- HTTP: the timeout covers every body chunk and stays a `TimeoutException`; only
+  idempotent requests (or re-readable bodies, or explicit `retry:`) retry, backing off
+  `250 ms × 2^attempt` and honouring `Retry-After`; a second `reader()` is a `StateError`;
+  non-2xx responses release on status; redirect URLs resolve absolute; a 416 on a complete
+  file copies nothing and a mis-offset 206 throws; `lengthHint` is null under a
+  content-encoding.
+- `Json` maps hash unordered like their equality; `File.write` keeps the mode bits and
+  never replaces a symlink.
+- Regression tests for the already-fixed charset bodies (EUC-KR, Shift_JIS, header and
+  `<meta>`) and hidden automation marks (`navigator.webdriver`).
+- Once closed, `poll` and `draw` throw an end-of-run (`Tui.run` swallows it) instead of
+  spinning on `null`s; teardown runs once in `Tui.run`'s `finally`, and two ^Cs end the
+  run promptly with the terminal restored.
+- A failing `defer` no longer goes to the zone before the terminal is restored:
+  cleanup errors are collected, the backend closes, then the first is rethrown. A
+  `listen` stream error arrives from the next `poll` by default.
+- `pointer: false` no longer captures the mouse (the start binding took three
+  arguments, Rust one); wheel up and down were swapped.
+- ^Z is `Suspend`/`Resume` again on POSIX (restore, stop, re-enter, full redraw);
+  Windows keeps it a key. Clicks hit-test in reverse paint order, and a popup
+  swallows clicks on its empty rows.
+
+**Hardening, phase 2: throughput** (medians, back to back, old → new)
+
+- HTTP body reads keep the current chunk and an offset: 100 MB from localhost pipes in
+  ~6.4 s → ~70 ms (plain dart:io ~34 ms).
+- One `HttpClient` per isolate with a 15 s idle timeout: 200 GETs go from 200 sockets to
+  1 (75 ms → 47 ms).
+- The process stdout buffer is a chunk queue with a head offset: `text()` of 100 MB in
+  ~820 ms → ~115 ms (`io.Process.run` ~100 ms).
+- The pool queue is a `ListQueue`: 80k jobs in 6.8 s → 0.5 s.
+- `lines()` streams UTF-8 through the decoder with cancellation wired (a break stops the
+  source); legacy charsets still decode whole first.
+- The script/style close-tag search compares in place: 29k scripts in 16.5 s → 68 ms.
+- Sibling position is wired, not searched: `div:first-child` over 34k siblings in
+  34 s → 65 ms.
+- `Json.parse` wraps the decode lazily instead of copying it: 28 MB in ~600 ms → ~290 ms
+  (`jsonDecode` ~285 ms).
+- The archive stepper keeps zip/7z open and decompresses lazily: `unzip` of 2000 entries
+  in 11.4 s → 16 ms; file extraction streams through the size cap, so a 600 MB member
+  holds RSS flat (was +560 MB).
+- `blur`/`resize`/`fit`/`crop` run on the native RGBA handle (Lanczos3): `blur(10)` on
+  2000×1500 in 4.5 s → 70 ms.
+- `Bar.set` redraws only on a changed line, at most every 80 ms: 200k sets write
+  ~19 MB → 230 bytes.
+- Decoupling startup through core interfaces: `process` over `core` drops from +85 ms
+  to +72 ms, `tui` from +192 ms to +99 ms (module medians, same sitting).
+
+**Changed** (hardening phases 3, 5 and 6, plus the TUI look and examples)
+
+- Long native calls are jobs on native threads (`Done` listener, stop byte, throttled
+  progress): every waiting `tk_cdp_*` call (`dart_toolkit_chrome` ABI 2) and the TUI
+  reader (`tk_tui_listen`, `dart_toolkit_tui` ABI 2 — rebuild with `make native`). A
+  timeout completes with `TimeoutException`; closing the owning resource with
+  `StateError('closed')`.
+- Handles are answered at queue time behind shared state: closing a page fails its
+  in-flight calls with `StateError('closed')`; closing the browser stops a launch
+  still in flight. `Term.poll` answers from a Dart queue — a `post` wakes a waiter at
+  once. A 5 ms timer keeps ticking through a `page.navigate`, a 200 MB `Dir.pack` and
+  a 500 MB file hash; `onProgress` (on `dir.pack`, `source.unpack`, `file.hash`,
+  `file.copy`, `file.move`) fires at least twice per pack and ends at total.
+- `Resp` is `Response`; `headers` is an unmodifiable multi-value map with
+  `header(name)` for the first value. `find`/`all` search descendants only, `matches`
+  tests the element itself, unknown pseudo-classes are a `FormatException`.
+  `Json.get<T>` converts int↔double and throws a naming `FormatException` otherwise;
+  `or:` covers only missing values. `Image.fit` never enlarges; `decode` is
+  synchronous; `Digest.toInt()` needs ≤ 8 bytes. `dir.pack` refuses `.rar`/`.7z` and
+  bare `.gz`, levels are 0–9, and native archive failures map (`FormatException`,
+  `PathNotFoundException`). `File.text()` on malformed UTF-8 is a `FormatException`.
+  `Process.kill`/`pid`/`exitCode` are gone (`close()`/`wait()`); `Process(dir:)`
+  takes any `Located`, `Canvas.picture` any `Frame`. `Chan(0)` is an `ArgumentError`.
+  Headless Chrome launches with a `Chrome/` user agent (no `HeadlessChrome`); eval
+  errors show `exception.description`.
+- The console look: accent live bars with speed/ETA, `✓`/`✗` end lines, prompts
+  through the live region, arrow-key `choose`, `NO_COLOR`/pipe fallbacks, bars closed
+  in `finally`. The TUI default matches: continuous box borders, accent markers and
+  spinner, `label bar pct details` bars.
+- annasarchive reopens visible with a kept profile when the browser check needs a
+  human; keybox prints one line on an unreachable site.
+
 ## 0.0.3
 
 A second review pass, on memory above all. Every bug below keeps a regression test.

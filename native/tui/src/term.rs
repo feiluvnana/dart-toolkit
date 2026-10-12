@@ -6,7 +6,9 @@
 //! disagree with itself.
 
 use std::io::Write;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
@@ -15,7 +17,14 @@ use crossterm::event::{
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, event, execute, terminal};
 
-use crate::{guard, live, Handle, Msg};
+use crate::{guard, live, lock, Handle, Msg};
+
+/// One heard event, handed to the Dart listener. Replaces the blocking poll:
+/// one way to read.
+pub type EventFn = Option<unsafe extern "C" fn(ev: *const TkEvent)>;
+
+/// A listener as stored: a plain function pointer, held across the spawn.
+type Listener = unsafe extern "C" fn(ev: *const TkEvent);
 
 /// Key codes past the Unicode range (mirrored in the Dart seam, lib/src/tui/native.dart).
 const KEY_UP: i32 = 0x100001;
@@ -39,13 +48,13 @@ const MOD_SHIFT: i32 = 1;
 const MOD_CTRL: i32 = 2;
 const MOD_ALT: i32 = 4;
 
-/// The event `tk_tui_poll` fills: kinds 1 key, 2 resize, 3 pointer, 4 paste,
+/// The event a listener hears: kinds 1 key, 2 resize, 3 pointer, 4 paste,
 /// 5 focus, 6 blur, 7 interrupt. For keys, `code` is the printable scalar or
 /// a `KEY_*` constant and `mods` the modifier bits; for pointers, `code` is
 /// the button, `mods` the key modifiers, `w` the pointer kind (0 press,
 /// 1 release, 2 drag, 3 move, 4 scrollUp, 5 scrollDown); for resize, the new
-/// width/height travel in `x`/`y`; paste bytes are a `give()` allocation in
-/// `text_ptr`/`text_len`.
+/// width/height travel in `x`/`y`; paste bytes are a heap allocation in
+/// `text_ptr`/`text_len`, freed with the event (`tk_tui_event_free`).
 #[repr(C)]
 pub struct TkEvent {
     kind: i32,
@@ -61,6 +70,12 @@ pub struct TkEvent {
 
 pub struct Term {
     mouse: bool,
+    /// Told to the reader thread: set on stop and free, cleared on listen.
+    stop: Arc<AtomicBool>,
+    /// The reader thread while one runs.
+    reader: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The listener to restart the reader with after a resume.
+    event_fn: Mutex<Option<Listener>>,
 }
 
 fn enter(mouse: bool) -> Result<(), String> {
@@ -88,7 +103,16 @@ fn leave(mouse: bool) {
 #[no_mangle]
 pub unsafe extern "C" fn tk_tui_start(mouse: u8) -> Handle {
     match enter(mouse != 0) {
-        Ok(()) => Box::into_raw(Box::new(Term { mouse: mouse != 0 })) as Handle,
+        Ok(()) => {
+            Box::into_raw(
+                Box::new(Term {
+                    mouse: mouse != 0,
+                    stop: Arc::new(AtomicBool::new(true)),
+                    reader: Mutex::new(None),
+                    event_fn: Mutex::new(None),
+                }),
+            ) as Handle
+        }
         Err(message) => {
             tk_common::set_error(&message);
             std::ptr::null_mut()
@@ -96,7 +120,8 @@ pub unsafe extern "C" fn tk_tui_start(mouse: u8) -> Handle {
     }
 }
 
-/// Restores modes and leaves the alt screen; restartable via `tk_tui_resume`.
+/// Restores modes, leaves the alt screen and stops the reader; restartable via
+/// `tk_tui_resume`.
 #[no_mangle]
 pub unsafe extern "C" fn tk_tui_stop(handle: Handle) {
     if handle.is_null() {
@@ -104,20 +129,26 @@ pub unsafe extern "C" fn tk_tui_stop(handle: Handle) {
     }
     // SAFETY: null checked; the caller holds the handle.
     let term = unsafe { &*(handle as *mut Term) };
+    stop_reader(term);
     leave(term.mouse);
 }
 
-/// Re-enters after `tk_tui_stop` (the ^Z dance).
+/// Re-enters after `tk_tui_stop` (the ^Z dance) and restarts the reader with
+/// the listener it had (none when `tk_tui_listen` never ran: then no thread).
 #[no_mangle]
 pub unsafe extern "C" fn tk_tui_resume(handle: Handle) -> i32 {
     guard(|| {
         let term = live::<Term>(handle)?;
         enter(term.mouse)?;
+        if let Some(f) = *lock(&term.event_fn) {
+            start_reader(term, f);
+        }
         Ok(0)
     })
 }
 
-/// Restores and frees the handle. Best effort; never fails.
+/// Restores, stops the reader and frees the handle. Best effort; never fails.
+/// Joins the reader first (bounded by its poll), so no event arrives past this.
 #[no_mangle]
 pub unsafe extern "C" fn tk_tui_free(handle: Handle) {
     if handle.is_null() {
@@ -125,6 +156,7 @@ pub unsafe extern "C" fn tk_tui_free(handle: Handle) {
     }
     // SAFETY: null checked; frees exactly once (the caller detaches first).
     let term = unsafe { Box::from_raw(handle as *mut Term) };
+    stop_reader(&term);
     leave(term.mouse);
 }
 
@@ -144,31 +176,68 @@ pub unsafe extern "C" fn tk_tui_size(handle: Handle, out_cols: *mut u16, out_row
     })
 }
 
-/// The next event into `out_ev`: 1 on an event, 0 past `timeout_ms` with
-/// nothing heard, negative on failure. Unmapped keys (media, modifiers alone)
-/// are skipped inside the budget rather than reported.
+/// Starts the reader thread for `handle`: every crossterm event is decoded and
+/// handed to `f` as a heap event the listener frees (`tk_tui_event_free`).
+/// Replaces the blocking `tk_tui_poll`: one way to read. Answers 0, or
+/// negative without its callback. A second call replaces the first reader.
 #[no_mangle]
-pub unsafe extern "C" fn tk_tui_poll(handle: Handle, out_ev: *mut TkEvent, timeout_ms: u64) -> i32 {
+pub unsafe extern "C" fn tk_tui_listen(handle: Handle, f: EventFn) -> i32 {
     guard(|| {
-        live::<Term>(handle)?;
-        if out_ev.is_null() {
-            return Err("null event slot".to_string());
-        }
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms.min(3_600_000));
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(0);
-            }
-            if !event::poll(remaining).msg()? {
-                return Ok(0);
-            }
-            if let Some(ev) = decode(event::read().msg()?)? {
-                *out_ev = ev;
-                return Ok(1);
-            }
-        }
+        let term = live::<Term>(handle)?;
+        let f = f.ok_or("a listener needs its event callback")?;
+        *lock(&term.event_fn) = Some(f);
+        start_reader(term, f);
+        Ok(0)
     })
+}
+
+/// Frees an event a listener heard (its paste bytes with it).
+#[no_mangle]
+pub unsafe extern "C" fn tk_tui_event_free(ev: *mut TkEvent) {
+    if ev.is_null() {
+        return;
+    }
+    let boxed = Box::from_raw(ev);
+    if !boxed.text_ptr.is_null() && boxed.text_len > 0 {
+        drop(Vec::from_raw_parts(boxed.text_ptr, boxed.text_len, boxed.text_len));
+    }
+}
+
+/// (Re)starts the reader: the old thread, if any, is stopped and joined first
+/// (bounded by its poll), so at most one reader hands events to Dart.
+fn start_reader(term: &Term, f: Listener) {
+    stop_reader(term);
+    term.stop.store(false, Ordering::Relaxed);
+    let stop = term.stop.clone();
+    *lock(&term.reader) = Some(std::thread::spawn(move || read_loop(&stop, f)));
+}
+
+/// Tells the reader to end and waits for it (bounded by its poll).
+fn stop_reader(term: &Term) {
+    term.stop.store(true, Ordering::Relaxed);
+    if let Some(w) = lock(&term.reader).take() {
+        let _ = w.join();
+    }
+}
+
+/// Reads crossterm events until told to stop or stdin goes away, handing each
+/// decoded one to `f`. A failed decode is skipped; a dead stdin ends the loop.
+fn read_loop(stop: &AtomicBool, f: Listener) {
+    while !stop.load(Ordering::Relaxed) {
+        match event::poll(Duration::from_millis(50)) {
+            Ok(true) => match event::read() {
+                Ok(ev) => match decode(ev) {
+                    Ok(Some(tk)) => unsafe {
+                        f(Box::into_raw(Box::new(tk)) as *const TkEvent);
+                    },
+                    _ => {}
+                },
+                Err(_) => break,
+            },
+            Ok(false) => {}
+            Err(_) => break,
+        }
+    }
 }
 
 fn mods_of(mods: KeyModifiers) -> i32 {
@@ -231,8 +300,8 @@ fn decode(ev: Event) -> Result<Option<TkEvent>, String> {
                 MouseEventKind::Up(_) => 1,
                 MouseEventKind::Drag(_) => 2,
                 MouseEventKind::Moved => 3,
-                MouseEventKind::ScrollDown => 4,
-                MouseEventKind::ScrollUp => 5,
+                MouseEventKind::ScrollUp => 4,
+                MouseEventKind::ScrollDown => 5,
                 // Horizontal scroll has no Dart noun: skipped.
                 _ => return Ok(None),
             };
@@ -320,5 +389,28 @@ mod tests {
     fn media_keys_are_skipped() {
         let none = decode(Event::Key(crossterm::event::KeyEvent::new(KeyCode::Media(crossterm::event::MediaKeyCode::Play), KeyModifiers::NONE))).unwrap();
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn sgr_wheel_up_is_scroll_up() {
+        // `\e[<64;11;21M`: button 64 is the wheel turning up.
+        let up = decode(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!((up.kind, up.w), (3, 4));
+        let down = decode(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!((down.kind, down.w), (3, 5));
     }
 }

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io' as io;
 import 'dart:isolate';
 import 'dart:math';
 
 import 'package:dart_toolkit/async.dart';
+import 'package:dart_toolkit/process.dart';
 import 'package:test/test.dart';
 
 /// One counted job: posts its id on start and on end, answers its id.
@@ -12,6 +14,15 @@ Future<int> _job(({SendPort port, int id}) job) async {
   while (DateTime.now().isBefore(end)) {}
   await Chan.post(job.port, -job.id);
   return job.id;
+}
+
+/// A job whose failure never reaches its own future: it kills the isolate
+/// after scheduling one, so the error is uncaught at the isolate level.
+Future<int> _stray() async {
+  await Future<void>.delayed(Duration.zero);
+  unawaited(Future<void>.delayed(Duration.zero).then((_) => throw FormatException('stray')));
+  await Future<void>.delayed(const Duration(milliseconds: 50));
+  return 1;
 }
 
 void main() {
@@ -71,7 +82,6 @@ void main() {
     unawaited(chan.send(4).then((_) => fourthDone = true));
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(fourthDone, isFalse);
-    expect(chan.len, 3);
     final seen = <int>[];
     await for (final v in chan.recv()) {
       seen.add(v);
@@ -91,5 +101,68 @@ void main() {
       await chan.close();
     }
     expect(seen, [1]);
+  });
+
+  group('hang and leak regressions', () {
+    test('Task.run of an unsendable result throws StateError', () async {
+      await expectLater(Task.run(() => ReceivePort()), throwsA(isA<StateError>()));
+    }, timeout: const Timeout(Duration(seconds: 5)));
+
+    test('Task.run of an uncaught async error throws StateError', () async {
+      await expectLater(Task.run(_stray), throwsA(isA<StateError>()));
+    }, timeout: const Timeout(Duration(seconds: 5)));
+
+    test('a script with a crashed pool worker exits after close()', () async {
+      final dir = await io.Directory.systemTemp.createTemp('poolcrash_');
+      try {
+        io.File('${dir.path}/crash.dart').writeAsStringSync('''
+import 'dart:isolate';
+import 'package:dart_toolkit/async.dart';
+Never die() { Isolate.exit(); }
+Future<void> main() async {
+  final pool = Pool(1);
+  try {
+    await pool.run(die);
+  } catch (_) {}
+  await pool.close();
+}
+''');
+        final pkgConfig = '${io.Directory.current.path}/.dart_tool/package_config.json';
+        final probe = Process(io.Platform.executable, ['--packages=$pkgConfig', '${dir.path}/crash.dart']);
+        expect(await probe.check(), isTrue);
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    }, timeout: const Timeout(Duration(seconds: 10)));
+
+    test('Chan<int?> keeps null items', () async {
+      final chan = Chan<int?>(10);
+      await chan.send(null);
+      await chan.send(1);
+      await chan.close();
+      expect(await chan.recv().toList(), [null, 1]);
+    });
+
+    test('post after close answers false instead of hanging', () async {
+      final chan = Chan<int>(10);
+      final port = chan.port;
+      await chan.close();
+      expect(await Chan.post(port, 1, wait: false), isFalse);
+      await expectLater(Chan.post(port, 2), throwsA(isA<StateError>()));
+    }, timeout: const Timeout(Duration(seconds: 5)));
+
+    test('cancelling recv neither hangs nor swallows the next send', () async {
+      final chan = Chan<int>(10);
+      final sub = chan.recv().listen((_) {});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await sub.cancel();
+      await chan.send(7);
+      expect(await chan.recv().first, 7);
+      await chan.close();
+    }, timeout: const Timeout(Duration(seconds: 5)));
+
+    test('Chan(0) is an ArgumentError', () async {
+      expect(() => Chan<int>(0), throwsArgumentError);
+    });
   });
 }

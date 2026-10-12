@@ -5,7 +5,8 @@
 //! transforms in memory, encodes JPEG/PNG/WebP/BMP/TIFF, scores with SSIMULACRA2.
 //! Handles are borrowed, never consumed: every op returns a new owned handle.
 
-use crate::{bytes, give, guard, text};
+use crate::{bytes, give, guard, set_error, text, watch};
+use crate::{Done, Job, Progress, done_bytes, spawn};
 use image::codecs::bmp::BmpEncoder;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
@@ -399,14 +400,6 @@ pub unsafe extern "C" fn tk_image_load_file(path: *const u8, plen: usize, max_si
     })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn tk_image_load_memory(data: *const u8, dlen: usize, format_code: u32, max_side: u32) -> *mut c_void {
-    made(|| {
-        let slice = bytes(data, dlen);
-        let orient = read_exif_orientation(slice);
-        Ok(NativeImage::new(upright(decode(slice, format_code, max_side)?, orient)))
-    })
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_create_blank(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> *mut c_void {
@@ -500,17 +493,7 @@ pub unsafe extern "C" fn tk_image_probe_memory(
 
 // ---- transforms
 
-#[no_mangle]
-pub unsafe extern "C" fn tk_image_resize(handle: *mut c_void, target_w: u32, target_h: u32, fit_mode: u32, filter_code: u32) -> *mut c_void {
-    op(handle, |n| resized(&n.inner, target_w, target_h, fit_mode, filter_code).map(NativeImage::new))
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn tk_image_crop(handle: *mut c_void, x: u32, y: u32, width: u32, height: u32) -> *mut c_void {
-    op(handle, |n| {
-        Ok(NativeImage::new(DynamicImage::ImageRgba8(image::imageops::crop_imm(&n.inner.to_rgba8(), x, y, width, height).to_image())))
-    })
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_crop_aspect(handle: *mut c_void, target_aspect: f64, align_x: f32, align_y: f32) -> *mut c_void {
@@ -715,10 +698,6 @@ pub unsafe extern "C" fn tk_image_sepia(handle: *mut c_void) -> *mut c_void {
     })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn tk_image_blur(handle: *mut c_void, sigma: f32) -> *mut c_void {
-    op(handle, |n| Ok(NativeImage::new(n.inner.blur(sigma))))
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_sharpen(handle: *mut c_void, amount: f32, sigma: f32) -> *mut c_void {
@@ -1109,22 +1088,6 @@ fn encode_image(img: &DynamicImage, format: ImageFormat, quality: u8, lossless: 
     Ok(buf)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn tk_image_encode_memory(
-    handle: *mut c_void,
-    format_code: u32,
-    quality: u8,
-    lossless: bool,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    guard(|| {
-        let native = img(handle)?;
-        let format = code_to_format(format_code).unwrap_or(ImageFormat::Jpeg);
-        let buf = encode_image(&native.inner, format, quality, lossless)?;
-        Ok(give(buf, out_ptr, out_len))
-    })
-}
 
 /// Whether any pixel of [img] is less than opaque: a JPEG, which has no alpha, would drop it.
 fn translucent(img: &DynamicImage) -> bool {
@@ -1850,6 +1813,239 @@ pub unsafe extern "C" fn tk_image_to_rgba(handle: *mut c_void, out: *mut u8, cap
         unsafe { std::ptr::copy_nonoverlapping(rgba.as_ptr(), out, need) };
         Ok(need as i32)
     })
+}
+
+
+// ---- synchronous in-memory calls: transforms of an Image already held stay sync on the Dart
+// side (computation on values in memory is synchronous); I/O-bound loads and saves are jobs.
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_load_memory(data: *const u8, dlen: usize, format_code: u32, max_side: u32) -> *mut c_void {
+    made(|| {
+        let slice = bytes(data, dlen);
+        let orient = read_exif_orientation(slice);
+        Ok(NativeImage::new(upright(decode(slice, format_code, max_side)?, orient)))
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_resize(handle: *mut c_void, target_w: u32, target_h: u32, fit_mode: u32, filter_code: u32) -> *mut c_void {
+    op(handle, |n| resized(&n.inner, target_w, target_h, fit_mode, filter_code).map(NativeImage::new))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_crop(handle: *mut c_void, x: u32, y: u32, width: u32, height: u32) -> *mut c_void {
+    op(handle, |n| {
+        Ok(NativeImage::new(DynamicImage::ImageRgba8(image::imageops::crop_imm(&n.inner.to_rgba8(), x, y, width, height).to_image())))
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_blur(handle: *mut c_void, sigma: f32) -> *mut c_void {
+    op(handle, |n| Ok(NativeImage::new(n.inner.blur(sigma))))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_encode_memory(
+    handle: *mut c_void,
+    format_code: u32,
+    quality: u8,
+    lossless: bool,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard(|| {
+        let native = img(handle)?;
+        let format = code_to_format(format_code).unwrap_or(ImageFormat::Jpeg);
+        let buf = encode_image(&native.inner, format, quality, lossless)?;
+        Ok(give(buf, out_ptr, out_len))
+    })
+}
+
+/// Validates `w*h*4` RGBA bytes.
+fn rgba_in(data: &[u8], w: u32, h: u32) -> Result<RgbaImage, String> {
+    let want = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if data.len() != want {
+        return Err(format!("RGBA needs {} bytes for {}x{}, not {}", want, w, h, data.len()));
+    }
+    RgbaImage::from_raw(w, h, data.to_vec()).ok_or("RGBA buffer gave no image".to_string())
+}
+
+/// An image as `[w:u32le][h:u32le][rgba]` for the trip back to Dart.
+fn rgba_out(img: RgbaImage) -> Job {
+    let (w, h) = (img.width(), img.height());
+    let mut out = Vec::with_capacity(8 + w as usize * h as usize * 4);
+    out.extend_from_slice(&w.to_le_bytes());
+    out.extend_from_slice(&h.to_le_bytes());
+    out.extend_from_slice(img.as_raw());
+    done_bytes(out)
+}
+
+/// Decodes image bytes on a worker thread, answering `[w][h][rgba]`.
+/// Replaces the blocking `tk_image_load_memory`: one way to decode.
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_load_memory_async(
+    data: *const u8,
+    dlen: usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let bytes = bytes(data, dlen).to_vec();
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = watch(stop as *const u8);
+        let orient = read_exif_orientation(&bytes);
+        let img = upright(decode(&bytes, 0, 0)?, orient);
+        Ok(rgba_out(img.to_rgba8()))
+    });
+    0
+}
+
+/// Encodes `w*h*4` RGBA bytes on a worker thread, answering the encoded file.
+/// Replaces the blocking `tk_image_encode_memory`: one way to encode.
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_encode_rgba_async(
+    data: *const u8,
+    dlen: usize,
+    w: u32,
+    h: u32,
+    format_code: u32,
+    quality: u8,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    let args = match rgba_in(unsafe { bytes(data, dlen) }, w, h) {
+        Ok(img) => img,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let format = match code_to_format(format_code) {
+        Some(format) => format,
+        None => {
+            set_error(&format!("unknown image format {}", format_code));
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = watch(stop as *const u8);
+        let img = DynamicImage::ImageRgba8(args);
+        let buf = encode_image(&img, format, quality, false)?;
+        Ok(done_bytes(buf))
+    });
+    0
+}
+
+/// Blurs `w*h*4` RGBA bytes on a worker thread (gaussian `sigma`), answering
+/// `[w][h][rgba]`. Replaces the blocking `tk_image_blur`.
+#[no_mangle]
+pub unsafe extern "C" fn tk_image_blur_async(
+    data: *const u8,
+    dlen: usize,
+    w: u32,
+    h: u32,
+    sigma: f32,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    let args = match rgba_in(unsafe { bytes(data, dlen) }, w, h) {
+        Ok(img) => img,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = watch(stop as *const u8);
+        let img = DynamicImage::ImageRgba8(args);
+        Ok(rgba_out(image::imageops::blur(&img.to_rgba8(), sigma)))
+    });
+    0
+}
+
+/// Resamples `w*h*4` RGBA bytes on a worker thread (Lanczos3 unless told
+/// otherwise), answering `[w][h][rgba]`. Replaces the blocking `tk_image_resize`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn tk_image_resize_async(
+    data: *const u8,
+    dlen: usize,
+    w: u32,
+    h: u32,
+    target_w: u32,
+    target_h: u32,
+    fit_mode: u32,
+    filter_code: u32,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    let args = match rgba_in(unsafe { bytes(data, dlen) }, w, h) {
+        Ok(img) => img,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = watch(stop as *const u8);
+        let img = DynamicImage::ImageRgba8(args);
+        let out = resized(&img, target_w, target_h, fit_mode, filter_code)?;
+        Ok(rgba_out(out.to_rgba8()))
+    });
+    0
+}
+
+/// Crops `w*h*4` RGBA bytes on a worker thread, answering `[w][h][rgba]`.
+/// Out-of-bounds rectangles are invalid arguments. Replaces the blocking
+/// `tk_image_crop`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn tk_image_crop_async(
+    data: *const u8,
+    dlen: usize,
+    w: u32,
+    h: u32,
+    x: u32,
+    y: u32,
+    cw: u32,
+    ch: u32,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    let args = match (|| -> Result<RgbaImage, String> {
+        let img = rgba_in(unsafe { bytes(data, dlen) }, w, h)?;
+        if cw == 0 || ch == 0 || x > w || y > h || x + cw > w || y + ch > h {
+            return Err(format!("crop ({},{},{},{}) leaves {}x{}", x, y, cw, ch, w, h));
+        }
+        Ok(img)
+    })() {
+        Ok(img) => img,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = watch(stop as *const u8);
+        Ok(rgba_out(image::imageops::crop_imm(&args, x, y, cw, ch).to_image()))
+    });
+    0
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
@@ -126,6 +127,40 @@ void main() {
         throwsA(isA<io.PathNotFoundException>().having((e) => e.path, 'path', '/nope/absent.bin')),
       );
     });
+
+    test('the event loop stays free during a 500 MB file hash', () async {
+      final dir = await Dir.temp();
+      try {
+        final file = dir.file('half-gig.bin');
+        // Synchronous writes: nothing buffers a second copy in memory (a
+        // buffered sink would heap the whole half gig and pause the loop in GC).
+        final chunk = Uint8List.fromList(List.generate(1024 * 1024, (i) => (i * 7 + 3) & 0xFF));
+        final raf = io.File(file.path).openSync(mode: io.FileMode.write);
+        try {
+          for (var i = 0; i < 500; i++) {
+            raf.writeFromSync(chunk);
+          }
+        } finally {
+          raf.closeSync();
+        }
+        var last = DateTime.now();
+        var worst = Duration.zero;
+        final tick = Timer.periodic(const Duration(milliseconds: 5), (_) {
+          final now = DateTime.now();
+          final gap = now.difference(last);
+          last = now;
+          if (gap > worst) worst = gap;
+        });
+        try {
+          await file.hash(Hash.sha256);
+        } finally {
+          tick.cancel();
+        }
+        expect(worst, lessThan(const Duration(milliseconds: 50)), reason: 'worst timer gap was $worst');
+      } finally {
+        await dir.drop();
+      }
+    }, timeout: const Timeout(Duration(seconds: 300)));
   });
 
   group('digest text', () {

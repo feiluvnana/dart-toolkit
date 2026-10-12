@@ -20,10 +20,11 @@ pub(crate) use tk_common::{
     bytes, bytes_mut, create_file, give, guard, live, opt_text, read_file, set_error, stopped, text, watch,
     Handle, Msg, Watched,
 };
+pub(crate) use tk_common::{Done, Job, Progress, done_bytes, done_count, spawn, throttle_progress};
 
 /// Pumps `from` into `to` until end, then flushes.
 pub(crate) fn pump(mut from: impl std::io::Read, mut to: impl std::io::Write) -> Result<(), String> {
     std::io::copy(&mut from, &mut to).map_err(|e| e.to_string())?;
     to.flush().map_err(|e| e.to_string())
 }
-tk_common::exports!(2);
+tk_common::exports!(3);

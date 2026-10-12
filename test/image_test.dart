@@ -12,7 +12,7 @@ void main() {
       final img = Image.empty(32, 24).fill(0xFF112233);
       final bytes = img.encode(format: 'png');
       expect(Image.formatOf(bytes), 'png');
-      final back = await Image.decode(bytes);
+      final back = Image.decode(bytes);
       expect((back.w, back.h), (32, 24));
       expect(back.rgba, img.rgba);
     });
@@ -21,7 +21,7 @@ void main() {
       final img = Image.empty(17, 9).fill(0xFF445566);
       final bytes = img.encode(format: 'qoi');
       expect(Image.formatOf(bytes), 'qoi');
-      final back = await Image.decode(bytes);
+      final back = Image.decode(bytes);
       expect((back.w, back.h), (17, 9));
       expect(back.rgba, img.rgba);
     });
@@ -31,13 +31,13 @@ void main() {
       for (final format in ['jpeg', 'webp']) {
         final bytes = img.encode(format: format, quality: 80);
         expect(Image.formatOf(bytes), format);
-        final back = await Image.decode(bytes);
+        final back = Image.decode(bytes);
         expect((back.w, back.h), (48, 32));
       }
     });
 
     test('unknown bytes are a FormatException', () async {
-      await expectLater(Image.decode([1, 2, 3, 4]), throwsFormatException);
+      expect(() => Image.decode([1, 2, 3, 4]), throwsFormatException);
     });
 
     test('blur of a solid image is solid; draw leaves pixels', () {
@@ -57,6 +57,14 @@ void main() {
       final cut = img.crop(1, 1, 2, 2);
       expect((cut.w, cut.h), (2, 2));
       expect(cut.pixel(0, 0), img.pixel(1, 1));
+    });
+
+    test('crop outside the bounds clips to transparent', () {
+      final img = Image.empty(4, 4).fill(0xFF102030);
+      final cut = img.crop(-1, -1, 3, 3);
+      expect((cut.w, cut.h), (3, 3));
+      expect(cut.pixel(0, 0), 0x00000000);
+      expect(cut.pixel(1, 1), img.pixel(0, 0));
     });
   });
 

@@ -5,6 +5,7 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import '../core/errors.dart';
+import '../core/jobs.dart';
 import '../core/native.dart' as l2native;
 import '../core/traits.dart';
 
@@ -32,24 +33,46 @@ abstract final class _FsNative {
           ffi.IntPtr,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
-          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
           ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
         int Function(
           ffi.Pointer<ffi.Uint8>,
           int,
           ffi.Pointer<ffi.Uint8>,
           int,
-          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
           ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
         )
-      >('tk_copy_file');
+      >('tk_copy_file_async');
 
   static final rename = _lib
       .lookupFunction<
-        ffi.Int32 Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr, ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
-        int Function(ffi.Pointer<ffi.Uint8>, int, ffi.Pointer<ffi.Uint8>, int)
-      >('tk_rename');
+        ffi.Int32 Function(
+          ffi.Pointer<ffi.Uint8>,
+          ffi.IntPtr,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.IntPtr,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
+        ),
+        int Function(
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
+      >('tk_rename_async');
 }
 
 /// What the library said about [path], as the exception it means: a missing
@@ -70,12 +93,18 @@ Exception _fsFileError(String message, String path, String op) {
 /// held target waits with backoff and retries). Without the library it is an
 /// [UnsupportedError] (rule 42: no Dart fallback).
 Future<void> renameFile(String src, String dst) async {
-  final rc = l2native.withText(src, (sp, sn) {
-    return l2native.withText(dst, (dp, dn) {
-      return _FsNative.rename(sp, sn, dp, dn);
-    });
-  });
-  if (rc < 0) throw _fsFileError(l2native.lastError(), src, 'Cannot rename');
+  try {
+    await nativeCount(
+      'rename $src',
+      l2native.engineJobs,
+      (done, stop, progress, id) => l2native.withText(
+        src,
+        (sp, sn) => l2native.withText(dst, (dp, dn) => _FsNative.rename(sp, sn, dp, dn, done, stop, progress, id)),
+      ),
+    );
+  } on NativeException catch (e) {
+    throw _fsFileError(e.message, src, 'Cannot rename');
+  }
 }
 
 /// Whether canonical [here] is [there] itself or below it.
@@ -152,10 +181,11 @@ String _join(String a, String b) {
 /// The one `Object` parameter is text-or-bytes: a `String` is UTF-8 encoded, a
 /// `List<int>`/`Uint8List` is written verbatim, anything else is an
 /// [ArgumentError]. A reading on a missing file throws [io.PathNotFoundException].
-final class File implements Source, Target {
+final class File implements Source, Target, Located {
   File(this.path);
 
   /// The path as written.
+  @override
   final String path;
 
   /// The last segment.
@@ -190,8 +220,16 @@ final class File implements Source, Target {
     return File(await io.Link(path).target());
   }
 
-  /// The whole file decoded as UTF-8.
-  Future<String> text() => io.File(path).readAsString();
+  /// The whole file decoded as UTF-8; malformed bytes are a
+  /// [FormatException] naming the file, not a [io.FileSystemException].
+  Future<String> text() async {
+    final raw = await io.File(path).readAsBytes();
+    try {
+      return utf8.decode(raw);
+    } on FormatException catch (e) {
+      throw FormatException('Invalid UTF-8 in $path: ${e.message}');
+    }
+  }
 
   /// The whole file as bytes.
   Future<Uint8List> bytes() => io.File(path).readAsBytes();
@@ -202,17 +240,20 @@ final class File implements Source, Target {
   /// Replaces the file with [data] (`String` or `List<int>`), atomically: a
   /// temporary sibling is renamed over the target (held-target retries on
   /// Windows), so a failed write leaves the old content and no temp behind.
+  /// The temp takes the target's mode bits before the rename, and a symlink
+  /// is never replaced: the temp sits next to the link's target instead.
   Future<void> write(Object data) async {
     final bytes = _writeBytes(data);
-    final tmp = '$path.tmp_${DateTime.now().microsecondsSinceEpoch}';
+    final (tmp, real) = await _stageAtomic(path);
     try {
       await io.File(tmp).writeAsBytes(bytes);
     } catch (_) {
       await _gone(tmp);
       rethrow;
     }
+    await _carryMode(tmp, real);
     try {
-      await renameFile(tmp, path);
+      await renameFile(tmp, real);
     } catch (_) {
       await _gone(tmp);
       rethrow;
@@ -228,11 +269,12 @@ final class File implements Source, Target {
   /// Copies this file to [to] atomically (via a temporary sibling renamed
   /// over the target) with `tk_copy_file` (source permission bits kept,
   /// partial destination removed); answers [to]. Without the library it is an
-  /// [UnsupportedError] (rule 42: no Dart fallback).
-  Future<File> copy(File to) async {
+  /// [UnsupportedError] (rule 42: no Dart fallback). [onProgress] hears bytes copied
+  /// and the total. The copy runs on a native thread: the event loop stays free.
+  Future<File> copy(File to, {void Function(int done, int total)? onProgress}) async {
     final tmp = '${to.path}.tmp_${DateTime.now().microsecondsSinceEpoch}';
     try {
-      await _nativeCopy(path, tmp);
+      await _nativeCopy(path, tmp, onProgress: onProgress);
       await renameFile(tmp, to.path);
     } catch (_) {
       await _gone(tmp);
@@ -244,14 +286,15 @@ final class File implements Source, Target {
   /// Moves (renames) this file to [to] (held-target retries on Windows);
   /// across volumes it copies and then drops the source, so the destination
   /// is complete before the source is touched; answers [to].
-  Future<File> move(File to) async {
+  /// [onProgress] hears the copy's bytes when the move crosses volumes.
+  Future<File> move(File to, {void Function(int done, int total)? onProgress}) async {
     try {
       await renameFile(path, to.path);
       return to;
     } on io.FileSystemException catch (e) {
       if (!_isCrossVolume(e)) rethrow;
     }
-    await copy(to);
+    await copy(to, onProgress: onProgress);
     await drop();
     return to;
   }
@@ -305,12 +348,19 @@ final class File implements Source, Target {
   /// A writer for this file. It replaces atomically: chunks go to a temporary
   /// sibling that [Writer.close] renames over the target (on an error the
   /// temp is deleted and the old content stays). With [resume], it appends to
-  /// the file itself, so a partial file survives a crash.
+  /// the file itself, so a partial file survives a crash. Each [Writer.write]
+  /// is awaited through `RandomAccessFile.writeFrom`, which copies at the
+  /// call and gives backpressure, so `pipe` may reuse its chunk. Like
+  /// [write], the temp takes the target's mode and never replaces a symlink.
   @override
   Future<Writer> writer({bool resume = false}) async {
-    if (resume) return _AppendWriter(io.File(path).openWrite(mode: io.FileMode.append));
-    final tmp = '$path.tmp_${DateTime.now().microsecondsSinceEpoch}';
-    return _AtomicWriter(io.File(tmp).openWrite(), tmp, path);
+    if (resume) {
+      final raf = await io.File(path).open(mode: io.FileMode.append);
+      return _AppendWriter(raf);
+    }
+    final (tmp, real) = await _stageAtomic(path);
+    final raf = await io.File(tmp).open(mode: io.FileMode.write);
+    return _AtomicWriter(raf, tmp, real);
   }
 
   @override
@@ -355,33 +405,35 @@ final class _FileReader implements Reader, Seeker {
 /// A [Writer] that replaces its target atomically: chunks land in a temporary
 /// sibling; [close] renames it over the target, so the file is never
 /// half-written. On an error the temp is deleted and the old content stays.
+/// [abort] deletes the temp without renaming.
 final class _AtomicWriter implements Writer {
-  final io.IOSink _sink;
+  final io.RandomAccessFile _raf;
   final String _tmp;
   final String _target;
-  var _closed = false;
+  var _done = false;
 
-  _AtomicWriter(this._sink, this._tmp, this._target);
+  _AtomicWriter(this._raf, this._tmp, this._target);
 
   @override
   Future<int> write(Uint8List data) async {
-    _sink.add(data);
+    await _raf.writeFrom(data);
     return data.length;
   }
 
   @override
-  Future<void> flush() => _sink.flush();
+  Future<void> flush() => _raf.flush();
 
   @override
   Future<void> close() async {
-    if (_closed) return;
-    _closed = true;
+    if (_done) return;
+    _done = true;
     try {
-      await _sink.close();
+      await _raf.close();
     } catch (_) {
       await _gone(_tmp);
       rethrow;
     }
+    await _carryMode(_tmp, _target);
     try {
       await renameFile(_tmp, _target);
     } catch (_) {
@@ -389,30 +441,54 @@ final class _AtomicWriter implements Writer {
       rethrow;
     }
   }
+
+  @override
+  Future<void> abort() async {
+    if (_done) return;
+    _done = true;
+    try {
+      await _raf.close();
+    } catch (_) {
+      // Closing a failed write never hides the failure.
+    }
+    await _gone(_tmp);
+  }
 }
 
 /// A [Writer] that appends to the file itself: a partial file survives a
-/// crash, so a resumed transfer can continue from [File.size].
+/// crash, so a resumed transfer can continue from [File.size]. [abort] only
+/// closes: it never truncates.
 final class _AppendWriter implements Writer {
-  final io.IOSink _sink;
-  var _closed = false;
+  final io.RandomAccessFile _raf;
+  var _done = false;
 
-  _AppendWriter(this._sink);
+  _AppendWriter(this._raf);
 
   @override
   Future<int> write(Uint8List data) async {
-    _sink.add(data);
+    await _raf.writeFrom(data);
     return data.length;
   }
 
   @override
-  Future<void> flush() => _sink.flush();
+  Future<void> flush() => _raf.flush();
 
   @override
   Future<void> close() async {
-    if (_closed) return;
-    _closed = true;
-    await _sink.close();
+    if (_done) return;
+    _done = true;
+    await _raf.close();
+  }
+
+  @override
+  Future<void> abort() async {
+    if (_done) return;
+    _done = true;
+    try {
+      await _raf.close();
+    } catch (_) {
+      // Closing a failed write never hides the failure.
+    }
   }
 }
 
@@ -427,14 +503,20 @@ List<int> _writeBytes(Object data) {
 /// Copies [src] to a new file [dst] through `tk_copy_file` (clone where the
 /// filesystem makes one, else chunked; progress null, stop null): a failed
 /// copy removes [dst]. [dst] must not exist.
-Future<void> _nativeCopy(String src, String dst) async {
-  final s = utf8.encode(src), d = utf8.encode(dst);
-  final rc = l2native.withBytes(s, (sp, sn) {
-    return l2native.withBytes(d, (dp, dn) {
-      return _FsNative.copyFile(sp, sn, dp, dn, ffi.nullptr, ffi.nullptr);
-    });
-  });
-  if (rc < 0) throw _fsFileError(l2native.lastError(), src, 'Cannot copy');
+Future<void> _nativeCopy(String src, String dst, {void Function(int done, int total)? onProgress}) async {
+  try {
+    await nativeCount(
+      'copy $src',
+      l2native.engineJobs,
+      (done, stop, progress, id) => l2native.withText(
+        src,
+        (sp, sn) => l2native.withText(dst, (dp, dn) => _FsNative.copyFile(sp, sn, dp, dn, done, stop, progress, id)),
+      ),
+      onProgress: onProgress,
+    );
+  } on NativeException catch (e) {
+    throw _fsFileError(e.message, src, 'Cannot copy');
+  }
 }
 
 /// Deletes the file at [path] when there is one; never throws.
@@ -446,19 +528,60 @@ Future<void> _gone(String path) async {
   }
 }
 
-/// Whether [e] reports a cross-volume rename (POSIX EXDEV): copy+drop then.
+/// The staging pair for an atomic replace of [path]: the temp file and the
+/// real target. A symlink is never replaced: the temp sits next to the link's
+/// target (a relative target resolves against the link's directory).
+Future<(String tmp, String real)> _stageAtomic(String path) async {
+  var real = path;
+  if (await io.Link(path).exists()) {
+    final raw = await io.Link(path).target();
+    real = _isAbsolutePath(raw) ? raw : _join(io.File(path).parent.path, raw);
+  }
+  return ('$real.tmp_${DateTime.now().microsecondsSinceEpoch}', real);
+}
+
+/// Whether [p] is absolute (POSIX root or a Windows drive/UNC root).
+bool _isAbsolutePath(String p) => p.startsWith('/') || _driveRoot.hasMatch(p) || p.startsWith(r'\\');
+
+/// Gives the temp file [tmp] the mode bits of [real] (best effort: without a
+/// target yet there is nothing to carry, and a chmod failure never fails the
+/// write the bytes are already staged for).
+Future<void> _carryMode(String tmp, String real) async {
+  int mode;
+  try {
+    // A missing target stats as notFound with mode 0 (no throw): only an
+    // existing target lends its bits.
+    final st = io.FileStat.statSync(real);
+    if (st.type == io.FileSystemEntityType.notFound) return;
+    mode = st.mode & 0xFFF; // permission bits (0o7777)
+  } catch (_) {
+    // Unstattable: the temp keeps its default mode.
+    return;
+  }
+  try {
+    final rc = l2native.withText(tmp, (ptr, len) => _FsNative.chmod(ptr, len, mode));
+    if (rc < 0) throw _fsFileError(l2native.lastError(), tmp, 'Cannot chmod');
+  } catch (_) {
+    // Best effort: the bytes land either way; the mode is a nicety.
+  }
+}
+
+/// Whether [e] reports a cross-volume rename (POSIX EXDEV, Windows
+/// ERROR_NOT_SAME_DEVICE): copy+drop then.
 bool _isCrossVolume(io.FileSystemException e) {
   if (e.osError?.errorCode == 18) return true;
+  if (io.Platform.isWindows && e.osError?.errorCode == 17) return true;
   final m = e.message.toLowerCase();
   return m.contains('cross-device') || m.contains('different volume') || m.contains('exdev');
 }
 
 /// A directory: [make] it, [drop] it, list [files]/[dirs], recursive [find] by
 /// glob, [watch] it — and [file]/[dir] for children by name.
-final class Dir {
+final class Dir implements Located {
   Dir(this.path);
 
   /// The path as written.
+  @override
   final String path;
 
   /// The last segment.

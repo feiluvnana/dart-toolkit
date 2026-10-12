@@ -181,7 +181,7 @@ final class BooksApp {
         _footer,
       ],
       vert: true,
-      flex: [2, max(1, ui.bounds.h - fixed), rows.length, notice == null ? 0 : 1, 3, 1],
+      flex: [2, max(1, ui.rest - fixed), rows.length, notice == null ? 0 : 1, 3, 1],
     );
   }
 
@@ -190,10 +190,12 @@ final class BooksApp {
       case Welcome():
         _welcome(c);
       case Searching(:final query):
-        c.spinner(
-          connected ? 'Searching for "$query"…  esc to cancel' : "Passing the site's browser check…  esc to cancel",
-          fg: orange,
-        );
+        final check = archive.visibleCheck
+            ? 'Solve the check in the browser window once…  esc to cancel'
+            : connected
+            ? 'Searching for "$query"…  esc to cancel'
+            : "Passing the site's browser check…  esc to cancel";
+        c.spinner(check, fg: orange);
       case final Found found:
         _found(c, found);
       case Detail(:final book):
@@ -372,10 +374,7 @@ final class BooksApp {
     }
     switch (screen) {
       case final Found found when results.isNotEmpty:
-        var at = selected;
-        if (at < 0) at = 0;
-        if (at >= results.length) at = results.length - 1;
-        _openBook(found, results[at]);
+        _openBook(found, results[selected.clamp(0, results.length - 1)]);
       case Detail(:final book):
         _act(term, book);
       default:
@@ -387,14 +386,10 @@ final class BooksApp {
     switch (screen) {
       case final Found found:
         if (results.isEmpty) return;
-        selected += dir;
-        if (selected < 0) selected = 0;
-        if (selected >= results.length) selected = results.length - 1;
+        selected = (selected + dir).clamp(0, results.length - 1);
         _loadMoreNearTheEnd(term, found);
       case Detail():
-        action += dir;
-        if (action < 0) action = 0;
-        if (action >= Action.values.length) action = Action.values.length - 1;
+        action = (action + dir).clamp(0, Action.values.length - 1);
       default:
         break;
     }
@@ -420,11 +415,14 @@ final class BooksApp {
   }
 }
 
-Future<bool> openUrl(String url) => io.Platform.isMacOS
-    ? Process('open', [url]).check()
-    : io.Platform.isWindows
-    ? Process('cmd', ['/c', 'start', '', url]).check()
-    : Process('xdg-open', [url]).check();
+Future<bool> openUrl(String url) {
+  final (cmd, args) = switch (io.Platform.operatingSystem) {
+    'macos' => ('open', [url]),
+    'windows' => ('cmd', ['/c', 'start', '', url]),
+    _ => ('xdg-open', [url]),
+  };
+  return Process(cmd, args).check();
+}
 
 Future<bool> copy(String text) async {
   Future<bool> tool(String cmd, List<String> args) =>
@@ -438,6 +436,10 @@ Future<bool> copy(String text) async {
 
 /// The site. Its domains move: `ANNAS_ARCHIVE=https://…` points at a mirror that works.
 final site = io.Platform.environment['ANNAS_ARCHIVE'] ?? 'https://annas-archive.gl';
+
+/// The kept browser profile: once the site's browser check is solved in it, later runs pass it headless.
+final keptProfile =
+    '${io.Platform.environment['HOME'] ?? io.Platform.environment['USERPROFILE'] ?? '.'}/.cache/annasarchive/profile';
 
 /// Titles of the browser-check pages a protected site shows before the real one.
 final checking = RegExp(r'DDoS-Guard|Just a moment|Checking your browser|Attention Required', caseSensitive: false);
@@ -468,9 +470,16 @@ final class Book {
 typedef SearchPage = ({List<Book> books, String? total, bool more});
 
 /// Anna's Archive through a real browser: the site checks for one before it serves pages.
+///
+/// The browser keeps [keptProfile]: when the check doesn't pass within 20 s headless, the
+/// headless browser is closed and reopened visible with that profile, so the user solves the
+/// check once in the window; later runs reuse the profile headless.
 final class AnnasArchive {
-  final _chrome = Chrome();
+  Chrome _chrome = Chrome(profile: keptProfile);
   Page? _page;
+
+  /// True while the visible window is open for the user to solve the browser check.
+  bool visibleCheck = false;
 
   Future<void> connect() => _open('$site/');
 
@@ -507,6 +516,7 @@ final class AnnasArchive {
   /// [url] rendered in the one reused tab, once the browser check has passed. A server
   /// error is retried twice; a parked domain (no Anna's Archive markup) fails at once.
   Future<Doc> _open(String url) async {
+    await io.Directory(keptProfile).create(recursive: true);
     for (var attempt = 1; ; attempt++) {
       try {
         if (_page case final page?) {
@@ -524,10 +534,12 @@ final class AnnasArchive {
     }
   }
 
-  /// The page once it is the real one: a browser check is waited out (60 s at most), a server
-  /// error page throws, and a page without the site's markup is a parked domain.
+  /// The page once it is the real one: a browser check is waited out (20 s headless, then a
+  /// visible window with the kept profile for the user to solve it once, 10 min at most), a
+  /// server error page throws, and a page without the site's markup is a parked domain.
   Future<Doc> _rendered(Page page, String url) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    final headlessOver = DateTime.now().add(const Duration(seconds: 20));
+    final visibleOver = DateTime.now().add(const Duration(minutes: 10));
     while (true) {
       final title = await page.title();
       if (serverError.firstMatch(title)?[1] case final code?) {
@@ -541,13 +553,29 @@ final class AnnasArchive {
             'set ANNAS_ARCHIVE to a working mirror',
           );
         }
+        visibleCheck = false;
         return doc;
       }
-      if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException("The site's browser check did not pass within 60 s", const Duration(seconds: 60));
+      if (DateTime.now().isAfter(visibleCheck ? visibleOver : headlessOver)) {
+        if (visibleCheck) {
+          throw TimeoutException("The site's browser check did not pass within 10 min", const Duration(minutes: 10));
+        }
+        page = await _escalate(url);
+        continue;
       }
       await Future<void>.delayed(const Duration(seconds: 1));
     }
+  }
+
+  /// Closes the headless browser and reopens it visible with the kept profile, so the user
+  /// solves the site's browser check once in the window. Answers the new tab on [url].
+  Future<Page> _escalate(String url) async {
+    visibleCheck = true;
+    await _chrome.close();
+    _page = null;
+    _chrome = Chrome(visible: true, profile: keptProfile);
+    _page = await _chrome.open(url, timeout: const Duration(seconds: 60));
+    return _page!;
   }
 }
 
@@ -568,12 +596,14 @@ String? _labelled(Element row, String icon) => row
 
 String? _optional(Element? found) => found == null || found.text.trim().isEmpty ? null : _decoded(found.text);
 
-List<String> _details(Element? line) => [
-  if (line != null)
+List<String> _details(Element? line) {
+  if (line == null) return [];
+  return [
     for (final part in line.text.split('·'))
       if (!part.contains('/'))
         if (part.replaceAll(symbols, '').trim() case final detail when detail.isNotEmpty && detail != 'Save') detail,
-];
+  ];
+}
 
 String _decoded(String text) => Html.parse(text).text;
 

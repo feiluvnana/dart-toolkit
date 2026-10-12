@@ -1,154 +1,217 @@
 //! CDP over a blocking websocket: one short-lived connection per call.
 //!
 //! Each page handle only carries its target's websocket URL, target id and the
-//! browser endpoint; every command below connects, runs its request/response (or
-//! event wait) with a deadline and the caller's stop byte, then drops the socket.
-//! No pump thread, no shared id map: localhost connects cost ~1 ms, and nothing is
-//! shared between concurrent calls on different pages.
+//! browser endpoint; every command below is a job that connects, runs its
+//! request/response (or event wait) with a deadline and the caller's stop byte,
+//! then drops the socket. No pump thread, no shared id map: localhost connects
+//! cost ~1 ms, and nothing is shared between concurrent calls on different pages.
+//!
+//! Every job copies what it needs at queue time, so a page closed while its job
+//! runs only stops that job (the caller sets its stop byte); the shared state is
+//! touched again only by `open`, which checks `closed` before keeping its tab.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::chrome::http;
-use crate::{give, guard, live, stopped, text, Handle, Msg};
+use crate::chrome::{browser_of, http, BrowserRef};
+use crate::{guard, live, lock, queue, stopped, text, Done, Handle, Msg, Progress, CLOSED};
 
-/// A tab: everything a command needs to reach it.
+/// What a page handle and its `open` job share.
+type PageRef = Arc<Mutex<Page>>;
+
+/// A tab: everything a command needs to reach it. `owned` is true only for
+/// tabs `open` created: the GC release closes an owned tab, and only frees
+/// the handle of a tab borrowed through `attach_page` (another owner's tab
+/// must survive our exit). `ws_url` is empty until `open` has its tab.
 pub struct Page {
     ws_url: String,
     target_id: String,
     endpoint: String,
+    owned: bool,
+    closed: bool,
+    browser: BrowserRef,
 }
 
-/// Opens a tab at `url` and answers its handle once the load event fires
-/// (`timeout_ms`, default 30 s). Subscribes before navigating, so a fast load
-/// cannot slip through.
+/// The websocket URL of the page behind `handle`, copied for one job.
+unsafe fn ws_of(handle: Handle) -> Result<String, String> {
+    let page = lock(live::<PageRef>(handle)?);
+    if page.closed {
+        return Err(CLOSED.to_string());
+    }
+    if page.ws_url.is_empty() {
+        return Err("the page is still opening".to_string());
+    }
+    Ok(page.ws_url.clone())
+}
+
+/// Queues opening a tab at `url`: the page handle is written to `out_page` at
+/// once, and the job completes once the load event fires (`timeout_ms`, default
+/// 30 s). Subscribes before navigating, so a fast load cannot slip through. A
+/// page closed before its tab exists closes that tab when it appears.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_open(
     browser: Handle,
     url: *const u8,
     urllen: usize,
     timeout_ms: u64,
-    stop: *const u8,
     out_page: *mut Handle,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let _watch = tk_common::watch(stop);
-        let endpoint = super::chrome::endpoint_of(browser)?;
+        let (browser, endpoint) = browser_of(browser)?;
         let url = text(url, urllen)?.to_string();
-        let page = open(&endpoint, &url, capped_timeout(timeout_ms))?;
-        if !out_page.is_null() {
-            *out_page = Box::into_raw(Box::new(page)) as Handle;
+        if out_page.is_null() {
+            return Err("no slot for the page handle".to_string());
         }
-        Ok(0)
+        let deadline = capped_timeout(timeout_ms);
+        let shared = Arc::new(Mutex::new(Page {
+            ws_url: String::new(),
+            target_id: String::new(),
+            endpoint: endpoint.clone(),
+            owned: true,
+            closed: false,
+            browser,
+        }));
+        let handle = Box::into_raw(Box::new(shared.clone())) as Handle;
+        let rc = queue(done, stop, move || {
+            open(&shared, &endpoint, &url, deadline)?;
+            Ok(Vec::new())
+        });
+        if rc == 0 {
+            *out_page = handle;
+        } else {
+            drop(Box::from_raw(handle as *mut PageRef));
+        }
+        Ok(rc)
     })
 }
 
-/// Navigates the tab at `page` to `url` and waits for the load event
-/// (`timeout_ms`, default 30 s).
+/// Queues navigating the tab at `page` to `url`; the job completes on the load
+/// event (`timeout_ms`, default 30 s).
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_navigate(
     page: Handle,
     url: *const u8,
     urllen: usize,
     timeout_ms: u64,
+    done: Done,
     stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let _watch = tk_common::watch(stop);
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let url = text(url, urllen)?.to_string();
-        let mut session = Session::connect(&page.ws_url)?;
-        session.send("Page.enable", serde_json::json!({}))?;
-        stealth(&mut session)?;
-        session.send("Page.navigate", serde_json::json!({ "url": url }))?;
-        session.wait_event("Page.loadEventFired", capped_timeout(timeout_ms))?;
-        Ok(0)
+        let deadline = capped_timeout(timeout_ms);
+        Ok(queue(done, stop, move || {
+            let mut session = Session::connect(&ws_url)?;
+            session.send("Page.enable", serde_json::json!({}))?;
+            stealth(&mut session)?;
+            session.send("Page.navigate", serde_json::json!({ "url": url }))?;
+            session.wait_event("Page.loadEventFired", deadline)?;
+            Ok(Vec::new())
+        }))
     })
 }
 
-/// Evaluates `expr` and hands its JSON value back (`give()`); a JS exception is
+/// Queues evaluating `expr`; the job answers its JSON value. A JS exception is
 /// an error naming what the page said.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_eval(
     page: Handle,
     expr: *const u8,
     exprlen: usize,
-    out: *mut *mut u8,
-    outlen: *mut usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let expr = text(expr, exprlen)?.to_string();
-        let value = eval(&page.ws_url, &expr, deadline_secs(30))?;
-        Ok(give(value.to_string().into_bytes(), out, outlen))
+        Ok(queue(done, stop, move || Ok(eval(&ws_url, &expr)?.to_string().into_bytes())))
     })
 }
 
-/// Waits until `selector` matches (polling `querySelector` every 100 ms) or
-/// `timeout_ms` passes; a miss is an error naming the selector.
+/// Queues waiting until `selector` matches (polling `querySelector` every
+/// 100 ms) or `timeout_ms` passes; a miss is an error naming the selector.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_wait(
     page: Handle,
     sel: *const u8,
     sellen: usize,
     timeout_ms: u64,
+    done: Done,
     stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let _watch = tk_common::watch(stop);
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let sel = text(sel, sellen)?.to_string();
-        let script = format!("!!document.querySelector({})", json_string(&sel));
-        let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms);
-        loop {
-            stopped()?;
-            if start.elapsed() >= timeout {
-                return Err(format!("Timed out waiting for {}", sel));
+        let deadline = capped_timeout(timeout_ms);
+        Ok(queue(done, stop, move || {
+            let script = format!("!!document.querySelector({})", json_string(&sel));
+            loop {
+                stopped()?;
+                if Instant::now() >= deadline {
+                    return Err(format!("Timed out waiting for {}", sel));
+                }
+                match eval(&ws_url, &script)? {
+                    serde_json::Value::Bool(true) => return Ok(Vec::new()),
+                    _ => std::thread::sleep(Duration::from_millis(100)),
+                }
             }
-            match eval(&page.ws_url, &script, deadline_secs(30))? {
-                serde_json::Value::Bool(true) => return Ok(0),
-                _ => std::thread::sleep(Duration::from_millis(100)),
-            }
-        }
+        }))
     })
 }
 
-/// Clicks the first element matching `sel` with real mouse events at its
-/// center (scrolled into view first). A missing element is an error.
+/// Queues clicking the first element matching `sel` with real mouse events at
+/// its center (scrolled into view first). A missing element is an error.
 #[no_mangle]
-pub unsafe extern "C" fn tk_cdp_click(page: Handle, sel: *const u8, sellen: usize) -> i32 {
+pub unsafe extern "C" fn tk_cdp_click(
+    page: Handle,
+    sel: *const u8,
+    sellen: usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let sel = text(sel, sellen)?.to_string();
-        let script = format!(
-            "(() => {{ const el = document.querySelector({}); if (!el) return null; \
-             el.scrollIntoView({{block: 'center', inline: 'center'}}); \
-             const r = el.getBoundingClientRect(); \
-             return {{x: r.x + r.width / 2, y: r.y + r.height / 2}}; }})()",
-            json_string(&sel)
-        );
-        let at = eval(&page.ws_url, &script, deadline_secs(30))?;
-        let (x, y) = match &at {
-            serde_json::Value::Object(map) => (map.get("x").and_then(|v| v.as_f64()), map.get("y").and_then(|v| v.as_f64())),
-            _ => (None, None),
-        };
-        let (x, y) = match (x, y) {
-            (Some(x), Some(y)) => (x, y),
-            _ => return Err(format!("no such element: {}", sel)),
-        };
-        let mut session = Session::connect(&page.ws_url)?;
-        for kind in ["mousePressed", "mouseReleased"] {
-            session.send(
-                "Input.dispatchMouseEvent",
-                serde_json::json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 }),
-            )?;
-        }
-        Ok(0)
+        Ok(queue(done, stop, move || {
+            let script = format!(
+                "(() => {{ const el = document.querySelector({}); if (!el) return null; \
+                 el.scrollIntoView({{block: 'center', inline: 'center'}}); \
+                 const r = el.getBoundingClientRect(); \
+                 return {{x: r.x + r.width / 2, y: r.y + r.height / 2}}; }})()",
+                json_string(&sel)
+            );
+            let at = eval(&ws_url, &script)?;
+            let (x, y) = match (at.get("x").and_then(|v| v.as_f64()), at.get("y").and_then(|v| v.as_f64())) {
+                (Some(x), Some(y)) => (x, y),
+                _ => return Err(format!("no such element: {}", sel)),
+            };
+            let mut session = Session::connect(&ws_url)?;
+            for kind in ["mousePressed", "mouseReleased"] {
+                session.send(
+                    "Input.dispatchMouseEvent",
+                    serde_json::json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 }),
+                )?;
+            }
+            Ok(Vec::new())
+        }))
     })
 }
 
-/// Focuses the first match of `sel` and inserts `text` as typed input (trusted
-/// `input` events, so framework hooks fire). A missing element is an error.
+/// Queues focusing the first match of `sel` and inserting `text` as typed
+/// input (trusted `input` events, so framework hooks fire). A missing element
+/// is an error.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_type(
     page: Handle,
@@ -156,76 +219,86 @@ pub unsafe extern "C" fn tk_cdp_type(
     sellen: usize,
     text_ptr: *const u8,
     textlen: usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let sel = text(sel, sellen)?.to_string();
-        let script = format!(
-            "(() => {{ const el = document.querySelector({}); if (!el) return false; el.focus(); return true; }})()",
-            json_string(&sel)
-        );
-        match eval(&page.ws_url, &script, deadline_secs(30))? {
-            serde_json::Value::Bool(true) => {}
-            _ => return Err(format!("no such element: {}", sel)),
-        }
         let inserted = text(text_ptr, textlen)?.to_string();
-        if !inserted.is_empty() {
-            let mut session = Session::connect(&page.ws_url)?;
-            session.send("Input.insertText", serde_json::json!({ "text": inserted }))?;
-        }
-        Ok(0)
+        Ok(queue(done, stop, move || {
+            let script = format!(
+                "(() => {{ const el = document.querySelector({}); if (!el) return false; el.focus(); return true; }})()",
+                json_string(&sel)
+            );
+            match eval(&ws_url, &script)? {
+                serde_json::Value::Bool(true) => {}
+                _ => return Err(format!("no such element: {}", sel)),
+            }
+            if !inserted.is_empty() {
+                let mut session = Session::connect(&ws_url)?;
+                session.send("Input.insertText", serde_json::json!({ "text": inserted }))?;
+            }
+            Ok(Vec::new())
+        }))
     })
 }
 
-/// Captures a PNG screenshot (`full` captures past the viewport) and hands the
-/// bytes back (`give()`).
+/// Queues a PNG screenshot (`full` captures past the viewport); the job
+/// answers the bytes.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_shot(
     page: Handle,
     full: u8,
+    done: Done,
     stop: *const u8,
-    out: *mut *mut u8,
-    outlen: *mut usize,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let _watch = tk_common::watch(stop);
-        let page = live::<Page>(page)?;
-        let mut session = Session::connect(&page.ws_url)?;
-        let mut params = serde_json::json!({ "format": "png" });
-        if full != 0 {
-            params["captureBeyondViewport"] = serde_json::json!(true);
-        }
-        let got = session.send("Page.captureScreenshot", params)?;
-        let data = got.get("data").and_then(|v| v.as_str()).ok_or("screenshot answered without data".to_string())?;
-        let png = decode_b64(data)?;
-        Ok(give(png, out, outlen))
+        let ws_url = ws_of(page)?;
+        Ok(queue(done, stop, move || {
+            let mut session = Session::connect(&ws_url)?;
+            let mut params = serde_json::json!({ "format": "png" });
+            if full != 0 {
+                params["captureBeyondViewport"] = serde_json::json!(true);
+            }
+            let got = session.send("Page.captureScreenshot", params)?;
+            let data = got.get("data").and_then(|v| v.as_str()).ok_or("screenshot answered without data".to_string())?;
+            decode_b64(data)
+        }))
     })
 }
 
-/// Prints the page to PDF (`landscape` when non-zero) and hands the bytes back
-/// (`give()`). Headless only: headful Chrome refuses to print.
+/// Queues printing the page to PDF (`landscape` when non-zero); the job
+/// answers the bytes. Headless only: headful Chrome refuses to print.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_pdf(
     page: Handle,
     landscape: u8,
-    out: *mut *mut u8,
-    outlen: *mut usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
-        let mut session = Session::connect(&page.ws_url)?;
-        let got = session.send(
-            "Page.printToPDF",
-            serde_json::json!({ "landscape": landscape != 0, "printBackground": true }),
-        )?;
-        let data = got.get("data").and_then(|v| v.as_str()).ok_or("printToPDF answered without data".to_string())?;
-        let pdf = decode_b64(data)?;
-        Ok(give(pdf, out, outlen))
+        let ws_url = ws_of(page)?;
+        Ok(queue(done, stop, move || {
+            let mut session = Session::connect(&ws_url)?;
+            let got = session.send(
+                "Page.printToPDF",
+                serde_json::json!({ "landscape": landscape != 0, "printBackground": true }),
+            )?;
+            let data = got.get("data").and_then(|v| v.as_str()).ok_or("printToPDF answered without data".to_string())?;
+            decode_b64(data)
+        }))
     })
 }
 
-/// Sends a raw CDP command (`params` is a JSON object, empty for none) and hands
-/// the result object back (`give()`): the escape hatch under the verbs above.
+/// Queues a raw CDP command (`params` is a JSON object, empty for none); the
+/// job answers the result object: the escape hatch under the verbs above.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_send(
     page: Handle,
@@ -233,40 +306,48 @@ pub unsafe extern "C" fn tk_cdp_send(
     methodlen: usize,
     params: *const u8,
     paramslen: usize,
-    out: *mut *mut u8,
-    outlen: *mut usize,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
 ) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
+        let ws_url = ws_of(page)?;
         let method = text(method, methodlen)?.to_string();
         let raw = text(params, paramslen)?;
         let params = if raw.is_empty() { serde_json::json!({}) } else { serde_json::from_str(raw).msg()? };
-        let mut session = Session::connect(&page.ws_url)?;
-        let got = session.send(&method, params)?;
-        Ok(give(got.to_string().into_bytes(), out, outlen))
+        Ok(queue(done, stop, move || {
+            let mut session = Session::connect(&ws_url)?;
+            Ok(session.send(&method, params)?.to_string().into_bytes())
+        }))
     })
 }
 
-/// Wraps an existing target (from `/json/list`) in a page handle: no tab is
-/// opened, nothing navigates.
+/// Wraps an existing target of `browser` (from `/json/list`) in a page handle:
+/// no tab is opened, nothing navigates, nothing waits (so no job).
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_attach_page(
+    browser: Handle,
     ws_url: *const u8,
     wslen: usize,
     target_id: *const u8,
     idlen: usize,
-    endpoint: *const u8,
-    endpointlen: usize,
 ) -> Handle {
     let page = (|| {
+        let (browser, endpoint) = browser_of(browser)?;
         Ok::<Page, String>(Page {
             ws_url: text(ws_url, wslen)?.to_string(),
             target_id: text(target_id, idlen)?.to_string(),
-            endpoint: text(endpoint, endpointlen)?.to_string(),
+            endpoint,
+            // Borrowed, never owned: releasing this handle must not close
+            // another owner's tab.
+            owned: false,
+            closed: false,
+            browser,
         })
     })();
     match page {
-        Ok(page) => Box::into_raw(Box::new(page)) as Handle,
+        Ok(page) => Box::into_raw(Box::new(Arc::new(Mutex::new(page)))) as Handle,
         Err(message) => {
             tk_common::set_error(&message);
             std::ptr::null_mut()
@@ -274,45 +355,84 @@ pub unsafe extern "C" fn tk_cdp_attach_page(
     }
 }
 
-/// Closes the tab server-side and frees the handle.
+/// Frees the handle at once and queues closing its tab server-side (best
+/// effort: a tab of a closed browser is already gone). A tab `open` is still
+/// creating is closed by `open` itself.
 #[no_mangle]
-pub unsafe extern "C" fn tk_cdp_close_page(page: Handle) -> i32 {
+pub unsafe extern "C" fn tk_cdp_close_page(
+    page: Handle,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
     guard(|| {
-        let page = live::<Page>(page)?;
-        let owned = unsafe { Box::from_raw(page as *mut Page) };
-        // Best effort: the tab may already be gone with a dead browser.
-        let path = format!("/json/close/{}", owned.target_id);
-        let _ = http("PUT", &owned.endpoint, &path);
-        Ok(0)
+        live::<PageRef>(page)?;
+        let shared = unsafe { Box::from_raw(page as *mut PageRef) };
+        let (target_id, endpoint, browser) = {
+            let mut page = lock(&shared);
+            page.closed = true;
+            (page.target_id.clone(), page.endpoint.clone(), page.browser.clone())
+        };
+        Ok(queue(done, stop, move || {
+            if !target_id.is_empty() && !lock(&browser).closed {
+                let _ = http("PUT", &endpoint, &format!("/json/close/{}", target_id));
+            }
+            Ok(Vec::new())
+        }))
     })
 }
 
-/// Best-effort release for the GC finalizer: closes the tab, never fails.
+/// Best-effort release for the GC finalizer: closes an owned tab of a live
+/// browser, only frees a borrowed one — never fails.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_release_page(page: Handle) {
     if page.is_null() {
         return;
     }
-    let owned = unsafe { Box::from_raw(page as *mut Page) };
-    let path = format!("/json/close/{}", owned.target_id);
-    let _ = http("PUT", &owned.endpoint, &path);
+    let shared = unsafe { Box::from_raw(page as *mut PageRef) };
+    let (target_id, endpoint, browser) = {
+        let mut page = lock(&shared);
+        page.closed = true;
+        if !page.owned {
+            return;
+        }
+        (page.target_id.clone(), page.endpoint.clone(), page.browser.clone())
+    };
+    if !target_id.is_empty() && !lock(&browser).closed {
+        let _ = http("PUT", &endpoint, &format!("/json/close/{}", target_id));
+    }
 }
 
-fn open(endpoint: &str, url: &str, timeout: Instant) -> Result<Page, String> {
+fn open(shared: &PageRef, endpoint: &str, url: &str, deadline: Instant) -> Result<(), String> {
+    stopped()?;
     let (code, body) = http("PUT", endpoint, "/json/new?about:blank")?;
     if code != 200 {
         return Err(format!("could not open a new page ({})", code));
     }
     let info: serde_json::Value = serde_json::from_slice(&body).msg()?;
-    let ws_url = info.get("webSocketDebuggerUrl").and_then(|v| v.as_str()).ok_or("new page answered without a websocket URL".to_string())?;
+    let ws_url = info
+        .get("webSocketDebuggerUrl")
+        .and_then(|v| v.as_str())
+        .ok_or("new page answered without a websocket URL".to_string())?
+        .to_string();
     let target_id = info.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let page = Page { ws_url: ws_url.to_string(), target_id, endpoint: endpoint.to_string() };
-    let mut session = Session::connect(&page.ws_url)?;
+    {
+        let mut page = lock(shared);
+        if page.closed {
+            // Closed while the tab was being made: nobody else will close it.
+            let _ = http("PUT", endpoint, &format!("/json/close/{}", target_id));
+            return Err(CLOSED.to_string());
+        }
+        page.ws_url = ws_url.clone();
+        page.target_id = target_id;
+    }
+    let mut session = Session::connect(&ws_url)?;
     session.send("Page.enable", serde_json::json!({}))?;
     stealth(&mut session)?;
     session.send("Page.navigate", serde_json::json!({ "url": url }))?;
-    session.wait_event("Page.loadEventFired", timeout)?;
-    Ok(page)
+    session.wait_event("Page.loadEventFired", deadline)?;
+    Ok(())
 }
 
 /// What `--remote-debugging-port` leaves visible to a page's scripts, hidden before the
@@ -350,28 +470,38 @@ fn stealth(session: &mut Session) -> Result<(), String> {
     Ok(())
 }
 
-fn eval(ws_url: &str, expr: &str, deadline: Instant) -> Result<serde_json::Value, String> {
+fn eval(ws_url: &str, expr: &str) -> Result<serde_json::Value, String> {
     let mut session = Session::connect(ws_url)?;
     let got = session.send(
         "Runtime.evaluate",
         serde_json::json!({ "expression": expr, "returnByValue": true, "awaitPromise": true }),
     )?;
-    let _ = deadline;
     if let Some(details) = got.get("exceptionDetails") {
-        return Err(format!("evaluation failed: {}", details));
+        return Err(format!("evaluation failed: {}", thrown(details)));
     }
     Ok(got.get("result").and_then(|r| r.get("value")).cloned().unwrap_or(serde_json::Value::Null))
 }
 
-fn deadline_secs(secs: u64) -> Instant {
-    Instant::now() + Duration::from_secs(secs)
+/// What a page's exception says: the thrown error's `description` (`ReferenceError: x
+/// is not defined …`), a thrown primitive's value, or CDP's summary text.
+fn thrown(details: &serde_json::Value) -> String {
+    let exception = details.get("exception");
+    if let Some(description) = exception.and_then(|e| e.get("description")).and_then(|d| d.as_str()) {
+        return description.to_string();
+    }
+    match exception.and_then(|e| e.get("value")) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(value) if !value.is_null() => value.to_string(),
+        _ => details.get("text").and_then(|t| t.as_str()).unwrap_or("an exception").to_string(),
+    }
 }
 
-/// A caller timeout in ms, defaulting to 30 s; absurd values are capped at an
-/// hour rather than overflowing the deadline.
+/// A caller timeout in ms, defaulting to 30 s, as a deadline one second later: the
+/// caller's own timer answers first (a `TimeoutException`), this is the backstop.
+/// Absurd values are capped at an hour rather than overflowing the deadline.
 fn capped_timeout(timeout_ms: u64) -> Instant {
     let ms = if timeout_ms == 0 { 30_000 } else { timeout_ms.min(3_600_000) };
-    Instant::now() + Duration::from_millis(ms)
+    Instant::now() + Duration::from_millis(ms + 1_000)
 }
 
 fn json_string(text: &str) -> String {

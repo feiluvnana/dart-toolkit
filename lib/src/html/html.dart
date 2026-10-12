@@ -1,7 +1,6 @@
 import '../core/pipe.dart';
 import '../core/traits.dart';
 import 'dom.dart';
-import 'parser.dart';
 
 export 'dom.dart' show Doc, Element, Node, Text;
 

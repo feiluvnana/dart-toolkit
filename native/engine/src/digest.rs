@@ -11,14 +11,12 @@
 //! keyed mode (BLAKE2 a key up to its block size, BLAKE3 exactly 32 bytes). Checksums take
 //! no key. Caller buffers carry their capacity; every entry point runs inside `guard`.
 
-use crate::{bytes, bytes_mut, guard, live, stopped, text, watch, Handle, Msg};
+use crate::{bytes, bytes_mut, guard, live, set_error, stopped, text, watch, Handle, Msg};
+use crate::{Done, Progress, done_bytes, spawn, throttle_progress};
 use digest::{Digest, DynDigest, KeyInit};
 use hmac::{Hmac, Mac};
 use rayon::prelude::*;
 use std::io::Read;
-
-/// A long native call's progress callback: (completed, total, bytes, bytesTotal, name, nameLen).
-pub type ProgressCb = Option<unsafe extern "C" fn(u64, u64, u64, u64, *const u8, usize)>;
 
 /// Expands `$run!(DigestType)` for the plain digest with code `$alg`. BLAKE2 digests are
 /// constructed through the second macro: a MAC caller handles those codes before reaching it.
@@ -82,8 +80,8 @@ impl<M: Mac + 'static> Keyed for M {
 /// [`Session::seal`]. A finished session is freed; feeding after sealing is impossible
 /// because sealing consumes the handle.
 enum Session {
-    Digest(Box<dyn DynDigest>),
-    Keyed(Box<dyn Keyed>),
+    Digest(Box<dyn DynDigest + Send>),
+    Keyed(Box<dyn Keyed + Send>),
     Blake3(Box<blake3::Hasher>),
     Crc32(crc32fast::Hasher),
     Crc32c(u32),
@@ -145,16 +143,16 @@ impl Session {
         }
     }
 
-    /// Feeds the file at `path` in 1 MiB buffers. Every 32 MiB it reports progress and
-    /// honours the stop flag, so a cancel ends a large hash promptly.
-    fn ingest_file(&mut self, path: &str, progress: ProgressCb) -> Result<(), String> {
+    /// Feeds the file at `path` in 1 MiB buffers, reporting throttled progress.
+    /// Every 32 MiB it honours the stop flag, so a cancel ends a large hash
+    /// promptly.
+    fn ingest_file(&mut self, path: &str, progress: Progress, id: i64) -> Result<(), String> {
         const STEP: usize = 32 << 20;
         let mut file = crate::read_file(path)?;
         let total = file.metadata().map_or(0, |m| if m.is_file() { m.len() } else { 0 });
-        let tell = |done: u64| -> Result<(), String> {
-            if let Some(report) = progress {
-                unsafe { report(0, 1, done, total, std::ptr::null(), 0) };
-            }
+        let mut last = std::time::Instant::now();
+        let tell = |done: u64, last: &mut std::time::Instant| -> Result<(), String> {
+            throttle_progress(progress, id, done, total, last);
             stopped()
         };
         // Filled whole where possible: a short read hands the hasher a small slice.
@@ -174,13 +172,17 @@ impl Session {
         loop {
             let n = fill(&mut file, &mut buf).map_err(|e| format!("{}: {}", path, e))?;
             if n == 0 {
+                // The final report always fires, ending at the total.
+                if let Some(f) = progress {
+                    unsafe { f(id, done, total) };
+                }
                 return Ok(());
             }
             self.ingest(&buf[..n]);
             done += n as u64;
             if done - told >= STEP as u64 {
                 told = done;
-                tell(done)?;
+                tell(done, &mut last)?;
             }
         }
     }
@@ -229,22 +231,46 @@ pub unsafe extern "C" fn tk_mac_new(alg: u32, key: *const u8, klen: usize) -> Ha
     out
 }
 
-/// Feeds the file at `path` into the digest or MAC. The session survives a failure, and
-/// `tk_digest_final` still releases it. `progress`, when not null, hears the bytes read as
-/// (0, 1, bytes, size, null, 0); `stop`, when not null, is a byte stopping the call once set.
+/// Hashes the file at `path` on a worker thread: opens, ingests and seals in
+/// one job, answering the digest bytes. `key` (empty for none) selects the
+/// keyed/HMAC variant. `progress`, when set, hears throttled `(done, total)`.
+/// Replaces the blocking `tk_digest_file`: one way to hash a file.
 #[no_mangle]
-pub unsafe extern "C" fn tk_digest_file(
-    h: Handle,
+pub unsafe extern "C" fn tk_digest_file_async(
+    alg: u32,
     path: *const u8,
     plen: usize,
-    progress: ProgressCb,
+    key: *const u8,
+    klen: usize,
+    done: Done,
     stop: *const u8,
+    progress: Progress,
+    id: i64,
 ) -> i32 {
-    let _watch = watch(stop);
-    guard(|| {
-        live::<Session>(h)?.ingest_file(text(path, plen)?, progress)?;
-        Ok(0)
-    })
+    // Borrowed inputs are copied now: Dart frees them on return.
+    let args = match (|| -> Result<(Session, String), String> {
+        let owned = bytes(key, klen).to_vec();
+        let session = if owned.is_empty() {
+            Session::open(alg)?
+        } else {
+            Session::keyed(alg, &owned)?
+        };
+        Ok((session, text(path, plen)?.to_string()))
+    })() {
+        Ok(args) => args,
+        Err(message) => {
+            set_error(&message);
+            return -1;
+        }
+    };
+    let stop = stop as usize;
+    spawn(done, move || {
+        let _watch = unsafe { watch(stop as *const u8) };
+        let (mut session, path) = args;
+        session.ingest_file(&path, progress, id)?;
+        Ok(done_bytes(session.seal()))
+    });
+    0
 }
 
 /// Feeds `len` bytes at `data` into the digest or MAC: one chunk of a stream.
@@ -323,7 +349,7 @@ pub unsafe extern "C" fn tk_digest_files(
                 }
                 // One buffer per file: the files already spread over every core.
                 let mut session = Session::open(alg)?;
-                session.ingest_file(path, None)?;
+                session.ingest_file(path, None, 0)?;
                 slot.copy_from_slice(&session.seal());
                 Ok::<(), String>(())
             })?;

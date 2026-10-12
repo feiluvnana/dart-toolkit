@@ -18,7 +18,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 | 1 | **Objects first.** Values (`Image`, `Doc`, `Json`) and resources (`File`, `Dir`, `Process`, `Chrome`, `Pool`, `Chan`) are objects you call methods on. A static exists only as an entry point with no value to hold: `Http.get/post/put/delete`, `Task.run`, `Tui.run`, `Cli.*`, `File.temp`/`Dir.temp`, and the in-memory builders (`Json.parse`, `Html.parse`, `Html.escape`, `Image.decode/empty/fromRgba/formatOf`, `Hash.sha256(data)`, `Archive.zip/unzip/gzip/gunzip`, `Hex`/`Base64.decode`, `Chan.post`). |
 | 2 | **One form per operation.** No aliases, no `@Deprecated` names, no backward-compatibility shims. The public names are a reviewed list (`test/api_names.txt`). |
 | 3 | **Topic imports.** One public library per topic, and a script imports what it uses. Every topic re-exports core (traits, readings, errors). `lib/` imports only `dart:` and relative paths; shared private code lives once in `src/`. Test seams are in `testing.dart` only. `test/layering_test.dart` enforces the graph. |
-| 4 | **The shared interfaces are one list:** `Source`, `Target`, `Reader`, `Writer`, `Closer`, `Seeker`. A module implements them and adds no parallel one. |
+| 4 | **The shared interfaces are one list:** `Source`, `Target`, `Reader`, `Writer`, `Closer`, `Seeker`. A module implements them and adds no parallel one. A `Writer.write` copies or pins `data` at the call: the caller may reuse it once the future completes. `Writer.abort` drops a write without completing it (a file's temp is deleted, the old content stays; a resume writer never truncates). A failed `pipe` aborts, never closes. |
 | 5 | **Constructors are synchronous and start nothing.** Work starts at the first method: `Process(…)` spawns, `Chrome()` launches and `Http.get(…)` sends on first use. |
 | 6 | **`close()` is the only end verb,** and it is idempotent. Nothing is called `cancel`, `kill`, `quit`, `done`, `stop` or `dispose`. Closing a process or a browser kills its whole tree; closing a writer completes its target. |
 | 7 | **Values are immutable.** An operation returns a new value: `img.fill(c)`, `doc.drop(css)`, `j['a']`. |
@@ -37,7 +37,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 | 15 | **Named parameters only** for options; required arguments are positional (`fit(w, h)`, `Pool(4)`, `Cli.bar(100)`). No option objects or builders, and no optional positional parameters. |
 | 16 | **One parameter, one meaning; one behaviour per method.** A mode is a separate method (`text()` vs `check()`), never a flag that switches the algorithm or the result type. An invalid combination or an out-of-range value is an `ArgumentError` at the call. |
 | 17 | **No `Object` parameter,** with one exception: data that is text or bytes takes a `String` (UTF-8) or a `List<int>`, checked; anything else is an `ArgumentError`. |
-| 18 | **Defaults are one table:** 30 s per response, per browser call and per `wait`; 2 retries on network errors and 5xx; UTF-8; `find` is recursive; links are never followed. `Duration.zero` never means "none". Environment variables are `DART_TOOLKIT_<NAME>`. |
+| 18 | **Defaults are one table:** 30 s per response, per browser call and per `wait`; 2 retries on network errors and 5xx; UTF-8; `find`/`all` search descendants only (`matches` tests the element itself); links are never followed. `Duration.zero` never means "none". Environment variables are `DART_TOOLKIT_<NAME>`. |
 | 19 | **Callbacks are `on<Event>`** (`onProgress:`, `onPress:`, `onError:`). A progress callback is a display aid, not a status source. |
 
 ## 3. Names
@@ -58,7 +58,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 | 26 | **A bug is never turned into a value.** An `Error` from your code is rethrown as it is. |
 | 27 | **Every failure names its subject:** the file, URL, selector, key or command. A wrapper keeps its cause. |
 | 28 | **Nothing is swallowed unexplained.** An empty `catch` is typed where it can be and says why on its line; `make catches` refuses one without. |
-| 29 | **Retry never repeats what would fail the same way:** an `Error`, a `FormatException`, a `MissingException`, a 4xx. |
+| 29 | **Retry never repeats what would fail the same way:** an `Error`, a `FormatException`, a `MissingException`, a 4xx. HTTP retries only idempotent requests (GET/HEAD/PUT/DELETE, or a re-readable body such as a `File`): anything else retries only with an explicit `retry:`, and a consumed stream body never retries. |
 | 30 | **Exit codes:** usage 64, timeout 124, cannot run 126, not found 127 (a command that can't start is `ProcessException(code: 127)`), ^C 130. |
 
 ## 5. Robustness
@@ -67,7 +67,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 |---|---|
 | 31 | **Every write is atomic.** It goes to a temporary sibling renamed over the target (with the Windows held-target retry); an overwrite is a rename-over, never delete-first. A failed write leaves the old content and no temporary file. A move has its destination complete before the source is gone. Only `resume:` writes into a partial file. |
 | 32 | **Nothing lands in the working directory unless asked:** a destination is always given. |
-| 33 | **Untrusted archives are contained.** Every member is checked before it is written: absolute paths, NUL bytes, `..` escapes and links are refused. The checks run against the canonical destination, for files and streams alike. Output is capped relative to the input, and setuid/setgid don't survive. |
+| 33 | **Untrusted archives are contained.** Every member is checked before it is written: absolute paths, NUL bytes, `..` escapes and every link are refused, on the file and stream paths alike. `unpack(dir, trusted: true)` lifts the link refusal and the size cap. A failed stream removes what it created. Output is capped relative to the input, and setuid/setgid don't survive. |
 | 34 | **A child never outlives its `close`:** processes and browsers die as a tree on `close` and on a timeout. The library installs no signal handling of its own. |
 | 35 | **Parse the real world,** bound every depth, and make an unterminated construct a `FormatException`, never a hang. |
 | 36 | **Every wait is bounded:** network, browser and process waits all have a timeout (rule 18). |
@@ -77,8 +77,8 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 | # | Rule |
 |---|---|
 | 37 | **Two UIs, never mixed:** `Cli` prints inline (prompts, bars, a spinner); `Tui` owns the screen through the `Tui.run` loop (draw, then poll). |
-| 38 | **Where lines go:** `Cli.print` writes to stdout; prompts, bars and spinners write to stderr. So `app \| jq` gets only data. |
-| 39 | **Live drawing happens only on an ANSI terminal;** elsewhere a bar prints one line when it ends. ASCII glyphs are used where the terminal can't draw Unicode. |
+| 38 | **Where lines go:** `Cli.print` writes to stdout; prompts, bars and spinners write to stderr. So `app \| jq` gets only data. While bars are live, every one of these goes through the live region (bars clear, the text writes, bars redraw); a bar is closed in `finally`, or the next print lands under a stale one. |
+| 39 | **Live drawing happens only on an ANSI terminal without `NO_COLOR`;** elsewhere a bar prints one line when it ends. ASCII glyphs are used where the terminal can't draw Unicode. Redraws are throttled (a changed line, at most every 80 ms), and end lines say `✓`/`✗`. |
 | 40 | **A TUI app is a loop over events,** each named by a noun: `Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`, `Focus`, `Blur`, `Suspend`, `Resume`, `Interrupt`, `Post`. Side effects go through the `Term`: `post`, `listen`, `defer`, `close`. ^C reaches the app, and a second ^C within 2 s always quits. |
 | 41 | **One seam per side effect, with a shipped fake,** all in `testing.dart`: `FakeTerminal`, `CliFake`, `BufferReader`/`BufferWriter`, `NativeReset`. |
 
@@ -88,7 +88,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 |---|---|
 | 42 | **The native libraries do what Dart can't do fast:** digests, archives and streaming unpack, content decoding, images, file syscalls, the process tree kill, the browser engine, the terminal engine and torrents. There is no Dart fallback: without the library, the call is an `UnsupportedError` saying how to build it. |
 | 43 | **One library per subsystem** (`dart_toolkit_native`, `_chrome`, `_tui`, `_torrent`), so an import compiles only the FFI it needs. `dart:ffi` appears only in the seam files. |
-| 44 | **One handle protocol.** `tk_x_new` does no long work and returns null with `tk_last_error` on failure. Every call returns ≤ 0 on an error, with the message in `tk_last_error`. `tk_x_free` is idempotent and null-safe. The Dart owner holds a `NativeFinalizer`, and `close()` waits for work in flight. Errors are mapped to the table (rule 25) at the boundary. |
+| 44 | **One handle protocol.** `tk_x_new` does no long work and returns null with `tk_last_error` on failure. Every call returns ≤ 0 on an error, with the message in `tk_last_error`. `tk_x_free` is idempotent and null-safe. The Dart owner holds a `NativeFinalizer`, and `close()` waits for work in flight. Errors are mapped to the table (rule 25) at the boundary. Long native calls are jobs on native threads (a `Done` listener, a stop byte, throttled progress): a timeout completes with `TimeoutException`, closing the owning resource with `StateError('closed')`. |
 | 45 | **An export change bumps its library's ABI** (`exports!(n)` and the Dart constant together), so a stale library is refused at load. |
 | 46 | **No binary in git, in the package or in CI.** Libraries are built with `make native` or fetched from the release `native-<hash of native/>`. The loader looks in `native/lib/<os>_<arch>/`, beside the executable, or where `DART_TOOLKIT_NATIVE`, `DART_TOOLKIT_CHROME_LIB` or `DART_TOOLKIT_TUI_LIB` point; `DART_TOOLKIT_CHROME` names the browser executable. Any change to `native/` wants a `make native-release` once committed. |
 | 47 | **Native code never spawns a helper process to inspect processes:** dart:io reaps every child of the VM, so the helper's exit races it. Use the OS (libproc, `/proc`); `taskkill` on Windows is the exception. |

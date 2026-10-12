@@ -48,7 +48,15 @@ Future<void> main() async {
   final clock = Stopwatch()..start();
 
   Cli.print('Reading the official site'.bold);
-  final keyBox = await page('key_box.html');
+  final Doc keyBox;
+  try {
+    keyBox = await page('key_box.html');
+  } on Exception catch (e) {
+    // The first request decides whether the site is there at all: say so plainly.
+    io.stderr.writeln("✗ Can't reach ${Uri.parse(site).host}: $e");
+    io.exitCode = 1;
+    return;
+  }
   final discs = readDiscs(keyBox);
   final artwork = [
     ...discArtwork(keyBox, discs),
@@ -204,13 +212,12 @@ Future<List<Asset>> findSongs(Map<int, Disc> discs, Pool pool) async {
     if (href == null) continue;
     final songPage = link(soundtrack, href);
     final path = Uri.parse(songPage).path;
-    final disc = numberIn(path, discInLink, orIn: cells[1].text);
+    final disc = discs[numberIn(path, discInLink, orIn: cells[1].text)]!;
     final track = numberIn(path, trackInLink, orIn: cells[2].text);
-    final title = discs[disc]!.tracks[track] ?? safeName(cells[3].text);
+    final title = disc.tracks[track] ?? safeName(cells[3].text);
     final missing = <String, String>{
       for (final format in formats)
-        if (!await discs[disc]!.track(track, title, format).exists())
-          format: discs[disc]!.track(track, title, format).path,
+        if (!await disc.track(track, title, format).exists()) format: disc.track(track, title, format).path,
     };
     if (missing.isNotEmpty) wanted.add((page: songPage, missing: missing));
   }
@@ -233,10 +240,14 @@ int numberIn(String path, RegExp pattern, {required String orIn}) =>
     int.parse(pattern.firstMatch(path)?[1] ?? number.firstMatch(orIn)![1]!);
 
 /// The element's text split at `<br>` and line breaks, trimmed, blanks dropped.
-List<String> lines(Element e) => [
-  for (final line in Html.parse(e.html.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')).text.split('\n'))
-    if (line.trim().isNotEmpty) line.trim(),
-];
+List<String> lines(Element e) {
+  final breaks = RegExp(r'<br\s*/?>', caseSensitive: false);
+  final text = Html.parse(e.html.replaceAll(breaks, '\n')).text;
+  return [
+    for (final line in text.split('\n'))
+      if (line.trim().isNotEmpty) line.trim(),
+  ];
+}
 
 String link(String base, String href) => Uri.parse(base).resolve(href).toString();
 

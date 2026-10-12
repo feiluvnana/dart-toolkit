@@ -2,12 +2,16 @@ import 'dart:convert';
 
 import '../core/pipe.dart';
 import '../core/traits.dart';
+import 'entities.dart';
+
+part 'parser.dart';
 
 /// A node in the document tree. Nodes are immutable: the parser freezes every
 /// collection, and [Element.drop] copies instead of mutating.
 sealed class Node {
-  /// The parent element, if any. Set once, when the tree is assembled.
-  late final Element? parent;
+  /// The parent element, if any. Set once, when the tree is assembled or
+  /// copied — `null` until then, never throwing.
+  Element? parent;
 
   /// All text below this node, concatenated.
   String get text;
@@ -23,23 +27,38 @@ final class Text extends Node {
   @override
   String get text => data;
 
+  /// The text escaped (`&`, `<`, `>`), so reparsing gives the same tree.
+  /// Inside `script`/`style`/`textarea`/`title` the parent writes [data] raw.
   @override
-  String toString() => data;
+  String toString() => _escapeText(data);
 }
+
+/// Escapes `&`, `<` and `>` for HTML output.
+String _escapeText(String v) => v.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 /// An element with a [tag], [attrs] and child nodes. [children] holds the
 /// element children only; text runs are [Text] nodes beside them.
+///
+/// The constructor is private: a script cannot build an unwired tree.
+/// Documents come from [Html.parse]; subtrees from [drop].
 final class Element extends Node {
   final String tag;
   final Map<String, String> attrs;
   final List<Node> _nodes;
 
-  Element(this.tag, [Map<String, String>? attrs, List<Node>? nodes])
+  /// Position among the parent's element children, set at wiring: `prev`,
+  /// `next` and `:nth-child` read it instead of rebuilding the list.
+  int _siblingIndex = 0;
+
+  /// The element children, cached at wiring (same content as [children]).
+  List<Element>? _elementKids;
+
+  Element._(this.tag, [Map<String, String>? attrs, List<Node>? nodes])
     : attrs = Map.unmodifiable(attrs ?? <String, String>{}),
       _nodes = List.unmodifiable(nodes ?? <Node>[]);
 
   /// The element children.
-  List<Element> get children => List<Element>.unmodifiable(_nodes.whereType<Element>());
+  List<Element> get children => _elementKids ??= List<Element>.unmodifiable(_nodes.whereType<Element>());
 
   /// The concatenated text of every descendant.
   @override
@@ -59,32 +78,46 @@ final class Element extends Node {
 
   /// The previous sibling element, if any.
   Element? get prev {
-    final siblings = parent?.children;
-    if (siblings == null) return null;
-    final i = siblings.indexOf(this) - 1;
-    return i >= 0 ? siblings[i] : null;
+    final p = parent;
+    if (p == null || _siblingIndex <= 0) return null;
+    return (p._elementKids ?? p.children)[_siblingIndex - 1];
   }
 
   /// The next sibling element, if any.
   Element? get next {
-    final siblings = parent?.children;
-    if (siblings == null) return null;
-    final i = siblings.indexOf(this) + 1;
-    return i < siblings.length ? siblings[i] : null;
+    final p = parent;
+    if (p == null) return null;
+    final kids = p._elementKids ?? p.children;
+    final i = _siblingIndex + 1;
+    return i < kids.length ? kids[i] : null;
   }
 
-  /// The first element matching [css], searching this element then descendants.
+  /// The first element below this one matching [css], in document order
+  /// (like `querySelector`: the element itself is never a match; test it
+  /// with [matches]).
   Element? find(String css) {
-    if (matches(css)) return this;
     for (final el in children) {
+      if (el.matches(css)) return el;
       final hit = el.find(css);
       if (hit != null) return hit;
     }
     return null;
   }
 
-  /// Every element matching [css], in document order.
-  List<Element> all(String css) => [if (matches(css)) this, for (final el in children) ...el.all(css)];
+  /// Every element below this one matching [css], in document order (like
+  /// `querySelectorAll`: the element itself is never included).
+  List<Element> all(String css) {
+    final out = <Element>[];
+    void walk(Element at) {
+      for (final el in at.children) {
+        if (el.matches(css)) out.add(el);
+        walk(el);
+      }
+    }
+
+    walk(this);
+    return out;
+  }
 
   /// A deep copy without the elements matching [css]; the receiver is
   /// unchanged, and itself always kept.
@@ -97,22 +130,36 @@ final class Element extends Node {
   String toString() {
     final sb = StringBuffer('<$tag');
     attrs.forEach((name, value) => sb.write(' $name="${_escapeAttr(value)}"'));
+    // Void elements have no closer.
+    if (_void.contains(tag.toLowerCase())) {
+      sb.write('>');
+      return sb.toString();
+    }
     sb.write('>');
+    // Raw-text elements keep their content verbatim; everything else escapes.
+    final raw = _rawText.contains(tag.toLowerCase()) || _escapableRaw.contains(tag.toLowerCase());
     for (final child in _nodes) {
-      sb.write(child.toString());
+      if (child is Text && raw) {
+        sb.write(child.data);
+      } else {
+        sb.write(child.toString());
+      }
     }
     sb.write('</$tag>');
     return sb.toString();
   }
 }
 
-String _escapeAttr(String v) => v.replaceAll('"', '&quot;');
+String _escapeAttr(String v) => v.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
 
 /// A parsed document with a synthetic `#document` root.
 final class Doc {
   final Element _root;
 
-  Doc(this._root);
+  /// The `<!DOCTYPE …>` line when the source had one, verbatim.
+  final String? doctype;
+
+  Doc(this._root, [this.doctype]);
 
   /// The first element in the document matching [css].
   Element? find(String css) => _root.find(css);
@@ -123,11 +170,11 @@ final class Doc {
   /// The document's whole text.
   String get text => _root.text;
 
-  /// The whole document's markup.
-  String get html => _root.html;
+  /// The whole document's markup, doctype first when there is one.
+  String get html => '${doctype ?? ''}${_root.html}';
 
   /// A deep copy without the elements matching [css]; the receiver is unchanged.
-  Doc drop(String css) => Doc(_copyExcept(_root, css));
+  Doc drop(String css) => Doc(_copyExcept(_root, css), doctype);
 
   /// Saves the document's markup to [to] (atomically for a file).
   Future<void> save(Target to) => utf8.encode(html).pipe(to);
@@ -137,7 +184,8 @@ final class Doc {
 }
 
 /// [src] deep-copied without the elements matching [css]; [src] itself is
-/// always kept, so the copy never loses its root.
+/// always kept, so the copy never loses its root. The copy is wired to
+/// [src]'s parent, so selectors (and `:root`) work on it.
 Element _copyExcept(Element src, String css) {
   final kids = <Node>[];
   for (final n in src._nodes) {
@@ -148,10 +196,8 @@ Element _copyExcept(Element src, String css) {
       kids.add(Text((n as Text).data));
     }
   }
-  final el = Element(src.tag, src.attrs, kids);
-  for (final k in kids) {
-    k.parent = el;
-  }
+  final el = Element._(src.tag, src.attrs, kids);
+  _wire(el, src.parent);
   return el;
 }
 
@@ -160,23 +206,29 @@ Element _copyExcept(Element src, String css) {
 ///
 /// The parser builds mutable lists; this freezes them. Hidden from the topic
 /// export: documents come from [Html.parse].
-Doc assembleDocument(List<Node> topKids) {
+Doc assembleDocument(List<Node> topKids, [String? doctype]) {
   final structured = _implyStructure(topKids);
-  final root = Element('#document', {}, structured);
+  final root = Element._('#document', {}, structured);
   _wire(root, null);
-  return Doc(root);
+  return Doc(root, doctype);
 }
 
-/// Wires every parent in [el]'s tree, exactly once.
+/// Wires every parent in [el]'s tree, exactly once — and numbers each element
+/// among its siblings, caching the element-children list, so `prev`/`next`
+/// and `:nth-child` never rebuild it.
 void _wire(Element el, Element? parent) {
   el.parent = parent;
+  final kids = <Element>[];
   for (final kid in el._nodes) {
     if (kid is Element) {
+      kid._siblingIndex = kids.length;
+      kids.add(kid);
       _wire(kid, el);
     } else {
       kid.parent = el;
     }
   }
+  el._elementKids = List<Element>.unmodifiable(kids);
 }
 
 /// Wraps a fragment without `<html>` in an implied `html > head + body` (as a
@@ -191,14 +243,14 @@ List<Node> _implyStructure(List<Node> kids) {
     }
   }
   if (htmlEl == null) {
-    final body = Element('body', {}, kids);
-    final head = Element('head');
+    final body = Element._('body', {}, kids);
+    final head = Element._('head');
     return [
-      Element('html', {}, [head, body]),
+      Element._('html', {}, [head, body]),
     ];
   }
   if (!htmlEl.children.any((el) => el.tag.toLowerCase() == 'body')) {
-    final withBody = Element('html', htmlEl.attrs, [...htmlEl._nodes, Element('body')]);
+    final withBody = Element._('html', htmlEl.attrs, [...htmlEl._nodes, Element._('body')]);
     return [for (final k in kids) identical(k, htmlEl) ? withBody : k];
   }
   return kids;
@@ -356,6 +408,9 @@ final class _Compound {
           continue;
         }
         final name = nameMatch.group(0)!;
+        if (!_pseudoNames.contains(name)) {
+          throw FormatException('Unknown pseudo-class :$name in selector', src, i);
+        }
         i = nameMatch.end;
         if (i < src.length && src[i] == '(') {
           var depth = 1;
@@ -413,11 +468,32 @@ final class _Compound {
       if (_matchesSelector(el, not)) return false;
     }
     for (final inner in has) {
-      if (!_descendants(el).any((d) => _matchesSelector(d, inner))) return false;
+      final relative = inner.trimLeft();
+      final ok = relative.startsWith('>')
+          ? el.children.any((c) => _matchesSelector(c, relative.substring(1).trimLeft()))
+          : _descendants(el).any((d) => _matchesSelector(d, inner));
+      if (!ok) return false;
     }
     return true;
   }
 }
+
+/// The pseudo-classes the matcher knows; anything else is a [FormatException]
+/// when the selector is parsed, never a silent match.
+const _pseudoNames = {
+  'first-child',
+  'last-child',
+  'only-child',
+  'first-of-type',
+  'last-of-type',
+  'empty',
+  'root',
+  'nth-child',
+  'nth-of-type',
+  'contains',
+  'has',
+  'not',
+};
 
 /// Every descendant element of [el] in document order.
 Iterable<Element> _descendants(Element el) sync* {
@@ -445,7 +521,7 @@ bool _matchPseudo(Element el, String pseudo) {
     case 'empty':
       return el._nodes.isEmpty;
     case 'root':
-      return el.tag == 'html' || el.parent == null;
+      return el.tag == 'html' && (el.parent == null || el.parent!.tag == '#document');
     case 'nth-child':
       return _matchNth(el, arg!);
     case 'nth-of-type':
@@ -473,8 +549,8 @@ Iterable<Element> _siblingsOfType(Element el) =>
     (el.parent == null ? [el] : el.parent!.children).where((e) => e.tag == el.tag);
 
 bool _matchNth(Element el, String expr) {
-  final siblings = el.parent == null ? [el] : el.parent!.children;
-  return _matchNthOrdinal(siblings.indexOf(el) + 1, expr);
+  // The wiring numbers each element among its siblings: no list is rebuilt.
+  return _matchNthOrdinal(el._siblingIndex + 1, expr);
 }
 
 bool _matchNthOrdinal(int index, String expr) {

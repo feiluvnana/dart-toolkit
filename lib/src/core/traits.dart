@@ -11,10 +11,14 @@ abstract interface class Reader implements Closer {
 }
 
 /// Writes [data] in order; [flush] pushes what is buffered. [close] completes the target
-/// (a file is renamed into place on close).
+/// (a file is renamed into place on close). [abort] drops the write without
+/// completing it (a file's temp is deleted and the old content stays; a resume
+/// writer never truncates). The caller may reuse [data] once the returned
+/// future completes.
 abstract interface class Writer implements Closer {
   Future<int> write(Uint8List data);
   Future<void> flush();
+  Future<void> abort();
 }
 
 /// Moves the read position to [offset].
@@ -38,4 +42,18 @@ abstract interface class Source {
 abstract interface class Target {
   Future<Writer> writer({bool resume = false});
   Future<int> size();
+}
+
+/// Something with a filesystem path: a file or a directory. A process takes
+/// one as its working directory without importing the filesystem module.
+abstract interface class Located {
+  String get path;
+}
+
+/// One frame of pixels: its width, height and `w*h*4` RGBA bytes. An [Image]
+/// is one; the TUI draws them without importing the image module.
+abstract interface class Frame {
+  int get w;
+  int get h;
+  Uint8List get rgba;
 }

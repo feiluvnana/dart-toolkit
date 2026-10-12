@@ -102,8 +102,9 @@ final class Resume extends TuiEvent {
 }
 
 /// ^C: delivered as an event, never as a signal. Answering it (drawing again)
-/// keeps the app open; a second ^C within two seconds always ends the run,
-/// and the terminal is restored on every way out.
+/// keeps the app open; a second ^C within two seconds closes the run (the next
+/// `draw`/`poll` throws the end-of-run), and the terminal is restored on every
+/// way out.
 final class Interrupt extends TuiEvent {
   const Interrupt();
 

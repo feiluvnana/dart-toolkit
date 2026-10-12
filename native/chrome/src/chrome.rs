@@ -1,4 +1,4 @@
-//! Chrome process ownership, rewritten: launch, profile lock, alive check, reaper.
+//! Chrome process ownership: launch, profile lock, alive check, reaper.
 //!
 //! The crate owns what Dart cannot do safely: spawning the browser hidden, refusing a
 //! `--user-data-dir` another instance holds (Windows error 32 on its `lockfile`), asking
@@ -6,21 +6,31 @@
 //! in [`crate::cdp`]. Tree kill shells to `taskkill /T /F` on Windows (the same call the
 //! engine's `tk_process_kill_tree` makes); assigning a Job Object at spawn would be
 //! stronger, and is not done yet.
+//!
+//! Launch and attach are jobs: the handle is answered at once and the job fills it
+//! in. Freeing the handle mid-launch is safe: the job sees `closed` and kills what
+//! it spawned.
 
 use std::io::Read;
 use std::io::Write;
 use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::{guard, live, text, Handle, Msg};
+use crate::{guard, live, lock, queue, stopped, text, Done, Handle, Msg, Progress, CLOSED};
+
+/// What a browser handle and its in-flight jobs share.
+pub(crate) type BrowserRef = Arc<Mutex<Browser>>;
 
 /// A launched or attached browser: the child when we spawned it (reaped on free),
-/// the DevTools HTTP endpoint, and the temp profile we delete on free when owned.
-pub struct Browser {
+/// the DevTools HTTP endpoint (empty until the launch job finds it), and the temp
+/// profile we delete on free when owned. `closed` is set by free and release.
+pub(crate) struct Browser {
     child: Option<Child>,
     pid: u32,
     endpoint: String,
     profile: Option<OwnedProfile>,
+    pub(crate) closed: bool,
 }
 
 struct OwnedProfile {
@@ -28,16 +38,36 @@ struct OwnedProfile {
     owned: bool,
 }
 
-/// The DevTools HTTP endpoint behind a browser handle, for the CDP layer.
-pub(crate) fn endpoint_of(handle: Handle) -> Result<String, String> {
+/// The shared state behind a browser handle and its endpoint, for the CDP layer:
+/// an error once the browser is closed or before its launch finished.
+pub(crate) fn browser_of(handle: Handle) -> Result<(BrowserRef, String), String> {
     // SAFETY: the caller holds the handle; null is the only wrong state.
-    Ok(unsafe { live::<Browser>(handle)?.endpoint.clone() })
+    let shared = unsafe { live::<BrowserRef>(handle)? }.clone();
+    let endpoint = {
+        let browser = lock(&shared);
+        if browser.closed {
+            return Err(CLOSED.to_string());
+        }
+        if browser.endpoint.is_empty() {
+            return Err("Chrome is not running yet".to_string());
+        }
+        browser.endpoint.clone()
+    };
+    Ok((shared, endpoint))
 }
 
-/// Launches `exe` headless (unless `headless` is 0) with `profile` as its
-/// `--user-data-dir`, waits for the DevTools endpoint, and answers the browser
-/// handle with the debugging port in `out_port`. A profile another Chrome holds
-/// is refused before anything spawns.
+fn new_handle() -> (BrowserRef, Handle) {
+    let shared = Arc::new(Mutex::new(Browser { child: None, pid: 0, endpoint: String::new(), profile: None, closed: false }));
+    let handle = Box::into_raw(Box::new(shared.clone())) as Handle;
+    (shared, handle)
+}
+
+/// Queues a launch of `exe` headless (unless `headless` is 0) with `profile` as
+/// its `--user-data-dir` (`extra`: NUL-separated arguments). The browser handle
+/// is written to `out_browser` at once; the job waits for the DevTools endpoint
+/// and answers it as text (`http://127.0.0.1:<port>`). A profile another Chrome
+/// holds is refused before anything spawns. A failed launch kills what it spawned
+/// and deletes an owned profile before it reports.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_launch(
     exe: *const u8,
@@ -48,45 +78,77 @@ pub unsafe extern "C" fn tk_cdp_launch(
     owned_profile: u8,
     extra: *const u8,
     extralen: usize,
-    out_port: *mut u16,
-) -> Handle {
-    match launch(
-        text(exe, exelen),
-        headless != 0,
-        text(profile, profilelen),
-        owned_profile != 0,
-        text(extra, extralen),
-    ) {
-        Ok((browser, port)) => {
-            if !out_port.is_null() {
-                *out_port = port;
+    out_browser: *mut Handle,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    guard(|| {
+        let exe = text(exe, exelen)?.to_string();
+        let profile = text(profile, profilelen)?.to_string();
+        let extra: Vec<String> = text(extra, extralen)?.split('\0').filter(|a| !a.is_empty()).map(String::from).collect();
+        if out_browser.is_null() {
+            return Err("no slot for the browser handle".to_string());
+        }
+        let owned = owned_profile != 0;
+        let (shared, handle) = new_handle();
+        let rc = queue(done, stop, move || {
+            let result = launch(&shared, &exe, headless != 0, &profile, owned, &extra);
+            if result.is_err() {
+                reap(&shared);
+                // Chrome may have recreated the folder after a close deleted it.
+                if owned {
+                    let _ = delete_dir_retry(&profile);
+                }
             }
-            Box::into_raw(Box::new(browser)) as Handle
+            result
+        });
+        if rc == 0 {
+            *out_browser = handle;
+        } else {
+            drop(Box::from_raw(handle as *mut BrowserRef));
         }
-        Err(message) => {
-            tk_common::set_error(&message);
-            std::ptr::null_mut()
-        }
-    }
+        Ok(rc)
+    })
 }
 
-/// Attaches to the instance serving `host:port` (no child, no profile).
+/// Queues an attach to the instance serving `host:port` (no child, no profile):
+/// the handle is written to `out_browser` at once, and the job answers the
+/// endpoint once `/json/version` serves (10 s at most).
 #[no_mangle]
-pub unsafe extern "C" fn tk_cdp_attach(host: *const u8, hostlen: usize, port: u16) -> Handle {
-    let endpoint = match text(host, hostlen) {
-        Ok(h) => format!("http://{}:{}", h, port),
-        Err(message) => {
-            tk_common::set_error(&message);
-            return std::ptr::null_mut();
+pub unsafe extern "C" fn tk_cdp_attach(
+    host: *const u8,
+    hostlen: usize,
+    port: u16,
+    out_browser: *mut Handle,
+    done: Done,
+    stop: *const u8,
+    _progress: Progress,
+    _id: i64,
+) -> i32 {
+    guard(|| {
+        let endpoint = format!("http://{}:{}", text(host, hostlen)?, port);
+        if out_browser.is_null() {
+            return Err("no slot for the browser handle".to_string());
         }
-    };
-    match wait_version(&endpoint, Duration::from_secs(10)) {
-        Ok(()) => Box::into_raw(Box::new(Browser { child: None, pid: 0, endpoint, profile: None })) as Handle,
-        Err(message) => {
-            tk_common::set_error(&message);
-            std::ptr::null_mut()
+        let (shared, handle) = new_handle();
+        let rc = queue(done, stop, move || {
+            wait_version(&endpoint, Duration::from_secs(10))?;
+            let mut browser = lock(&shared);
+            if browser.closed {
+                return Err(CLOSED.to_string());
+            }
+            browser.endpoint = endpoint.clone();
+            Ok(endpoint.into_bytes())
+        });
+        if rc == 0 {
+            *out_browser = handle;
+        } else {
+            drop(Box::from_raw(handle as *mut BrowserRef));
         }
-    }
+        Ok(rc)
+    })
 }
 
 /// Whether the browser's pid still names a live process (1) or not (0). An
@@ -94,8 +156,15 @@ pub unsafe extern "C" fn tk_cdp_attach(host: *const u8, hostlen: usize, port: u1
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_alive(handle: Handle) -> i32 {
     guard(|| {
-        let browser = live::<Browser>(handle)?;
-        Ok(if browser.pid != 0 { alive_pid(browser.pid) } else { endpoint_up(&browser.endpoint) } as i32)
+        let shared = live::<BrowserRef>(handle)?;
+        let (pid, endpoint) = {
+            let browser = lock(shared);
+            if browser.closed {
+                return Ok(0);
+            }
+            (browser.pid, browser.endpoint.clone())
+        };
+        Ok(if pid != 0 { alive_pid(pid) } else { !endpoint.is_empty() && endpoint_up(&endpoint) } as i32)
     })
 }
 
@@ -107,14 +176,9 @@ pub unsafe extern "C" fn tk_cdp_release(handle: Handle) {
     if handle.is_null() {
         return;
     }
-    let mut owned = Box::from_raw(handle as *mut Browser);
-    if owned.pid != 0 {
-        kill_tree(owned.pid);
-    }
-    if let Some(mut child) = owned.child.take() {
-        let _ = child.wait_timeout(Duration::from_secs(5));
-    }
-    if let Some(profile) = owned.profile.take() {
+    let shared = Box::from_raw(handle as *mut BrowserRef);
+    lock(&shared).closed = true;
+    if let Some(profile) = reap(&shared) {
         if profile.owned {
             let _ = delete_dir_retry(&profile.dir);
         }
@@ -122,21 +186,17 @@ pub unsafe extern "C" fn tk_cdp_release(handle: Handle) {
 }
 
 /// Kills the tree, reaps the child, and deletes the owned temp profile (with
-/// backoff, so a just-reaped Chrome lets go of it). Best effort per step; the
-/// first failure is what `tk_last_error` holds.
+/// backoff, so a just-reaped Chrome lets go of it); a launch still in flight
+/// sees `closed` and stops. Best effort per step; the first failure is what
+/// `tk_last_error` holds.
 #[no_mangle]
 pub unsafe extern "C" fn tk_cdp_free(handle: Handle) -> i32 {
     guard(|| {
-        let browser = live::<Browser>(handle)?;
+        live::<BrowserRef>(handle)?;
         // Take it out of the handle first: a second free is a null handle, not a double kill.
-        let owned = unsafe { Box::from_raw(browser as *mut Browser) };
-        if owned.pid != 0 {
-            kill_tree(owned.pid);
-        }
-        if let Some(mut child) = owned.child {
-            let _ = child.wait_timeout(Duration::from_secs(5));
-        }
-        if let Some(profile) = owned.profile {
+        let shared = unsafe { Box::from_raw(handle as *mut BrowserRef) };
+        lock(&shared).closed = true;
+        if let Some(profile) = reap(&shared) {
             if profile.owned {
                 delete_dir_retry(&profile.dir)?;
             }
@@ -145,25 +205,35 @@ pub unsafe extern "C" fn tk_cdp_free(handle: Handle) -> i32 {
     })
 }
 
-fn launch(exe: Result<&str, String>, headless: bool, profile: Result<&str, String>, owned: bool, extra: Result<&str, String>) -> Result<(Browser, u16), String> {
-    let exe = exe?;
-    let profile = profile?.to_string();
-    let extra = extra?;
-    refuse_held_profile(&profile)?;
+/// Kills and reaps whatever `shared` spawned, answering the profile it held.
+fn reap(shared: &BrowserRef) -> Option<OwnedProfile> {
+    let (pid, child, profile) = {
+        let mut browser = lock(shared);
+        (std::mem::take(&mut browser.pid), browser.child.take(), browser.profile.take())
+    };
+    if pid != 0 {
+        kill_tree(pid);
+    }
+    if let Some(mut child) = child {
+        let _ = child.wait_timeout(Duration::from_secs(5));
+    }
+    profile
+}
+
+fn launch(shared: &BrowserRef, exe: &str, headless: bool, profile: &str, owned: bool, extra: &[String]) -> Result<Vec<u8>, String> {
+    stopped()?;
+    refuse_held_profile(profile)?;
     let mut cmd = Command::new(exe);
     if headless {
         cmd.arg("--headless=new");
     }
     cmd.args(["--disable-gpu", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0"]);
     // `navigator.webdriver` is set before any page script runs: only this flag clears it.
-    // The rest of the marks automation leaves are hidden per navigation (cdp.rs `stealth`).
+    // The user agent comes from the caller (`--user-agent=` in `extra`); the rest of the
+    // marks automation leaves are hidden per navigation (cdp.rs `stealth`).
     cmd.args(["--disable-blink-features=AutomationControlled", "--hide-scrollbars", "--mute-audio"]);
     cmd.arg(format!("--user-data-dir={}", profile));
-    for arg in extra.split('\0') {
-        if !arg.is_empty() {
-            cmd.arg(arg);
-        }
-    }
+    cmd.args(extra);
     cmd.arg("about:blank");
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
@@ -172,13 +242,23 @@ fn launch(exe: Result<&str, String>, headless: bool, profile: Result<&str, Strin
         // No console window flash for the browser we spawned.
         cmd.creation_flags(0x08000000);
     }
-    let child = cmd.spawn().msg()?;
-    let pid = child.id();
-    let (endpoint, port) = wait_endpoint(&profile, Duration::from_secs(15)).map_err(|message| {
-        kill_tree(pid);
-        message
-    })?;
-    Ok((Browser { child: Some(child), pid, endpoint, profile: Some(OwnedProfile { dir: profile, owned }) }, port))
+    let child = cmd.spawn().map_err(|e| format!("{}: {}", exe, e))?;
+    {
+        let mut browser = lock(shared);
+        browser.pid = child.id();
+        browser.child = Some(child);
+        browser.profile = Some(OwnedProfile { dir: profile.to_string(), owned });
+        if browser.closed {
+            return Err(CLOSED.to_string());
+        }
+    }
+    let endpoint = wait_endpoint(profile, Duration::from_secs(15))?;
+    let mut browser = lock(shared);
+    if browser.closed {
+        return Err(CLOSED.to_string());
+    }
+    browser.endpoint = endpoint.clone();
+    Ok(endpoint.into_bytes())
 }
 
 /// Refuses a `--user-data-dir` another Chrome holds: its `lockfile` cannot be
@@ -207,16 +287,18 @@ fn refuse_held_profile(profile: &str) -> Result<(), String> {
 /// on start, proved by a 200 from `/json/version`. The file is re-read every turn:
 /// a first read can catch it half-written (or stale from a reused profile), and a
 /// port that never serves is a launch failure, not a 10 s wait on a dead port.
-fn wait_endpoint(profile: &str, timeout: Duration) -> Result<(String, u16), String> {
+/// Stops when the caller sets the stop byte.
+fn wait_endpoint(profile: &str, timeout: Duration) -> Result<String, String> {
     let file = std::path::Path::new(profile).join("DevToolsActivePort");
     let start = Instant::now();
     while start.elapsed() < timeout {
+        stopped()?;
         if let Ok(text) = std::fs::read_to_string(&file) {
             if let Some(first) = text.lines().next() {
                 if let Ok(port) = first.trim().parse::<u16>() {
                     let endpoint = format!("http://127.0.0.1:{}", port);
                     if let Ok((200, _)) = http("GET", &endpoint, "/json/version") {
-                        return Ok((endpoint, port));
+                        return Ok(endpoint);
                     }
                 }
             }
@@ -226,10 +308,12 @@ fn wait_endpoint(profile: &str, timeout: Duration) -> Result<(String, u16), Stri
     Err("Chrome DevTools endpoint did not become ready".to_string())
 }
 
-/// `GET /json/version` until it answers 200: the endpoint is up.
+/// `GET /json/version` until it answers 200: the endpoint is up. Stops when the
+/// caller sets the stop byte.
 fn wait_version(endpoint: &str, timeout: Duration) -> Result<(), String> {
     let start = Instant::now();
     while start.elapsed() < timeout {
+        stopped()?;
         match http("GET", endpoint, "/json/version") {
             Ok((200, _)) => return Ok(()),
             _ => std::thread::sleep(Duration::from_millis(100)),
@@ -293,9 +377,25 @@ pub(crate) fn http(method: &str, endpoint: &str, path: &str) -> Result<(u16, Vec
     Ok((code, body))
 }
 
+/// `pid` as a signal target, or `None` when `kill()` would read it as more than one process or
+/// as one we must never touch: `0` is the caller's process group, any `u32` above `i32::MAX`
+/// casts negative (`-1` signals EVERY process the user owns, another negative a whole group),
+/// `1` is launchd/init, and the caller itself is never part of a tree it kills.
+pub(crate) fn signalable(pid: u32) -> Option<i32> {
+    let p = i32::try_from(pid).ok()?;
+    if p <= 1 || pid == std::process::id() {
+        return None;
+    }
+    Some(p)
+}
+
 /// The process tree rooted at `pid` killed, children first found. Never fails:
 /// a pid already gone is the normal outcome of a kill racing an exit.
 fn kill_tree(pid: u32) {
+    // Never a group, never everyone, never launchd or ourselves: see [`signalable`].
+    let Some(target) = signalable(pid) else {
+        return;
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -305,24 +405,27 @@ fn kill_tree(pid: u32) {
     {
         // SAFETY: signal to a pid we spawned; ESRCH means already gone.
         unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
+            libc::kill(target, libc::SIGTERM);
         }
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(2) {
             // SAFETY: as above; a zero signal only asks.
-            if unsafe { libc::kill(pid as i32, 0) } != 0 {
+            if unsafe { libc::kill(target, 0) } != 0 {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         // SAFETY: as above.
         unsafe {
-            libc::kill(pid as i32, libc::SIGKILL);
+            libc::kill(target, libc::SIGKILL);
         }
     }
 }
 
 fn alive_pid(pid: u32) -> bool {
+    if signalable(pid).is_none() {
+        return false;
+    }
     #[cfg(windows)]
     {
         // OpenProcess + GetExitCodeProcess: no kill race, no window.
@@ -340,6 +443,7 @@ fn alive_pid(pid: u32) -> bool {
     #[cfg(not(windows))]
     {
         // SAFETY: a zero signal only asks; ESRCH means gone.
+        // SAFETY: a zero signal only asks; the guard above refused every special pid.
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
 }
@@ -358,12 +462,14 @@ unsafe extern "system" {
 }
 
 /// A just-reaped Chrome still holds files briefly: retry with backoff before
-/// giving up, so `close()` leaves no temp profile behind.
+/// giving up, so `close()` leaves no temp profile behind. A missing one is fine.
 fn delete_dir_retry(dir: &str) -> Result<(), String> {
     let mut wait = Duration::from_millis(50);
     for attempt in 0..10 {
         match std::fs::remove_dir_all(dir) {
             Ok(()) => return Ok(()),
+            // Already gone: a launch that failed and a close can both delete it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) if attempt < 9 => {
                 let _ = e;
                 std::thread::sleep(wait);
@@ -407,9 +513,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Never signal a sentinel pid in a test: `u32::MAX as i32` is -1, and `kill(-1, …)`
+    /// reaches every process the user owns. The guard is tested as a pure function instead.
     #[test]
-    fn killing_a_gone_pid_is_quiet() {
-        kill_tree(u32::MAX);
+    fn group_and_everyone_pids_are_never_signal_targets() {
+        assert_eq!(signalable(u32::MAX), None); // -1: every process
+        assert_eq!(signalable(i32::MAX as u32 + 1), None); // negative: a process group
+        assert_eq!(signalable(0), None); // our own process group
+        assert_eq!(signalable(1), None); // launchd / init
+        assert_eq!(signalable(std::process::id()), None); // ourselves
+        assert_eq!(signalable(4242), Some(4242));
         assert!(!alive_pid(u32::MAX));
     }
 }

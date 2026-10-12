@@ -14,7 +14,7 @@ import 'dart:isolate';
 import '../core/native_status.dart';
 
 /// ABI of `dart_toolkit_tui` this seam binds.
-const _tuiAbi = 1;
+const _tuiAbi = 2;
 
 /// A polled `tk_event`: what the native crate heard.
 final class TkEvent extends ffi.Struct {

@@ -3,6 +3,8 @@ import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
 
+import '../core/errors.dart';
+import '../core/jobs.dart';
 import '../core/native.dart' as l2native;
 import '../core/traits.dart';
 import '../fs/io.dart' as fs;
@@ -130,14 +132,28 @@ abstract final class _HashNative {
   static final digestFile = _lib
       .lookupFunction<
         ffi.Int32 Function(
-          ffi.Pointer<ffi.Void>,
+          ffi.Uint32,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
-          ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Uint8>,
+          ffi.IntPtr,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
-        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int, ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>)
-      >('tk_digest_file');
+        int Function(
+          int,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
+      >('tk_digest_file_async');
 }
 
 /// How much of a large in-hand input is handed to the library at a time, so
@@ -218,15 +234,30 @@ Uint8List _nativeBytes(Algo algo, List<int>? key, List<int> data) {
   return _nativeFinish(algo, h);
 }
 
-/// The digest/MAC of the file at [path], read inside the native library.
-Uint8List _nativeFile(Algo algo, List<int>? key, String path) {
-  final h = _nativeOpen(algo, key);
-  final failure = l2native.withText(path, (p, n) => _HashNative.digestFile(h, p, n, ffi.nullptr, ffi.nullptr)) < 0
-      ? l2native.lastError()
-      : null;
-  final digest = _nativeFinish(algo, h);
-  if (failure == null) return digest;
-  throw _nativeFileError(failure, path);
+/// The digest/MAC of the file at [path], read inside the native library on one of its
+/// threads (the event loop stays free); [onProgress] hears bytes read and the size.
+Future<Uint8List> _nativeFile(
+  Algo algo,
+  List<int>? key,
+  String path, {
+  void Function(int done, int total)? onProgress,
+}) async {
+  try {
+    return await nativeJob(
+      'hash $path',
+      l2native.engineJobs,
+      (done, stop, progress, id) => l2native.withText(
+        path,
+        (p, n) => l2native.withBytes(
+          key ?? const <int>[],
+          (k, kn) => _HashNative.digestFile(algo._code, p, n, k, kn, done, stop, progress, id),
+        ),
+      ),
+      onProgress: onProgress,
+    );
+  } on NativeException catch (e) {
+    throw _nativeFileError(e.message, path);
+  }
 }
 
 /// What the library said about the file at [path], as the exception it
@@ -245,13 +276,16 @@ Exception _nativeFileError(String message, String path) {
 
 extension SourceHash on Source {
   /// The digest of every byte ([key]: its MAC). A File hashes inside the native library in
-  /// constant memory; other sources stream through a native digest handle.
-  Future<Uint8List> hash(Algo algo, {Object? key}) async {
+  /// constant memory, on one of its threads; other sources stream through a native digest
+  /// handle. [onProgress] hears a file's bytes read and its size.
+  Future<Uint8List> hash(Algo algo, {Object? key, void Function(int done, int total)? onProgress}) async {
     final k = key == null ? null : _bytes(key);
-    if (this case final fs.File f) return _nativeFile(algo, k, f.path);
-    final h = _nativeOpen(algo, k);
+    if (this case final fs.File f) return _nativeFile(algo, k, f.path, onProgress: onProgress);
+    // The native handle opens only once the reader has: a failing source leaks nothing.
     final r = await reader();
     final buf = l2native.alloc(_streamChunk);
+    final h = _nativeOpen(algo, k);
+    var finished = false;
     try {
       final view = buf.asTypedList(_streamChunk);
       final chunk = Uint8List(_streamChunk);
@@ -261,16 +295,20 @@ extension SourceHash on Source {
         view.setRange(0, n, chunk);
         if (_HashNative.digestUpdate(h, buf, n) < 0) {
           final why = l2native.lastError();
+          finished = true;
           _nativeFinish(algo, h);
           if (key != null) throw ArgumentError.value('•••', 'key', '${algo.name}: $why');
           throw l2native.NativeException('hash with ${algo.name}', why);
         }
       }
+      finished = true;
+      return _nativeFinish(algo, h);
     } finally {
+      // Finishing frees the handle: an error on the way releases it too.
+      if (!finished) _nativeFinish(algo, h);
       l2native.free(buf, _streamChunk);
       await r.close();
     }
-    return _nativeFinish(algo, h);
   }
 }
 

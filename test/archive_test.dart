@@ -3,6 +3,7 @@
 // Every refusal throws a SecurityException before anything is written — no
 // entry escapes its destination, no absolute member, no NUL byte, no link
 // materialized. Unpacking a download streams through the native unpack sink.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
@@ -11,6 +12,98 @@ import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/path.dart';
 import 'package:test/test.dart';
+
+/// One 512-byte tar header for `name` holding `size` bytes of kind `type`
+/// (`'0'` file, `'5'` dir, `'2'` symlink to [link]).
+Uint8List tarHead(String name, int size, String type, {String link = ''}) {
+  final header = Uint8List(512);
+  void str(int off, String s, int len) {
+    final codes = utf8.encode(s);
+    for (var i = 0; i < len; i++) {
+      header[off + i] = i < codes.length ? codes[i] : 0;
+    }
+  }
+
+  str(0, name, 100);
+  str(124, '${size.toRadixString(8).padLeft(11, '0')}\x00', 12);
+  header[156] = type.codeUnitAt(0);
+  str(157, link, 100);
+  str(257, 'ustar\x00', 6);
+  for (var i = 148; i < 156; i++) {
+    header[i] = 0x20;
+  }
+  var sum = 0;
+  for (final b in header) {
+    sum += b;
+  }
+  str(148, '${sum.toRadixString(8).padLeft(6, '0')}\x00 ', 8);
+  return header;
+}
+
+/// A tar with a symlink member `name -> target` (linkname set, no content).
+Uint8List tarLink(String name, String target) {
+  final out = BytesBuilder(copy: true)..add(tarHead(name, 0, '2', link: target));
+  out.add(Uint8List(1024));
+  return out.takeBytes();
+}
+
+/// A [Source] over bytes, fed in [chunk]-byte pieces with [delay] between
+/// them, so a streamed unpack sees a slow small-chunk stream.
+final class ChunkedSource implements Source {
+  final Uint8List bytes;
+  final int chunk;
+  final Duration delay;
+
+  ChunkedSource(this.bytes, {this.chunk = 100, this.delay = const Duration(milliseconds: 2)});
+
+  @override
+  int? get lengthHint => bytes.length;
+
+  @override
+  Future<Reader> reader({int from = 0}) async => _ChunkedReader(bytes.sublist(from), chunk, delay, -1);
+}
+
+/// A [Source] that throws [error] after [failAfter] chunks.
+final class FailingSource implements Source {
+  final Uint8List bytes;
+  final int failAfter;
+  final Object error;
+
+  FailingSource(this.bytes, {this.failAfter = 3, this.error = 'boom'});
+
+  @override
+  int? get lengthHint => bytes.length;
+
+  @override
+  Future<Reader> reader({int from = 0}) async =>
+      _ChunkedReader(bytes.sublist(from), 1024, Duration.zero, failAfter, error: error);
+}
+
+final class _ChunkedReader implements Reader {
+  final Uint8List _bytes;
+  final int _chunk;
+  final Duration _delay;
+  int _failAfter;
+  final Object _error;
+  int _pos = 0;
+
+  _ChunkedReader(this._bytes, this._chunk, this._delay, this._failAfter, {Object error = 'boom'}) : _error = error;
+
+  @override
+  Future<int> read(Uint8List buf) async {
+    if (_failAfter == 0) throw _error;
+    if (_pos >= _bytes.length) return 0;
+    if (_delay != Duration.zero) await Future<void>.delayed(_delay);
+    if (_failAfter > 0) _failAfter--;
+    final n = (_bytes.length - _pos).clamp(0, _chunk).clamp(0, buf.length);
+    buf.setRange(0, n, _bytes, _pos);
+    _pos += n;
+    return n;
+  }
+
+  @override
+  Future<void> close() async {}
+}
 
 /// A minimal tar builder for members the packer never emits (links, dirs).
 Uint8List tarOf(List<(String name, List<int> data, String type)> members) {
@@ -358,5 +451,207 @@ void main() {
       expect(await bundle.entry('a.txt').text(), 'hello');
       await expectLater(bundle.entry('nope').text(), throwsA(isA<MissingException>()));
     });
+  });
+
+  group('pack failures never free twice', () {
+    test('a zip holding ../x unpacks as SecurityException and the process lives on', () async {
+      io.File(at('dotdot.zip')).writeAsBytesSync(
+        Archive.zip({
+          '../x': [1, 2, 3],
+          'ok.txt': [4],
+        }),
+      );
+      await expectLater(File(at('dotdot.zip')).unpack(Dir(at('dotdot-out'))), throwsA(isA<SecurityException>()));
+      // The process lives on: packing and unpacking still work.
+      io.File(at('after.zip')).writeAsBytesSync(
+        Archive.zip({
+          'a.txt': [7],
+        }),
+      );
+      await File(at('after.zip')).unpack(Dir(at('after-out')));
+      expect(io.File(at('after-out/a.txt')).readAsBytesSync(), [7]);
+    });
+
+    test('a 70,000-byte member name is an ArgumentError', () async {
+      expect(
+        () => Archive.zip({
+          'x' * 70000: [1],
+        }),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('streamed tars with trailing padding succeed', () {
+    for (final chunk in [100, 512, 4096]) {
+      test('10 KiB of padding in $chunk-byte chunks', () async {
+        final tar = BytesBuilder(copy: true)
+          ..add(tarOf([('a.txt', utf8.encode('hello'), '0')]))
+          ..add(Uint8List(10 * 1024));
+        final out = Dir(at('pad-$chunk'));
+        expect(await ChunkedSource(tar.takeBytes(), chunk: chunk).unpack(out), 1);
+        expect(await out.file('a.txt').text(), 'hello');
+      });
+    }
+
+    test('../evil, /abs and link members each throw SecurityException', () async {
+      final first = tarOf([('a.txt', utf8.encode('hi'), '0')]);
+      final linkEvil = BytesBuilder(copy: true)
+        ..add(first.sublist(0, first.length - 1024))
+        ..add(tarHead('b', 0, '2', link: 'a.txt'))
+        ..add(Uint8List(1024));
+      final cases = <String, Uint8List>{
+        'dotdot': tarOf([
+          ('ok.txt', [1], '0'),
+          ('../evil.txt', [2], '0'),
+        ]),
+        'abs': tarOf([
+          ('ok.txt', [1], '0'),
+          ('/abs.txt', [2], '0'),
+        ]),
+        'link': linkEvil.takeBytes(),
+      };
+      for (final entry in cases.entries) {
+        final out = Dir(at('stream-evil-${entry.key}'));
+        await expectLater(
+          ChunkedSource(entry.value, chunk: 100).unpack(out),
+          throwsA(isA<SecurityException>()),
+          reason: entry.key,
+        );
+        // No partial output: nothing unpacked stays behind.
+        final dest = io.Directory(out.path);
+        final leftovers = dest.existsSync() ? dest.listSync(recursive: true) : <io.FileSystemEntity>[];
+        expect(leftovers, isEmpty, reason: '${entry.key}: destination holds partial output');
+      }
+    });
+  });
+
+  group('one link rule on both unpack paths', () {
+    test('b -> a.txt is refused from a file and from a stream, accepted trusted', () async {
+      final first = tarOf([('a.txt', utf8.encode('hi'), '0')]);
+      final tar = BytesBuilder(copy: true)
+        ..add(first.sublist(0, first.length - 1024))
+        ..add(tarHead('b', 0, '2', link: 'a.txt'))
+        ..add(Uint8List(1024));
+      final bytes = tar.takeBytes();
+      io.File(at('link.tar')).writeAsBytesSync(bytes);
+      await expectLater(File(at('link.tar')).unpack(Dir(at('link-file'))), throwsA(isA<SecurityException>()));
+      await expectLater(ChunkedSource(bytes).unpack(Dir(at('link-stream'))), throwsA(isA<SecurityException>()));
+      await File(at('link.tar')).unpack(Dir(at('link-trusted-file')), trusted: true);
+      expect(io.Link(at('link-trusted-file/b')).existsSync(), isTrue);
+      await ChunkedSource(bytes).unpack(Dir(at('link-trusted-stream')), trusted: true);
+      expect(io.Link(at('link-trusted-stream/b')).existsSync(), isTrue);
+    });
+
+    test('a stream failing mid-way leaves the destination as it was', () async {
+      final dir = Dir(at('mid-src'));
+      await dir.make();
+      await dir.file('a.txt').write('hello stream');
+      await dir.file('big.bin').write(List.generate(200000, (i) => i & 0xFF));
+      final packed = File(at('mid.tar'));
+      await dir.pack(packed);
+      final bytes = await packed.bytes();
+      final out = io.Directory(at('mid-out'))..createSync();
+      io.File('${out.path}/keeper.txt').writeAsStringSync('keep me');
+      // Fail ~100 KiB in, inside big.bin: a.txt is already out, big.bin partial.
+      await expectLater(FailingSource(bytes, failAfter: 100).unpack(Dir(out.path)), throwsA('boom'));
+      expect(io.File('${out.path}/keeper.txt').readAsStringSync(), 'keep me');
+      final leftovers = io.Directory(
+        out.path,
+      ).listSync(recursive: true).where((e) => e.path != '${out.path}/keeper.txt');
+      expect(leftovers, isEmpty);
+    });
+  });
+
+  group('pack validation and error mapping', () {
+    test('rar, 7z and bare gz destinations are ArgumentErrors', () async {
+      final dir = Dir(at('valid-src'));
+      await dir.make();
+      await dir.file('a.txt').write('hi');
+      for (final name in ['b.rar', 'b.7z', 'one.gz']) {
+        await expectLater(dir.pack(File(at(name))), throwsArgumentError, reason: name);
+      }
+      // Containers still pack.
+      await dir.pack(File(at('b.zip')));
+      expect(await File(at('b.zip')).entries(), ['a.txt']);
+    });
+
+    test('levels outside 0..9 are ArgumentErrors', () async {
+      expect(
+        () => Archive.zip({
+          'a.txt': [1],
+        }, level: 10),
+        throwsArgumentError,
+      );
+      expect(
+        () => Archive.zip({
+          'a.txt': [1],
+        }, level: -1),
+        throwsArgumentError,
+      );
+      final dir = Dir(at('level-src'));
+      await dir.make();
+      await dir.file('a.txt').write('hi');
+      await expectLater(Dir(at('level-src')).pack(File(at('l.zip')), level: 10), throwsArgumentError);
+      final file = File(at('level-src/a.txt'));
+      await expectLater(file.pack(File(at('l.gz')), level: 99), throwsArgumentError);
+    });
+
+    test('unzip of garbage is a FormatException', () async {
+      expect(() => Archive.unzip([0, 1, 2, 3, 4, 5]), throwsFormatException);
+      expect(() => Archive.gunzip([1, 2, 3]), throwsFormatException);
+    });
+
+    test('unpack of a missing file is a PathNotFoundException', () async {
+      await expectLater(File(at('nope.zip')).unpack(Dir(at('missing-out'))), throwsA(isA<io.PathNotFoundException>()));
+    });
+
+    test('an abandoned entry reader never breaks the archive', () async {
+      io.File(
+        at('abandon.zip'),
+      ).writeAsBytesSync(Archive.zip({'a.txt': utf8.encode('hello'), 'b.txt': utf8.encode('world')}));
+      // Opened and dropped without close: the finalizer owns the stepper now.
+      // ignore: unused_local_variable
+      final dropped = File(at('abandon.zip')).entry('a.txt');
+      await dropped.reader();
+      // The archive itself is unaffected, before and after a GC.
+      expect(await File(at('abandon.zip')).entry('b.txt').text(), 'world');
+    });
+  });
+
+  group('long jobs keep the event loop free', () {
+    test('a 5 ms timer ticks through a 200 MB pack, with progress to total', () async {
+      final src = io.Directory(at('bigsrc'))..createSync(recursive: true);
+      final chunk = Uint8List.fromList(List.generate(1024 * 1024, (i) => (i * 31 + 7) & 0xFF));
+      for (var f = 0; f < 8; f++) {
+        // Synchronous writes: nothing buffers a second copy in memory.
+        final raf = io.File('${src.path}/f$f.bin').openSync(mode: io.FileMode.write);
+        try {
+          for (var i = 0; i < 25; i++) {
+            raf.writeFromSync(chunk);
+          }
+        } finally {
+          raf.closeSync();
+        }
+      }
+      final seen = <(int, int)>[];
+      var last = DateTime.now();
+      var worst = Duration.zero;
+      final tick = Timer.periodic(const Duration(milliseconds: 5), (_) {
+        final now = DateTime.now();
+        final gap = now.difference(last);
+        last = now;
+        if (gap > worst) worst = gap;
+      });
+      try {
+        await Dir(src.path).pack(File(at('big.tar')), onProgress: (done, total) => seen.add((done, total)));
+      } finally {
+        tick.cancel();
+      }
+      expect(worst, lessThan(const Duration(milliseconds: 50)), reason: 'worst timer gap was $worst');
+      expect(seen.length, greaterThanOrEqualTo(2), reason: 'progress never reported: $seen');
+      expect(seen.last.$1, seen.last.$2, reason: 'progress did not end at total: $seen');
+      expect(seen.last.$2, greaterThan(0));
+    }, timeout: const Timeout(Duration(seconds: 300)));
   });
 }

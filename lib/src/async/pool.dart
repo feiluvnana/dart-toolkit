@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:isolate';
 
 /// Up to [concurrency] persistent worker isolates, spawned on demand and reused.
@@ -16,7 +17,7 @@ final class Pool {
   final int concurrency;
 
   final List<_Handle> _handles = [];
-  final List<_Pending<dynamic>> _queue = [];
+  final ListQueue<_Pending<dynamic>> _queue = ListQueue<_Pending<dynamic>>();
   final Map<int, _Pending<dynamic>> _flying = {};
   int _jobSeq = 0;
   int _active = 0;
@@ -62,7 +63,7 @@ final class Pool {
 
   void _pump() {
     while (_active < concurrency && _queue.isNotEmpty) {
-      final pending = _queue.removeAt(0);
+      final pending = _queue.removeFirst();
       _active++;
       _assign(pending).then((_) {}, onError: (_) {});
     }
@@ -118,6 +119,9 @@ final class Pool {
 
   void _onGone(_Handle handle) {
     handle.dead = true;
+    // Release its ports at once: a dead worker's open ports keep the script
+    // alive past close().
+    handle.dispose();
     // Fail anything it was running; the next pump replaces it.
     for (final entry in _flying.entries.toList()) {
       if (identical(entry.value.handle, handle)) {
@@ -213,8 +217,11 @@ final class _Handle {
 
   StreamSubscription<dynamic>? _sub;
   ReceivePort? _exit;
+  var _disposed = false;
 
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     try {
       jobs.send(null);
     } catch (_) {

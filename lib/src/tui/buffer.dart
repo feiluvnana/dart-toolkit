@@ -321,22 +321,23 @@ final class Grid {
     cells[y * width + x] = cell;
   }
 
-  /// Writes [text] at ([x], [y]) with the style; wide chars take two cells
-  /// (continuation marked ''), overflow clips. Answers columns consumed.
+  /// Writes [text] at ([x], [y]) with the style, cluster by cluster; wide
+  /// clusters take two cells (continuation marked ''), overflow clips. Answers
+  /// columns consumed.
   int write(int x, int y, String text, {TuiColor? fg, TuiColor? bg, CellStyle attrs = const CellStyle()}) {
     var cx = x;
-    for (final rune in text.runes) {
+    for (final cluster in clusters(text)) {
       if (cx >= width) break;
-      final w = charWidth(rune);
+      final w = clusterWidth(cluster);
       if (w == 0) {
-        // Combining mark: append to the previous cell's text.
+        // Joiner: append to the previous cell's text.
         if (cx > x) {
           final prev = at(cx - 1, y);
-          set(cx - 1, y, Cell('${prev.text}${String.fromCharCode(rune)}', prev.fg, prev.bg, prev.attrs));
+          set(cx - 1, y, Cell('${prev.text}$cluster', prev.fg, prev.bg, prev.attrs));
         }
         continue;
       }
-      set(cx, y, Cell(String.fromCharCode(rune), fg, bg, attrs));
+      set(cx, y, Cell(cluster, fg, bg, attrs));
       if (w == 2) {
         if (cx + 1 < width) set(cx + 1, y, const Cell(''));
         cx += 2;
@@ -375,7 +376,7 @@ List<Change> diff(Grid? prev, Grid next) {
   for (var y = 0; y < next.height; y++) {
     for (var x = 0; x < next.width; x++) {
       // Wide continuations ride with their base cell: skip them.
-      if (next.at(x, y).text == '' && x > 0 && charWidth(next.at(x - 1, y).text.runes.firstOrNull ?? 32) == 2) continue;
+      if (next.at(x, y).text == '' && x > 0 && clusterWidth(next.at(x - 1, y).text) == 2) continue;
       if (prev == null || prev.at(x, y) != next.at(x, y)) out.add(Change(x, y, next.at(x, y)));
     }
   }
@@ -401,7 +402,7 @@ String encodeChanges(List<Change> changes, ColorLevel level) {
       active = sgr;
     }
     sb.write(c.cell.text);
-    cx += c.cell.text.isEmpty ? 0 : (charWidth(c.cell.text.runes.first) == 2 ? 2 : 1);
+    cx += c.cell.text.isEmpty ? 0 : (clusterWidth(c.cell.text) == 2 ? 2 : 1);
   }
   if (active.isNotEmpty) sb.write('\x1b[0m');
   return sb.toString();

@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/native.dart';
+import 'package:dart_toolkit/path.dart';
 import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart';
 
@@ -71,12 +72,6 @@ abstract final class _N2 {
         ffi.Int32 Function(ffi.Uint32, _U8, ffi.IntPtr, _U8, ffi.IntPtr, _U8, ffi.IntPtr),
         int Function(int, _U8, int, _U8, int, _U8, int)
       >('tk_hmac');
-
-  static final digestFile = require()
-      .lookupFunction<
-        ffi.Int32 Function(_Handle, _U8, ffi.IntPtr, ffi.Pointer<ffi.Void>, _U8),
-        int Function(_Handle, _U8, int, ffi.Pointer<ffi.Void>, _U8)
-      >('tk_digest_file');
 
   static final digestFiles = require()
       .lookupFunction<
@@ -184,10 +179,41 @@ void main() {
         expect(Native.reason, isNotNull);
       }
     });
+
+    test('a missing engine file is not ok, naming it', () async {
+      final dir = await io.Directory.systemTemp.createTemp('nativeok_');
+      try {
+        io.File('${dir.path}/probe.dart').writeAsStringSync(r'''
+import 'package:dart_toolkit/native.dart';
+void main() {
+  print('ok=${Native.ok}');
+  print('reason=${Native.reason}');
+}
+''');
+        Future<String> run(Map<String, String> extraEnv) async {
+          final res = await io.Process.run(
+            io.Platform.executable,
+            ['--packages=${io.Directory.current.path}/.dart_tool/package_config.json', '${dir.path}/probe.dart'],
+            environment: {...io.Platform.environment, ...extraEnv},
+          );
+          return '${res.stdout}${res.stderr}';
+        }
+
+        final missing = await run({'DART_TOOLKIT_NATIVE': '/nonexistent-tk.dylib'});
+        expect(missing, contains('ok=false'));
+        expect(missing, contains('/nonexistent-tk.dylib'));
+        final missingChrome = await run({'DART_TOOLKIT_CHROME_LIB': '/nonexistent-tk-chrome.dylib'});
+        expect(missingChrome, contains('ok=false'));
+        expect(missingChrome, contains('/nonexistent-tk-chrome.dylib'));
+        expect(await run({}), contains('ok=true'));
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    });
   });
 
-  test('rewritten cdylib reports ABI 2', () {
-    expect(_N2.version(), 2);
+  test('rewritten cdylib reports ABI 3', () {
+    expect(_N2.version(), 3);
   });
 
   group('parity: explicit bindings == loader surface', () {
@@ -238,43 +264,11 @@ void main() {
         final data = Uint8List.fromList(List.generate(200000, (i) => (i * 7 + 3) & 0xFF));
         final path = '${tmp.path}/big.bin';
         await io.File(path).writeAsBytes(data);
-        final h = _N2.digestNew(3);
-        expect(h, isNot(equals(ffi.nullptr)));
-        final units = utf8.encode(path);
-        final buf = _N2.calloc(units.length);
-        try {
-          buf.asTypedList(units.length).setAll(0, units);
-          expect(_N2.digestFile(h, buf, units.length, ffi.nullptr, ffi.nullptr), 0);
-        } finally {
-          _N2.free(buf, units.length);
-        }
-        final out = _N2.calloc(64);
-        try {
-          final n = _N2.digestFinal(h, out, 64);
-          expect(n, greaterThan(0));
-          final got = Uint8List.fromList(out.asTypedList(n));
-          expect(hexOf(got), hexOf(n2oneshot(3, data)));
-        } finally {
-          _N2.free(out, 64);
-        }
-        // Missing file: negative with an "(os error N)" message the Dart side maps.
-        final h2 = _N2.digestNew(3);
-        final miss = utf8.encode('${tmp.path}/gone.bin');
-        final buf2 = _N2.calloc(miss.length);
-        try {
-          buf2.asTypedList(miss.length).setAll(0, miss);
-          expect(_N2.digestFile(h2, buf2, miss.length, ffi.nullptr, ffi.nullptr), lessThan(0));
-          expect(_N2.error(), contains('os error'));
-        } finally {
-          _N2.free(buf2, miss.length);
-        }
-        final out2 = _N2.calloc(64);
-        try {
-          // The session survives the failure; final still releases it.
-          expect(_N2.digestFinal(h2, out2, 64), greaterThan(0));
-        } finally {
-          _N2.free(out2, 64);
-        }
+        // File hashing is a native job now (no sync export): the surface must
+        // agree with the one-shot binding.
+        expect(hexOf(await File(path).hash(Hash.sha256)), hexOf(n2oneshot(3, data)));
+        // Missing file surfaces as a filesystem exception, not a hang.
+        await expectLater(File('${tmp.path}/gone.bin').hash(Hash.sha256), throwsA(isA<io.FileSystemException>()));
       } finally {
         await tmp.delete(recursive: true);
       }

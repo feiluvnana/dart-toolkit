@@ -28,7 +28,7 @@ Import the topics you use.
 | `process.dart`      | `Process(cmd, args)`, `text`/`lines`, `check`, `close`, `pipe`                  |
 | `json.dart`         | `Json`: `parse`, `get`, `encode`, `save`; `source.json()`                           |
 | `html.dart`         | `Html.parse`, `find`/`all`, `drop`, CSS selectors; `source.html()`                 |
-| `http.dart`         | `Http.get/post/put/delete`, lazy `Request`, `Resp`, `pipe(resume:)`                |
+| `http.dart`         | `Http.get/post/put/delete`, lazy `Request`, `Response`, `pipe(resume:)`                |
 | `chrome.dart`       | `Chrome()`/`Chrome(port:)`, `open`, `Page` drive, `screenshot`, `pdf`, `page.html()` |
 | `image.dart`        | `Image.empty/decode`, transforms, `save`; `source.image()`                             |
 | `cli.dart`          | `ask`, `confirm`, `choose`, `bar`, `spin`, ANSI colours                              |
@@ -95,7 +95,10 @@ await Http.get('https://site.com/bundle.tar.gz').unpack(Dir('bundle'));
 
 The format is the extension when packing and the magic bytes when unpacking
 (.zip, .tar, .tar.gz, .tar.xz, .tar.zst, .tar.bz2, .gz). Members are sandbox-checked before
-anything is written: escapes and links are a SecurityException. Unpacking a download streams.
+anything is written: escapes are a SecurityException, and every link member is refused
+unless `unpack(dir, trusted: true)` lifts that and the size cap. Unpacking a download streams,
+and a failed stream removes what it created. `dir.pack`, `source.unpack`, `file.hash`,
+`file.copy` and `file.move` take `onProgress:` (units done and total).
 
 **I want a checksum or a MAC.**
 
@@ -138,7 +141,7 @@ await Http.get('https://site.com/big.iso').pipe(File('big.iso'), resume: true);
 ```
 
 A request is sent when you first read it, so `resume: true` can ask for the rest. A non-2xx
-reading throws an `HttpException`; `await Http.get(u)` gives the `Resp` (status, headers).
+reading throws an `HttpException`; `await Http.get(u)` gives the `Response` (status, headers).
 
 **I want pages a browser renders.**
 
@@ -152,7 +155,9 @@ await chrome.close();
 ```
 
 Chrome() launches on the first open; Chrome(port: 9222) attaches to a running one. close
-kills the whole tree and drops the temp profile. page.pdf() prints to PDF.
+kills the whole tree and drops the temp profile. page.pdf() prints to PDF. The drive calls
+run on native threads, so the event loop stays free while a page hangs; closing a page
+fails its in-flight calls with `StateError('closed')`.
 
 ---
 
@@ -196,12 +201,20 @@ isolates; `Chan` bounds memory between producers and the consumer.
 ```dart
 final name = await Cli.ask('Your name?');
 final ok = await Cli.confirm('Proceed?');
-final bar = Cli.bar(100);
-bar.set(50);
-bar.close();
+final bar = Cli.bar(100, label: 'Downloading', unit: 'B');
+try {
+  bar.set(50);
+} finally {
+  bar.close();
+}
+final pick = await Cli.choose('Pick one', ['alpha', 'beta']);
+await Cli.spin('Fetching', () async => 'data');
 ```
 
-Everything drawn goes to stderr, so `app --json | jq` gets only data.
+Prompts, bars and spinners write to stderr; `Cli.print` writes to stdout, so
+`app --json | jq` gets only data. Piped output or `NO_COLOR` disables the live
+region (each bar prints one line when it ends); without Unicode, `ok`/`failed`
+and ASCII glyphs stand in.
 
 **I want a terminal app.**
 
@@ -209,8 +222,10 @@ Everything drawn goes to stderr, so `app --json | jq` gets only data.
 await Tui.run((term) async {
   while (true) {
     term.draw((ui) {
-      ui.box(title: 'App');
-      ui.text('Press "q" to exit.');
+      ui.box(
+        title: 'App',
+        build: (box) => box.text('Press "q" to exit.'),
+      );
     });
     if (await term.poll() case final ev? when ev.key == 'q') break;
   }

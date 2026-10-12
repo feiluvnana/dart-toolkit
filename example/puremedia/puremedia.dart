@@ -37,8 +37,8 @@ Future<void> main(List<String> args) async {
 
 /// `--volume N` / `-v N`, or null; anything else is a usage error (exit 64, rule 30).
 int? volumeArgument(List<String> args) {
+  if (args.isEmpty) return null;
   final at = args.indexWhere((a) => a == '-v' || a == '--volume');
-  if (at == -1 && args.isEmpty) return null;
   final value = at != -1 && at + 1 < args.length ? int.tryParse(args[at + 1]) : null;
   if (value == null || args.length != 2) {
     Cli.print('usage: dart run example/puremedia/puremedia.dart [--volume N]');
@@ -49,7 +49,8 @@ int? volumeArgument(List<String> args) {
 
 Future<List<Album>> loadCatalog(File file) async {
   if (await file.exists()) {
-    return [for (final album in (await file.json()).value! as List<Object?>) Map<String, Object?>.from(album! as Map)];
+    final saved = (await file.json()).value! as List<Object?>;
+    return [for (final album in saved) Map<String, Object?>.from(album! as Map)];
   }
   final albums = await scrapeCatalog();
   albums.sort((a, b) => sortKey(a).compareTo(sortKey(b)));

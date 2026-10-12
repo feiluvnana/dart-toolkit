@@ -38,69 +38,101 @@ class HttpException implements Exception {
 /// `lines`, `pipe` …) work on it — strictly: a reading on a non-2xx throws an
 /// [HttpException], so check [ok] first when a non-2xx is data.
 ///
-/// The body streams: it is never pre-read. Read it once, then [close].
-final class Resp implements Source, Reader, Decoding {
+/// The body streams: it is never pre-read. Read it once, then [close]. Every
+/// body chunk waits at most [timeout]; a stall is a [TimeoutException].
+final class Response implements Source, Reader {
   /// The status code, e.g. `200`.
   final int status;
 
-  /// Response headers, lower-cased names.
-  final Map<String, String> headers;
+  /// Response headers by lower-cased name, every value kept (`set-cookie` can repeat).
+  /// Unmodifiable; [header] gives the first value.
+  final Map<String, List<String>> headers;
 
   /// The final URL after redirects.
   final String url;
 
-  /// The reason phrase, e.g. `Not Found`.
-  final String reason;
+  /// The reason phrase, e.g. `Not Found` (it's in a failed reading's message).
+  final String _reason;
 
   final StreamIterator<Uint8List> _it;
-  final io.HttpClient _client;
-  final List<int> _carry = [];
+  final Duration _timeout;
+  // The current chunk and how much of it is consumed: chunks pass through by
+  // reference, never copied into a carry list.
+  Uint8List _carry = Uint8List(0);
+  int _off = 0;
   bool _done = false;
+  bool _readerTaken = false;
 
-  Resp._(this.status, this.headers, this.url, this.reason, Stream<Uint8List> body, this._client)
-    : _it = StreamIterator(body);
+  Response._(this.status, this.headers, this.url, this._reason, Stream<Uint8List> body, this._timeout)
+    : _it = StreamIterator(body) {
+    textCodecs[this] = TextCodec(
+      (bytes) => _decodeBody(bytes, header('content-type')),
+      () => _streamsText(header('content-type')),
+    );
+    // An unread body still releases its subscription on GC (never the shared
+    // client: it outlives every response).
+    _releaser.attach(this, _it, detach: this);
+  }
+
+  /// Releases an unread response's body subscription when nothing else does.
+  static final _releaser = Finalizer<StreamIterator<Uint8List>>((it) {
+    unawaited(() async {
+      try {
+        await it.cancel();
+      } catch (_) {
+        // Best effort: the response was never read.
+      }
+    }());
+  });
 
   /// Whether the status is 2xx.
   bool get ok => status >= 200 && status < 300;
 
   /// One header, or `null`.
-  String? header(String name) => headers[name.toLowerCase()];
+  String? header(String name) => headers[name.toLowerCase()]?.firstOrNull;
 
-  /// The body's length from `content-length`, or null without one.
+  /// The body's length from `content-length`, or null without one — and null
+  /// when a `content-encoding` is set (dart:io gunzips, so the length is the
+  /// compressed one, not the body's).
   @override
-  int? get lengthHint => int.tryParse(header('content-length') ?? '');
-
-  /// [bytes] of this body as text, in the charset the response declares.
-  @override
-  String decode(Uint8List bytes) => _decodeBody(bytes, header('content-type'));
+  int? get lengthHint {
+    if (header('content-encoding') != null) return null;
+    return int.tryParse(header('content-length') ?? '');
+  }
 
   /// Fills [buf] with the next body bytes and answers how many were written.
-  /// `0` means the body ended.
+  /// `0` means the body ended. Each chunk waits at most the timeout; a stall
+  /// throws a [TimeoutException] unwrapped.
   @override
   Future<int> read(Uint8List buf) async {
     if (_done) return 0;
-    while (_carry.isEmpty) {
-      final hasNext = await _it.moveNext();
+    while (_off >= _carry.length) {
+      final hasNext = await _it.moveNext().timeout(_timeout);
       if (!hasNext) {
         _done = true;
         await _release();
         return 0;
       }
-      _carry.addAll(_it.current);
+      _carry = _it.current;
+      _off = 0;
+      if (_carry.isEmpty) continue;
     }
-    final n = math.min(buf.length, _carry.length);
-    buf.setRange(0, n, _carry);
-    _carry.removeRange(0, n);
+    final n = math.min(buf.length, _carry.length - _off);
+    buf.setRange(0, n, _carry, _off);
+    _off += n;
     return n;
   }
 
-  /// This response's body, strictly: a non-2xx throws an [HttpException].
-  /// [from] must be 0 on a response that is already sent.
+  /// This response's body, strictly: a non-2xx closes the response and throws an
+  /// [HttpException] carrying its status. A second call throws
+  /// a [StateError] (the body reads once).
   @override
   Future<Reader> reader({int from = 0}) async {
     if (from != 0) {
       throw ArgumentError.value(from, 'from', 'Only 0: a sent response cannot seek');
     }
+    if (_readerTaken) throw StateError('body already read');
+    _readerTaken = true;
     return _bodyReader();
   }
 
@@ -109,21 +141,18 @@ final class Resp implements Source, Reader, Decoding {
   Future<Reader> _bodyReader() async {
     if (!ok) {
       await close();
-      throw HttpException('$status $reason from $url', uri: Uri.tryParse(url), status: status);
+      throw HttpException('$status $_reason', uri: Uri.tryParse(url), status: status);
     }
     return this;
   }
 
   Future<void> _release() async {
+    _releaser.detach(this);
     try {
       await _it.cancel();
     } catch (_) {
-      // Already done: nothing to cancel.
-    }
-    try {
-      _client.close(force: true);
-    } catch (_) {
-      // Already closed: nothing to do.
+      // Already done: nothing to cancel. (The shared client is never closed
+      // per response: it lives for the isolate, idle 15 s.)
     }
   }
 
@@ -131,15 +160,21 @@ final class Resp implements Source, Reader, Decoding {
   @override
   Future<void> close() async {
     _done = true;
-    _carry.clear();
+    _carry = Uint8List(0);
+    _off = 0;
     await _release();
   }
 }
 
-/// A request that is sent on first use: `await` gives the [Resp]; a reading or `pipe` reads
+/// A request that is sent on first use: `await` gives the [Response]; a reading or `pipe` reads
 /// the body. Sending late lets `pipe(file, resume: true)` add a `Range` header.
-final class Request implements Future<Resp>, Source, Decoding {
-  Request._(this._method, this._url, this._headers, this._timeout, this._retry, this._body);
+final class Request implements Future<Response>, Source {
+  Request._(this._method, this._url, this._headers, this._timeout, this._retry, this._body) {
+    textCodecs[this] = TextCodec(
+      (bytes) => _decodeBody(bytes, _response?.header('content-type')),
+      () => _streamsText(_response?.header('content-type')),
+    );
+  }
 
   final String _method;
   final String _url;
@@ -147,11 +182,12 @@ final class Request implements Future<Resp>, Source, Decoding {
   final Duration? _timeout;
   final int? _retry;
   final _Body? _body;
-  Future<Resp>? _sent;
+  Future<Response>? _sent;
   int _from = 0;
-  Map<String, String>? _responseHeaders;
+  bool _readerTaken = false;
+  Response? _response;
 
-  Future<Resp> get _resp => _sent ??= Http._withRetry(
+  Future<Response> get _resp => _sent ??= Http._withRetry(
     _method,
     _url,
     headers: {...?_headers, if (_from > 0) 'range': 'bytes=$_from-'},
@@ -161,41 +197,100 @@ final class Request implements Future<Resp>, Source, Decoding {
   );
 
   /// The body's length from the response's `content-length` once sent,
-  /// else null.
+  /// else null — and null when a `content-encoding` is set (the length is
+  /// the compressed one, not the body's).
   @override
-  int? get lengthHint => int.tryParse(_responseHeaders?['content-length'] ?? '');
-
-  /// [bytes] of the body as text, in the charset the response declared.
-  @override
-  String decode(Uint8List bytes) => _decodeBody(bytes, _responseHeaders?['content-type']);
+  int? get lengthHint {
+    return _response?.lengthHint;
+  }
 
   @override
   Future<Reader> reader({int from = 0}) async {
+    if (_readerTaken) throw StateError('body already read');
+    _readerTaken = true;
     if (_sent != null && from != _from) throw StateError('Request already sent');
     _from = from;
     final resp = await _resp;
-    _responseHeaders = resp.headers;
+    _response = resp;
+    if (from > 0 && resp.status == 416) {
+      // The file is already complete when the server's total is what we hold:
+      // no byte is copied. Anything else is a failed resume.
+      await resp.close();
+      if (_rangeTotal(resp.header('content-range')) == from) return _EmptyReader();
+      throw HttpException('Server cannot resume from $from', uri: Uri.parse(_url), status: 416);
+    }
     if (from > 0 && resp.status == 200) {
       // The server ignored Range: restart. pipe() sees `from` bytes too many; signal it.
       await resp.close();
       throw HttpException('Server does not support resume', uri: Uri.parse(_url), status: 200);
     }
+    if (from > 0 && resp.status == 206 && _rangeStart(resp.header('content-range')) != from) {
+      // The server resumed from somewhere else: refuse rather than interleave.
+      await resp.close();
+      throw HttpException('Server resumed from the wrong offset', uri: Uri.parse(_url), status: 206);
+    }
     return resp._bodyReader();
   }
 
   @override
-  Stream<Resp> asStream() => _resp.asStream();
+  Stream<Response> asStream() => _resp.asStream();
   @override
-  Future<Resp> catchError(Function onError, {bool Function(Object error)? test}) =>
+  Future<Response> catchError(Function onError, {bool Function(Object error)? test}) =>
       _resp.catchError(onError, test: test);
   @override
-  Future<R> then<R>(FutureOr<R> Function(Resp value) onValue, {Function? onError}) =>
+  Future<R> then<R>(FutureOr<R> Function(Response value) onValue, {Function? onError}) =>
       _resp.then(onValue, onError: onError);
   @override
-  Future<Resp> timeout(Duration timeLimit, {FutureOr<Resp> Function()? onTimeout}) =>
+  Future<Response> timeout(Duration timeLimit, {FutureOr<Response> Function()? onTimeout}) =>
       _resp.timeout(timeLimit, onTimeout: onTimeout);
   @override
-  Future<Resp> whenComplete(FutureOr<void> Function() action) => _resp.whenComplete(action);
+  Future<Response> whenComplete(FutureOr<void> Function() action) => _resp.whenComplete(action);
+}
+
+/// A [Reader] with no bytes: a resumed download already complete.
+final class _EmptyReader implements Reader {
+  @override
+  Future<int> read(Uint8List buf) async => 0;
+
+  @override
+  Future<void> close() async {}
+}
+
+/// Whether a body with these response headers streams as UTF-8 text: a
+/// declared UTF-8/ASCII charset, or no charset on a non-HTML body. HTML
+/// without a declared charset may hide a legacy `<meta charset>`, so it
+/// decodes whole instead.
+bool _streamsText(String? contentType) {
+  final label = _declaredCharset(contentType)?.toLowerCase();
+  if (label == null) return !(contentType?.toLowerCase().contains('html') ?? false);
+  return label == 'utf-8' || label == 'utf8' || label == 'unicode-1-1-utf-8' || label == 'us-ascii' || label == 'ascii';
+}
+
+/// The start byte of a `Content-Range: bytes N-M/T`, or null without one.
+int? _rangeStart(String? value) {
+  if (value == null) return null;
+  final m = RegExp(r'bytes (\d+)-\d+/').firstMatch(value);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// The total of a `Content-Range: bytes */N`, or null without one.
+int? _rangeTotal(String? value) {
+  if (value == null) return null;
+  final m = RegExp(r'bytes \*/(\d+)').firstMatch(value);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// One `HttpClient` per isolate: creating one per request means no
+/// keep-alive (every request handshakes). Idle sockets linger 15 s.
+abstract final class _SharedClient {
+  static io.HttpClient? _client;
+
+  static io.HttpClient get current {
+    final hit = _client;
+    if (hit != null) return hit;
+    final fresh = io.HttpClient()..idleTimeout = const Duration(seconds: 15);
+    return _client = fresh;
+  }
 }
 
 /// A request body: exactly one of JSON, form fields, or a streamed [Source].
@@ -249,13 +344,16 @@ _Body? _bodyOf(String method, {Object? json, Map<String, String>? form, Source? 
 /// ```
 ///
 /// A request is sent on first use, so `pipe(file, resume: true)` can still
-/// ask for the rest with `Range`. Every request is retried twice on 5xx or
-/// network errors ([retry]), with 30 s per response by default ([timeout]).
+/// ask for the rest with `Range`. Idempotent requests (and re-readable bodies)
+/// are retried twice on 5xx or network errors ([retry]), backing off
+/// `250 ms × 2^attempt` and honouring `Retry-After`; anything else retries
+/// only with an explicit [retry]. Every body chunk waits 30 s by default
+/// ([timeout]).
 abstract final class Http {
   static const Duration _timeout = Duration(seconds: 30);
   static const int _retries = 2;
 
-  /// A GET of [url], sent on first use: `await` gives the [Resp], a reading
+  /// A GET of [url], sent on first use: `await` gives the [Response], a reading
   /// or `pipe` reads the body.
   static Request get(String url, {Map<String, String>? headers, Duration? timeout, int? retry}) =>
       Request._('GET', url, headers, timeout, retry, null);
@@ -295,7 +393,7 @@ abstract final class Http {
     int? retry,
   }) => Request._('DELETE', url, headers, timeout, retry, _bodyOf('DELETE', json: json, form: form, body: body));
 
-  static Future<Resp> _withRetry(
+  static Future<Response> _withRetry(
     String method,
     String url, {
     Map<String, String>? headers,
@@ -303,18 +401,23 @@ abstract final class Http {
     int? retry,
     _Body? body,
   }) async {
+    // N6: only idempotent requests retry — GET/HEAD/PUT/DELETE, or a body that
+    // can be re-read (a File). Anything else retries only with an explicit
+    // retry:, and a consumed stream body never retries (its bytes are gone).
+    final idempotent = method == 'GET' || method == 'HEAD' || method == 'PUT' || method == 'DELETE';
+    final rereadableBody = body is _SourceBody && body.source is fs.File;
+    final resendable = body == null || body is _JsonBody || body is _FormBody || rereadableBody;
+    final retryableCall = resendable && (idempotent || rereadableBody || retry != null);
     final attempts = (retry ?? _retries) + 1;
     Object? lastError;
     for (var attempt = 1; attempt <= attempts; attempt++) {
       try {
         final resp = await _send(method, url, headers: headers, timeout: timeout ?? _timeout, body: body);
-        if (resp.status >= 500 && attempt < attempts) {
-          lastError = HttpException(
-            '${resp.status} ${resp.reason} from ${resp.url}',
-            uri: Uri.tryParse(url),
-            status: resp.status,
-          );
+        if (resp.status >= 500 && attempt < attempts && retryableCall) {
+          lastError = HttpException('${resp.status} ${resp._reason}', uri: Uri.tryParse(url), status: resp.status);
+          final wait = _retryDelay(attempt, resp.header('retry-after'));
           await resp.close();
+          await Future<void>.delayed(wait);
           continue;
         }
         return resp;
@@ -324,45 +427,112 @@ abstract final class Http {
         lastError = e;
         if (attempt >= attempts) break;
         if (!_retryable(e)) break;
+        if (!retryableCall) break;
+        await Future<void>.delayed(_retryDelay(attempt, null));
       }
     }
     if (lastError is HttpException) throw lastError;
+    // A timeout stays a timeout, never an HttpException.
+    if (lastError is TimeoutException) throw lastError;
     throw HttpException('Request failed: $lastError', uri: Uri.tryParse(url), cause: lastError);
   }
 
   static bool _retryable(Object e) => e is io.SocketException || e is io.HttpException || e is TimeoutException;
 
-  static Future<Resp> _send(
+  /// How long before retry number [attempt] (1-based): `250 ms × 2^attempt`
+  /// with jitter, honouring a `Retry-After` (seconds or HTTP date, capped at
+  /// 30 s) when the server gave one.
+  static Duration _retryDelay(int attempt, String? retryAfter) {
+    final backoff = Duration(milliseconds: 250 * (1 << (attempt - 1)) + math.Random().nextInt(100));
+    if (retryAfter == null) return backoff;
+    final secs = _retryAfterSecs(retryAfter);
+    if (secs == null) return backoff;
+    final instructed = Duration(seconds: secs > 30 ? 30 : secs);
+    return instructed > backoff ? instructed : backoff;
+  }
+
+  /// [value] as seconds to wait: a number, or an HTTP date's distance from
+  /// now (past dates wait nothing); null when it is neither.
+  static int? _retryAfterSecs(String value) {
+    final secs = int.tryParse(value.trim());
+    if (secs != null) return secs < 0 ? 0 : secs;
+    try {
+      final wait = io.HttpDate.parse(value.trim()).difference(DateTime.now().toUtc()).inSeconds;
+      return wait < 0 ? 0 : wait;
+    } catch (_) {
+      // Not a date either: fall back to the backoff.
+      return null;
+    }
+  }
+
+  static Future<Response> _send(
     String method,
     String url, {
     Map<String, String>? headers,
     required Duration timeout,
     _Body? body,
   }) async {
-    final client = io.HttpClient();
+    // One client per isolate, kept alive 15 s: sequential requests share the
+    // socket instead of handshaking each time.
+    final client = _SharedClient.current;
+    final request = await client.openUrl(method, Uri.parse(url)).timeout(timeout);
+    headers?.forEach(request.headers.set);
+    if (body != null) await _writeBody(request, body);
+    final response = await request.close().timeout(timeout);
+    final respHeaders = <String, List<String>>{};
+    response.headers.forEach((name, values) => respHeaders[name.toLowerCase()] = List.unmodifiable(values));
+    // Each redirect hop resolves against the previous URL, so the final one
+    // is absolute even when a hop said `/final?q=1`.
+    var current = Uri.parse(url);
+    for (final hop in response.redirects) {
+      current = current.resolveUri(hop.location);
+    }
+    final resp = Response._(
+      response.statusCode,
+      Map.unmodifiable(respHeaders),
+      current.toString(),
+      response.reasonPhrase,
+      response.map((chunk) => chunk is Uint8List ? chunk : Uint8List.fromList(chunk)),
+      timeout,
+    );
+    // A non-2xx body never reads (readings are strict): settle it now, so an
+    // awaited-but-unread response holds no socket — small bodies drain back
+    // into the pool, big or stalled ones are destroyed instead.
+    if (!resp.ok) {
+      await _settleErrorBody(response, timeout);
+      await resp.close();
+    }
+    return resp;
+  }
+
+  /// Settles a non-2xx body the caller will never read: drains it (up to
+  /// 1 MiB) so its connection pools, else detaches and destroys the socket.
+  /// A stall detaches too, bounded by [timeout] — never a hang.
+  static Future<void> _settleErrorBody(io.HttpClientResponse response, Duration timeout) async {
+    const cap = 1024 * 1024;
     try {
-      final request = await client.openUrl(method, Uri.parse(url)).timeout(timeout);
-      headers?.forEach(request.headers.set);
-      if (body != null) await _writeBody(request, body);
-      final response = await request.close().timeout(timeout);
-      final respHeaders = <String, String>{};
-      response.headers.forEach((name, values) => respHeaders[name.toLowerCase()] = values.join(', '));
-      final finalUrl = response.redirects.isEmpty ? url : response.redirects.last.location.toString();
-      return Resp._(
-        response.statusCode,
-        respHeaders,
-        finalUrl,
-        response.reasonPhrase,
-        response.map((chunk) => chunk is Uint8List ? chunk : Uint8List.fromList(chunk)),
-        client,
-      );
-    } catch (_) {
+      await (() async {
+        var total = 0;
+        await for (final chunk in response) {
+          total += chunk.length;
+          if (total > cap) {
+            try {
+              (await response.detachSocket()).destroy();
+            } catch (_) {
+              // Already gone: nothing to destroy.
+            }
+            return;
+          }
+        }
+      })().timeout(timeout);
+    } on TimeoutException {
       try {
-        client.close(force: true);
+        (await response.detachSocket()).destroy();
       } catch (_) {
-        // Closing a failed client never hides the failure.
+        // Already gone: nothing to destroy.
       }
-      rethrow;
+    } catch (_) {
+      // The body broke mid-way: nothing left to pool.
     }
   }
 
