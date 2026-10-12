@@ -9,7 +9,6 @@ const _libraries = [
   'async',
   'chrome',
   'cli',
-  'collection',
   'core',
   'hash',
   'html',
@@ -20,8 +19,6 @@ const _libraries = [
   'path',
   'process',
   'tui',
-  'xml',
-  'xpath',
 ];
 
 /// The documents whose ` ```dart ` blocks must compile.

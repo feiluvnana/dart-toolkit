@@ -4,9 +4,9 @@
 [![Dart](https://img.shields.io/badge/Dart-3.8%2B-blue.svg)](https://dart.dev)
 [![GitHub](https://img.shields.io/badge/GitHub-feiluvnana%2Fdart--toolkit-brightgreen.svg)](https://github.com/feiluvnana/dart-toolkit)
 
-A toolkit for Dart scripts: processes, files, archives, hashes, documents, tables, HTTP, a real
+A toolkit for Dart scripts: processes, files, archives, hashes, HTML, JSON, HTTP, a real
 browser, images, a CLI and terminal apps. One way to do each thing, every part plugs into every
-other through `Reader`/`Writer` pipes, and digests, archives, images and the browser run in native
+other through `Source`/`Target` pipes, and digests, archives, images and the browser run in native
 libraries. No third-party package at runtime.
 
 ```yaml
@@ -20,28 +20,26 @@ Import the topics you use.
 
 | Import              | Holds                                                                               |
 | ------------------- | ----------------------------------------------------------------------------------- |
-| `core.dart`         | `Reader`, `Writer`, `Closer`, `Seeker`, `pipe`, errors                              |
-| `path.dart`         | `File`, `Dir`, `Path`: read, write, copy, move, atomic renames, find                |
-| `archive.dart`      | `Archive.pack/unpack/list/extract/open`, in-memory `zip`/`unzip`, `gzip`/`gunzip`   |
-| `hash.dart`         | `Hash` digests, `.mac(key)`, `.writer()`, `Hex`, `Base64`                           |
-| `async.dart`        | `Task.run`, `Pool`, `Worker`, `Chan`                                                |
-| `process.dart`      | `Process.run/exec`, streaming `Process` with `wait(timeout:)` and tree-kill `cancel`|
-| `json.dart`         | `Json.parse/dump/get/read/write`                                                    |
-| `html.dart`         | `Html.parse/read`, `find`/`all`, CSS selectors                                      |
-| `xml.dart`          | `Xml.parse`, the shared markup tree                                                 |
-| `xpath.dart`        | `$x` XPath on an `Element`, a `Selection`, an `Html` or an `Xml`                    |
-| `collection.dart`   | `Table`: CSV/TSV/JSON rows, `where`/`orderBy`/`groupBy`/`agg`, save                 |
-| `http.dart`         | `Http.get/post/put/delete`, streaming `Resp`, resumable `download`                  |
-| `chrome.dart`       | `Chrome.launch/connect`, `Browser.open`, `Page` drive, `shot`, `pdf`                |
-| `image.dart`        | `Image` raster, transforms, codec load/save                                         |
+| `core.dart`         | `Source`, `Target`, `Reader`, `Writer`, `pipe`, `text`/`bytes`/`lines`, errors      |
+| `path.dart`         | `File`, `Dir`: read, write, copy, move, find, watch; atomic writes                  |
+| `archive.dart`      | `dir.pack`, `source.unpack`, `file.entries`/`entry`; in-memory `Archive.zip`/`unzip`/`gzip`/`gunzip` |
+| `hash.dart`         | `Hash.sha256(data, key:)`, `source.hash(algo)`, `.hex`/`.base64`/`.toInt()`, `Hex`/`Base64.decode` |
+| `async.dart`        | `Task.run`, `Pool`, `Chan`                                                          |
+| `process.dart`      | `Process(cmd, args)`, `text`/`lines`, `check`, `close`, `pipe`                  |
+| `json.dart`         | `Json`: `parse`, `get`, `encode`, `save`; `source.json()`                           |
+| `html.dart`         | `Html.parse`, `find`/`all`, `drop`, CSS selectors; `source.html()`                 |
+| `http.dart`         | `Http.get/post/put/delete`, lazy `Request`, `Response`, `pipe(resume:)`                |
+| `chrome.dart`       | `Chrome()`/`Chrome(port:)`, `open`, `Page` drive, `screenshot`, `pdf`, `page.html()` |
+| `image.dart`        | `Image.empty/decode`, transforms, `save`; `source.image()`                             |
 | `cli.dart`          | `ask`, `confirm`, `choose`, `bar`, `spin`, ANSI colours                              |
-| `tui.dart`          | `Tui.run` terminal apps, widgets, `FakeTerminal`                                    |
-| `native.dart`       | The `dart_toolkit_native` seam (`Lib2Native`)                                       |
+| `tui.dart`          | `Tui.run` terminal apps, widgets (`FakeTerminal` in `testing.dart`)                 |
+| `native.dart`       | `Native.ok`/`reason`; the three cdylib seams                                        |
+| `testing.dart`      | Test seams: `FakeTerminal`, `CliFake`, `BufferReader`/`BufferWriter`, `NativeReset` |
 
 Hashing, archives and images run in the `dart_toolkit_native` cdylib, the browser in
 `dart_toolkit_chrome`, the terminal in `dart_toolkit_tui`. Build them with `make native`
 (`dart run tool/build_native.dart`), which needs Rust and a C compiler; `make native-release`
-uploads the set a first use would download. Without a library those calls are `UnsupportedError`.
+uploads the set a first use would fetch. Without a library those calls are `UnsupportedError`.
 
 ---
 
@@ -50,12 +48,11 @@ uploads the set a first use would download. Without a library those calls are `U
 **I want a command's output, or to know whether it worked.**
 
 ```dart
-final r = await Process.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
-Cli.print(r.out.trim());
-if (r.code != 0) Cli.print('git failed: ${r.err}');
+final branch = await Process('git', ['rev-parse', '--abbrev-ref', 'HEAD']).text();
+if (!await Process('git', ['diff', '--quiet']).check()) Cli.print('dirty tree');
 ```
 
-**I want to stream output, or stop it.**
+and
 
 ```dart
 final proc = Process('ping', ['127.0.0.1']);
@@ -63,10 +60,12 @@ await for (final line in proc.lines()) {
   Cli.print(line);
   break;
 }
-await proc.cancel();
+await proc.close();
 ```
 
-A cancel kills the whole process tree; `wait(timeout:)` throws `TimeoutException` after one.
+A process starts on its first call. Readings throw a ProcessException on a non-zero exit;
+check() answers yes or no. close() kills the whole tree; wait(timeout:) throws TimeoutException
+after one.
 
 ---
 
@@ -75,36 +74,44 @@ A cancel kills the whole process tree; `wait(timeout:)` throws `TimeoutException
 **I want to read and write files.**
 
 ```dart
-await File('conf.json').write('{"a": 1}');
-Cli.print(await File('conf.json').text());
-await File('conf.json').copy('conf.bak');
+final f = File('conf.json');
+await f.write('{"a": 1}');
+Cli.print(await f.text());
+await f.copy(File('conf.bak'));
 await File('conf.bak').drop();
+final out = Dir.script.dir('out').file(File.safeName('Track 1: Intro?.mp3'));
+await out.write([1, 2, 3]);
 ```
 
-Writes replace atomically (a sibling renamed over the target); `move` retries over a
-Windows-held target.
+`write` replaces atomically (a sibling renamed over the target, with the Windows retry);
+`pipe(File(…))` streams into a file the same way. Every write, `copy` and `move` makes the
+missing folders. `Dir.script` is the running script's folder, `Dir.home` the user's, and
+`File.safeName` turns any text into a file name.
 
 **I want to zip a folder or unpack an archive.**
 
 ```dart
-await Archive.pack('site', 'site.tar.zst');
-await Archive.unpack('site.tar.zst', 'out');
-final names = await Archive.list('site.tar.zst');
+await Dir('site').pack(File('site.tar.zst'));
+await File('site.tar.zst').unpack(Dir('out'));
+final names = await File('site.tar.zst').entries();
+await Http.get('https://site.com/bundle.tar.gz').unpack(Dir('bundle'));
 ```
 
-The format is the extension (`.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`,
-`.gz`). Members are sandbox-checked before anything is written: escapes and links are a
-`SecurityException`.
+The format is the extension when packing and the magic bytes when unpacking
+(.zip, .tar, .tar.gz, .tar.xz, .tar.zst, .tar.bz2, .gz). Members are sandbox-checked before
+anything is written: escapes are a SecurityException, and every link member is refused
+unless `unpack(dir, trusted: true)` lifts that and the size cap. Unpacking a download streams,
+and a failed stream removes what it created. `dir.pack`, `source.unpack`, `file.hash`,
+`file.copy`, `file.move`, `pipe` and `Task.all` take `onProgress:` (units done and total, 0
+while unknown), which `Cli.bar().set` draws.
 
 **I want a checksum or a MAC.**
 
 ```dart
 final hex = Hash.sha256('hello world').hex;
-final fileHex = (await Hash.sha256.file('disc.iso')).hex;
-final mac = Hash.sha256.mac('secret')('body');
+final fileHex = (await File('disc.iso').hash(Hash.sha256)).hex;
+final mac = Hash.sha256('body', key: 'secret').hex;
 ```
-
-Streaming sinks a pipe: `await File('big.iso').pipe(Hash.sha256.writer())`.
 
 ---
 
@@ -114,35 +121,23 @@ Streaming sinks a pipe: `await File('big.iso').pipe(Hash.sha256.writer())`.
 
 ```dart
 final data = Json.parse('{"a": {"b": 42}}');
-final port = Json.get<int>(data, 'a.b', 8080);
-Cli.print(Json.dump({'ok': true}));
+final port = data.get<int>('a.b', or: 8080);
+Cli.print(Json({'ok': true}).encode());
 ```
 
 **I want to scrape a page.**
 
 ```dart
-final doc = Html.parse('<ul><li><a>one</a></li><li><a>two</a></li></ul>');
-final titles = [for (final a in doc.all('a')) a.text];
+final doc = await Http.get('https://site.com/list').html();
+final links = [for (final a in doc.all('a')) a.link()];
+final row = doc.find('a')?.closest('tr');
+final lines = doc.find('.lyrics')?.lines;
+final clean = doc.drop('script, style');
 ```
 
-**I want XML and XPath.**
-
-```dart
-final xml = Xml.parse('<r><i id="a">1</i><i id="b">2</i></r>');
-final first = xml.$x('//i').first.text;
-final second = xml.$x('//i[@id="b"]').attr('id');
-```
-
-**I want to query a CSV.**
-
-```dart
-final t = Table.cells(['name', 'price'], [
-  ['apple', 3],
-  ['bread', 12],
-]);
-final top = t.where((r) => r.get<num>('price') > 10).take(10);
-await top.show();
-```
+`link()` resolves an `href` (or `link('src')`) against where the page came from: the final URL
+after redirects, a browser page's, a file's (`Html.parse(text, url:)` sets one). `lines` is the
+text broken at `<br>` and blocks.
 
 ---
 
@@ -151,25 +146,31 @@ await top.show();
 **I want to fetch a page or an API.**
 
 ```dart
-final data = await (await Http.get('https://api.site.com/users')).json();
-await Http.download('https://site.com/file.zip', File('file.zip'));
+final data = await Http.get('https://api.site.com/users').json();
+await Http.get('https://site.com/file.zip').pipe(File('file.zip'));
+await Http.get('https://site.com/big.iso').pipe(File('big.iso'), resume: true);
+final urls = ['https://site.com/a.jpg', 'https://site.com/b.jpg'];
+await Task.all(urls, (u) => Http.get(u).pipe(File(u.split('/').last)), onProgress: Cli.bar().set);
 ```
 
-A non-2xx throws; a `Resp` is itself a `Reader`, so `Http.get(url).pipe(File('huge.iso'))`
-streams without buffering.
+A request is sent when you first read it, so `resume: true` can ask for the rest. A non-2xx
+reading throws an `HttpException`; `await Http.get(u)` gives the `Response` (status, headers).
 
 **I want pages a browser renders.**
 
 ```dart
-final chrome = await Chrome.launch();
+final chrome = Chrome();
 final page = await chrome.open('https://example.com');
 Cli.print(await page.title());
-await page.shot().pipe(File('shot.png'));
+final doc = await page.html();
+await page.screenshot().pipe(File('shot.png'));
 await chrome.close();
 ```
 
-`close` kills the whole tree and drops the temp profile. `page.html()` feeds `Html.parse`;
-`page.pdf()` prints to PDF.
+Chrome() launches on the first open; Chrome(port: 9222) attaches to a running one. close
+kills the whole tree and drops the temp profile. page.pdf() prints to PDF. The drive calls
+run on native threads, so the event loop stays free while a page hangs; closing a page
+fails its in-flight calls with `StateError('closed')`.
 
 ---
 
@@ -178,8 +179,9 @@ await chrome.close();
 **I want to edit an image.**
 
 ```dart
-final img = Image.blank(width: 100, height: 50);
-await img.fit(48, 48).save('thumb.png');
+final img = Image.empty(100, 50);
+await img.fit(48, 48).save(File('thumb.png'));
+await File('photo.jpg').image().fit(800, 600).save(File('photo.webp'), quality: 80);
 ```
 
 `quality` (0–100) applies to JPEG/WebP only; PNG ignores it.
@@ -191,15 +193,18 @@ await img.fit(48, 48).save('thumb.png');
 **I want one background result, or a channel of them.**
 
 ```dart
-final answer = await Task.run(() async => 40 + 2);
-final chan = Chan<int>(cap: 10);
+final answer = await Task.run(() => 40 + 2);
+final sizes = await Task.all(['a.txt', 'b.txt'], (p) => File(p).size(), concurrency: 8);
+final pool = Pool(4);
+final squares = await pool.map([1, 2, 3], (n) => n * n);
+await pool.close();
+final chan = Chan<int>(10);
 await chan.send(1);
-final first = chan.tryRecv();
 await chan.close();
 ```
 
-`Task.run(..., isolate: true)` leaves the event loop live; `Pool` maps items over worker
-isolates; `Chan` bounds memory between producers and the consumer.
+`Task.run` leaves the event loop live; `Task.all` runs I/O over many items, a few at a
+time, answering in order; `Pool` maps CPU work over worker isolates; `Chan` bounds memory between producers and the consumer.
 
 ---
 
@@ -210,12 +215,24 @@ isolates; `Chan` bounds memory between producers and the consumer.
 ```dart
 final name = await Cli.ask('Your name?');
 final ok = await Cli.confirm('Proceed?');
-final bar = Cli.bar(total: 100);
-bar.set(50);
-bar.done();
+final bar = Cli.bar(max: 100, label: 'Downloading', unit: 'B');
+try {
+  bar.set(50);
+} finally {
+  bar.close();
+}
+await Http.get('https://site.com/a.iso').pipe(File('a.iso'), onProgress: Cli.bar(unit: 'B').set);
+for (final page in Cli.each(['p1', 'p2'], label: 'Pages')) {
+  Cli.print(page);
+}
+final pick = await Cli.choose('Pick one', ['alpha', 'beta']);
+await Cli.spin('Fetching', () async => 'data');
 ```
 
-Everything drawn goes to stderr, so `app --json | jq` gets only data.
+Prompts, bars and spinners write to stderr; `Cli.print` writes to stdout, so
+`app --json | jq` gets only data. Piped output or `NO_COLOR` disables the live
+region (each bar prints one line when it ends); without Unicode, `ok`/`failed`
+and ASCII glyphs stand in.
 
 **I want a terminal app.**
 
@@ -223,27 +240,30 @@ Everything drawn goes to stderr, so `app --json | jq` gets only data.
 await Tui.run((term) async {
   while (true) {
     term.draw((ui) {
-      ui.box(title: 'App');
-      ui.text('Press "q" to exit.');
+      ui.box(
+        title: 'App',
+        build: (box) => box.text('Press "q" to exit.'),
+      );
     });
     if (await term.poll() case final ev? when ev.key == 'q') break;
   }
 });
 ```
 
-Widgets (`box`, `text`, `bar`, `list`, `split`, `button`, `field`, `picture` …) paint a cell
-grid; only changed cells are written. Tests drive the same loop on a `FakeTerminal` (frames,
-injected keys, no terminal needed).
+Widgets (box, text, bar, spinner, list, split, button, field, tabs, table, popup, markdown, picture …) paint a cell grid; only
+changed cells are written. term.listen(stream) turns a stream (a Chan's recv()) into Post
+events. Tests drive the same loop on a FakeTerminal (import testing.dart).
 
 ---
 
 ## Native libraries
 
 ```dart
-if (!Lib2Native.isAvailable) Cli.print(Lib2Native.reason ?? 'no native library');
+if (!Native.ok) Cli.print(Native.reason ?? 'no native library');
 ```
 
-`Lib2Native`, `Lib2Chrome` and `Lib2Tui` open `native2/lib/<os>_<arch>/` (or beside the
+`Native.ok` checks all three libraries (`dart_toolkit_native`, `dart_toolkit_chrome`,
+`dart_toolkit_tui`), opened from `native/lib/<os>_<arch>/` (or beside the
 executable, or what `DART_TOOLKIT_NATIVE`, `DART_TOOLKIT_CHROME_LIB`,
 `DART_TOOLKIT_TUI_LIB` name). A stale ABI is refused at load. Programmatic first-use
 install is follow-up work; until then build with `make native` or fetch the release asset
@@ -253,8 +273,12 @@ for your target into that folder.
 
 ## Examples
 
-- [`example/monitor`](example/monitor): a live TUI dashboard — a `Chan` of stats drained
-  into a board at the poll pace.
+- [`example/keybox`](example/keybox): downloads a whole box set (artwork, scans and a soundtrack
+  found by following links) with a worker `Pool`, then zips it.
+- [`example/puremedia`](example/puremedia): scrapes a shop's catalog into a JSON cache and
+  mirrors every album's thumbnail; `--volume N` keeps one.
+- [`example/annasarchive`](example/annasarchive): a terminal app that searches a site through
+  a real browser and downloads books in the background, resuming partial files.
 
 Plain `dart run` recompiles what a script imports on every start.
 

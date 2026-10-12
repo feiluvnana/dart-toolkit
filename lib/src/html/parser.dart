@@ -1,4 +1,4 @@
-import 'dom.dart';
+part of 'dom.dart';
 
 const Set<String> _void = {
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', //
@@ -8,20 +8,57 @@ const Set<String> _void = {
 const Set<String> _rawText = {'script', 'style'};
 const Set<String> _escapableRaw = {'title', 'textarea'};
 
+/// One open element: its tag, attributes and child nodes so far. The parser
+/// collects mutable lists here; [assembleDocument] freezes them into a [Doc].
+final class _Frame {
+  final String tag;
+  final Map<String, String> attrs;
+  final List<Node> kids = [];
+
+  _Frame(this.tag, this.attrs);
+
+  /// This frame frozen into an [Element]. Nobody's parent is wired yet:
+  /// [assembleDocument] wires the whole tree once, after implying structure.
+  Element freeze() => Element._(tag, attrs, kids);
+}
+
 /// Parses an HTML [source] into a [Doc] using a tolerant stack machine.
-Doc parseHtml(String source) {
-  final root = Element('#document');
-  final stack = <Element>[root];
+Doc parseHtml(String source, {String? url}) {
+  final root = _Frame('#document', {});
+  final stack = <_Frame>[root];
   final html = source;
   var i = 0;
   final n = html.length;
+  String? doctype;
+
+  Element closeFrame(_Frame frame) => frame.freeze();
+
+  void closeTo(String name) {
+    var s = stack.length - 1;
+    while (s >= 1 && stack[s].tag.toLowerCase() != name) {
+      s--;
+    }
+    if (s < 1) return; // no match: stray closer, ignored
+    while (stack.length > s) {
+      final shut = closeFrame(stack.removeLast());
+      stack.last.kids.add(shut);
+    }
+  }
 
   while (i < n) {
     if (html[i] != '<') {
       final next = html.indexOf('<', i);
       final text = next == -1 ? html.substring(i) : html.substring(i, next);
-      if (text.isNotEmpty) stack.last.append(TextNode(decodeEntities(text)));
+      if (text.isNotEmpty) stack.last.kids.add(Text(decodeEntities(text)));
       i = next == -1 ? n : next;
+      continue;
+    }
+
+    // A tag starts only at `<` followed by a letter, `/`, `!` or `?`.
+    // Anything else (`< 2`, `a<b` without intent) is literal text.
+    if (i + 1 >= n || !_tagStart(html[i + 1])) {
+      stack.last.kids.add(Text('<'));
+      i++;
       continue;
     }
 
@@ -31,7 +68,14 @@ Doc parseHtml(String source) {
       continue;
     }
 
-    if (html.startsWith('<!', i)) {
+    if (_doctypeAt(html, i)) {
+      final end = html.indexOf('>', i);
+      doctype ??= html.substring(i, end == -1 ? n : end + 1);
+      i = end == -1 ? n : end + 1;
+      continue;
+    }
+
+    if (html.startsWith('<!', i) || html.startsWith('<?', i)) {
       final end = html.indexOf('>', i);
       i = end == -1 ? n : end + 1;
       continue;
@@ -41,51 +85,87 @@ Doc parseHtml(String source) {
       final end = html.indexOf('>', i);
       final name = html.substring(i + 2, end == -1 ? n : end).trim().toLowerCase();
       i = end == -1 ? n : end + 1;
-      for (var s = stack.length - 1; s >= 1; s--) {
-        if (stack[s].tag.toLowerCase() == name) {
-          stack.removeRange(s, stack.length);
-          break;
-        }
-      }
+      closeTo(name);
       continue;
     }
 
-    final end = html.indexOf('>', i);
+    // The tag scan skips quoted attribute values, so `<a title="x>y">` ends
+    // at its real closer.
+    final end = _tagEnd(html, i);
     final rawTag = html.substring(i + 1, end == -1 ? n : end);
     final selfClose = rawTag.endsWith('/');
     final (name, attrs) = _parseTag(selfClose ? rawTag.substring(0, rawTag.length - 1) : rawTag);
     i = end == -1 ? n : end + 1;
     _autoClose(stack, name);
-    final el = Element(name, attrs);
-    stack.last.append(el);
+    final frame = _Frame(name, attrs);
     final lower = name.toLowerCase();
-    if (_void.contains(lower) || selfClose) continue;
-    stack.add(el);
+    if (_void.contains(lower) || selfClose) {
+      stack.last.kids.add(closeFrame(frame));
+      continue;
+    }
+    stack.add(frame);
 
     if (_rawText.contains(lower)) {
       final closeIdx = _indexOfIgnoreCase(html, '</$lower', i);
       final text = closeIdx == -1 ? html.substring(i) : html.substring(i, closeIdx);
-      if (text.isNotEmpty) el.append(TextNode(text));
+      if (text.isNotEmpty) frame.kids.add(Text(text));
       i = closeIdx == -1 ? n : closeIdx;
     } else if (_escapableRaw.contains(lower)) {
       final closeIdx = _indexOfIgnoreCase(html, '</$lower', i);
       final text = closeIdx == -1 ? html.substring(i) : html.substring(i, closeIdx);
-      if (text.isNotEmpty) el.append(TextNode(decodeEntities(text)));
+      if (text.isNotEmpty) frame.kids.add(Text(decodeEntities(text)));
       i = closeIdx == -1 ? n : closeIdx;
     }
   }
 
-  _implyStructure(root);
-  return Doc(root);
+  // Frames left open at the end close in order, innermost first.
+  while (stack.length > 1) {
+    final shut = closeFrame(stack.removeLast());
+    stack.last.kids.add(shut);
+  }
+  return assembleDocument(root.kids, doctype: doctype, url: url);
+}
+
+/// Whether [c] can start a tag after `<`: a letter, `/`, `!` or `?`.
+bool _tagStart(String c) =>
+    (c.codeUnitAt(0) >= 65 && c.codeUnitAt(0) <= 90) ||
+    (c.codeUnitAt(0) >= 97 && c.codeUnitAt(0) <= 122) ||
+    c == '/' ||
+    c == '!' ||
+    c == '?';
+
+/// Whether a `<!DOCTYPE …>` (any case) starts at [i].
+bool _doctypeAt(String html, int i) => i + 9 <= html.length && html.substring(i, i + 9).toLowerCase() == '<!doctype';
+
+/// The `>` closing the tag at [i], skipping quoted attribute values; -1 when
+/// the tag never closes.
+int _tagEnd(String html, int i) {
+  var j = i + 1;
+  String? quote;
+  while (j < html.length) {
+    final c = html[j];
+    if (quote != null) {
+      if (c == quote) quote = null;
+    } else if (c == '"' || c == "'") {
+      quote = c;
+    } else if (c == '>') {
+      return j;
+    }
+    j++;
+  }
+  return -1;
 }
 
 /// Closes elements the HTML standard auto-closes: an open `<li>` before the
 /// next `<li>`, an open `<p>` before block starts, open cells before the next
 /// cell or row, an open row before the next row.
-void _autoClose(List<Element> stack, String name) {
+void _autoClose(List<_Frame> stack, String name) {
   String top() => stack.length > 1 ? stack.last.tag.toLowerCase() : '';
   void popTop() {
-    if (stack.length > 1) stack.removeLast();
+    if (stack.length > 1) {
+      final shut = stack.removeLast().freeze();
+      stack.last.kids.add(shut);
+    }
   }
 
   switch (name.toLowerCase()) {
@@ -126,41 +206,6 @@ void _autoClose(List<Element> stack, String name) {
         'article':
       if (top() == 'p') popTop();
   }
-}
-
-/// Wraps a fragment without `<html>` in an implied `html > head + body` (as a
-/// browser does), so `find('body')` works on text-only pages. A document with
-/// `<html>` but no `<body>` gains an empty one.
-void _implyStructure(Element root) {
-  Element? htmlEl;
-  for (final child in root.children) {
-    if (child is Element && child.tag.toLowerCase() == 'html') {
-      htmlEl = child;
-      break;
-    }
-  }
-  if (htmlEl == null) {
-    htmlEl = Element('html');
-    final head = Element('head');
-    final body = Element('body');
-    final moved = List<Node>.of(root.children);
-    root.children.clear();
-    for (final child in moved) {
-      body.append(child);
-    }
-    htmlEl.append(head);
-    htmlEl.append(body);
-    root.append(htmlEl);
-    return;
-  }
-  var hasBody = false;
-  for (final child in htmlEl.children) {
-    if (child is Element && child.tag.toLowerCase() == 'body') {
-      hasBody = true;
-      break;
-    }
-  }
-  if (!hasBody) htmlEl.append(Element('body'));
 }
 
 (String, Map<String, String>) _parseTag(String src) {
@@ -214,26 +259,32 @@ void _implyStructure(Element root) {
 
 bool _isSpace(String c) => c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 
+/// Case-insensitive [needle] (already lowercase, starting with `</`) in
+/// [haystack] from [start], compared in place at each `<`: lowercasing the
+/// whole document per script/style element is quadratic.
 int _indexOfIgnoreCase(String haystack, String needle, int start) {
-  final lower = haystack.toLowerCase();
-  return lower.indexOf(needle.toLowerCase(), start);
+  var i = haystack.indexOf('<', start);
+  while (i != -1) {
+    if (i + 1 < haystack.length && haystack[i + 1] == '/') {
+      var j = 2;
+      while (j < needle.length) {
+        if (i + j >= haystack.length) return -1;
+        if (_lowerAscii(haystack.codeUnitAt(i + j)) != needle.codeUnitAt(j)) break;
+        j++;
+      }
+      if (j == needle.length) return i;
+    }
+    i = haystack.indexOf('<', i + 1);
+  }
+  return -1;
 }
 
-const Map<String, String> _entities = {
-  'amp': '&',
-  'lt': '<',
-  'gt': '>',
-  'quot': '"',
-  'apos': "'",
-  'nbsp': '\u00A0',
-  'copy': '©',
-  'reg': '®',
-  'hellip': '…',
-  'mdash': '—',
-  'ndash': '–',
-};
+/// ASCII lowercase of [c].
+int _lowerAscii(int c) => c >= 65 && c <= 90 ? c + 32 : c;
 
-/// Decodes HTML character references in [text].
+/// Decodes HTML character references in [text]: the full named table, plus
+/// numeric references. An invalid or out-of-range code point, or a lone
+/// surrogate, becomes U+FFFD instead of throwing.
 String decodeEntities(String text) {
   if (!text.contains('&')) return text;
   final sb = StringBuffer();
@@ -253,17 +304,23 @@ String decodeEntities(String text) {
     }
     final entity = text.substring(amp + 1, semi);
     if (entity.startsWith('#x') || entity.startsWith('#X')) {
-      final code = int.tryParse(entity.substring(2), radix: 16);
-      sb.write(code == null ? '&$entity;' : String.fromCharCode(code));
+      sb.write(_fromCode(int.tryParse(entity.substring(2), radix: 16), entity));
     } else if (entity.startsWith('#')) {
-      final code = int.tryParse(entity.substring(1));
-      sb.write(code == null ? '&$entity;' : String.fromCharCode(code));
+      sb.write(_fromCode(int.tryParse(entity.substring(1)), entity));
     } else {
-      sb.write(_entities[entity] ?? '&$entity;');
+      sb.write(htmlEntities[entity] ?? '&$entity;');
     }
     i = semi + 1;
   }
   return sb.toString();
+}
+
+/// [code] as a character, or U+FFFD when it is missing ([literal] has no
+/// number), NUL, out of range, or a lone surrogate.
+String _fromCode(int? code, String entity) {
+  if (code == null) return '&$entity;';
+  if (code == 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return '�';
+  return String.fromCharCode(code);
 }
 
 /// Escapes `&`, `<`, `>` and quotes for HTML output.

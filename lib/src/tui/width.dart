@@ -3,52 +3,110 @@
 /// for layout; the native crate never measures (it only paints the cells Dart
 /// computed), so the two can never disagree.
 ///
-/// Wide ranges follow Unicode East-Asian Wide/Fullwidth plus emoji
-/// presentation blocks; everything else unassigned or control is 0, else 1.
-/// Combining marks are 0 (they join the previous cell).
+/// Wide and zero-width come from the generated tables (`width_tables.dart`,
+/// Unicode 16.0.0 East_Asian_Width plus combining/format ranges); a grapheme
+/// cluster (base plus combining marks, VS15/16, skin tones, ZWJ-joined runes
+/// and regional-indicator pairs) is one cell, two columns when wide or
+/// emoji-joined.
 library;
 
-/// Columns [char] occupies: 0 for combining/control, 2 for wide, else 1.
-int charWidth(int char) {
-  if (char < 32 || (char >= 0x7F && char < 0xA0)) return 0;
-  if (char >= 0x300 && char <= 0x36F) return 0; // combining diacriticals
-  if (char >= 0x200B && char <= 0x200F) return 0; // zero-width + marks
-  if (char >= 0xFE00 && char <= 0xFE0F) return 0; // variation selectors
-  if (char == 0xFEFF) return 0;
-  if (_isWide(char)) return 2;
-  return 1;
-}
+import 'width_tables.dart';
 
-bool _isWide(int c) {
-  // CJK + Hangul + fullwidth forms.
-  if (c >= 0x1100 && c <= 0x115F) return true;
-  if (c >= 0x2E80 && c <= 0x303E) return true;
-  if (c >= 0x3041 && c <= 0x33FF) return true;
-  if (c >= 0x3400 && c <= 0x4DBF) return true;
-  if (c >= 0x4E00 && c <= 0x9FFF) return true;
-  if (c >= 0xA000 && c <= 0xA4CF) return true;
-  if (c >= 0xAC00 && c <= 0xD7A3) return true;
-  if (c >= 0xF900 && c <= 0xFAFF) return true;
-  if (c >= 0xFE30 && c <= 0xFE4F) return true;
-  if (c >= 0xFF00 && c <= 0xFF60) return true;
-  if (c >= 0xFFE0 && c <= 0xFFE6) return true;
-  if (c >= 0x20000 && c <= 0x3FFFD) return true;
-  // Emoji presentation blocks.
-  if (c >= 0x1F300 && c <= 0x1FAFF) return true;
-  if (c >= 0x1F000 && c <= 0x1F2FF) return true;
-  if (c >= 0x2600 && c <= 0x26FF) return true;
-  if (c >= 0x2700 && c <= 0x27BF) return true;
-  if (c >= 0x2B00 && c <= 0x2BFF) return true;
-  if (c == 0x231A || c == 0x231B || (c >= 0x23E9 && c <= 0x23F3)) return true;
-  if (c >= 0x1F1E6 && c <= 0x1F1FF) return true; // regional indicators
+/// Whether [c] falls in the `start, end` pair table [ranges] (binary search).
+bool _inRanges(List<int> ranges, int c) {
+  var lo = 0;
+  var hi = ranges.length ~/ 2 - 1;
+  while (lo <= hi) {
+    final mid = (lo + hi) ~/ 2;
+    final start = ranges[mid * 2], end = ranges[mid * 2 + 1];
+    if (c < start) {
+      hi = mid - 1;
+    } else if (c > end) {
+      lo = mid + 1;
+    } else {
+      return true;
+    }
+  }
   return false;
 }
 
-/// Columns [text] occupies (combining marks join their base for free).
+/// Columns [char] occupies on its own: 0 for control and zero-width, 2 for
+/// wide, else 1. Inside a cluster only the whole cluster's width counts (see
+/// [clusterWidth]).
+int charWidth(int char) {
+  if (char < 32 || (char >= 0x7F && char < 0xA0)) return 0;
+  if (_inRanges(zeroRanges, char)) return 0;
+  if (_inRanges(wideRanges, char)) return 2;
+  return 1;
+}
+
+/// Regional-indicator code points pair up into flag clusters.
+bool _isRI(int c) => c >= 0x1F1E6 && c <= 0x1F1FF;
+
+/// Skin-tone modifiers join the cluster before them.
+bool _isTone(int c) => c >= 0x1F3FB && c <= 0x1F3FF;
+
+/// Whether [rune] continues the current cluster (rather than starting one).
+bool _joins(int rune, {required bool prevZWJ, required bool singleRI}) =>
+    _inRanges(zeroRanges, rune) || _isTone(rune) || prevZWJ || rune == 0x200D || (singleRI && _isRI(rune));
+
+/// Splits [text] into grapheme clusters: a base rune plus its combining marks,
+/// variation selectors, skin tone, ZWJ-joined runes (each side), and
+/// regional-indicator pairs. A lone joiner starts its own cluster.
+List<String> clusters(String text) {
+  final out = <String>[];
+  final buf = StringBuffer();
+  var hasBase = false;
+  var prevZWJ = false;
+  var singleRI = false;
+  void flush() {
+    if (buf.isNotEmpty) {
+      out.add(buf.toString());
+      buf.clear();
+    }
+  }
+
+  for (final rune in text.runes) {
+    final join = hasBase && _joins(rune, prevZWJ: prevZWJ, singleRI: singleRI);
+    if (!join) {
+      flush();
+      singleRI = _isRI(rune);
+    } else {
+      singleRI = false;
+    }
+    prevZWJ = rune == 0x200D;
+    hasBase = true;
+    buf.writeCharCode(rune);
+  }
+  flush();
+  return out;
+}
+
+/// Columns [cluster] occupies: 2 when its base is wide or it is emoji-joined
+/// (ZWJ, skin tone, regional pair), else its base's width. A lone joiner is 0.
+int clusterWidth(String cluster) {
+  final runes = cluster.runes.iterator;
+  if (!runes.moveNext()) return 0;
+  final base = runes.current;
+  var joined = false;
+  var prevRI = _isRI(base);
+  var count = 1;
+  while (runes.moveNext()) {
+    final r = runes.current;
+    count++;
+    if (r == 0x200D || _isTone(r) || (_isRI(r) && prevRI)) joined = true;
+    prevRI = _isRI(r);
+  }
+  if (count == 1) return charWidth(base);
+  if (charWidth(base) == 2 || joined) return 2;
+  return charWidth(base);
+}
+
+/// Columns [text] occupies, cluster by cluster.
 int textWidth(String text) {
   var w = 0;
-  for (final c in text.runes) {
-    w += charWidth(c);
+  for (final cluster in clusters(text)) {
+    w += clusterWidth(cluster);
   }
   return w;
 }
@@ -58,33 +116,20 @@ int textWidth(String text) {
 String truncate(String text, int width) {
   if (width <= 0) return '';
   if (textWidth(text) <= width) return text;
-  if (width == 1) return _takeWidth(text, 1);
-  return '${_takeWidth(text, width - 1)}…';
+  if (width == 1) return takeWidth(text, 1);
+  return '${takeWidth(text, width - 1)}…';
 }
 
-/// The longest prefix of [text] fitting in [width] columns.
-String _takeWidth(String text, int width) {
+/// The longest cluster prefix of [text] fitting in [width] columns.
+String takeWidth(String text, int width) {
   final sb = StringBuffer();
   var w = 0;
-  for (var i = 0; i < text.length; i++) {
-    final c = text.codeUnitAt(i);
-    // Keep surrogate pairs whole; combining marks ride along.
-    var rune = c;
-    var next = i + 1;
-    if (c >= 0xD800 && c <= 0xDBFF && next < text.length) {
-      final lo = text.codeUnitAt(next);
-      if (lo >= 0xDC00 && lo <= 0xDFFF) {
-        rune = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
-        next++;
-      }
-    }
-    final cw = charWidth(rune);
+  for (final cluster in clusters(text)) {
+    final cw = clusterWidth(cluster);
     if (w + cw > width) break;
+    // A zero-width cluster still rides along (it joins the previous cell).
     w += cw;
-    sb.write(String.fromCharCode(rune));
-    // A wide char that ends exactly at the edge is fine; a following combining
-    // mark still fits (zero width).
-    i = next - 1;
+    sb.write(cluster);
   }
   return sb.toString();
 }
@@ -119,7 +164,8 @@ List<String> wrap(String text, int width) {
           // Hard-cut the overlong word across lines.
           var rest = word;
           while (textWidth(rest) > width) {
-            final piece = _takeWidth(rest, width);
+            var piece = takeWidth(rest, width);
+            if (piece.isEmpty) piece = clusters(rest).first; // wider than the row: clipped, but consumed
             out.add(piece);
             rest = rest.substring(piece.length);
           }
@@ -137,7 +183,8 @@ List<String> wrap(String text, int width) {
         } else {
           var rest = word;
           while (textWidth(rest) > width) {
-            final piece = _takeWidth(rest, width);
+            var piece = takeWidth(rest, width);
+            if (piece.isEmpty) piece = clusters(rest).first; // wider than the row: clipped, but consumed
             out.add(piece);
             rest = rest.substring(piece.length);
           }

@@ -1,75 +1,145 @@
 import 'dart:async';
 import 'dart:isolate';
 
-/// One-shot background work: [run], [all] and the long-running [bg].
+/// One-shot work: [run] on a background isolate, [all] over many items at once.
 ///
 /// ```dart
-/// final hash = await Task.run(() => calcHash(buf));
-/// final heavy = await Task.run(() => calcHash(buf), isolate: true);
-/// final res  = await Task.run(() => slow(), timeout: const Duration(seconds: 5));
-/// final both = await Task.all([() => fetch(1), () => fetch(2)]);
+/// final answer = await Task.run(() => 40 + 2);
+/// final pages = await Task.all(urls, (url) => Http.get(url).text());
 /// ```
 ///
-/// With `isolate: true` the function runs on a background isolate, so a
-/// CPU-bound job never blocks the event loop (timers still fire). The function
-/// is copied to the isolate, so it must be a top-level or static function
-/// holding nothing else (r58); a capturing closure throws an [ArgumentError].
-/// Without it (the default) small work stays on the caller (r58).
+/// [run]'s function runs on a background isolate, so a CPU-bound job never blocks
+/// the event loop (timers still fire). It is copied to the isolate, so it
+/// must be a top-level or static function, or a closure over sendable values
+/// only (rule 52); anything else throws an [ArgumentError].
 abstract final class Task {
   /// Runs [fn] and answers its value.
   ///
-  /// With `isolate: true` the work runs on a background isolate. A [timeout]
-  /// bounds the wait *and* stops the work: on the caller the wait is
-  /// abandoned, and the isolate is killed so nothing keeps running (a
+  /// A [timeout] bounds the wait *and* stops the work: on the caller the wait
+  /// is abandoned, and the isolate is killed so nothing keeps running (a
   /// [TimeoutException] is thrown).
-  static Future<T> run<T>(FutureOr<T> Function() fn, {Duration? timeout, String? name, bool isolate = false}) {
-    if (!isolate) {
-      final future = Future<T>.sync(fn);
-      if (timeout == null) return future;
-      return future.timeout(timeout);
+  static Future<T> run<T>(FutureOr<T> Function() fn, {Duration? timeout}) => _runIsolate(fn, timeout: timeout);
+
+  /// Runs [fn] on every item, [concurrency] at a time, on *this* isolate (for
+  /// I/O: requests, downloads, files; CPU work goes to a `Pool`); answers the
+  /// results in item order. [onProgress] hears `(done, total)` as each ends,
+  /// so `onProgress: bar.set` draws it. The first failure stops new items and
+  /// is rethrown once those already running end.
+  static Future<List<T>> all<I, T>(
+    Iterable<I> items,
+    FutureOr<T> Function(I item) fn, {
+    int concurrency = 4,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (concurrency < 1) throw ArgumentError.value(concurrency, 'concurrency', 'must be at least 1');
+    final list = items.toList();
+    final results = List<T?>.filled(list.length, null);
+    var next = 0;
+    var done = 0;
+    var failed = false;
+    onProgress?.call(0, list.length);
+    Future<void> lane() async {
+      while (!failed && next < list.length) {
+        final i = next++;
+        try {
+          results[i] = await fn(list[i]);
+        } catch (_) {
+          failed = true;
+          rethrow;
+        }
+        onProgress?.call(++done, list.length);
+      }
     }
-    return _runIsolate(fn, timeout: timeout, name: name);
+
+    await Future.wait([for (var k = 0; k < concurrency && k < list.length; k++) lane()]);
+    return [for (final r in results) r as T];
   }
 
-  static Future<T> _runIsolate<T>(FutureOr<T> Function() fn, {Duration? timeout, String? name}) async {
+  static Future<T> _runIsolate<T>(FutureOr<T> Function() fn, {Duration? timeout}) async {
     final main = ReceivePort();
+    final errors = ReceivePort();
+    final exits = ReceivePort();
     Isolate? worker;
-    try {
-      try {
-        worker = await Isolate.spawn(_entry<T>, [main.sendPort, fn], debugName: name ?? 'task');
-      } on ArgumentError {
-        main.close();
-        throw ArgumentError.value(fn, 'fn', 'isolate: true needs a top-level or static function (r58)');
-      }
-    } catch (e) {
+    void shut() {
       main.close();
+      errors.close();
+      exits.close();
+    }
+
+    try {
+      worker = await Isolate.spawn(
+        _entry<T>,
+        [main.sendPort, fn],
+        debugName: 'task',
+        onError: errors.sendPort,
+        onExit: exits.sendPort,
+      );
+    } on ArgumentError {
+      shut();
+      throw ArgumentError.value(
+        fn,
+        'fn',
+        'needs a top-level or static function, or a closure over sendable values (rule 52)',
+      );
+    } catch (e) {
+      shut();
       rethrow;
     }
     try {
-      final result = timeout == null ? await main.first : await main.first.timeout(timeout);
-      if (result is _Fail) {
-        if (result.error is Error) throw result.error!;
-        throw result.error ?? StateError('Task failed without an error');
+      final waiting = Future.any([
+        main.first.then((v) => _Outcome.result(v)),
+        errors.first.then((v) => _Outcome.remoteError(v)),
+        exits.first.then((_) => _Outcome.exited()),
+      ]);
+      final outcome = timeout == null ? await waiting : await waiting.timeout(timeout);
+      if (outcome is _Result) {
+        final result = outcome.value;
+        if (result is _Fail) {
+          if (result.error is Error) Error.throwWithStackTrace(result.error!, result.stack);
+          throw result.error ?? StateError('Task failed without an error');
+        }
+        return (result as _Ok<T>).value;
       }
-      return (result as _Ok<T>).value;
+      if (outcome is _RemoteError) {
+        // An uncaught async error in the isolate: only its message and stack
+        // cross, so they travel as a StateError carrying both.
+        final parts = (outcome.value as List).map((e) => '$e').toList();
+        final stack = parts.length > 1 ? StackTrace.fromString(parts[1]) : StackTrace.empty;
+        Error.throwWithStackTrace(StateError('Task failed in its isolate: ${parts[0]}'), stack);
+      }
+      // The isolate exited without answering (its result could not cross, or it
+      // died): never hang on a missing answer.
+      throw StateError('Task isolate exited without answering');
     } on TimeoutException {
       worker.kill(priority: Isolate.immediate);
       throw TimeoutException('Task timed out${timeout == null ? '' : ' after $timeout'}', timeout);
     } finally {
       worker.kill(priority: Isolate.immediate);
-      main.close();
+      shut();
     }
   }
+}
 
-  /// Runs every [fns] entry concurrently, answering their values in input order.
-  ///
-  /// With `isolate: true` each entry runs on its own background isolate.
-  static Future<List<T>> all<T>(List<FutureOr<T> Function()> fns, {bool isolate = false}) =>
-      Future.wait([for (final fn in fns) run<T>(fn, isolate: isolate)]);
+/// Which port answered a task isolate first.
+sealed class _Outcome {
+  const _Outcome();
+  factory _Outcome.result(Object? value) = _Result;
+  factory _Outcome.remoteError(Object? value) = _RemoteError;
+  factory _Outcome.exited() = _Exited;
+}
 
-  /// Starts a long-running background job that receives a [CancelToken]. Call [Bg.cancel]
-  /// to ask it to stop.
-  static Bg bg(Future<void> Function(CancelToken cancel) fn) => Bg.start(fn);
+final class _Result extends _Outcome {
+  final Object? value;
+  const _Result(this.value);
+}
+
+final class _RemoteError extends _Outcome {
+  final Object? value;
+  const _RemoteError(this.value);
+}
+
+final class _Exited extends _Outcome {
+  const _Exited();
 }
 
 final class _Ok<T> {
@@ -79,48 +149,29 @@ final class _Ok<T> {
 
 final class _Fail {
   final Object? error;
-  _Fail(this.error);
+  final StackTrace stack;
+  _Fail(this.error, [StackTrace? stack]) : stack = stack ?? StackTrace.empty;
 }
 
 void _entry<T>(List<Object?> args) {
   final port = args[0] as SendPort;
   final fn = args[1] as FutureOr<T> Function();
-  Future.sync(fn).then((v) => port.send(_Ok<T>(v)), onError: (Object e) => port.send(_Fail(e)));
-}
-
-/// A cooperative cancellation flag handed to [Task.bg] jobs.
-final class CancelToken {
-  bool _done = false;
-
-  /// Whether [cancel] has been called.
-  bool get isDone => _done;
-
-  /// Raises the flag. The flag is checked cooperatively by the job.
-  void cancel() => _done = true;
-}
-
-/// A running [Task.bg] job.
-final class Bg {
-  final CancelToken _token;
-  final Future<void> _done;
-
-  Bg._(this._token, this._done);
-
-  /// Starts [fn] with a fresh token.
-  static Bg start(Future<void> Function(CancelToken cancel) fn) {
-    final token = CancelToken();
-    return Bg._(token, Future<void>.sync(() => fn(token)));
-  }
-
-  /// Whether the job has finished.
-  bool get isDone => _token.isDone;
-
-  /// The job's completion.
-  Future<void> get done => _done;
-
-  /// Asks the job to stop and waits for it.
-  Future<void> cancel() async {
-    _token.cancel();
-    await _done;
-  }
+  Future.sync(fn).then(
+    (v) {
+      try {
+        port.send(_Ok<T>(v));
+      } catch (_) {
+        // Unsendable across isolates (a ReceivePort, a closure over one):
+        // say so instead of hanging on a missing answer.
+        port.send(_Fail(StateError('Task result cannot be sent across isolates')));
+      }
+    },
+    onError: (Object e, StackTrace st) {
+      try {
+        port.send(_Fail(e, st));
+      } catch (_) {
+        port.send(_Fail('$e'));
+      }
+    },
+  );
 }

@@ -6,5 +6,8 @@
 /// with `tui`.
 library;
 
-export 'src/cli/cli.dart';
-export 'src/tui/buffer.dart' show BarGlyphs;
+export 'src/cli/cli.dart' show AnsiText, Bar, Cli;
+export 'src/tui/buffer.dart' show BarGlyphs, SpinGlyphs;
+export 'src/core/errors.dart';
+export 'src/core/pipe.dart';
+export 'src/core/traits.dart';

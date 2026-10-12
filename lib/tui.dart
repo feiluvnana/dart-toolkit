@@ -1,17 +1,20 @@
 /// # TUI
 ///
 /// Full-screen terminal apps: [Tui.run] takes a `draw`/`poll` loop over a
-/// [Term] (`box`, `text`, `bar`, `list`, `split`, `picture` …), hears [TuiEvent]s
-/// (`Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`, `Interrupt`, `Post`),
-/// and restores the terminal on every way out. [FakeTerminal] is the test
-/// seam: frames, keys and resizes without a terminal.
+/// [Term] (`box`, `text`, `bar`, `list`, `split`, `button`, `field`, `tabs`,
+/// `table`, `popup`, `markdown`, `picture` …), hears [TuiEvent]s (`Start`,
+/// `KeyPress`, `Paste`, `Pointer`, `Resize`, `Interrupt`, `Post`), and
+/// restores the terminal on every way out. Tests drive the same loop on a
+/// `FakeTerminal` (import `testing.dart`).
 ///
 /// ```dart
 /// await Tui.run((term) async {
 ///   while (true) {
 ///     term.draw((ui) {
-///       ui.box(title: 'App');
-///       ui.text('Press "q" to exit.');
+///       ui.box(
+///         title: 'App',
+///         build: (box) => box.text('Press "q" to exit.'),
+///       );
 ///     });
 ///     if (await term.poll() case final ev? when ev.key == 'q') break;
 ///   }
@@ -19,10 +22,10 @@
 /// ```
 library;
 
-export 'src/tui/buffer.dart';
-export 'src/tui/canvas.dart';
-export 'src/tui/events.dart';
-export 'src/tui/layout.dart';
-export 'src/tui/native.dart';
-export 'src/tui/term.dart';
-export 'src/tui/width.dart';
+export 'src/tui/buffer.dart' show BarGlyphs, CellStyle, SpinGlyphs, TuiColor;
+export 'src/tui/events.dart'
+    show Blur, Focus, Interrupt, Paste, Pointer, PointerKind, Post, Resize, Resume, Start, Suspend, TuiEvent, KeyPress;
+export 'src/tui/term.dart' show Canvas, FieldState, Term, Tui;
+export 'src/core/errors.dart';
+export 'src/core/pipe.dart';
+export 'src/core/traits.dart';

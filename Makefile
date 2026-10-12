@@ -2,7 +2,7 @@
 # or `cargo` command, so it runs the same from sh on macOS and Linux and from cmd on Windows.
 #
 #   make                 analyze, format check, catch check, tests
-#   make native          build the native libraries for this machine into native2/lib/<os>_<arch>/
+#   make native          build the native libraries for this machine into native/lib/<os>_<arch>/
 #   make native-all      every target this machine can cross-build
 #   make native-release  native-all, then the GitHub release a first use downloads from
 #   make bench           startup cost per module (JIT)
@@ -32,7 +32,7 @@ test:
 	$(DART) test
 
 ## The native libraries (dart_toolkit_native, dart_toolkit_chrome, dart_toolkit_tui,
-## dart_toolkit_torrent). Build them here after an edit to native2/; without them the
+## dart_toolkit_torrent). Build them here after an edit to native/; without them the
 ## native calls are UnsupportedError (programmatic first-use install is follow-up work).
 native:
 	$(DART) run tool/build_native.dart
@@ -40,14 +40,14 @@ native:
 native-all:
 	$(DART) run tool/build_native.dart --all
 
-## Needs native2/ committed and `gh` signed in: the release is named by the hash of native2/.
+## Needs native/ committed and `gh` signed in: the release is named by the hash of native/.
 native-release:
 	$(DART) run tool/build_native.dart --release
 
 ## The archive parsers read files from the internet, so the release checks them for advisories
 ## (cargo install cargo-audit).
 audit:
-	cargo audit --file native2/Cargo.lock
+	cargo audit --file native/Cargo.lock
 
 ## Startup cost per module (JIT medians over a bare script; read the deltas).
 bench:

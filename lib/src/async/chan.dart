@@ -2,50 +2,54 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
 
-/// A Rust-style Multi-Producer, Single-Consumer channel with an optional bounded buffer.
+/// A multi-producer, single-consumer channel with a bounded buffer.
 ///
-/// A [cap] above zero suspends a producer once that many items are queued until the consumer
-/// reads ([send]); [trySend] never waits. The consumer reads a [Stream] from [recv], or one
-/// item at a time with [next]/[tryRecv]. [close] signals EOF so `await for` ends cleanly.
+/// [cap] suspends a producer once that many items are queued until the
+/// consumer reads ([send]). The consumer reads a [Stream] from [recv].
+/// [close] signals EOF so `await for` ends cleanly.
 ///
 /// ```dart
-/// final chan = Chan<int>(cap: 100);
+/// final chan = Chan<int>(10);
 /// await chan.send(1);
-/// await for (final v in chan.recv()) { print(v); }
+/// await chan.close();
 /// ```
 ///
-/// Fan-in from worker isolates: hand [sendPort] to another isolate and send
-/// from there with [Chan.sendTo]; the consumer buffers in its own isolate, so
+/// Fan-in from worker isolates: hand [port] to another isolate and send
+/// from there with [Chan.post]; the consumer buffers in its own isolate, so
 /// [cap] still bounds memory at the consumer.
 ///
 /// ```dart
-/// final chan = Chan<int>(cap: 100);
-/// await Isolate.spawn(producer, chan.sendPort);
+/// final chan = Chan<int>(10);
+/// await Isolate.spawn(producer, chan.port);
 /// await for (final v in chan.recv()) { print(v); }
 /// ```
+/// The closed-channel marker handed to waiting readers: a private sentinel, so
+/// a `null` item and a closed channel never look alike.
+const _done = _Closed();
+
+final class _Closed {
+  const _Closed();
+}
+
 final class Chan<T> {
-  /// Capacity of the bounded buffer; `0` means every [send] waits for a reader.
+  /// Capacity of the bounded buffer.
   final int cap;
 
   final Queue<T> _queue = Queue<T>();
   final Queue<Completer<void>> _sendWaiters = Queue<Completer<void>>();
-  final Queue<Completer<T?>> _recvWaiters = Queue<Completer<T?>>();
+  final Queue<Completer<Object?>> _recvWaiters = Queue<Completer<Object?>>();
   bool _closed = false;
 
   ReceivePort? _remote;
+  // Held, never cancelled: the listener answers late posts with `false` after
+  // close, so the port (and its subscription) outlives the channel.
+  // ignore: unused_field
   StreamSubscription<dynamic>? _remoteSub;
   final Queue<({T value, SendPort? ack})> _remotePending = Queue();
 
-  Chan({this.cap = 0});
-
-  /// Whether [close] has been called.
-  bool get isClosed => _closed;
-
-  /// Whether nothing is buffered right now.
-  bool get isEmpty => _queue.isEmpty && _remotePending.isEmpty;
-
-  /// How many items are buffered right now.
-  int get len => _queue.length + _remotePending.length;
+  Chan(this.cap) {
+    if (cap < 1) throw ArgumentError.value(cap, 'cap', 'Must be at least 1');
+  }
 
   /// Sends [val], suspending when the buffer is full until a reader makes room.
   Future<void> send(T val) async {
@@ -64,55 +68,60 @@ final class Chan<T> {
     _pump();
   }
 
-  /// Sends [val] without waiting. Answers `false` when the buffer is full or the channel closed.
-  bool trySend(T val) {
-    if (_closed) return false;
-    if (_recvWaiters.isNotEmpty) {
-      _recvWaiters.removeFirst().complete(val);
-      return true;
-    }
-    if (cap > 0 && _queue.length >= cap) return false;
-    _queue.add(val);
-    _pump();
-    return true;
-  }
-
-  /// Takes the next buffered item, or `null` when none is waiting.
-  T? tryRecv() {
-    if (_queue.isEmpty) return null;
-    final item = _queue.removeFirst();
-    _admitRemote();
-    if (_sendWaiters.isNotEmpty) _sendWaiters.removeFirst().complete();
-    return item;
-  }
-
-  /// Waits for the next item, or `null` once the channel is closed and drained.
-  Future<T?> next() async {
-    if (_queue.isNotEmpty) {
-      final item = _queue.removeFirst();
-      _admitRemote();
-      if (_sendWaiters.isNotEmpty) _sendWaiters.removeFirst().complete();
-      return item;
-    }
-    if (_closed) return null;
-    final waiter = Completer<T?>();
-    _recvWaiters.add(waiter);
-    return waiter.future;
-  }
-
   /// A stream of the channel's items, completing when it is closed and drained.
-  Stream<T> recv() async* {
-    while (true) {
-      final val = await next();
-      if (val == null) {
-        if (_closed && _queue.isEmpty) break;
-      } else {
-        yield val;
+  ///
+  /// Cancelling the subscription removes its waiter, so a cancelled `recv`
+  /// neither hangs nor swallows the next [send].
+  Stream<T> recv() {
+    late final StreamController<T> controller;
+    Completer<Object?>? waiter;
+    Future<Object?> take() {
+      if (_queue.isNotEmpty) {
+        final item = _queue.removeFirst();
+        _admitRemote();
+        if (_sendWaiters.isNotEmpty) _sendWaiters.removeFirst().complete();
+        return Future.value(item);
       }
+      if (_closed) return Future.value(_done);
+      final w = Completer<Object?>();
+      waiter = w;
+      _recvWaiters.add(w);
+      return w.future.whenComplete(() {
+        if (identical(waiter, w)) waiter = null;
+      });
     }
+
+    controller = StreamController<T>(
+      onListen: () {
+        () async {
+          try {
+            while (true) {
+              final val = await take();
+              if (identical(val, _done)) break;
+              controller.add(val as T);
+            }
+          } catch (e, st) {
+            controller.addError(e, st);
+          }
+          await controller.close();
+        }();
+      },
+      onCancel: () {
+        final w = waiter;
+        waiter = null;
+        if (w != null && !w.isCompleted) {
+          // No longer listening: leave the queue for the next reader.
+          _recvWaiters.remove(w);
+          w.complete(_done);
+        }
+      },
+    );
+    return controller.stream;
   }
 
   /// Closes the channel: no more sends, queued items can still be read.
+  /// Blocked senders fail; waiting readers drain, then end. The remote port
+  /// stays open so a late [post] still gets its `false` instead of hanging.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -120,24 +129,21 @@ final class Chan<T> {
       _sendWaiters.removeFirst().completeError(StateError('Channel closed'));
     }
     while (_recvWaiters.isNotEmpty) {
-      _recvWaiters.removeFirst().complete(null);
+      _recvWaiters.removeFirst().complete(_done);
     }
     // Refuse and release remote senders waiting for room.
     for (final pending in _remotePending) {
       pending.ack?.send(false);
     }
     _remotePending.clear();
-    await _remoteSub?.cancel();
-    _remote?.close();
-    _remote = null;
   }
 
-  /// A [SendPort] other isolates send into with [sendTo].
+  /// A [SendPort] other isolates send into with [post].
   ///
   /// The port is created on first use and lives until [close]. Buffering
   /// happens here, on the consumer's isolate, so [cap] bounds memory at the
   /// consumer.
-  SendPort get sendPort {
+  SendPort get port {
     final existing = _remote;
     if (existing != null) return existing.sendPort;
     final port = ReceivePort();
@@ -147,25 +153,18 @@ final class Chan<T> {
   }
 
   /// Sends [val] into the channel owned by another isolate through its
-  /// [sendPort], waiting for room when the channel is bounded.
+  /// [port], waiting for room when the channel is bounded.
   ///
-  /// Answers `false` when the channel is closed or full ([trySend] semantics
-  /// when [wait] is false). With [wait] (the default) it suspends until a
-  /// reader makes room, like [send].
-  static Future<bool> sendTo<T>(SendPort sendPort, T val, {bool wait = true}) async {
-    if (!wait) {
-      final ack = ReceivePort();
-      sendPort.send([val, ack.sendPort, false]);
-      final ok = await ack.first as bool;
-      ack.close();
-      return ok;
-    }
+  /// Answers `false` when the channel is closed or full ([post] with
+  /// [wait] false). With [wait] (the default) it suspends until a reader
+  /// makes room, like [send].
+  static Future<bool> post<T>(SendPort port, T val, {bool wait = true}) async {
     final ack = ReceivePort();
-    sendPort.send([val, ack.sendPort, true]);
+    port.send([val, ack.sendPort, wait]);
     final ok = await ack.first as bool;
     ack.close();
-    if (!ok) throw StateError('Cannot send to closed channel');
-    return true;
+    if (!ok && wait) throw StateError('Cannot send to closed channel');
+    return ok;
   }
 
   void _onRemote(Object? msg) {

@@ -4,61 +4,251 @@ import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
 
+import '../core/decoding.dart';
+import '../core/errors.dart';
+import '../core/jobs.dart';
+import '../core/traits.dart';
 import 'native.dart';
 
-/// Launches or attaches to Chrome over the native DevTools engine.
+export '../core/errors.dart';
+export '../core/pipe.dart';
+export '../core/traits.dart';
+
+/// A browser, launched on the first [open].
 ///
 /// ```dart
-/// final chrome = await Chrome.launch();
+/// final chrome = Chrome();
 /// final page = await chrome.open('https://example.com');
-/// print(await page.html());
-/// await page.shot().pipe(File('shot.png'));
+/// Cli.print(await page.title());
+/// final doc = await page.html();
+/// await page.screenshot().pipe(File('shot.png'));
 /// await chrome.close();
 /// ```
 ///
-/// Every call below runs through `dart_toolkit_chrome` (ABI 1); without the
-/// library it is an [UnsupportedError] (r50: no Dart fallback). The blocking
-/// CDP calls run synchronously on the calling isolate; the stop byte the ABI
-/// carries is reserved for a worker-isolate cancel recipe (a hung render is
-/// bounded by its timeout, and `close()` always reaps the tree).
-abstract final class Chrome {
-  /// Launches a fresh Chrome and connects to it. A temp `--user-data-dir` is
-  /// made (deleted by [Browser.close]); pass [profile] to reuse one (kept).
-  static Future<Browser> launch({
-    String? executable,
-    bool headless = true,
-    List<String> args = const [],
-    bool visible = false,
-    String? profile,
-  }) async {
+/// `Chrome()` launches on the first [open]; `Chrome(port: 9222)` attaches to
+/// a running one. [close] kills the whole tree and drops the temp profile.
+/// `page.pdf()` prints to PDF. `page.html()` gives a `Doc`: import `html.dart`
+/// for it.
+///
+/// Every call below runs through `dart_toolkit_chrome` (ABI 2); without the
+/// library it is an [UnsupportedError] (rule 42: no Dart fallback). The CDP
+/// calls run as jobs on native threads, so the event loop stays free while a
+/// render hangs; each is bounded by its timeout, and [close] always reaps the
+/// tree. Closing a [Page] fails its in-flight calls with `StateError('closed')`.
+final class Chrome implements ffi.Finalizable {
+  /// Attaches to a running Chrome at 127.0.0.1:[port] instead of launching.
+  final int? port;
+
+  /// The browser executable (found when null).
+  final String? executable;
+
+  /// Whether to show the browser window.
+  final bool visible;
+
+  /// Reuses a profile directory (a temp one is made and dropped otherwise).
+  final String? profile;
+
+  /// Extra browser arguments.
+  final List<String> args;
+
+  Future<_Launched>? _started;
+
+  /// The launch or attach job in flight, if any: [close] stops it.
+  NativeJob? _starting;
+
+  static final _finalizer = ffi.NativeFinalizer(
+    require().lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>('tk_cdp_release').cast(),
+  );
+
+  Chrome({this.port, this.executable, this.visible = false, this.profile, this.args = const []});
+
+  Future<_Launched> get _handle => _started ??= _start();
+
+  /// Launches (or attaches, for [port]) on first use.
+  Future<_Launched> _start() async {
+    if (port != null) {
+      final slot = alloc(8).cast<ffi.Pointer<ffi.Void>>();
+      final NativeJob job;
+      try {
+        job = startJob(
+          'attach to Chrome at 127.0.0.1:$port',
+          chromeJobs,
+          (done, stop, progress, id) =>
+              withText('127.0.0.1', (hp, hl) => _ChromeNative.attach(hp, hl, port!, slot, done, stop, progress, id)),
+        );
+      } catch (_) {
+        free(slot.cast(), 8);
+        rethrow;
+      }
+      _starting = job;
+      _finalizer.attach(this, slot.value, detach: this);
+      try {
+        final endpoint = utf8.decode(await job.future);
+        return _Launched(slot.value, endpoint, null);
+      } catch (_) {
+        _finalizer.detach(this);
+        _ChromeNative.releaseBrowser(slot.value);
+        rethrow;
+      } finally {
+        free(slot.cast(), 8);
+        _starting = null;
+      }
+    }
     final exe = executable ?? _findChrome();
-    if (exe == null) throw const ChromeException('No Chrome or Edge executable found');
+    if (exe == null) throw const MissingException('Chrome or Edge executable');
+    // Headless hides behind the real user agent: `exe --version` names the
+    // version, and the launch carries `--user-agent=` with `HeadlessChrome`
+    // replaced by `Chrome`. Visible mode keeps the real UA (no flag). A probe
+    // that fails in any way launches without the flag.
+    final extra = List<String>.of(args);
+    if (!visible) {
+      final agent = await _stealthUserAgent(exe);
+      if (agent != null) extra.add('--user-agent=$agent');
+    }
     final dir = profile ?? (await io.Directory.systemTemp.createTemp('tk_chrome_profile_')).path;
     final owned = profile == null;
-    final portOut = Lib2Chrome.alloc(2).cast<ffi.Uint16>();
+    final slot = alloc(8).cast<ffi.Pointer<ffi.Void>>();
+    final NativeJob job;
     try {
-      final handle = Lib2Chrome.withText(exe, (ep, el) {
-        return Lib2Chrome.withText(dir, (dp, dl) {
-          return Lib2Chrome.withBytes(utf8.encode(args.join('\x00')), (ap, al) {
-            return _ChromeNative.launch(ep, el, (headless && !visible) ? 1 : 0, dp, dl, owned ? 1 : 0, ap, al, portOut);
+      job = startJob(
+        'launch Chrome',
+        chromeJobs,
+        (done, stop, progress, id) => withText(exe, (ep, el) {
+          return withText(dir, (dp, dl) {
+            return withBytes(utf8.encode(extra.join('\x00')), (ap, al) {
+              return _ChromeNative.launch(
+                ep,
+                el,
+                visible ? 0 : 1,
+                dp,
+                dl,
+                owned ? 1 : 0,
+                ap,
+                al,
+                slot,
+                done,
+                stop,
+                progress,
+                id,
+              );
+            });
           });
-        });
-      });
-      if (handle == ffi.nullptr) throw ChromeException('Cannot launch Chrome: ${Lib2Chrome.lastError()}');
-      return Browser._(handle, 'http://127.0.0.1:${portOut.value}');
+        }),
+      );
+    } catch (_) {
+      free(slot.cast(), 8);
+      // A refused queue owns nothing: drop the temp profile it just made, so
+      // one bogus executable does not leave profiles behind.
+      if (owned) await _dropDir(dir);
+      rethrow;
+    }
+    _starting = job;
+    _finalizer.attach(this, slot.value, detach: this);
+    try {
+      final endpoint = utf8.decode(await job.future);
+      return _Launched(slot.value, endpoint, owned ? dir : null);
+    } catch (_) {
+      _finalizer.detach(this);
+      _ChromeNative.releaseBrowser(slot.value);
+      // A failed launch owns nothing: the native side already reaped what it
+      // spawned and dropped an owned profile; this only covers the leftovers.
+      if (owned) await _dropDir(dir);
+      rethrow;
     } finally {
-      Lib2Chrome.free(portOut.cast(), 2);
+      free(slot.cast(), 8);
+      _starting = null;
     }
   }
 
-  /// Attaches to an already-running Chrome with a debugging [port].
-  static Future<Browser> connect({String port = '9222', String host = '127.0.0.1'}) async {
-    final handle = Lib2Chrome.withText(host, (hp, hl) => _ChromeNative.attach(hp, hl, int.parse(port)));
-    if (handle == ffi.nullptr) throw ChromeException('Cannot attach to Chrome: ${Lib2Chrome.lastError()}');
-    return Browser._(handle, 'http://$host:$port');
+  /// Opens [url] in a new tab and answers the connected [Page].
+  /// Launches/attaches on first call.
+  Future<Page> open(String url, {Duration timeout = const Duration(seconds: 30)}) async {
+    final l = await _handle;
+    final slot = alloc(8).cast<ffi.Pointer<ffi.Void>>();
+    final NativeJob job;
+    try {
+      job = startJob(
+        'open $url',
+        chromeJobs,
+        (done, stop, progress, id) => withText(
+          url,
+          (p, n) => _ChromeNative.open(l.handle, p, n, timeout.inMilliseconds, slot, done, stop, progress, id),
+        ),
+      );
+    } catch (_) {
+      free(slot.cast(), 8);
+      rethrow;
+    }
+    final page = Page._(slot.value, l.endpoint);
+    free(slot.cast(), 8);
+    try {
+      await job.future;
+      return page;
+    } catch (_) {
+      // Never connected: free the handle (closing the tab if one appeared).
+      page._abandon();
+      rethrow;
+    }
   }
 
-  /// The browser executable: `DART_TOOLKIT_CHROME` first (PLAN.md §9), then the
+  /// The open pages.
+  Future<List<Page>> pages() async {
+    final l = await _handle;
+    final res = await _httpGet('${l.endpoint}/json/list');
+    final list = jsonDecode(res) as List<dynamic>;
+    final pages = <Page>[];
+    for (final item in list.cast<Map<String, dynamic>>()) {
+      final ws = item['webSocketDebuggerUrl'] as String?;
+      final id = item['id'] as String?;
+      if (item['type'] == 'page' && ws != null && id != null) {
+        final handle = withText(ws, (wp, wl) {
+          return withText(id, (ip, il) => _ChromeNative.attachPage(l.handle, wp, wl, ip, il));
+        });
+        if (handle != ffi.nullptr) pages.add(Page._(handle, l.endpoint));
+      }
+    }
+    return pages;
+  }
+
+  /// Whether the browser process still lives (never true before the first
+  /// [open], nor after [close]).
+  Future<bool> alive() async {
+    final started = _started;
+    if (started == null) return false;
+    _Launched? l;
+    try {
+      l = await started;
+    } catch (_) {
+      return false;
+    }
+    return l.handle != ffi.nullptr && _ChromeNative.alive(l.handle) == 1;
+  }
+
+  /// Closes the browser: the whole tree dies (never an orphan), the temp
+  /// profile is deleted. Idempotent; a relaunch happens on the next [open].
+  /// A launch still in flight is stopped first.
+  Future<void> close() async {
+    final starting = _starting;
+    _starting = null;
+    starting?.cancel(StateError('closed'));
+    final started = _started;
+    _started = null;
+    if (started == null) return;
+    _Launched? l;
+    try {
+      l = await started;
+    } catch (_) {
+      // Never started: there is nothing to free.
+      return;
+    }
+    final h = l.handle;
+    if (h == ffi.nullptr) return;
+    l.handle = ffi.nullptr;
+    _finalizer.detach(this);
+    _ChromeNative.free(h);
+  }
+
+  /// The browser executable: `DART_TOOLKIT_CHROME` first, then the
   /// usual installs (Chrome, then Edge).
   static String? _findChrome() {
     final env = io.Platform.environment;
@@ -86,124 +276,119 @@ abstract final class Chrome {
   }
 }
 
-/// A connected browser instance: a resource — [close] it.
-final class Browser implements ffi.Finalizable {
-  ffi.Pointer<ffi.Void> _handle;
-
-  /// The DevTools HTTP endpoint, e.g. `http://127.0.0.1:9222`.
+/// A launched or attached browser: its native handle, DevTools endpoint, and
+/// the temp profile it owns (null when reused or attached).
+final class _Launched {
+  ffi.Pointer<ffi.Void> handle;
   final String endpoint;
+  final String? ownedProfile;
 
-  static final _finalizer = ffi.NativeFinalizer(
-    Lib2Chrome.require().lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>('tk_cdp_release').cast(),
-  );
-
-  Browser._(this._handle, this.endpoint) {
-    _finalizer.attach(this, _handle, detach: this);
-  }
-
-  /// Metadata about the browser.
-  Future<Map<String, dynamic>> version() async {
-    final res = await _httpGet('$endpoint/json/version');
-    return jsonDecode(res) as Map<String, dynamic>;
-  }
-
-  /// Opens [url] in a new tab and answers the connected [Page].
-  Future<Page> open(String url, {Duration timeout = const Duration(seconds: 30)}) async {
-    final out = Lib2Chrome.alloc(8).cast<ffi.Pointer<ffi.Void>>();
-    try {
-      final rc = Lib2Chrome.withText(
-        url,
-        (p, n) => _ChromeNative.open(_handle, p, n, timeout.inMilliseconds, ffi.nullptr, out),
-      );
-      if (rc < 0) throw ChromeException('Cannot open $url: ${Lib2Chrome.lastError()}');
-      return Page._(out.value, endpoint);
-    } finally {
-      Lib2Chrome.free(out.cast(), 8);
-    }
-  }
-
-  /// Opens a blank tab.
-  Future<Page> newTab({String about = 'about:blank'}) => open(about);
-
-  /// Opens a blank tab.
-  @Deprecated('use newTab instead')
-  Future<Page> newPage() => newTab();
-
-  /// The open pages.
-  Future<List<Page>> pages() async {
-    final res = await _httpGet('$endpoint/json/list');
-    final list = jsonDecode(res) as List<dynamic>;
-    final pages = <Page>[];
-    for (final item in list.cast<Map<String, dynamic>>()) {
-      final ws = item['webSocketDebuggerUrl'] as String?;
-      final id = item['id'] as String?;
-      if (item['type'] == 'page' && ws != null && id != null) {
-        final handle = Lib2Chrome.withText(ws, (wp, wl) {
-          return Lib2Chrome.withText(id, (ip, il) {
-            return Lib2Chrome.withText(endpoint, (ep, el) => _ChromeNative.attachPage(wp, wl, ip, il, ep, el));
-          });
-        });
-        if (handle != ffi.nullptr) pages.add(Page._(handle, endpoint));
-      }
-    }
-    return pages;
-  }
-
-  /// Whether the browser process still lives (never true after [close]).
-  Future<bool> get alive async => _handle != ffi.nullptr && _ChromeNative.alive(_handle) == 1;
-
-  /// Closes the browser: the whole tree dies (never an orphan), the temp
-  /// profile is deleted. Idempotent.
-  Future<void> close() async {
-    final h = _handle;
-    if (h == ffi.nullptr) return;
-    _handle = ffi.nullptr;
-    _finalizer.detach(this);
-    _ChromeNative.free(h);
-  }
+  _Launched(this.handle, this.endpoint, this.ownedProfile);
 }
 
-/// A single tab, driven through the native CDP engine.
-final class Page implements ffi.Finalizable {
+/// A single tab, driven through the native CDP engine. A [Source] over its
+/// HTML, so `page.html()` gives a `Doc` (import `html.dart` for it) and
+/// `page.text()` the markup.
+///
+/// Every drive call below is a job on a native thread; [close] fails the ones
+/// still in flight with `StateError('closed')`, and a call on a closed page
+/// throws it at once.
+final class Page implements ffi.Finalizable, Source {
   ffi.Pointer<ffi.Void> _handle;
 
   /// The browser endpoint this tab belongs to.
   final String endpoint;
 
+  /// The CDP jobs in flight: [close] stops them all.
+  final _jobs = <NativeJob>{};
+
   static final _finalizer = ffi.NativeFinalizer(
-    Lib2Chrome.require()
-        .lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>('tk_cdp_release_page')
-        .cast(),
+    require().lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>('tk_cdp_release_page').cast(),
   );
 
   Page._(this._handle, this.endpoint) {
     _finalizer.attach(this, _handle, detach: this);
+    sourceUrls[this] = () => _readUrl;
   }
 
+  /// The page's URL when [reader] last read it: `page.html()` resolves links against it.
+  String? _readUrl;
+
+  /// Throws `StateError('closed')` once the tab is gone.
+  void _checkOpen() {
+    if (_handle == ffi.nullptr) throw StateError('closed');
+  }
+
+  /// Runs a native count call ([start] queues it); tracked so [close] stops it.
+  Future<int> _count(String op, StartJob start) async {
+    _checkOpen();
+    final job = startJob(op, chromeJobs, start);
+    _jobs.add(job);
+    try {
+      await job.future;
+      return job.rc;
+    } finally {
+      _jobs.remove(job);
+    }
+  }
+
+  /// Runs a native byte call ([start] queues it); tracked so [close] stops it.
+  Future<Uint8List> _bytes(String op, StartJob start) async {
+    _checkOpen();
+    final job = startJob(op, chromeJobs, start);
+    _jobs.add(job);
+    try {
+      return await job.future;
+    } finally {
+      _jobs.remove(job);
+    }
+  }
+
+  /// Gives up the handle without a server round-trip: detaches the finalizer
+  /// and releases the native side (closing the tab if one appeared). For a
+  /// failed [Chrome.open] only; [close] goes through the server instead.
+  void _abandon() {
+    final h = _handle;
+    _handle = ffi.nullptr;
+    _finalizer.detach(this);
+    _jobs.clear();
+    if (h != ffi.nullptr) _ChromeNative.releasePage(h);
+  }
+
+  /// This page's HTML as a [Reader]; [from] must be 0.
+  @override
+  Future<Reader> reader({int from = 0}) async {
+    if (from != 0) throw ArgumentError.value(from, 'from', 'Only 0: a page cannot seek');
+    final read = (await eval('location.href + "\\n" + document.documentElement.outerHTML')).toString();
+    final cut = read.indexOf('\n');
+    _readUrl = read.substring(0, cut);
+    return _PageReader(utf8.encode(read.substring(cut + 1)));
+  }
+
+  /// The page markup length is not known up front.
+  @override
+  int? get lengthHint => null;
+
   /// Navigates to [url] and waits for the load event.
-  Future<void> goto(String url, {Duration timeout = const Duration(seconds: 30)}) async {
-    final rc = Lib2Chrome.withText(
-      url,
-      (p, n) => _ChromeNative.navigate(_handle, p, n, timeout.inMilliseconds, ffi.nullptr),
+  Future<void> navigate(String url, {Duration timeout = const Duration(seconds: 30)}) async {
+    await _count(
+      'navigate to $url',
+      (done, stop, progress, id) => withText(
+        url,
+        (p, n) => _ChromeNative.navigate(_handle, p, n, timeout.inMilliseconds, done, stop, progress, id),
+      ),
     );
-    if (rc < 0) throw ChromeException('Cannot go to $url: ${Lib2Chrome.lastError()}');
   }
 
   /// The page title.
   Future<String> title() async => (await eval('document.title')).toString();
 
-  /// The full HTML of the document: `Html.parse(await page.html())`.
-  Future<String> html() async => (await eval('document.documentElement.outerHTML')).toString();
-
-  /// The full HTML of the document.
-  @Deprecated('use html instead')
-  Future<String> content() => html();
-
   /// Evaluates [expression] and answers its value.
   Future<dynamic> eval(String expression) async {
-    final raw = Lib2Chrome.withText(
-      expression,
-      (p, n) => Lib2Chrome.take('evaluate JavaScript', (o, l) => _ChromeNative.eval(_handle, p, n, o, l)),
+    final raw = await _bytes(
+      'evaluate JavaScript',
+      (done, stop, progress, id) =>
+          withText(expression, (p, n) => _ChromeNative.eval(_handle, p, n, done, stop, progress, id)),
     );
     return jsonDecode(utf8.decode(raw));
   }
@@ -211,86 +396,100 @@ final class Page implements ffi.Finalizable {
   /// Clicks the first element matching [selector] with real mouse events at
   /// its center (scrolled into view first).
   Future<void> click(String selector) async {
-    final rc = Lib2Chrome.withText(selector, (p, n) => _ChromeNative.click(_handle, p, n));
-    if (rc < 0) throw ChromeException('Cannot click $selector: ${Lib2Chrome.lastError()}');
+    await _count(
+      'click $selector',
+      (done, stop, progress, id) =>
+          withText(selector, (p, n) => _ChromeNative.click(_handle, p, n, done, stop, progress, id)),
+    );
   }
 
   /// Types [text] into the first element matching [selector] (focused first,
   /// so framework hooks fire).
   Future<void> type(String selector, String text) async {
-    final rc = Lib2Chrome.withText(selector, (sp, sn) {
-      return Lib2Chrome.withText(text, (tp, tn) => _ChromeNative.type(_handle, sp, sn, tp, tn));
-    });
-    if (rc < 0) throw ChromeException('Cannot type into $selector: ${Lib2Chrome.lastError()}');
-  }
-
-  /// Sets the value of the first input matching [selector] and fires `input`.
-  Future<void> fill(String selector, String value) => eval(
-    '(() => { const el = document.querySelector(${jsonEncode(selector)});'
-    ' el.value = ${jsonEncode(value)};'
-    " el.dispatchEvent(new Event('input', { bubbles: true })); })()",
-  );
-
-  /// Waits until [selector] matches or [timeout] elapses.
-  Future<void> wait(String selector, {Duration timeout = const Duration(seconds: 10)}) async {
-    final rc = Lib2Chrome.withText(
-      selector,
-      (p, n) => _ChromeNative.wait(_handle, p, n, timeout.inMilliseconds, ffi.nullptr),
+    await _count(
+      'type into $selector',
+      (done, stop, progress, id) => withText(selector, (sp, sn) {
+        return withText(text, (tp, tn) => _ChromeNative.type(_handle, sp, sn, tp, tn, done, stop, progress, id));
+      }),
     );
-    if (rc < 0) throw ChromeException('Timed out waiting for $selector: ${Lib2Chrome.lastError()}');
   }
 
   /// Waits until [selector] matches or [timeout] elapses.
-  @Deprecated('use wait instead')
-  Future<void> waitFor(String selector, {Duration timeout = const Duration(seconds: 10)}) =>
-      wait(selector, timeout: timeout);
+  Future<void> wait(String selector, {Duration timeout = const Duration(seconds: 30)}) async {
+    await _count(
+      'wait for $selector',
+      (done, stop, progress, id) => withText(
+        selector,
+        (p, n) => _ChromeNative.wait(_handle, p, n, timeout.inMilliseconds, done, stop, progress, id),
+      ),
+    );
+  }
 
   /// Captures a PNG screenshot (`full` captures past the viewport). Pipe it:
-  /// `await page.shot().pipe(File('shot.png'))`.
-  Future<Uint8List> shot({bool full = false}) {
-    return Future.value(
-      Lib2Chrome.take('capture screenshot', (o, l) => _ChromeNative.shot(_handle, full ? 1 : 0, ffi.nullptr, o, l)),
+  /// `await page.screenshot().pipe(File('shot.png'))`.
+  Future<Uint8List> screenshot({bool full = false}) {
+    return _bytes(
+      'capture screenshot',
+      (done, stop, progress, id) => _ChromeNative.shot(_handle, full ? 1 : 0, done, stop, progress, id),
     );
   }
-
-  /// Captures a PNG screenshot.
-  @Deprecated('use shot instead')
-  Future<Uint8List> screenshot({bool fullPage = false}) => shot(full: fullPage);
 
   /// Prints the page to PDF (`landscape` when set). Pipe it:
   /// `await page.pdf().pipe(File('page.pdf'))`.
   Future<Uint8List> pdf({bool landscape = false}) {
-    return Future.value(Lib2Chrome.take('print to PDF', (o, l) => _ChromeNative.pdf(_handle, landscape ? 1 : 0, o, l)));
+    return _bytes(
+      'print to PDF',
+      (done, stop, progress, id) => _ChromeNative.pdf(_handle, landscape ? 1 : 0, done, stop, progress, id),
+    );
   }
 
-  /// Sends a raw DevTools command ([params] is a JSON object, empty for none)
-  /// and answers the result object: the escape hatch under the verbs above.
-  Future<Map<String, dynamic>> send(String method, [Map<String, dynamic>? params]) async {
-    final raw = Lib2Chrome.withText(method, (mp, ml) {
-      return Lib2Chrome.withText(jsonEncode(params ?? {}), (pp, pl) {
-        return Lib2Chrome.take('send $method', (o, l) => _ChromeNative.send(_handle, mp, ml, pp, pl, o, l));
-      });
-    });
-    return (jsonDecode(utf8.decode(raw)) as Map).cast<String, dynamic>();
-  }
-
-  /// Closes the tab. Idempotent.
+  /// Closes the tab: its in-flight calls fail with `StateError('closed')`,
+  /// then the server drops the tab. Idempotent.
   Future<void> close() async {
     final h = _handle;
     if (h == ffi.nullptr) return;
     _handle = ffi.nullptr;
     _finalizer.detach(this);
-    _ChromeNative.closePage(h);
+    for (final job in _jobs.toList()) {
+      job.cancel(StateError('closed'));
+    }
+    _jobs.clear();
+    await nativeCount(
+      'close page',
+      chromeJobs,
+      (done, stop, progress, id) => _ChromeNative.closePage(h, done, stop, progress, id),
+    );
   }
 }
 
-/// The native `tk_cdp_*` calls behind [Browser] and [Page].
+/// A [Reader] over bytes in hand (a page's markup).
+final class _PageReader implements Reader {
+  final Uint8List _bytes;
+  int _pos = 0;
+
+  _PageReader(this._bytes);
+
+  @override
+  Future<int> read(Uint8List buf) async {
+    if (_pos >= _bytes.length) return 0;
+    final n = buf.length < _bytes.length - _pos ? buf.length : _bytes.length - _pos;
+    buf.setRange(0, n, _bytes, _pos);
+    _pos += n;
+    return n;
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+/// The native `tk_cdp_*` calls behind [Chrome] and [Page] (native ABI 2: every
+/// call that waits on the browser is a job answering through `done`).
 abstract final class _ChromeNative {
-  static ffi.DynamicLibrary get _lib => Lib2Chrome.require();
+  static ffi.DynamicLibrary get _lib => require();
 
   static final launch = _lib
       .lookupFunction<
-        ffi.Pointer<ffi.Void> Function(
+        ffi.Int32 Function(
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
           ffi.Uint8,
@@ -299,9 +498,13 @@ abstract final class _ChromeNative {
           ffi.Uint8,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
-          ffi.Pointer<ffi.Uint16>,
+          ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
-        ffi.Pointer<ffi.Void> Function(
+        int Function(
           ffi.Pointer<ffi.Uint8>,
           int,
           int,
@@ -310,14 +513,36 @@ abstract final class _ChromeNative {
           int,
           ffi.Pointer<ffi.Uint8>,
           int,
-          ffi.Pointer<ffi.Uint16>,
+          ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
         )
       >('tk_cdp_launch');
 
   static final attach = _lib
       .lookupFunction<
-        ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr, ffi.Uint16),
-        ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Uint8>, int, int)
+        ffi.Int32 Function(
+          ffi.Pointer<ffi.Uint8>,
+          ffi.IntPtr,
+          ffi.Uint16,
+          ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
+        ),
+        int Function(
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          int,
+          ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
       >('tk_cdp_attach');
 
   static final open = _lib
@@ -327,16 +552,22 @@ abstract final class _ChromeNative {
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
           ffi.Uint64,
-          ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
         int Function(
           ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Uint8>,
           int,
           int,
-          ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Pointer<ffi.Void>>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
         )
       >('tk_cdp_open');
 
@@ -347,9 +578,21 @@ abstract final class _ChromeNative {
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
           ffi.Uint64,
-          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
-        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int, int, ffi.Pointer<ffi.Void>)
+        int Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
       >('tk_cdp_navigate');
 
   static final eval = _lib
@@ -358,15 +601,19 @@ abstract final class _ChromeNative {
           ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
         int Function(
           ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Uint8>,
           int,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
         )
       >('tk_cdp_eval');
 
@@ -377,15 +624,43 @@ abstract final class _ChromeNative {
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
           ffi.Uint64,
-          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
-        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int, int, ffi.Pointer<ffi.Void>)
+        int Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
       >('tk_cdp_wait');
 
   static final click = _lib
       .lookupFunction<
-        ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, ffi.IntPtr),
-        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int)
+        ffi.Int32 Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.IntPtr,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
+        ),
+        int Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
       >('tk_cdp_click');
 
   static final type = _lib
@@ -396,8 +671,22 @@ abstract final class _ChromeNative {
           ffi.IntPtr,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
-        int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int, ffi.Pointer<ffi.Uint8>, int)
+        int Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
       >('tk_cdp_type');
 
   static final shot = _lib
@@ -405,16 +694,18 @@ abstract final class _ChromeNative {
         ffi.Int32 Function(
           ffi.Pointer<ffi.Void>,
           ffi.Uint8,
-          ffi.Pointer<ffi.Void>,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
         int Function(
           ffi.Pointer<ffi.Void>,
           int,
-          ffi.Pointer<ffi.Void>,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
         )
       >('tk_cdp_shot');
 
@@ -423,72 +714,101 @@ abstract final class _ChromeNative {
         ffi.Int32 Function(
           ffi.Pointer<ffi.Void>,
           ffi.Uint8,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
-        ),
-        int Function(ffi.Pointer<ffi.Void>, int, ffi.Pointer<ffi.Pointer<ffi.Uint8>>, ffi.Pointer<ffi.IntPtr>)
-      >('tk_cdp_pdf');
-
-  static final send = _lib
-      .lookupFunction<
-        ffi.Int32 Function(
-          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
           ffi.Pointer<ffi.Uint8>,
-          ffi.IntPtr,
-          ffi.Pointer<ffi.Uint8>,
-          ffi.IntPtr,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
         ),
         int Function(
           ffi.Pointer<ffi.Void>,
-          ffi.Pointer<ffi.Uint8>,
           int,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
           ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
           int,
-          ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-          ffi.Pointer<ffi.IntPtr>,
         )
-      >('tk_cdp_send');
+      >('tk_cdp_pdf');
 
   static final attachPage = _lib
       .lookupFunction<
         ffi.Pointer<ffi.Void> Function(
-          ffi.Pointer<ffi.Uint8>,
-          ffi.IntPtr,
+          ffi.Pointer<ffi.Void>,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
           ffi.Pointer<ffi.Uint8>,
           ffi.IntPtr,
         ),
-        ffi.Pointer<ffi.Void> Function(
-          ffi.Pointer<ffi.Uint8>,
-          int,
-          ffi.Pointer<ffi.Uint8>,
-          int,
-          ffi.Pointer<ffi.Uint8>,
-          int,
-        )
+        ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, int, ffi.Pointer<ffi.Uint8>, int)
       >('tk_cdp_attach_page');
 
   static final alive = _lib
       .lookupFunction<ffi.Int32 Function(ffi.Pointer<ffi.Void>), int Function(ffi.Pointer<ffi.Void>)>('tk_cdp_alive');
 
   static void free(ffi.Pointer<ffi.Void> handle) {
-    if (_free(handle) < 0) throw ChromeException('Cannot close Chrome: ${Lib2Chrome.lastError()}');
+    if (_free(handle) < 0) throw NativeException('close Chrome', lastError());
   }
 
   static final _free = _lib
       .lookupFunction<ffi.Int32 Function(ffi.Pointer<ffi.Void>), int Function(ffi.Pointer<ffi.Void>)>('tk_cdp_free');
 
-  static void closePage(ffi.Pointer<ffi.Void> handle) {
-    if (_closePage(handle) < 0) throw ChromeException('Cannot close page: ${Lib2Chrome.lastError()}');
-  }
+  static final closePage = _lib
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          ffi.Int64,
+        ),
+        int Function(
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.NativeFunction<DoneFn>>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.NativeFunction<ProgressFn>>,
+          int,
+        )
+      >('tk_cdp_close_page');
 
-  static final _closePage = _lib
-      .lookupFunction<ffi.Int32 Function(ffi.Pointer<ffi.Void>), int Function(ffi.Pointer<ffi.Void>)>(
-        'tk_cdp_close_page',
+  /// Best-effort release of a browser handle that never connected (a failed
+  /// launch or attach): frees it without failing.
+  static final releaseBrowser = _lib
+      .lookupFunction<ffi.Void Function(ffi.Pointer<ffi.Void>), void Function(ffi.Pointer<ffi.Void>)>('tk_cdp_release');
+
+  /// Best-effort release of a page handle that never connected (a failed
+  /// open): frees it (closing the tab if one appeared) without failing.
+  static final releasePage = _lib
+      .lookupFunction<ffi.Void Function(ffi.Pointer<ffi.Void>), void Function(ffi.Pointer<ffi.Void>)>(
+        'tk_cdp_release_page',
       );
+}
+
+/// Deletes the directory at [dir] when there is one; never throws.
+Future<void> _dropDir(String dir) async {
+  try {
+    await io.Directory(dir).delete(recursive: true);
+  } catch (_) {
+    // Best effort: a half-made profile must not leak, but a missing one is fine.
+  }
+}
+
+/// The headless user agent: Chrome's own, with `HeadlessChrome` replaced by
+/// `Chrome`, versioned by `exe --version` (10 s; any failure answers null, and
+/// the launch goes without the flag).
+Future<String?> _stealthUserAgent(String exe) async {
+  try {
+    final res = await io.Process.run(exe, ['--version']).timeout(const Duration(seconds: 10));
+    final version = RegExp(r'\d+\.\d+\.\d+\.\d+').firstMatch('${res.stdout}${res.stderr}')?.group(0);
+    if (version == null) return null;
+    final platform = io.Platform.isMacOS
+        ? '(Macintosh; Intel Mac OS X 10_15_7)'
+        : io.Platform.isWindows
+        ? '(Windows NT 10.0; Win64; x64)'
+        : '(X11; Linux x86_64)';
+    return 'Mozilla/5.0 $platform AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$version Safari/537.36';
+  } catch (_) {
+    // A missing executable, a hang, or unparsable output: launch as before.
+    return null;
+  }
 }
 
 Future<String> _httpGet(String url) async {
@@ -497,7 +817,7 @@ Future<String> _httpGet(String url) async {
     final request = await client.getUrl(Uri.parse(url)).timeout(const Duration(seconds: 10));
     final response = await request.close().timeout(const Duration(seconds: 10));
     final body = await utf8.decodeStream(response).timeout(const Duration(seconds: 10));
-    if (response.statusCode != 200) throw ChromeException('Chrome answered ${response.statusCode} for $url');
+    if (response.statusCode != 200) throw NativeException('read Chrome $url', 'answered ${response.statusCode}');
     return body;
   } finally {
     client.close(force: true);

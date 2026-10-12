@@ -1,9 +1,12 @@
 /// # Processes
 ///
-/// `Process.run` for one-shot commands with captured output, or the `Process`
-/// constructor for a streaming child: a `Reader` over stdout and a `Writer`
-/// into stdin, with `line()`/`lines()` streaming, `wait(timeout:)` and
-/// `cancel()` — both of which kill the whole process tree.
+/// A lazy `Process(cmd, args)`: stdout is a `Source`, stdin a `Target`, so
+/// readings and `pipe` work on it. A non-zero exit throws a
+/// `ProcessException`; `check` answers yes or no; `close` kills the whole
+/// tree.
 library;
 
 export 'src/process/process.dart';
+export 'src/core/errors.dart';
+export 'src/core/pipe.dart';
+export 'src/core/traits.dart';

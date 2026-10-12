@@ -1,8 +1,8 @@
-/// The `lib2` seam over the `dart_toolkit_tui` cdylib (ABI 1).
+/// The seam over the `dart_toolkit_tui` cdylib.
 ///
 /// Only `tui` imports this file — never `dart:ffi` directly — so only programs
-/// that own the screen compile FFI (r56). Without the library, owning the
-/// terminal is an [UnsupportedError] (r50: no Dart fallback); the [FakeTerminal]
+/// that own the screen compile FFI (rule 50). Without the library, owning the
+/// terminal is an [UnsupportedError] (rule 42: no Dart fallback); the [FakeTerminal]
 /// test seam stays pure Dart and always works.
 library;
 
@@ -11,8 +11,10 @@ import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:isolate';
 
+import '../core/native_status.dart';
+
 /// ABI of `dart_toolkit_tui` this seam binds.
-const lib2TuiAbi = 1;
+const _tuiAbi = 2;
 
 /// A polled `tk_event`: what the native crate heard.
 final class TkEvent extends ffi.Struct {
@@ -22,7 +24,7 @@ final class TkEvent extends ffi.Struct {
   external int kind;
 
   /// Key: printable scalar, else a named code (`0x100001` up … — see
-  /// `Lib2Tui.keyUp` et al). Pointer: button. Resize: unused.
+  /// `_Tui.keyUp` et al). Pointer: button. Resize: unused.
   @ffi.Int32()
   external int code;
 
@@ -51,43 +53,13 @@ final class TkEvent extends ffi.Struct {
   external int textLen;
 }
 
-/// The `tui` cdylib binding for `lib2`: opened once, on first use.
-abstract final class Lib2Tui {
+/// The `tui` cdylib binding: opened once, on first use.
+abstract final class _Tui {
   static ffi.DynamicLibrary? _lib;
   static String? _reason;
   static bool _tried = false;
 
-  /// Named key codes past the Unicode range (mirror of the Rust table).
-  static const keyUp = 0x100001;
-  static const keyDown = 0x100002;
-  static const keyLeft = 0x100003;
-  static const keyRight = 0x100004;
-  static const keyHome = 0x100005;
-  static const keyEnd = 0x100006;
-  static const keyPageUp = 0x100007;
-  static const keyPageDown = 0x100008;
-  static const keyInsert = 0x100009;
-  static const keyDelete = 0x10000A;
-  static const keyEnter = 0x10000B;
-  static const keyTab = 0x10000C;
-  static const keyBackspace = 0x10000D;
-  static const keyEsc = 0x10000E;
-  static const keyF = 0x100010; // F1..F24 are keyF + (n - 1)
-
-  static const modShift = 1;
-  static const modCtrl = 2;
-  static const modAlt = 4;
-
-  /// Whether the native terminal engine is usable right now.
-  static bool get isAvailable => _load() != null;
-
-  /// Why the library does not load, or `null` when it does.
-  static String? get reason {
-    _load();
-    return _reason;
-  }
-
-  /// The library, or throws [UnsupportedError] naming why it is absent (r50).
+  /// The library, or throws [UnsupportedError] naming why it is absent (rule 42).
   static ffi.DynamicLibrary require() {
     final lib = _load();
     if (lib == null) {
@@ -97,6 +69,13 @@ abstract final class Lib2Tui {
   }
 
   static ffi.DynamicLibrary? _load() {
+    NativeStatus.register(
+      'dart_toolkit_tui',
+      NativeCheck(() => _load() != null, () {
+        _load();
+        return _reason;
+      }, _reset),
+    );
     if (!_tried) {
       _tried = true;
       _lib = _open();
@@ -104,8 +83,9 @@ abstract final class Lib2Tui {
     return _lib;
   }
 
-  /// For tests: forget the cached open so the next call looks again.
-  static void resetForTest() {
+  /// Forgets the cached open so the next call looks again (tests only, behind
+  /// [NativeReset]).
+  static void _reset() {
     _tried = false;
     _lib = null;
     _reason = null;
@@ -139,9 +119,9 @@ abstract final class Lib2Tui {
     try {
       final lib = ffi.DynamicLibrary.open(path);
       final ver = _version(lib);
-      if (ver == lib2TuiAbi) return lib;
+      if (ver == _tuiAbi) return lib;
       lib.close();
-      failures.add('$path reported ABI version $ver, expected $lib2TuiAbi');
+      failures.add('$path reported ABI version $ver, expected $_tuiAbi');
     } catch (e) {
       failures.add('$path: $e');
     }
@@ -163,14 +143,14 @@ abstract final class Lib2Tui {
     return io.File(env).absolute.path;
   }
 
-  /// `native2/lib/<os>_<arch>/<file>` inside the package, or `null` without
+  /// `native/lib/<os>_<arch>/<file>` inside the package, or `null` without
   /// the package sources (a compiled executable has no package).
   static String? get _built {
     final root = _packageRoot();
-    if (root == null || !io.File(_join([root, 'native2', 'Cargo.toml'])).existsSync()) {
+    if (root == null || !io.File(_join([root, 'native', 'Cargo.toml'])).existsSync()) {
       return null;
     }
-    return _join([root, 'native2', 'lib', _target, _fileOf('tui')]);
+    return _join([root, 'native', 'lib', _target, _fileOf('tui')]);
   }
 
   static String _fileOf(String name, [String? target]) => switch ((target ?? _target).split('_').first) {
@@ -254,16 +234,53 @@ abstract final class Lib2Tui {
       withBytes(utf8.encode(text), body);
 }
 
-/// Thrown when terminal interaction fails.
-final class TuiException implements Exception {
-  final String message;
-
-  const TuiException(this.message);
-
-  @override
-  String toString() => 'TuiException: $message';
-}
-
 String _join(List<String> parts) => parts.reduce(
   (a, b) => a.endsWith('/') || a.endsWith(io.Platform.pathSeparator) ? '$a$b' : '$a${io.Platform.pathSeparator}$b',
 );
+
+/// Named key codes past the Unicode range (mirror of the Rust table).
+const keyUp = 0x100001;
+const keyDown = 0x100002;
+const keyLeft = 0x100003;
+const keyRight = 0x100004;
+const keyHome = 0x100005;
+const keyEnd = 0x100006;
+const keyPageUp = 0x100007;
+const keyPageDown = 0x100008;
+const keyInsert = 0x100009;
+const keyDelete = 0x10000A;
+const keyEnter = 0x10000B;
+const keyTab = 0x10000C;
+const keyBackspace = 0x10000D;
+const keyEsc = 0x10000E;
+const keyF = 0x100010; // F1..F24 are keyF + (n - 1)
+
+/// Modifier bitmask: 1 shift, 2 ctrl, 4 alt.
+const modShift = 1;
+const modCtrl = 2;
+const modAlt = 4;
+
+/// The tui seam's shared helpers for `term.dart`: public here so they stay in
+/// one place, hidden from scripts by `tui.dart`'s export list.
+///
+/// The library, or throws [UnsupportedError] naming why it is absent (rule 42).
+ffi.DynamicLibrary require() => _Tui.require();
+
+/// [size] bytes of native memory, released by [free].
+ffi.Pointer<ffi.Uint8> alloc(int size) => _Tui.alloc(size);
+
+/// Releases what [alloc] returned; [size] is what it was asked for.
+void free(ffi.Pointer<ffi.Uint8> ptr, int size) => _Tui.free(ptr, size);
+
+/// Releases a `give()` buffer of [size] bytes.
+void freeGiven(ffi.Pointer<ffi.Uint8> ptr, int size) => _Tui.freeGiven(ptr, size);
+
+/// Runs [body] with [data] copied into native memory.
+R withBytes<R>(List<int> data, R Function(ffi.Pointer<ffi.Uint8> ptr, int len) body) => _Tui.withBytes(data, body);
+
+/// Runs [body] with [text] as UTF-8 in native memory.
+R withText<R>(String text, R Function(ffi.Pointer<ffi.Uint8> ptr, int len) body) => _Tui.withText(text, body);
+
+/// The last error message the library recorded (call on the same thread,
+/// synchronously after the failing call).
+String lastError() => _Tui.lastError();
