@@ -4,6 +4,7 @@ import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
 
+import '../core/decoding.dart';
 import '../core/errors.dart';
 import '../core/jobs.dart';
 import '../core/traits.dart';
@@ -307,7 +308,11 @@ final class Page implements ffi.Finalizable, Source {
 
   Page._(this._handle, this.endpoint) {
     _finalizer.attach(this, _handle, detach: this);
+    sourceUrls[this] = () => _readUrl;
   }
+
+  /// The page's URL when [reader] last read it: `page.html()` resolves links against it.
+  String? _readUrl;
 
   /// Throws `StateError('closed')` once the tab is gone.
   void _checkOpen() {
@@ -354,8 +359,10 @@ final class Page implements ffi.Finalizable, Source {
   @override
   Future<Reader> reader({int from = 0}) async {
     if (from != 0) throw ArgumentError.value(from, 'from', 'Only 0: a page cannot seek');
-    final markup = (await eval('document.documentElement.outerHTML')).toString();
-    return _PageReader(utf8.encode(markup));
+    final read = (await eval('location.href + "\\n" + document.documentElement.outerHTML')).toString();
+    final cut = read.indexOf('\n');
+    _readUrl = read.substring(0, cut);
+    return _PageReader(utf8.encode(read.substring(cut + 1)));
   }
 
   /// The page markup length is not known up front.

@@ -27,7 +27,7 @@ void main() {
   group('live bar line', () {
     test('paints the accent bar, dim details and human byte units', () async {
       CliFake.capture(live: true);
-      final bar = Cli.bar(100000000, label: 'Downloading', unit: 'B', size: 12);
+      final bar = Cli.bar(max: 100000000, label: 'Downloading', unit: 'B', size: 12);
       bar.set(25000000);
       await Future<void>.delayed(const Duration(milliseconds: 100));
       bar.set(50000000);
@@ -44,7 +44,7 @@ void main() {
 
     test('has no head at zero percent', () {
       CliFake.capture(live: true);
-      final bar = Cli.bar(100, label: 'Downloading', unit: 'items', size: 8);
+      final bar = Cli.bar(max: 100, label: 'Downloading', unit: 'items', size: 8);
       bar.set(0);
       final seen = _seen(CliFake.screen.single);
       expect(seen, contains('0%'));
@@ -54,8 +54,8 @@ void main() {
 
     test('pads labels to the longest live label', () {
       CliFake.capture(live: true);
-      final a = Cli.bar(100, label: 'Downloading', unit: 'items', size: 4);
-      final b = Cli.bar(100, label: 'Extracting', unit: 'items', size: 4);
+      final a = Cli.bar(max: 100, label: 'Downloading', unit: 'items', size: 4);
+      final b = Cli.bar(max: 100, label: 'Extracting', unit: 'items', size: 4);
       a.set(10);
       b.set(20);
       final seen = CliFake.screen.map(_seen).toList();
@@ -67,7 +67,7 @@ void main() {
 
     test('other units read raw', () {
       CliFake.capture(live: true);
-      final bar = Cli.bar(100, label: 'Copying', unit: 'items', size: 4);
+      final bar = Cli.bar(max: 100, label: 'Copying', unit: 'items', size: 4);
       bar.set(50);
       expect(_seen(CliFake.screen.single), contains('50%  50/100 items'));
       bar.close();
@@ -77,7 +77,7 @@ void main() {
   group('finished bar line', () {
     test('a complete byte bar names the total and the time', () {
       final buf = CliFake.capture();
-      final bar = Cli.bar(100000000, label: 'Downloading', unit: 'B');
+      final bar = Cli.bar(max: 100000000, label: 'Downloading', unit: 'B');
       bar.set(100000000);
       bar.close();
       expect(_seen(buf.toString()), matches(RegExp(r'✓ Downloading  100 MB in \d+\.\d+s\n$')));
@@ -85,7 +85,7 @@ void main() {
 
     test('a complete count bar names the counts and the time', () {
       final buf = CliFake.capture();
-      final bar = Cli.bar(100, label: 'Copying', unit: 'items');
+      final bar = Cli.bar(max: 100, label: 'Copying', unit: 'items');
       bar.set(100);
       bar.close();
       expect(_seen(buf.toString()), matches(RegExp(r'✓ Copying  100/100 items in \d+\.\d+s\n$')));
@@ -93,15 +93,50 @@ void main() {
 
     test('an incomplete bar stops instead of ticking', () {
       final buf = CliFake.capture();
-      final bar = Cli.bar(100, label: 'Copying', unit: 'items');
+      final bar = Cli.bar(max: 100, label: 'Copying', unit: 'items');
       bar.set(50);
       bar.close();
       expect(_seen(buf.toString()), contains('✗ Copying  stopped at 50/100'));
     });
 
+    test('a bar closes itself on reaching its total, learned from set', () {
+      final buf = CliFake.capture();
+      final bar = Cli.bar(label: 'Saving', unit: 'items');
+      bar.set(0, 4);
+      bar.set(2, 4);
+      expect(_seen(buf.toString()), isNot(contains('✓')));
+      bar.set(4, 4);
+      expect(_seen(buf.toString()), matches(RegExp(r'✓ Saving  4/4 items in \d+\.\d+s\n$')));
+      bar.set(1);
+      expect(bar.value, 4);
+    });
+
+    test('an unknown total (0) keeps the total the bar has', () {
+      CliFake.capture();
+      final bar = Cli.bar(max: 10, unit: 'B');
+      bar.set(4, 0);
+      expect((bar.value, bar.max), (4, 10));
+      bar.close();
+    });
+
+    test('an empty job closes its bar at once', () {
+      final buf = CliFake.capture();
+      Cli.bar(label: 'Nothing').set(0, 0);
+      expect(_seen(buf.toString()), contains('✓ Nothing'));
+    });
+
+    test('Cli.each ticks per item and closes after the loop', () {
+      final buf = CliFake.capture();
+      final seen = [
+        for (final item in Cli.each(['a', 'b', 'c'], label: 'Each')) item,
+      ];
+      expect(seen, ['a', 'b', 'c']);
+      expect(_seen(buf.toString()), matches(RegExp(r'✓ Each  3/3 in \d+\.\d+s\n$')));
+    });
+
     test('tick advances the value', () {
       CliFake.capture();
-      final bar = Cli.bar(3);
+      final bar = Cli.bar(max: 3);
       bar.tick();
       expect(bar.value, 1);
       bar.close();
@@ -172,7 +207,7 @@ void main() {
   group('colour and glyph fallbacks', () {
     test('no colour level prints plain lines', () {
       final buf = CliFake.capture(level: ColorLevel.none);
-      final bar = Cli.bar(100000000, label: 'Downloading', unit: 'B');
+      final bar = Cli.bar(max: 100000000, label: 'Downloading', unit: 'B');
       bar.set(100000000);
       bar.close();
       expect(buf.toString(), isNot(contains('\x1b')));
@@ -181,7 +216,7 @@ void main() {
 
     test('without unicode, words and ascii stand in', () async {
       final buf = CliFake.capture(live: true, unicode: false);
-      final bar = Cli.bar(100, label: 'Copying', unit: 'items', size: 4);
+      final bar = Cli.bar(max: 100, label: 'Copying', unit: 'items', size: 4);
       bar.set(50);
       expect(_seen(CliFake.screen.single), contains('50%  50/100 items'));
       expect(CliFake.screen.single, contains('#'));
@@ -210,8 +245,8 @@ void main() {
   group('live region', () {
     test('a log line lands above, and both bars finish clean', () {
       final buf = CliFake.capture(live: true);
-      final a = Cli.bar(100, label: 'One', size: 4);
-      final b = Cli.bar(100, label: 'Two', size: 4);
+      final a = Cli.bar(max: 100, label: 'One', size: 4);
+      final b = Cli.bar(max: 100, label: 'Two', size: 4);
       a.set(10);
       Cli.print('log line');
       b.set(20);

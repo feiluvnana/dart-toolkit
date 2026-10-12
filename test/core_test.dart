@@ -46,12 +46,18 @@ void main() {
         final src = dir.file('src.bin');
         await src.write(List.filled(100, 1));
         final seen = <int>[];
-        await src.pipe(dir.file('dst.bin'), onProgress: seen.add);
+        await src.pipe(dir.file('dst.bin'), onProgress: (done, _) => seen.add(done));
         expect(seen.last, 100);
         expect(seen, orderedEquals(seen.toList()..sort()));
       } finally {
         await dir.drop();
       }
+    });
+
+    test('onProgress hears the whole size when the source knows it', () async {
+      final totals = <int>{};
+      await BufferReader(Uint8List(100)).pipe(BufferWriter(), onProgress: (_, total) => totals.add(total));
+      expect(totals, {100});
     });
 
     test('BufferWriter takes bytes verbatim', () async {

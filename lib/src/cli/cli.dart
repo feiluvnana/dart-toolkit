@@ -123,7 +123,7 @@ String _humanSingle(num value) {
 /// Cli.print('Done!'.green);
 /// final name = await Cli.ask('Your name?');
 /// final ok   = await Cli.confirm('Proceed?');
-/// final bar  = Cli.bar(100);
+/// final bar  = Cli.bar(max: 100);
 /// try {
 ///   bar.set(50);
 /// } finally {
@@ -393,15 +393,31 @@ abstract final class Cli {
     }
   }
 
-  /// A determinate progress [Bar] of [max] units ([glyphs] picks the set;
-  /// [BarGlyphs.ascii] where the terminal cannot draw Unicode). With
-  /// `unit: 'B'` the values read human (`50.0/100 MB`, with a speed and an
-  /// ETA); with other units they read raw (`50/100 items`).
+  /// A progress [Bar] of [max] units, 0 while unknown: `set(done, total)` learns it,
+  /// so `onProgress: Cli.bar(label: 'Saving').set` draws any job ([glyphs] picks the set;
+  /// [BarGlyphs.ascii] where the terminal cannot draw Unicode). With `unit: 'B'` the
+  /// values read human (`50.0/100 MB`, with a speed and an ETA); with other units they
+  /// read raw (`50/100 items`). The bar closes itself on reaching [max].
   ///
-  /// Close every bar in a `finally`: the live region keeps drawing each bar
-  /// still open, so a bar an exception leaves live goes stale on screen.
-  static Bar bar(int max, {String? label, String? unit, int size = 24, BarGlyphs glyphs = BarGlyphs.line}) =>
-      Bar(max, label: label, unit: unit, size: size, glyphs: glyphs);
+  /// Close a bar that may stop short in a `finally`: the live region keeps drawing each
+  /// bar still open, so a bar an exception leaves live goes stale on screen.
+  static Bar bar({int max = 0, String? label, String? unit, int size = 24, BarGlyphs glyphs = BarGlyphs.line}) =>
+      Bar(max: max, label: label, unit: unit, size: size, glyphs: glyphs);
+
+  /// [items], ticking a [Bar] of their count as the loop moves past each; the bar
+  /// closes when the loop ends: `for (final url in Cli.each(urls, label: 'Pages'))`.
+  static Iterable<T> each<T>(Iterable<T> items, {String? label, String? unit}) sync* {
+    final list = items.toList();
+    final bar = Bar(max: list.length, label: label, unit: unit);
+    try {
+      for (final item in list) {
+        yield item;
+        bar.tick();
+      }
+    } finally {
+      bar.close();
+    }
+  }
 
   /// Shows [label] with [SpinGlyphs.dots] (80 ms) on stderr while [fn] runs,
   /// ending `✓ label 1.2s` — or `✗ label failed: <error>`, rethrowing.
@@ -601,7 +617,7 @@ final class _Meter {
 /// `NO_COLOR`) each bar prints one line when it ends instead.
 ///
 /// ```dart
-/// final bar = Cli.bar(100, label: 'Downloading');
+/// final bar = Cli.bar(max: 100, label: 'Downloading');
 /// try {
 ///   bar.set(50);
 /// } finally {
@@ -609,7 +625,9 @@ final class _Meter {
 /// }
 /// ```
 final class Bar {
-  final int max;
+  /// The total; [set] may move it as a progress callback learns it.
+  int get max => _max;
+  int _max;
   final String? label;
   final String? unit;
 
@@ -627,7 +645,7 @@ final class Bar {
   bool _live = false;
   bool _done = false;
 
-  Bar(this.max, {this.label, this.unit, this.size = 24, this.glyphs = BarGlyphs.line}) {
+  Bar({int max = 0, this.label, this.unit, this.size = 24, this.glyphs = BarGlyphs.line}) : _max = max {
     _live = Cli._liveRegion;
     _meter.sample(0);
     _LiveRegion._attach(this);
@@ -636,12 +654,17 @@ final class Bar {
   /// The value shown.
   int get value => _value;
 
-  /// Sets the completed amount to [value] (clamped to `[0, max]`).
-  void set(int value) {
+  /// Sets the completed amount to [value] (clamped to `[0, max]` once max is known), and
+  /// the total to [max] when it is known (above 0): `bar.set` fits every
+  /// `onProgress: (done, total)`. Reaching the total closes the bar; an empty job
+  /// (`set(0, 0)` on a bar of no total) closes it at once.
+  void set(int value, [int? max]) {
     if (_done) return;
-    _value = value < 0 ? 0 : (value > max ? max : value);
+    if (max != null && max > 0) _max = max;
+    _value = value < 0 ? 0 : (_max > 0 && value > _max ? _max : value);
     _meter.sample(_value);
     _draw();
+    if (_value == _max) close();
   }
 
   /// Adds one unit.
@@ -651,7 +674,7 @@ final class Bar {
 
   /// The live line: spinner frame, padded label, bar, percent, details.
   String _render(int labelWidth) {
-    final ratio = max <= 0 ? 1.0 : _value / max;
+    final ratio = max <= 0 ? 0.0 : _value / max;
     final g = _unicode() ? glyphs : BarGlyphs.ascii;
     final frame = _unicode() ? SpinGlyphs.dots.frame() : SpinGlyphs.ascii.frame();
     final done = (ratio * size + 1e-9).floor().clamp(0, size);
@@ -667,6 +690,7 @@ final class Bar {
   }
 
   String _details() {
+    if (max <= 0) return unit == 'B' ? _humanSingle(_value) : (unit == null ? '$_value' : '$_value $unit');
     if (unit == 'B') {
       var s = _humanPair(_value, max);
       if (_meter.rate > 0 && _value < max) {
@@ -710,8 +734,9 @@ final class Bar {
     final t = '${secs.toStringAsFixed(1)}s';
     final uni = _unicode();
     final pad = label == null ? '' : '${label!.padRight(labelWidth)}  ';
-    if (_value >= max) {
-      final what = unit == 'B' ? _humanSingle(max) : (unit == null ? '$max/$max' : '$max/$max $unit');
+    if (max <= 0 || _value >= max) {
+      final n = max <= 0 ? _value : max;
+      final what = unit == 'B' ? _humanSingle(n) : (unit == null ? '$n/$n' : '$n/$n $unit');
       return '${_green(uni ? '✓' : 'ok')} $pad$what in $t';
     }
     final at = unit == 'B' ? _humanPair(_value, max) : '$_value/$max';

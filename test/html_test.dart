@@ -129,4 +129,46 @@ void main() {
       expect(doc.all('div:has(li)').map((e) => e.attr('id')), ['b']);
     });
   });
+
+  group('links, lines and closest', () {
+    test('link resolves against the document URL, moved by <base href>', () {
+      final doc = Html.parse('<a href="b/c?x=1">c</a><img src="/i.png">', url: 'https://h.test/a/page.html');
+      expect(doc.url, 'https://h.test/a/page.html');
+      expect(doc.find('a')!.link(), 'https://h.test/a/b/c?x=1');
+      expect(doc.find('img')!.link('src'), 'https://h.test/i.png');
+      expect(doc.find('img')!.link(), isNull);
+      final based = Html.parse('<base href="/root/"><a href="x">x</a>', url: 'https://h.test/a/page.html');
+      expect(based.find('a')!.link(), 'https://h.test/root/x');
+      expect(based.drop('base').find('a')!.link(), 'https://h.test/root/x');
+    });
+
+    test('without a URL a link reads as written', () {
+      expect(Html.parse('<a href=" rel/x ">x</a>').find('a')!.link(), 'rel/x');
+    });
+
+    test('a file reading links against the file', () async {
+      final dir = await Dir.temp();
+      try {
+        final file = dir.file('p.html');
+        await file.write('<a href="next.html">n</a>');
+        final doc = await file.html();
+        expect(Uri.parse(doc.find('a')!.link()!).toFilePath(), endsWith('next.html'));
+        expect(Uri.parse(doc.url!).isAbsolute, isTrue);
+      } finally {
+        await dir.drop();
+      }
+    });
+
+    test('lines break at <br> and blocks, trimmed, blanks dropped', () {
+      final doc = Html.parse('<div id=t> 1. One<br>2. Two <br/><br> <p>Three</p><span>Four</span>\n Five</div>');
+      expect(doc.find('#t')!.lines, ['1. One', '2. Two', 'Three', 'Four', 'Five']);
+    });
+
+    test('closest is the nearest matching ancestor, never the element', () {
+      final doc = Html.parse('<div class=row id=outer><div class=row id=inner><a class=row>x</a></div></div>');
+      expect(doc.find('a')!.closest('.row')!.id, 'inner');
+      expect(doc.find('#outer')!.closest('.row'), isNull);
+      expect(doc.find('a')!.closest('table'), isNull);
+    });
+  });
 }

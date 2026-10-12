@@ -22,17 +22,6 @@ import 'package:dart_toolkit/tui.dart';
 const orange = TuiColor.rgb(217, 119, 87);
 const bold = CellStyle(bold: true);
 const muted = CellStyle(dim: true);
-String sizeText(int bytes) {
-  const units = ['B', 'KB', 'MB', 'GB'];
-  var value = bytes.toDouble();
-  var unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return '${value.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
-}
-
 String about(Book book) => [?book.author, ...book.details].join(' · ');
 
 enum Action {
@@ -132,8 +121,6 @@ final class BooksApp {
 
   Future<void> run(Term term) async {
     term.defer(archive.close);
-    term.defer(downloads.close);
-    term.listen(downloads.changes);
     archive.connect().then((_) => term.post(const Connected()), onError: (Object e) => term.post(Unreachable(e)));
     while (true) {
       term.draw(draw);
@@ -247,12 +234,10 @@ final class BooksApp {
         c.text('… waiting: $title');
       case Finding():
         c.spinner('Finding a server for $title', fg: orange);
-      case Receiving(:final bytes):
-        c.text('⬇ $title  ${sizeText(bytes)}', fg: orange);
+      case Receiving(:final bytes, :final total):
+        c.bar(bytes, total, label: '⬇ $title', unit: 'B');
       case Saved(:final file):
-        final home = io.Platform.environment['HOME'] ?? io.Platform.environment['USERPROFILE'] ?? '';
-        final path = home.isEmpty ? file.path : file.path.replaceFirst(home, '~');
-        c.text('✓ $title → $path', fg: TuiColor.green);
+        c.text('✓ $title → ${file.path.replaceFirst(Dir.home.path, '~')}', fg: TuiColor.green);
       case Failed(:final error):
         c.text('✗ $title: $error', fg: TuiColor.red);
     }
@@ -438,14 +423,10 @@ Future<bool> copy(String text) async {
 final site = io.Platform.environment['ANNAS_ARCHIVE'] ?? 'https://annas-archive.gl';
 
 /// The kept browser profile: once the site's browser check is solved in it, later runs pass it headless.
-final keptProfile =
-    '${io.Platform.environment['HOME'] ?? io.Platform.environment['USERPROFILE'] ?? '.'}/.cache/annasarchive/profile';
+final keptProfile = Dir.home.dir('.cache/annasarchive/profile');
 
 /// Titles of the browser-check pages a protected site shows before the real one.
 final checking = RegExp(r'DDoS-Guard|Just a moment|Checking your browser|Attention Required', caseSensitive: false);
-
-/// A server error page's title: `502 Bad Gateway`.
-final serverError = RegExp(r'^\s*([45]\d\d)\b');
 
 final totalCount = RegExp(r'\(([^ ]+) total\)');
 final symbols = RegExp(r'[^\w\s()\[\].,-]');
@@ -475,13 +456,22 @@ typedef SearchPage = ({List<Book> books, String? total, bool more});
 /// headless browser is closed and reopened visible with that profile, so the user solves the
 /// check once in the window; later runs reuse the profile headless.
 final class AnnasArchive {
-  Chrome _chrome = Chrome(profile: keptProfile);
+  Chrome _chrome = Chrome(profile: keptProfile.path);
   Page? _page;
+
+  /// The last page load: loads queue behind it, since they share one tab.
+  Future<void> _last = Future.value();
 
   /// True while the visible window is open for the user to solve the browser check.
   bool visibleCheck = false;
 
-  Future<void> connect() => _open('$site/');
+  /// Opens the site; a domain that answers without the site's markup is parked.
+  Future<void> connect() async {
+    await keptProfile.make();
+    if ((await _open('$site/')).find('form[action*="search"], a[href^="/search"]') == null) {
+      throw MissingException("Anna's Archive at $site: set ANNAS_ARCHIVE to a working mirror");
+    }
+  }
 
   Future<SearchPage> search(String query, {int page = 1}) async {
     final url = Uri.parse('$site/search').replace(queryParameters: {'q': query, if (page > 1) 'page': '$page'});
@@ -489,7 +479,7 @@ final class AnnasArchive {
     return (
       books: [
         for (final link in results.all('.js-aarecord-list-outer a.js-vim-focus'))
-          if (closest(link, '.border-b') case final row?) _book(link, row),
+          if (link.closest('.border-b') case final row?) _book(link, row),
       ],
       total: results.all('div.text-gray-500').map((e) => totalCount.firstMatch(e.text)?[1]).nonNulls.firstOrNull,
       more: results.find('a.js-pagination-next-page') != null,
@@ -501,8 +491,8 @@ final class AnnasArchive {
     for (final server in [8, 9, 10, 0, 1, 2, 3, 4, 5, 6, 7]) {
       try {
         final page = await _open('$site/slow_download/${book.id}/0/$server');
-        for (final a in page.all('a[href^="http"]')) {
-          if (a.text.contains('Download now')) return a.attr('href')!;
+        if (page.all('a[href^="http"]').where((a) => a.text.contains('Download now')).firstOrNull case final a?) {
+          return a.link()!;
         }
       } on Exception {
         continue;
@@ -513,125 +503,75 @@ final class AnnasArchive {
 
   Future<void> close() => _chrome.close();
 
-  /// [url] rendered in the one reused tab, once the browser check has passed. A server
-  /// error is retried twice; a parked domain (no Anna's Archive markup) fails at once.
-  Future<Doc> _open(String url) async {
-    await io.Directory(keptProfile).create(recursive: true);
-    for (var attempt = 1; ; attempt++) {
-      try {
-        if (_page case final page?) {
-          await page.navigate(url, timeout: const Duration(seconds: 60));
-        } else {
-          _page = await _chrome.open(url, timeout: const Duration(seconds: 60));
-        }
-        return await _rendered(_page!, url);
-      } on MissingException {
-        rethrow;
-      } on Exception {
-        if (attempt == 3) rethrow;
-        await Future<void>.delayed(Duration(seconds: attempt * 2));
-      }
-    }
+  /// [url] rendered in the one reused tab, after the loads queued before it.
+  Future<Doc> _open(String url) {
+    final load = _last.then((_) => _load(url));
+    _last = load.then((_) {}, onError: (Object _) {});
+    return load;
   }
 
   /// The page once it is the real one: a browser check is waited out (20 s headless, then a
-  /// visible window with the kept profile for the user to solve it once, 10 min at most), a
-  /// server error page throws, and a page without the site's markup is a parked domain.
-  Future<Doc> _rendered(Page page, String url) async {
-    final headlessOver = DateTime.now().add(const Duration(seconds: 20));
-    final visibleOver = DateTime.now().add(const Duration(minutes: 10));
-    while (true) {
-      final title = await page.title();
-      if (serverError.firstMatch(title)?[1] case final code?) {
-        throw HttpException('$title from $url', uri: Uri.parse(url), status: int.parse(code));
-      }
-      if (!checking.hasMatch(title)) {
-        final doc = await page.html();
-        if (doc.find('a[href^="/search"], form[action*="search"]') == null) {
-          throw MissingException(
-            "Anna's Archive at $site (the domain answers, but not with the site): "
-            'set ANNAS_ARCHIVE to a working mirror',
-          );
-        }
-        visibleCheck = false;
-        return doc;
-      }
-      if (DateTime.now().isAfter(visibleCheck ? visibleOver : headlessOver)) {
-        if (visibleCheck) {
-          throw TimeoutException("The site's browser check did not pass within 10 min", const Duration(minutes: 10));
-        }
-        page = await _escalate(url);
-        continue;
+  /// visible window with the kept profile for the user to solve it once, 10 min at most).
+  Future<Doc> _load(String url) async {
+    if (_page case final page?) {
+      await page.navigate(url, timeout: const Duration(seconds: 60));
+    } else {
+      _page = await _chrome.open(url, timeout: const Duration(seconds: 60));
+    }
+    var over = DateTime.now().add(const Duration(seconds: 20));
+    while (checking.hasMatch(await _page!.title())) {
+      if (DateTime.now().isAfter(over)) {
+        if (visibleCheck) throw TimeoutException("The site's browser check did not pass within 10 min");
+        await _showBrowser(url);
+        over = DateTime.now().add(const Duration(minutes: 10));
       }
       await Future<void>.delayed(const Duration(seconds: 1));
     }
+    visibleCheck = false;
+    return _page!.html();
   }
 
-  /// Closes the headless browser and reopens it visible with the kept profile, so the user
-  /// solves the site's browser check once in the window. Answers the new tab on [url].
-  Future<Page> _escalate(String url) async {
+  /// Reopens the browser visible with the kept profile, so the user solves the site's browser
+  /// check once in the window.
+  Future<void> _showBrowser(String url) async {
     visibleCheck = true;
     await _chrome.close();
-    _page = null;
-    _chrome = Chrome(visible: true, profile: keptProfile);
+    _chrome = Chrome(visible: true, profile: keptProfile.path);
     _page = await _chrome.open(url, timeout: const Duration(seconds: 60));
-    return _page!;
   }
 }
 
 Book _book(Element link, Element row) => Book(
-  _decoded(link.text),
-  '$site${link.attr('href')}',
+  link.text.trim(),
+  link.link()!,
   author: _labelled(row, 'mdi--user-edit'),
   publisher: _labelled(row, 'mdi--company'),
-  description: _optional(row.find('div.text-gray-600.mt-2')),
-  details: _details(row.find('div.font-semibold.text-sm')),
-);
-
-String? _labelled(Element row, String icon) => row
-    .all('a[href^="/search"]')
-    .where((link) => link.find('span[class*="$icon"]') != null)
-    .map((link) => _decoded(link.text))
-    .firstOrNull;
-
-String? _optional(Element? found) => found == null || found.text.trim().isEmpty ? null : _decoded(found.text);
-
-List<String> _details(Element? line) {
-  if (line == null) return [];
-  return [
-    for (final part in line.text.split('·'))
+  description: row.find('div.text-gray-600.mt-2')?.text.trim().nullIfEmpty,
+  details: [
+    for (final part in row.find('div.font-semibold.text-sm')?.text.split('·') ?? const <String>[])
       if (!part.contains('/'))
         if (part.replaceAll(symbols, '').trim() case final detail when detail.isNotEmpty && detail != 'Save') detail,
-  ];
-}
+  ],
+);
 
-String _decoded(String text) => Html.parse(text).text;
+String? _labelled(Element row, String icon) =>
+    row.all('a[href^="/search"]').where((a) => a.find('span[class*="$icon"]') != null).firstOrNull?.text.trim();
 
-/// The nearest ancestor-or-self of [el] matching [css].
-Element? closest(Element el, String css) {
-  for (Element? at = el; at != null; at = at.parent) {
-    if (at.matches(css)) return at;
-  }
-  return null;
+extension on String {
+  String? get nullIfEmpty => isEmpty ? null : this;
 }
 
 // ---- Downloads ----------------------------------------------------------------------------
 
 /// Where books land: $BOOKS_DIR, else ~/Downloads.
-final downloadsFolder = Dir(
-  io.Platform.environment['BOOKS_DIR'] ??
-      '${io.Platform.environment['HOME'] ?? io.Platform.environment['USERPROFILE']}/Downloads',
-);
+final downloadsFolder = Dir(io.Platform.environment['BOOKS_DIR'] ?? Dir.home.dir('Downloads').path);
 
 final bookFormats = 'epub pdf mobi azw3 fb2 djvu cbz cbr txt doc docx rtf zip rar'.split(' ').toSet();
 
 File savePath(Book book) {
   final format = book.details.map((d) => d.toLowerCase()).where(bookFormats.contains).firstOrNull ?? 'bin';
-  final name = [book.title, ?book.author].join(' - ');
-  return downloadsFolder.file('${safeName(name)}.$format');
+  return downloadsFolder.file('${File.safeName([book.title, ?book.author].join(' - '))}.$format');
 }
-
-String safeName(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').replaceAll(RegExp(r'\s+'), ' ').trim();
 
 /// Where one download stands.
 sealed class Progress {
@@ -648,8 +588,9 @@ final class Finding extends Progress {
 }
 
 final class Receiving extends Progress {
-  const Receiving(super.book, this.bytes);
+  const Receiving(super.book, this.bytes, this.total);
   final int bytes;
+  final int total;
 }
 
 final class Saved extends Progress {
@@ -662,22 +603,19 @@ final class Failed extends Progress {
   final Object error;
 }
 
-/// Two downloads at a time. Each streams into `<name>.part` and resumes one an earlier run
-/// left; the finished file is moved into place.
+/// Two downloads at a time. Each streams into `<name>.part`, resuming one an earlier run
+/// left; the finished file is moved into place. The app redraws [latest] as it ticks.
 final class Downloads {
   Downloads(this.archive);
   final AnnasArchive archive;
-  final _changes = StreamController<Progress>.broadcast();
   final _queue = <Book>[];
   final latest = <Book, Progress>{};
   var _running = 0;
 
-  Stream<Progress> get changes => _changes.stream;
-
   void add(Book book) {
     if (latest[book] case Queued() || Finding() || Receiving()) return;
     _queue.add(book);
-    _emit(Queued(book));
+    latest[book] = Queued(book);
     _next();
   }
 
@@ -694,36 +632,16 @@ final class Downloads {
 
   Future<void> _fetch(Book book) async {
     try {
-      _emit(Finding(book));
+      latest[book] = Finding(book);
       final url = await archive.fileOf(book);
-      final to = savePath(book);
-      final part = File('${to.path}.part');
-      await to.parent.make();
-      var shown = DateTime.now();
-      void progress(int bytes) {
-        if (DateTime.now().difference(shown) < const Duration(milliseconds: 200)) return;
-        shown = DateTime.now();
-        _emit(Receiving(book, bytes));
-      }
-
-      try {
-        await Http.get(url, retry: 3).pipe(part, resume: true, onProgress: progress);
-      } on HttpException catch (e) {
-        if (e.status != 200) rethrow;
-        // The server can't resume: start the file over.
-        await part.drop();
-        await Http.get(url, retry: 3).pipe(part, onProgress: progress);
-      }
-      _emit(Saved(book, await part.move(to)));
+      final part = File('${savePath(book).path}.part');
+      await Http.get(
+        url,
+        retry: 3,
+      ).pipe(part, resume: true, onProgress: (done, total) => latest[book] = Receiving(book, done, total));
+      latest[book] = Saved(book, await part.move(savePath(book)));
     } catch (e) {
-      _emit(Failed(book, e));
+      latest[book] = Failed(book, e);
     }
   }
-
-  void _emit(Progress p) {
-    latest[p.book] = p;
-    if (!_changes.isClosed) _changes.add(p);
-  }
-
-  Future<void> close() => _changes.close();
 }

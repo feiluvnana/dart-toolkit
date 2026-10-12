@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:isolate';
 
-/// One-shot background work, always on an isolate.
+/// One-shot work: [run] on a background isolate, [all] over many items at once.
 ///
 /// ```dart
 /// final answer = await Task.run(() => 40 + 2);
+/// final pages = await Task.all(urls, (url) => Http.get(url).text());
 /// ```
 ///
-/// The function runs on a background isolate, so a CPU-bound job never blocks
+/// [run]'s function runs on a background isolate, so a CPU-bound job never blocks
 /// the event loop (timers still fire). It is copied to the isolate, so it
 /// must be a top-level or static function, or a closure over sendable values
 /// only (rule 52); anything else throws an [ArgumentError].
@@ -18,6 +19,41 @@ abstract final class Task {
   /// is abandoned, and the isolate is killed so nothing keeps running (a
   /// [TimeoutException] is thrown).
   static Future<T> run<T>(FutureOr<T> Function() fn, {Duration? timeout}) => _runIsolate(fn, timeout: timeout);
+
+  /// Runs [fn] on every item, [concurrency] at a time, on *this* isolate (for
+  /// I/O: requests, downloads, files; CPU work goes to a `Pool`); answers the
+  /// results in item order. [onProgress] hears `(done, total)` as each ends,
+  /// so `onProgress: bar.set` draws it. The first failure stops new items and
+  /// is rethrown once those already running end.
+  static Future<List<T>> all<I, T>(
+    Iterable<I> items,
+    FutureOr<T> Function(I item) fn, {
+    int concurrency = 4,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (concurrency < 1) throw ArgumentError.value(concurrency, 'concurrency', 'must be at least 1');
+    final list = items.toList();
+    final results = List<T?>.filled(list.length, null);
+    var next = 0;
+    var done = 0;
+    var failed = false;
+    onProgress?.call(0, list.length);
+    Future<void> lane() async {
+      while (!failed && next < list.length) {
+        final i = next++;
+        try {
+          results[i] = await fn(list[i]);
+        } catch (_) {
+          failed = true;
+          rethrow;
+        }
+        onProgress?.call(++done, list.length);
+      }
+    }
+
+    await Future.wait([for (var k = 0; k < concurrency && k < list.length; k++) lane()]);
+    return [for (final r in results) r as T];
+  }
 
   static Future<T> _runIsolate<T>(FutureOr<T> Function() fn, {Duration? timeout}) async {
     final main = ReceivePort();

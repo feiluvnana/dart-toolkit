@@ -79,10 +79,14 @@ await f.write('{"a": 1}');
 Cli.print(await f.text());
 await f.copy(File('conf.bak'));
 await File('conf.bak').drop();
+final out = Dir.script.dir('out').file(File.safeName('Track 1: Intro?.mp3'));
+await out.write([1, 2, 3]);
 ```
 
 `write` replaces atomically (a sibling renamed over the target, with the Windows retry);
-`pipe(File(…))` streams into a file the same way.
+`pipe(File(…))` streams into a file the same way. Every write, `copy` and `move` makes the
+missing folders. `Dir.script` is the running script's folder, `Dir.home` the user's, and
+`File.safeName` turns any text into a file name.
 
 **I want to zip a folder or unpack an archive.**
 
@@ -98,7 +102,8 @@ The format is the extension when packing and the magic bytes when unpacking
 anything is written: escapes are a SecurityException, and every link member is refused
 unless `unpack(dir, trusted: true)` lifts that and the size cap. Unpacking a download streams,
 and a failed stream removes what it created. `dir.pack`, `source.unpack`, `file.hash`,
-`file.copy` and `file.move` take `onProgress:` (units done and total).
+`file.copy`, `file.move`, `pipe` and `Task.all` take `onProgress:` (units done and total, 0
+while unknown), which `Cli.bar().set` draws.
 
 **I want a checksum or a MAC.**
 
@@ -123,10 +128,16 @@ Cli.print(Json({'ok': true}).encode());
 **I want to scrape a page.**
 
 ```dart
-final doc = Html.parse('<ul><li><a>one</a></li><li><a>two</a></li></ul>');
-final titles = [for (final a in doc.all('a')) a.text];
+final doc = await Http.get('https://site.com/list').html();
+final links = [for (final a in doc.all('a')) a.link()];
+final row = doc.find('a')?.closest('tr');
+final lines = doc.find('.lyrics')?.lines;
 final clean = doc.drop('script, style');
 ```
+
+`link()` resolves an `href` (or `link('src')`) against where the page came from: the final URL
+after redirects, a browser page's, a file's (`Html.parse(text, url:)` sets one). `lines` is the
+text broken at `<br>` and blocks.
 
 ---
 
@@ -138,6 +149,8 @@ final clean = doc.drop('script, style');
 final data = await Http.get('https://api.site.com/users').json();
 await Http.get('https://site.com/file.zip').pipe(File('file.zip'));
 await Http.get('https://site.com/big.iso').pipe(File('big.iso'), resume: true);
+final urls = ['https://site.com/a.jpg', 'https://site.com/b.jpg'];
+await Task.all(urls, (u) => Http.get(u).pipe(File(u.split('/').last)), onProgress: Cli.bar().set);
 ```
 
 A request is sent when you first read it, so `resume: true` can ask for the rest. A non-2xx
@@ -181,6 +194,7 @@ await File('photo.jpg').image().fit(800, 600).save(File('photo.webp'), quality: 
 
 ```dart
 final answer = await Task.run(() => 40 + 2);
+final sizes = await Task.all(['a.txt', 'b.txt'], (p) => File(p).size(), concurrency: 8);
 final pool = Pool(4);
 final squares = await pool.map([1, 2, 3], (n) => n * n);
 await pool.close();
@@ -189,8 +203,8 @@ await chan.send(1);
 await chan.close();
 ```
 
-`Task.run` leaves the event loop live; `Pool` maps items over worker
-isolates; `Chan` bounds memory between producers and the consumer.
+`Task.run` leaves the event loop live; `Task.all` runs I/O over many items, a few at a
+time, answering in order; `Pool` maps CPU work over worker isolates; `Chan` bounds memory between producers and the consumer.
 
 ---
 
@@ -201,11 +215,15 @@ isolates; `Chan` bounds memory between producers and the consumer.
 ```dart
 final name = await Cli.ask('Your name?');
 final ok = await Cli.confirm('Proceed?');
-final bar = Cli.bar(100, label: 'Downloading', unit: 'B');
+final bar = Cli.bar(max: 100, label: 'Downloading', unit: 'B');
 try {
   bar.set(50);
 } finally {
   bar.close();
+}
+await Http.get('https://site.com/a.iso').pipe(File('a.iso'), onProgress: Cli.bar(unit: 'B').set);
+for (final page in Cli.each(['p1', 'p2'], label: 'Pages')) {
+  Cli.print(page);
 }
 final pick = await Cli.choose('Pick one', ['alpha', 'beta']);
 await Cli.spin('Fetching', () async => 'data');

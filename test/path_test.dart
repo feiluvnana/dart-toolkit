@@ -207,4 +207,37 @@ Future<void> main(List<String> args) async {
       expect(await target.text(), 'new');
     }, testOn: '!windows');
   });
+
+  group('names, folders and parents', () {
+    test('safeName replaces reserved characters and collapses whitespace', () {
+      expect(File.safeName(' a/b:c*d?e"f<g>h|i\\j \t\n k '), 'a_b_c_d_e_f_g_h_i_j k');
+      expect(File.safeName('ok\u0001name'), 'ok_name');
+    });
+
+    test('Dir.script and Dir.home are folders that exist', () async {
+      expect(await io.Directory(Dir.script.path).exists(), isTrue);
+      expect(await io.Directory(Dir.home.path).exists(), isTrue);
+    });
+
+    test('write, append, writer, copy and move make missing folders', () async {
+      final dir = await Dir.temp();
+      try {
+        await dir.file('a/b/w.txt').write('w');
+        await dir.file('c/d/a.txt').append('a');
+        await utf8.encode('p').pipe(dir.file('e/p.txt'));
+        await Uint8List(3).pipe(dir.file('f/r.bin'));
+        final resumed = await dir.file('g/r.txt').writer(resume: true);
+        await resumed.close();
+        await dir.file('a/b/w.txt').copy(dir.file('h/i/c.txt'));
+        await dir.file('c/d/a.txt').move(dir.file('j/k/m.txt'));
+        expect(await dir.file('a/b/w.txt').text(), 'w');
+        expect(await dir.file('h/i/c.txt').text(), 'w');
+        expect(await dir.file('j/k/m.txt').text(), 'a');
+        expect(await dir.file('e/p.txt').text(), 'p');
+        expect(await dir.file('g/r.txt').exists(), isTrue);
+      } finally {
+        await dir.drop();
+      }
+    });
+  });
 }

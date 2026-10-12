@@ -53,6 +53,9 @@ final class Element extends Node {
   /// The element children, cached at wiring (same content as [children]).
   List<Element>? _elementKids;
 
+  /// The URL links resolve against; set on the `#document` root only.
+  Uri? _base;
+
   Element._(this.tag, [Map<String, String>? attrs, List<Node>? nodes])
     : attrs = Map.unmodifiable(attrs ?? <String, String>{}),
       _nodes = List.unmodifiable(nodes ?? <Node>[]);
@@ -72,6 +75,58 @@ final class Element extends Node {
 
   /// The `id` attribute.
   String? get id => attrs['id'];
+
+  /// The [attr] attribute (`href` by default; `src` for an image) as an absolute URL,
+  /// resolved against the document's [Doc.url]; as written when the document has none.
+  String? link([String attr = 'href']) {
+    final raw = attrs[attr]?.trim();
+    if (raw == null) return null;
+    var top = this;
+    for (var p = parent; p != null; p = p.parent) {
+      top = p;
+    }
+    final ref = Uri.tryParse(raw);
+    return ref == null ? raw : (top._base?.resolveUri(ref).toString() ?? raw);
+  }
+
+  /// The text as lines: broken at `<br>`, block elements and line breaks, each
+  /// trimmed, blanks dropped.
+  List<String> get lines {
+    final sb = StringBuffer();
+    void walk(Element at) {
+      for (final n in at._nodes) {
+        if (n is Element) {
+          final tag = n.tag.toLowerCase();
+          if (tag == 'br') {
+            sb.write('\n');
+          } else if (_blocks.contains(tag)) {
+            sb.write('\n');
+            walk(n);
+            sb.write('\n');
+          } else {
+            walk(n);
+          }
+        } else {
+          sb.write(n.text);
+        }
+      }
+    }
+
+    walk(this);
+    return [
+      for (final line in sb.toString().split('\n'))
+        if (line.trim() case final t when t.isNotEmpty) t,
+    ];
+  }
+
+  /// The nearest element above this one matching [css] (the element itself
+  /// is never a match, as with [find]).
+  Element? closest(String css) {
+    for (var at = parent; at != null; at = at.parent) {
+      if (at.tag != '#document' && at.matches(css)) return at;
+    }
+    return null;
+  }
 
   /// The class list.
   List<String> get classes => (attrs['class'] ?? '').split(RegExp(r'\s+')).where((c) => c.isNotEmpty).toList();
@@ -150,6 +205,12 @@ final class Element extends Node {
   }
 }
 
+const _blocks = {
+  'address', 'article', 'aside', 'blockquote', 'dd', 'div', 'dl', 'dt', 'figcaption', 'figure', 'footer', //
+  'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', //
+  'section', 'table', 'td', 'th', 'tr', 'ul',
+};
+
 String _escapeAttr(String v) => v.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
 
 /// A parsed document with a synthetic `#document` root.
@@ -160,6 +221,10 @@ final class Doc {
   final String? doctype;
 
   Doc(this._root, [this.doctype]);
+
+  /// The URL [Element.link] resolves against: where the document came from (an
+  /// HTTP response's final URL, a page's, a file's), moved by its `<base href>`.
+  String? get url => _root._base?.toString();
 
   /// The first element in the document matching [css].
   Element? find(String css) => _root.find(css);
@@ -174,7 +239,7 @@ final class Doc {
   String get html => '${doctype ?? ''}${_root.html}';
 
   /// A deep copy without the elements matching [css]; the receiver is unchanged.
-  Doc drop(String css) => Doc(_copyExcept(_root, css), doctype);
+  Doc drop(String css) => Doc(_copyExcept(_root, css).._base = _root._base, doctype);
 
   /// Saves the document's markup to [to] (atomically for a file).
   Future<void> save(Target to) => utf8.encode(html).pipe(to);
@@ -206,10 +271,14 @@ Element _copyExcept(Element src, String css) {
 ///
 /// The parser builds mutable lists; this freezes them. Hidden from the topic
 /// export: documents come from [Html.parse].
-Doc assembleDocument(List<Node> topKids, [String? doctype]) {
+Doc assembleDocument(List<Node> topKids, {String? doctype, String? url}) {
   final structured = _implyStructure(topKids);
   final root = Element._('#document', {}, structured);
   _wire(root, null);
+  final at = url == null ? null : Uri.tryParse(url);
+  final base = root.find('base[href]')?.attr('href')?.trim();
+  final href = base == null ? null : Uri.tryParse(base);
+  root._base = href == null ? at : (at?.resolveUri(href) ?? href);
   return Doc(root, doctype);
 }
 

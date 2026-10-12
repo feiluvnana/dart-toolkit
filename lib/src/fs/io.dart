@@ -237,7 +237,8 @@ final class File implements Source, Target, Located {
   /// A stream of the file's UTF-8 lines.
   Stream<String> lines() => io.File(path).openRead().transform(utf8.decoder).transform(const LineSplitter());
 
-  /// Replaces the file with [data] (`String` or `List<int>`), atomically: a
+  /// Replaces the file with [data] (`String` or `List<int>`), creating missing
+  /// folders, atomically: a
   /// temporary sibling is renamed over the target (held-target retries on
   /// Windows), so a failed write leaves the old content and no temp behind.
   /// The temp takes the target's mode bits before the rename, and a symlink
@@ -260,9 +261,10 @@ final class File implements Source, Target, Located {
     }
   }
 
-  /// Appends [data] (`String` or `List<int>`) to the file, creating it if needed.
+  /// Appends [data] (`String` or `List<int>`) to the file, creating it (and its folder) if needed.
   Future<void> append(Object data) async {
     final bytes = _writeBytes(data);
+    await _makeParent(path);
     await io.File(path).writeAsBytes(bytes, mode: io.FileMode.append);
   }
 
@@ -272,6 +274,7 @@ final class File implements Source, Target, Located {
   /// [UnsupportedError] (rule 42: no Dart fallback). [onProgress] hears bytes copied
   /// and the total. The copy runs on a native thread: the event loop stays free.
   Future<File> copy(File to, {void Function(int done, int total)? onProgress}) async {
+    await _makeParent(to.path);
     final tmp = '${to.path}.tmp_${DateTime.now().microsecondsSinceEpoch}';
     try {
       await _nativeCopy(path, tmp, onProgress: onProgress);
@@ -288,6 +291,7 @@ final class File implements Source, Target, Located {
   /// is complete before the source is touched; answers [to].
   /// [onProgress] hears the copy's bytes when the move crosses volumes.
   Future<File> move(File to, {void Function(int done, int total)? onProgress}) async {
+    await _makeParent(to.path);
     try {
       await renameFile(path, to.path);
       return to;
@@ -319,6 +323,13 @@ final class File implements Source, Target, Located {
     await io.Link(link.path).create(path);
     return link;
   }
+
+  /// [text] as a file name: `\ / : * ? " < > |` and control characters become `_`,
+  /// runs of whitespace one space, the ends trimmed.
+  static String safeName(String text) => text.replaceAll(_spaces, ' ').replaceAll(_unsafeName, '_').trim();
+
+  static final _unsafeName = RegExp(r'[\\/:*?"<>|\x00-\x1f]');
+  static final _spaces = RegExp(r'\s+');
 
   /// A uniquely named temporary file.
   static Future<File> temp({String? ext}) async {
@@ -355,6 +366,7 @@ final class File implements Source, Target, Located {
   @override
   Future<Writer> writer({bool resume = false}) async {
     if (resume) {
+      await _makeParent(path);
       final raf = await io.File(path).open(mode: io.FileMode.append);
       return _AppendWriter(raf);
     }
@@ -537,8 +549,12 @@ Future<(String tmp, String real)> _stageAtomic(String path) async {
     final raw = await io.Link(path).target();
     real = _isAbsolutePath(raw) ? raw : _join(io.File(path).parent.path, raw);
   }
+  await _makeParent(real);
   return ('$real.tmp_${DateTime.now().microsecondsSinceEpoch}', real);
 }
+
+/// Creates the folder holding [path] when it is missing: every write makes its parents.
+Future<void> _makeParent(String path) => io.Directory(io.File(path).parent.path).create(recursive: true);
 
 /// Whether [p] is absolute (POSIX root or a Windows drive/UNC root).
 bool _isAbsolutePath(String p) => p.startsWith('/') || _driveRoot.hasMatch(p) || p.startsWith(r'\\');
@@ -593,6 +609,12 @@ final class Dir implements Located {
 
   /// The directory holding this directory.
   Dir get parent => Dir(io.File(path).parent.path);
+
+  /// The folder holding the running script (`dart run` or a compiled executable).
+  static Dir get script => File(io.Platform.script.toFilePath()).parent;
+
+  /// The user's home folder (`HOME`, or `USERPROFILE` on Windows).
+  static Dir get home => Dir(io.Platform.environment['HOME'] ?? io.Platform.environment['USERPROFILE'] ?? '.');
 
   /// Creates a unique temporary directory.
   static Future<Dir> temp() async => Dir((await io.Directory.systemTemp.createTemp('tk_dir_')).path);

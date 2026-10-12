@@ -103,6 +103,48 @@ void main() {
     expect(seen, [1]);
   });
 
+  group('Task.all', () {
+    test('answers in item order, at most concurrency at once, with progress', () async {
+      var running = 0;
+      var peak = 0;
+      final seen = <(int, int)>[];
+      final out = await Task.all(
+        [5, 1, 4, 2, 3],
+        (int n) async {
+          peak = max(peak, ++running);
+          await Future<void>.delayed(Duration(milliseconds: n * 5));
+          running--;
+          return n * 10;
+        },
+        concurrency: 2,
+        onProgress: (done, total) => seen.add((done, total)),
+      );
+      expect(out, [50, 10, 40, 20, 30]);
+      expect(peak, 2);
+      expect(seen.first, (0, 5));
+      expect(seen.last, (5, 5));
+    });
+
+    test('the first failure stops new items and is rethrown', () async {
+      final started = <int>[];
+      await expectLater(
+        Task.all([1, 2, 3, 4], (int n) async {
+          started.add(n);
+          if (n == 1) throw StateError('boom');
+          return n;
+        }, concurrency: 1),
+        throwsA(isA<StateError>()),
+      );
+      expect(started, [1]);
+    });
+
+    test('nothing to do answers an empty list and reports 0 of 0', () async {
+      final seen = <(int, int)>[];
+      expect(await Task.all(<int>[], (int n) => n, onProgress: (d, t) => seen.add((d, t))), isEmpty);
+      expect(seen, [(0, 0)]);
+    });
+  });
+
   group('hang and leak regressions', () {
     test('Task.run of an unsendable result throws StateError', () async {
       await expectLater(Task.run(() => ReceivePort()), throwsA(isA<StateError>()));

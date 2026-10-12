@@ -69,6 +69,7 @@ final class Response implements Source, Reader {
       (bytes) => _decodeBody(bytes, header('content-type')),
       () => _streamsText(header('content-type')),
     );
+    sourceUrls[this] = () => url;
     // An unread body still releases its subscription on GC (never the shared
     // client: it outlives every response).
     _releaser.attach(this, _it, detach: this);
@@ -174,6 +175,7 @@ final class Request implements Future<Response>, Source {
       (bytes) => _decodeBody(bytes, _response?.header('content-type')),
       () => _streamsText(_response?.header('content-type')),
     );
+    sourceUrls[this] = () => _response?.url ?? _url;
   }
 
   final String _method;

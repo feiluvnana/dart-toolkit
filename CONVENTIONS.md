@@ -15,7 +15,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 1 | **Objects first.** Values (`Image`, `Doc`, `Json`) and resources (`File`, `Dir`, `Process`, `Chrome`, `Pool`, `Chan`) are objects you call methods on. A static exists only as an entry point with no value to hold: `Http.get/post/put/delete`, `Task.run`, `Tui.run`, `Cli.*`, `File.temp`/`Dir.temp`, and the in-memory builders (`Json.parse`, `Html.parse`, `Html.escape`, `Image.decode/empty/fromRgba/formatOf`, `Hash.sha256(data)`, `Archive.zip/unzip/gzip/gunzip`, `Hex`/`Base64.decode`, `Chan.post`). |
+| 1 | **Objects first.** Values (`Image`, `Doc`, `Json`) and resources (`File`, `Dir`, `Process`, `Chrome`, `Pool`, `Chan`) are objects you call methods on. A static exists only as an entry point with no value to hold: `Http.get/post/put/delete`, `Task.run`, `Tui.run`, `Cli.*`, `File.temp`/`Dir.temp`/`Dir.script`/`Dir.home`, `File.safeName`, `Task.all`, and the in-memory builders (`Json.parse`, `Html.parse`, `Html.escape`, `Image.decode/empty/fromRgba/formatOf`, `Hash.sha256(data)`, `Archive.zip/unzip/gzip/gunzip`, `Hex`/`Base64.decode`, `Chan.post`). |
 | 2 | **One form per operation.** No aliases, no `@Deprecated` names, no backward-compatibility shims. The public names are a reviewed list (`test/api_names.txt`). |
 | 3 | **Topic imports.** One public library per topic, and a script imports what it uses. Every topic re-exports core (traits, readings, errors). `lib/` imports only `dart:` and relative paths; shared private code lives once in `src/`. Test seams are in `testing.dart` only. `test/layering_test.dart` enforces the graph. |
 | 4 | **The shared interfaces are one list:** `Source`, `Target`, `Reader`, `Writer`, `Closer`, `Seeker`. A module implements them and adds no parallel one. A `Writer.write` copies or pins `data` at the call: the caller may reuse it once the future completes. `Writer.abort` drops a write without completing it (a file's temp is deleted, the old content stays; a resume writer never truncates). A failed `pipe` aborts, never closes. |
@@ -34,11 +34,11 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 15 | **Named parameters only** for options; required arguments are positional (`fit(w, h)`, `Pool(4)`, `Cli.bar(100)`). No option objects or builders, and no optional positional parameters. |
+| 15 | **Named parameters only** for options; required arguments are positional (`fit(w, h)`, `Pool(4)`). No option objects or builders, and no optional positional parameters, except a trailing one that lets a tear-off fit a callback (`Bar.set(done, [total])` is an `onProgress`). |
 | 16 | **One parameter, one meaning; one behaviour per method.** A mode is a separate method (`text()` vs `check()`), never a flag that switches the algorithm or the result type. An invalid combination or an out-of-range value is an `ArgumentError` at the call. |
 | 17 | **No `Object` parameter,** with one exception: data that is text or bytes takes a `String` (UTF-8) or a `List<int>`, checked; anything else is an `ArgumentError`. |
 | 18 | **Defaults are one table:** 30 s per response, per browser call and per `wait`; 2 retries on network errors and 5xx; UTF-8; `find`/`all` search descendants only (`matches` tests the element itself); links are never followed. `Duration.zero` never means "none". Environment variables are `DART_TOOLKIT_<NAME>`. |
-| 19 | **Callbacks are `on<Event>`** (`onProgress:`, `onPress:`, `onError:`). A progress callback is a display aid, not a status source. |
+| 19 | **Callbacks are `on<Event>`** (`onProgress:`, `onPress:`, `onError:`). A progress callback is a display aid, not a status source; every one is `(int done, int total)`, total 0 while unknown, so `Cli.bar().set` fits it. |
 
 ## 3. Names
 
@@ -65,7 +65,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 31 | **Every write is atomic.** It goes to a temporary sibling renamed over the target (with the Windows held-target retry); an overwrite is a rename-over, never delete-first. A failed write leaves the old content and no temporary file. A move has its destination complete before the source is gone. Only `resume:` writes into a partial file. |
+| 31 | **Every write is atomic.** It goes to a temporary sibling renamed over the target (with the Windows held-target retry); an overwrite is a rename-over, never delete-first. A failed write leaves the old content and no temporary file. A move has its destination complete before the source is gone. Only `resume:` writes into a partial file. Every write (and `copy`/`move`) makes the missing folders. |
 | 32 | **Nothing lands in the working directory unless asked:** a destination is always given. |
 | 33 | **Untrusted archives are contained.** Every member is checked before it is written: absolute paths, NUL bytes, `..` escapes and every link are refused, on the file and stream paths alike. `unpack(dir, trusted: true)` lifts the link refusal and the size cap. A failed stream removes what it created. Output is capped relative to the input, and setuid/setgid don't survive. |
 | 34 | **A child never outlives its `close`:** processes and browsers die as a tree on `close` and on a timeout. The library installs no signal handling of its own. |

@@ -439,6 +439,12 @@ void main() {
       expect((await Http.get(url('/sjis-meta')).html()).text, contains('テスト'));
       expect(await Http.get(url('/sjis-header')).lines().toList(), ['テスト']);
     });
+
+    test('a page links against its final URL, after redirects', () async {
+      expect((await Http.get(url('/hop')).html()).url, url('/final?q=1'));
+      final response = await Http.get(url('/hop'));
+      expect((await response.html()).url, url('/final?q=1'));
+    });
   });
 
   group('response surface', () {

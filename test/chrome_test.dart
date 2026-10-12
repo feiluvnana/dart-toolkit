@@ -154,6 +154,8 @@ void main() {
         final doc = await page.html();
         expect(doc.text, contains('Gadget'));
         expect(doc.all('.product-card'), hasLength(2));
+        expect(doc.url, '$base/spa');
+        expect(await page.text(), startsWith('<html'));
         await page.close();
       } finally {
         await chrome.close();

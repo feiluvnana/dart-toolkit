@@ -24,14 +24,18 @@ now runs in native libraries rewritten from scratch, one per subsystem.
 
 - **path:** `File`/`Dir` objects replace `Path`/`Link`. `write` is atomic. `exists()`, `size()`,
   `isLink()` and `target()` are methods. `copy`/`move` take and return a `File`.
-  `Dir.files()`/`dirs()`/`find(glob)`. Hardlinks are removed.
+  `Dir.files()`/`dirs()`/`find(glob)`. Hardlinks are removed. Writes, `copy` and `move` make
+  missing folders. New `Dir.script`, `Dir.home` and `File.safeName(text)`.
 - **http:** requests are lazy, so `Http.get(u).text()` takes one await. `download`, `head` and
   `patch` are removed; `.pipe(File(p), resume: true)` resumes a download. Bodies are
   `json:`/`form:`/`body:` (a `Source`). `HttpException(status:)` replaces
-  `StatusException`/`ClientException`.
+  `StatusException`/`ClientException`. `pipe`'s `onProgress` hears `(done, total)` like every
+  other job.
 - **json / html:** an immutable `Json` (`get<T>(path, or:)`, `[]`, `value`, `encode()`,
   `save()`). `doc.drop(css)` returns a new `Doc`. `prev`/`next`. `TextNode` is `Text`.
-  `page.html()` and `source.html()` give a `Doc`. `Html.read`/`decode` are removed.
+  `page.html()` and `source.html()` give a `Doc` that knows its `url` (after redirects), so
+  `el.link()` / `link('src')` is absolute. New `el.lines` and `el.closest(css)`.
+  `Html.read`/`decode` are removed.
 - **archive:** `dir.pack(file)`, `source.unpack(dir)` (streams from any source, a download
   included), `file.entries()`, `file.entry(name)`. `Archive.pack/unpack/list/extract/open` are
   removed; in-memory `Archive.zip/unzip/gzip/gunzip` stay.
@@ -45,9 +49,12 @@ now runs in native libraries rewritten from scratch, one per subsystem.
   `text()`/`lines()` throw `ProcessException` on a non-zero exit, `check()` answers yes or no,
   and `close()` kills the tree. `run`, `exec`, `code`, `ProcessResult` and `cancel` are removed.
 - **async:** `Task.run` always uses an isolate. `Pool(n)` takes closures (`run`, `map`). `Chan`
-  keeps `send`/`recv`/`close` plus `Chan.post`. `Worker`, `Task.all/bg` and `CancelToken` are
-  removed.
-- **cli:** `Cli.bar(max)` with `set`/`tick`/`close`. `Cli.out` and the public `testLines` are
+  keeps `send`/`recv`/`close` plus `Chan.post`. `Task.all(items, fn, concurrency:,
+  onProgress:)` runs I/O over many items on this isolate. `Worker`, `Task.bg` and `CancelToken`
+  are removed.
+- **cli:** `Cli.bar(max:)` with `set(done, [total])`/`tick`/`close`; a bar closes itself at
+  its total, so `onProgress: Cli.bar().set` draws any job. `Cli.each(items)` ticks a bar per
+  loop step. `Cli.out` and the public `testLines` are
   removed (`CliFake.lines` in `testing.dart`).
 - **chrome:** `Chrome()` launches on the first `open`, and `Chrome(port:)` attaches. `navigate`,
   `screenshot`, `pdf`. `Browser`, `launch`, `connect`, `goto`, `shot`, `fill` and `send` are

@@ -23,7 +23,7 @@ final class _Frame {
 }
 
 /// Parses an HTML [source] into a [Doc] using a tolerant stack machine.
-Doc parseHtml(String source) {
+Doc parseHtml(String source, {String? url}) {
   final root = _Frame('#document', {});
   final stack = <_Frame>[root];
   final html = source;
@@ -123,7 +123,7 @@ Doc parseHtml(String source) {
     final shut = closeFrame(stack.removeLast());
     stack.last.kids.add(shut);
   }
-  return assembleDocument(root.kids, doctype);
+  return assembleDocument(root.kids, doctype: doctype, url: url);
 }
 
 /// Whether [c] can start a tag after `<`: a letter, `/`, `!` or `?`.

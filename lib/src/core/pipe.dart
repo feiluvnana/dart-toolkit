@@ -111,14 +111,19 @@ extension SourceReadings on Source {
 
   /// Copies every byte into [dst] and answers how many. With [resume], it continues from
   /// what [dst] already holds (`Range` for HTTP, a seek for a file). [onProgress] hears the
-  /// running total; it is a display aid, not a status source.
+  /// bytes [dst] holds and the whole size (0 while unknown), so `onProgress: bar.set` draws
+  /// it; it is a display aid, not a status source.
   ///
   /// A failed pipe leaves the target as it was: the writer is aborted, never
   /// closed. Both ends are opened inside the `try`, so a writer that throws on
   /// open still closes the reader.
-  Future<int> pipe(Target dst, {bool resume = false, void Function(int bytes)? onProgress}) async {
+  Future<int> pipe(Target dst, {bool resume = false, void Function(int done, int total)? onProgress}) async {
     final from = resume ? await dst.size() : 0;
     final r = await reader(from: from);
+    final whole = switch (lengthHint) {
+      final n? => from + n,
+      null => 0,
+    };
     Writer w;
     try {
       w = await dst.writer(resume: resume);
@@ -134,7 +139,7 @@ extension SourceReadings on Source {
         if (n <= 0) break;
         await w.write(Uint8List.sublistView(chunk, 0, n));
         total += n;
-        onProgress?.call(from + total);
+        onProgress?.call(from + total, whole);
       }
       await w.flush();
     } catch (_) {
@@ -167,7 +172,7 @@ extension SourceReadings on Source {
 
 /// Bytes in hand pipe like any source (a screenshot, an encoded image).
 extension BytesPipe on Uint8List {
-  Future<int> pipe(Target dst, {void Function(int bytes)? onProgress}) async {
+  Future<int> pipe(Target dst, {void Function(int done, int total)? onProgress}) async {
     final w = await dst.writer();
     try {
       await w.write(this);
@@ -190,13 +195,13 @@ extension BytesPipe on Uint8List {
       }
       rethrow;
     }
-    onProgress?.call(length);
+    onProgress?.call(length, length);
     return length;
   }
 }
 
 /// `page.screenshot().pipe(File('s.png'))` without an extra await.
 extension FutureBytesPipe on Future<Uint8List> {
-  Future<int> pipe(Target dst, {void Function(int bytes)? onProgress}) async =>
+  Future<int> pipe(Target dst, {void Function(int done, int total)? onProgress}) async =>
       (await this).pipe(dst, onProgress: onProgress);
 }

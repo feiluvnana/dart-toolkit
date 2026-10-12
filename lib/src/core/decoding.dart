@@ -17,3 +17,7 @@ final class TextCodec {
 
 /// The codec of each source that has one (HTTP responses and requests).
 final textCodecs = Expando<TextCodec>('text codec');
+
+/// Where each source's bytes come from, for links to resolve against (an HTTP response's
+/// final URL, a page's): asked after the body is read. Package-internal, like [textCodecs].
+final sourceUrls = Expando<String? Function()>('source url');
