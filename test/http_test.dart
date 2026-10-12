@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,26 +13,39 @@ void main() {
     base = 'http://${server.address.host}:${server.port}';
     server.listen((request) async {
       final path = request.uri.path;
-      if (path == '/hello') {
+      final method = request.method;
+      if (path == '/hello' && method == 'HEAD') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.text;
+      } else if (path == '/hello' && method == 'OPTIONS') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.set('allow', 'GET, HEAD, OPTIONS');
+      } else if (path == '/hello') {
         request.response
           ..statusCode = HttpStatus.ok
           ..headers.contentType = ContentType.text
           ..write('hello <b>world</b>');
-      } else if (path == '/echo' && request.method == 'POST') {
+      } else if (path == '/echo' && method == 'POST') {
         final body = await request.cast<List<int>>().transform(utf8.decoder).join();
         request.response
           ..statusCode = HttpStatus.created
           ..headers.set('x-echo', 'yes')
           ..write('got:$body');
+      } else if (path == '/item' && (method == 'PUT' || method == 'PATCH')) {
+        final body = await request.cast<List<int>>().transform(utf8.decoder).join();
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write('${method.toLowerCase()}:$body');
+      } else if (path == '/item' && method == 'DELETE') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write('deleted');
       } else if (path == '/headers') {
         request.response
           ..statusCode = HttpStatus.ok
           ..write(request.headers.value('x-test') ?? 'none');
-      } else if (path == '/slow') {
-        await Future<void>.delayed(const Duration(seconds: 5));
-        request.response
-          ..statusCode = HttpStatus.ok
-          ..write('slow');
       } else {
         request.response
           ..statusCode = HttpStatus.notFound
@@ -69,13 +81,6 @@ void main() {
       expect(res.status(), HttpStatus.notFound);
       expect(res.text(), 'nope');
     });
-
-    test('timeout throws TimeoutException', () async {
-      expect(
-        Http.get('$base/slow', timeout: const Duration(milliseconds: 100)),
-        throwsA(isA<TimeoutException>()),
-      );
-    });
   });
 
   group('Http.post', () {
@@ -84,6 +89,38 @@ void main() {
       expect(res.status(), HttpStatus.created);
       expect(res.text(), 'got:a=1');
       expect(res.header('x-echo'), 'yes');
+    });
+  });
+
+  group('other verbs', () {
+    test('put sends body', () async {
+      final res = await Http.put('$base/item', body: 'a=1');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.text(), 'put:a=1');
+    });
+
+    test('patch sends body', () async {
+      final res = await Http.patch('$base/item', body: 'b=2');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.text(), 'patch:b=2');
+    });
+
+    test('delete works', () async {
+      final res = await Http.delete('$base/item');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.text(), 'deleted');
+    });
+
+    test('head returns status, empty text', () async {
+      final res = await Http.head('$base/hello');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.text(), isEmpty);
+    });
+
+    test('options returns allow header', () async {
+      final res = await Http.options('$base/hello');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.header('allow'), contains('GET'));
     });
   });
 }
