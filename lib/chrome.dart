@@ -126,6 +126,10 @@ final class Browser implements Closeable {
   String? _downloadDir;
   var _closed = false;
 
+  /// Serializes download begins so concurrent `download()` calls don't share
+  /// one `onDownloadWillBegin.first`.
+  Future<void> _dlPrev = Future.value();
+
   static final _live = <Browser>{};
   static bool _watching = false;
 
@@ -661,38 +665,62 @@ final class Page implements Closeable {
   /// Click [selector] and wait for the download it starts to finish.
   /// Returns a [Download]: a [Reader] of the file plus the name the site
   /// suggested. Downloads share one folder per browser and are told apart
-  /// by their DevTools `guid`, so concurrent downloads don't clash. The
+  /// by their DevTools `guid`, so concurrent downloads don't clash. Begins
+  /// are serialized; the whole call shares one [timeout] deadline. The
   /// browser's copies are removed when the browser closes.
   Future<Download> download(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
+    final deadline = DateTime.now().add(limit);
+    Duration remaining() => deadline.difference(DateTime.now());
     // Wait for the trigger first: on a missing selector this throws before
     // any download future exists that could fail unhandled later.
     await _actionable(selector, timeout: timeout);
+    // Serialize begins: only one willBegin.first at a time.
+    final prev = _browser._dlPrev;
+    final gate = Completer<void>();
+    _browser._dlPrev = gate.future;
+    try {
+      await prev;
+    } catch (_) {}
     final dir = await _browser._downloads();
     await _page.devTools.browser.setDownloadBehavior('allow', downloadPath: dir, eventsEnabled: true);
     final willBegin = _page.devTools.browser.onDownloadWillBegin.first.timeout(
-      limit,
+      remaining().isNegative ? Duration.zero : remaining(),
       onTimeout: () => throw TimeoutException('no download from $selector for $limit', limit),
     );
     // Guard the future until it is awaited below: without this, a click
     // that starts no download surfaces an unhandled TimeoutException.
     unawaited(willBegin.then((_) {}, onError: (_) {}));
     await _page.click(selector);
-    final begun = await willBegin;
+    final begun;
     try {
-      final done = _page.devTools.browser.onDownloadProgress
-          .where((e) => e.guid == begun.guid && e.state == proto.DownloadProgressEventState.completed)
-          .first
+      begun = await willBegin;
+    } finally {
+      gate.complete();
+    }
+    try {
+      final terminal = _page.devTools.browser.onDownloadProgress
+          .where((e) => e.guid == begun.guid)
+          .firstWhere((e) =>
+              e.state == proto.DownloadProgressEventState.completed ||
+              e.state == proto.DownloadProgressEventState.cancelled ||
+              e.state == proto.DownloadProgressEventState.error)
           .timeout(
-            limit,
+            remaining().isNegative ? Duration.zero : remaining(),
             onTimeout: () => throw TimeoutException('download never finished: ${begun.suggestedFilename}', limit),
           );
       // Same guard: a download that never completes must not fail
       // unhandled after this call already threw elsewhere.
-      unawaited(done.then((_) {}, onError: (_) {}));
-      final finished = await done;
+      unawaited(terminal.then((_) {}, onError: (_) {}));
+      final finished = await terminal;
+      if (finished.state != proto.DownloadProgressEventState.completed) {
+        throw StateError(
+            'download ${finished.state.name}: ${begun.suggestedFilename}');
+      }
       final path = finished.filePath ?? '$dir/${begun.suggestedFilename}';
-      final file = await _stableFile(path, limit, begun.suggestedFilename);
+      final left = remaining();
+      final file = await _stableFile(
+          path, left.isNegative ? Duration.zero : left, begun.suggestedFilename);
       return Download._(file, begun.suggestedFilename);
     } catch (_) {
       rethrow;
