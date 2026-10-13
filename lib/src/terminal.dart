@@ -1,8 +1,8 @@
-/// Private terminal layer for `console`.
+/// Shared private terminal layer for `tui` and `console`.
 ///
-/// Not exported: `console.dart` imports it by relative path and keeps its
-/// own public surface. It holds the broadcast stdin, the key decoder, and
-/// saving/restoring the terminal modes.
+/// Not exported by either module: both import it by relative path and keep
+/// their own public surface. It holds what the two must agree on: one
+/// broadcast stdin, one key decoder, and saving/restoring terminal modes.
 library;
 
 // ignore_for_file: avoid_dynamic_calls
@@ -11,7 +11,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
-/// Terminal input for the prompts, as a broadcast stream that
+/// Terminal input for `Tui.run` and the prompts, as a broadcast stream that
 /// can be listened to again after every listener has cancelled — and that
 /// lets the process exit once nobody listens.
 ///
@@ -126,6 +126,24 @@ final class TermFocus extends TermEvent {
   TermFocus(this.gained);
 
   final bool gained;
+}
+
+/// Console-in-Tui routing: while a state-driven [Tui.run] is active,
+/// `Console.spin`/`bar` draw in the status row (several at once) and
+/// `ask`/`confirm`/`choose` open modal popups. The active session publishes
+/// itself here; `console.dart` delegates when it is non-null.
+abstract class TuiBridge {
+  static TuiBridge? current;
+
+  Object spinStarted(String label);
+  void spinEnded(Object id, bool ok);
+  Object barStarted(int? total, String? label);
+  void barMode(Object id, bool bytes);
+  void barTick(Object id, int count);
+  void barEnded(Object id, bool ok);
+  Future<String> promptAsk(String question, {required bool secret});
+  Future<bool> promptConfirm(String question);
+  Future<String> promptChoose(String question, List<String> choices);
 }
 
 /// Decode raw stdin [bytes] into events. Returns the events plus how many
