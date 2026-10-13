@@ -5,6 +5,34 @@ import 'dart:io';
 import 'package:dart_toolkit/http.dart';
 import 'package:test/test.dart';
 
+/// Python-generated fixtures (codecs with the same names): `python3 -c
+/// "open('x','wb').write('…'.encode('euc-kr'))"`, bytes pasted as literals so
+/// the suite needs no python at test time.
+const _cjk = {
+  'euc-kr': ('euc-kr', [176, 161, 179, 170, 199, 209, 177, 219]), // 가나한글
+  'shift_jis': (
+    'shift_jis',
+    [147, 250, 150, 123, 140, 234, 131, 101, 131, 88, 131, 103]
+  ), // 日本語テスト
+  'euc-jp': (
+    'euc-jp',
+    [198, 252, 203, 220, 184, 236, 165, 198, 165, 185, 165, 200]
+  ), // 日本語テスト
+  'gbk': (
+    'gbk',
+    [214, 208, 206, 196, 188, 242, 204, 229, 178, 226, 202, 212]
+  ), // 中文简体测试
+  'gb18030': (
+    'gb18030',
+    [149, 50, 130, 54, 149, 50, 130, 55]
+  ), // 𠀀𠀁 (4-byte sequences)
+  'big5': (
+    'big5',
+    [164, 164, 164, 229, 193, 99, 197, 233, 180, 250, 184, 213]
+  ), // 中文繁體測試
+  'cp949': ('euc-kr', [148, 238, 138, 221]), // 뷁듶 (CP949 extensions)
+};
+
 void main() {
   late HttpServer server;
   late String base;
@@ -68,6 +96,41 @@ void main() {
         await request.response.flush();
         await Future<void>.delayed(const Duration(seconds: 5));
         request.response.write('b');
+      } else if (path == '/blackhole' && method == 'PUT') {
+        // Accept the headers, never read the body, never answer in time.
+        await Future<void>.delayed(const Duration(seconds: 30));
+        request.response.statusCode = HttpStatus.ok;
+      } else if (path == '/sized') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.text
+          ..contentLength = 5
+          ..write('12345');
+      } else if (path == '/cjk') {
+        // Encoded bodies served raw: the charset label picks the decoder.
+        final which = request.uri.queryParameters['which'] ?? 'euc-kr';
+        final entry = _cjk[which]!;
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType =
+              ContentType('text', 'html', charset: entry.$1)
+          ..add(entry.$2);
+      } else if (path == '/meta') {
+        // No header charset: <meta charset> in the first 1024 bytes wins.
+        request.response.headers.contentType = ContentType('text', 'html');
+        request.response.add(
+          utf8.encode('<html><head><meta charset="shift_jis"></head><body>') +
+              _cjk['shift_jis']!.$2 +
+              utf8.encode('</body></html>'),
+        );
+      } else if (path == '/badbytes') {
+        request.response.headers.contentType =
+            ContentType('text', 'plain', charset: 'shift_jis');
+        request.response.add([0xff, 0x41, 0x82, 0x28]);
+      } else if (path == '/unknown-charset') {
+        request.response.headers.contentType =
+            ContentType('text', 'plain', charset: 'x-made-up');
+        request.response.write('plain ascii');
       } else {
         request.response
           ..statusCode = HttpStatus.notFound
@@ -161,6 +224,18 @@ void main() {
       expect(await res.text(), 'size:10;length:10');
     });
 
+    test('H1: an upload the server never reads times out, never hangs',
+        () async {
+      await expectLater(
+        Http.put(
+          '$base/blackhole',
+          body: _SlowReader(),
+          timeout: const Duration(seconds: 1),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
     test('wrong body type is an ArgumentError', () async {
       expect(
         Http.post('$base/echo', body: 42),
@@ -173,6 +248,37 @@ void main() {
     test('text() decodes with the charset header', () async {
       final res = await Http.get('$base/latin');
       expect(await res.text(), 'caf\u00e9');
+    });
+
+    test('H5: WHATWG CJK decoders match the header charset', () async {
+      final cases = {
+        'euc-kr': '가나한글',
+        'shift_jis': '日本語テスト',
+        'euc-jp': '日本語テスト',
+        'gbk': '中文简体测试',
+        'gb18030': '\u{20000}\u{20001}',
+        'big5': '中文繁體測試',
+        'cp949': '뷁듶',
+      };
+      for (final entry in cases.entries) {
+        final res = await Http.get('$base/cjk?which=${entry.key}');
+        expect(await res.text(), entry.value, reason: entry.key);
+      }
+    });
+
+    test('H5: <meta charset> is sniffed without a header', () async {
+      final res = await Http.get('$base/meta');
+      expect(await res.text(), contains('日本語テスト'));
+    });
+
+    test('H5: malformed bytes become U+FFFD, never a throw', () async {
+      final res = await Http.get('$base/badbytes');
+      expect(await res.text(), '�A�(');
+    });
+
+    test('H5: unknown charset falls back to UTF-8', () async {
+      final res = await Http.get('$base/unknown-charset');
+      expect(await res.text(), 'plain ascii');
     });
 
     test('text() and bytes() cache: calling again is free', () async {
@@ -227,11 +333,26 @@ void main() {
     });
 
     test('Future mirrors match', () async {
+      expect(await Http.get('$base/hello').status(), HttpStatus.ok);
+      expect(
+        await Http.get('$base/hello').header('content-type'),
+        contains('text/plain'),
+      );
+      expect(await Http.get('$base/hello').url(), '$base/hello');
+      expect(await Http.get('$base/hello').text(), contains('hello'));
+      expect(await Http.get('$base/hello').ok(), isTrue);
+      // /hello is chunked (no content-length); /sized sets one.
+      expect(await Http.get('$base/hello').size(), isNull);
+      expect(await Http.get('$base/sized').size(), 5);
+      expect(await Http.get('$base/hello').name(), 'hello');
+    });
+
+    test('H2: mirrors close the response (one-shot)', () async {
       final f = Http.get('$base/hello');
       expect(await f.status(), HttpStatus.ok);
-      expect(await f.header('content-type'), contains('text/plain'));
-      expect(await f.url(), '$base/hello');
-      expect(await f.text(), contains('hello'));
+      // Nothing else can reach the response now: reading fails, closing
+      // is a harmless no-op, and the process is not kept alive.
+      await expectLater(f.text(), throwsStateError);
       await f.close();
     });
   });
@@ -242,6 +363,17 @@ final class _Mem with Reader {
   final String _text;
   @override
   Stream<List<int>> stream() => Stream.value(utf8.encode(_text));
+}
+
+/// An endless body, for the blackhole test: the only exit is the timeout.
+final class _SlowReader with Reader {
+  @override
+  Stream<List<int>> stream() async* {
+    while (true) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      yield List.filled(65536, 65);
+    }
+  }
 }
 
 final class _Sink implements Writer {
