@@ -692,7 +692,7 @@ final class Page implements Closeable {
     // that starts no download surfaces an unhandled TimeoutException.
     unawaited(willBegin.then((_) {}, onError: (_) {}));
     await _page.click(selector);
-    final begun;
+    late final proto.DownloadWillBeginEvent begun;
     try {
       begun = await willBegin;
     } finally {
@@ -703,8 +703,7 @@ final class Page implements Closeable {
           .where((e) => e.guid == begun.guid)
           .firstWhere((e) =>
               e.state == proto.DownloadProgressEventState.completed ||
-              e.state == proto.DownloadProgressEventState.cancelled ||
-              e.state == proto.DownloadProgressEventState.error)
+              e.state == proto.DownloadProgressEventState.canceled)
           .timeout(
             remaining().isNegative ? Duration.zero : remaining(),
             onTimeout: () => throw TimeoutException('download never finished: ${begun.suggestedFilename}', limit),
