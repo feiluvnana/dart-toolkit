@@ -211,16 +211,20 @@ v2 syntax: positional inputs, named options, typed colours, and widget state as 
 
 ```dart
 abstract final class Tui {
-  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color accent = .orange});
+  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen,
+      {bool fullscreen = true, Color accent = .orange});
 }
 final class App<S> {
   S state();
-  void go(S state);              // switch state; the next redraw calls screen(state, app)
-  void say(String message);      // status row, until the next say or error
-  void quit();                   // run() returns state()
+  void go(S state);                          // switch state; the next redraw calls screen(state, app)
+  void say(String message);                  // status row, until the next say or error
+  void print(void Function(Region r) draw);  // inline: commit above the live area, into scrollback
+  void notify(String message);               // desktop notification (OSC 9/777, bell fallback); no-op while focused
+  void copy(String text);                    // clipboard (OSC 52)
+  void quit();                               // run() returns state()
 }
 final class Screen {
-  Screen(void Function(Region r) draw, {String? title, Map<String, Bind> keys = const {}});
+  Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Bind> keys = const {}});
 }
 typedef Bind = (String label, FutureOr<void> Function() action);
 
@@ -230,25 +234,34 @@ final class Pick<T> {                       // a list's items and selection
   Pick<T> set(List<T> items);                             // keeps the selected item if still there, else 0
   Pick<T> select(int index);                              // clamped
 }
-final class Field {                         // an input's text and cursor
-  Field([String text = '']);
-  String text();  Field set(String text);                 // cursor to the end
+final class Field {                         // an editor's text, cursor and history
+  Field({String text = '', List<String> history = const []});
+  String text();  List<String> history();
+  Field set(String text);                                 // cursor to the end
+  String submit();                                        // returns text, pushes it to history, clears
+}
+final class Scroll {                        // a scroll view's offset
+  Scroll({bool follow = true});                           // follow: stay pinned to the end as content grows
 }
 
 final class Region {
-  int width();  int height();
+  int width();  int height();  bool hovered();  bool focused();
   // text
-  Region write(String text, {Color? color, Color? background, Set<Style> style = const {}});
+  Region write(String text, {Color? color, Color? background, Set<Style> style = const {}, String? link});
   Region markdown(String source);
+  Region diff(String before, String after);
   // layout: each returns the new area
   Region box(String title);
   List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
   Region tabs<T>(Pick<T> tabs, String Function(T tab) label);   // the area below the tab row
+  Region scroll(Scroll scroll);                                 // unbounded height, clipped to a viewport
   Region popup(String title, {int width = 40, int height = 10});
-  // widgets: each returns the receiver
+  // widgets and bindings: each returns the receiver
+  Region on(Map<String, Bind> events);       // keys when focused, mouse events when under the pointer
   Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''});
   Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
-  Region input(Field field, {String hint = ''});
+  Region input(Field field, {String hint = '', int lines = 1,
+      FutureOr<List<String>> Function(String word)? suggest});
   Region button(String label, FutureOr<void> Function() action);
   Region bar(int done, int? total, {String? label});
   Region spin(String label);
@@ -260,61 +273,121 @@ final class Color {
   const factory Color.index(int index);            // 0–255, else ArgumentError
   const factory Color.rgb(int r, int g, int b);
 }
-enum Style { bold, dim, italic, underline, reverse }
+enum Style { bold, dim, italic, underline, strike, reverse }
 ```
 
-Public surface is exactly: `Tui`, `App`, `Screen`, `Bind`, `Pick`, `Field`, `Region`, `Color`,
-`Style`. `Screen.frame`, `pressed`, `typed`, and the `ScreenFuture` mirror go away.
+Public surface is exactly: `Tui`, `App`, `Screen`, `Bind`, `Pick`, `Field`, `Scroll`, `Region`,
+`Color`, `Style`. `Screen.frame`, `pressed`, `typed`, and the `ScreenFuture` mirror go away.
+
+**One vocabulary for events.** Keys, mouse and lifecycle events share the `Bind` map, both in
+`Screen(keys:)` and in `Region.on(…)`:
+
+| Kind      | Names                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| keys      | VISION key names, plus `shift+enter`/`ctrl+enter` (kitty keyboard protocol, where the terminal has it) |
+| mouse     | `click` `doubleclick` `rightclick` `middleclick` `wheelup` `wheeldown`                                  |
+| lifecycle | `show` (the state became current, including the first one), `resize`, `focus`/`blur` (terminal window)  |
+
+Hover is a reading, not an event: `if (r.hovered()) …` restyles a region, and a hover popup is
+`if (r.hovered()) r.popup(…)`.
 
 ### 15.3 Rules
 
 - **The state is the app's own value**, usually a sealed class with one subclass per view, so
   `screen` is an exhaustive `switch`. Going back is `app.go(previous)`. The previous object still
-  holds its `Pick`/`Field`, so the query, the selection and the focus come back as they were.
+  holds its `Pick`/`Field`/`Scroll`, so the query, the selection, the scroll position and the
+  focus come back as they were.
 - **`screen` runs on every redraw** and only describes the screen. It never blocks, and widgets
   never return state.
-- **Redraws are event-driven.** A redraw happens after each input event, after each handler
-  call and when its future settles, and on `go`, `say` and resize. It also runs at most every
-  80 ms while a handler future is pending or a spinner or bar is visible. An idle app uses no
-  CPU. Only changed cells are written.
-- **Keys.** `keys` maps a key name (VISION key names; alternatives are separated by spaces:
-  `'b escape'`) to `(label, action)`. A key goes to the first of these that takes it:
-  1. an open popup;
-  2. the focused widget;
-  3. `Tab`/`Shift+Tab` to move the focus, unless `keys` binds them;
-  4. the `keys` map;
-  5. any other drawn widget that uses the key, drawn order first (so `↑↓` reach the only list
+- **Redraws are event-driven**, coalesced to at most 60 fps, and only changed cells are written.
+  - A redraw happens after each input event, on `go`/`say`/`print`, and on resize.
+  - Handlers (and `show`) run in a zone, so any timer, future or stream event from work they
+    started schedules a redraw too. A streamed reply shows token by token with no extra call.
+  - Spinners animate at 80 ms while they are visible.
+  - An idle app uses no CPU.
+- **Two modes.**
+  - `fullscreen: true` uses the alternate screen and captures the mouse.
+  - `fullscreen: false` is inline, like Claude Code. The live area sits below the shell prompt
+    and is as tall as what is drawn, capped at the terminal height; a `0` size in `rows` takes
+    its content's height. When the content is taller than the terminal, its bottom shows.
+  - `app.print(draw)` renders once at the full width and commits the result above the live
+    area into the terminal's scrollback. Finished messages cost nothing on later redraws, and
+    the terminal's own scroll, search and selection work on them.
+  - Inline mode leaves the mouse to the terminal; in full screen, `print` throws `StateError`.
+- **Bindings.** A binding's name may list alternatives separated by spaces (`'b escape'`). An
+  event goes to the first of these that takes it:
+  1. an open popup (a `Console` prompt, a `suggest` list);
+  2. the focused widget or focused `on` region;
+  3. `Tab`/`Shift+Tab` to move the focus, unless something binds them;
+  4. the `Screen` `keys` map;
+  5. any other drawn widget that uses the event, drawn order first (so `↑↓` reach the only list
      while the input has focus);
   6. unbound `ctrl+c`, which quits.
-- **Widget keys:**
-  - `list`/`table`: `up` `down` `pageup` `pagedown` `home` `end`, the wheel (the list under the
-    pointer), and a click (selects and focuses).
-  - `input`: printable keys, paste, `backspace`/`delete` (by grapheme), `left` `right` `home`
-    `end`.
+
+  Mouse events go to the innermost region under the pointer, then outwards, then to `keys`.
+- **Widget events:**
+  - `list`/`table`: `up` `down` `pageup` `pagedown` `home` `end`, the wheel, and a click (selects
+    and focuses).
+  - `scroll`: the wheel, and when focused `pageup` `pagedown` `home` `end`. It draws a
+    scrollbar when the content overflows. When `follow` is set and the view is at the end, it
+    stays at the end as content grows; scrolling up unpins it, and `end` re-pins it.
+  - `input`:
+    - text: printable keys and paste (bracketed, so pasted newlines never submit);
+    - deletion: `backspace`/`delete` by grapheme, `ctrl+w`/`alt+backspace` by word,
+      `ctrl+u`/`ctrl+k` to the line's start/end;
+    - movement: `left` `right` `home` `end` `ctrl+a` `ctrl+e`, and `alt+`/`ctrl+left`/`right`
+      by word;
+    - lines: `lines > 1` grows to that many rows (`0` = no cap). `shift+enter`, `alt+enter`
+      or `\` then `enter` insert a newline. `up`/`down` move between lines, and at the first
+      or last line they walk the history;
+    - `enter` is never consumed, so `keys` decides what it does (usually
+      `('send', () => send(field.submit()))`);
+    - `suggest`: the word at the cursor is passed to `suggest` and the matches open as a popup
+      list. `up`/`down` choose, `tab`/`enter` replace the word, and `escape` closes. A stale
+      async answer is dropped.
   - `tabs`: `left` `right` when focused, and a click.
-  - `button`: `enter`/`space` when focused, and a left click.
-- **Focus** is the widget's `Pick`/`Field` object (a button's is its label), not a frame index,
-  so it survives redraws and state switches. When the focused widget isn't drawn, the first
-  focusable one is focused. A focused list's selection uses the accent; unfocused, it is dim
-  reversed. A focused input shows the hardware cursor.
-- **Handlers** may be sync or async, and every press runs one, even while an earlier run is
-  pending (a download doesn't block adding the next one); the app guards where it must. An `Exception` from a handler shows as
-  `✗ <first line>` in red in the status row, and the app keeps running. An `Error` (a bug) ends
-  `run` and is rethrown, the same rule as `cli`.
-- **Rows.** `title` is the top row, in the accent. The status row is always the bottom row. On
-  the left it shows the error, the `say` message, or the running spinners and bars. On the right
-  it shows the key help (`enter search · ctrl+o browser · esc quit`), with `escape` shown as
-  `esc` and an empty label hidden. When the row is too narrow, the help is cut first.
+  - `button`: `enter`/`space` when focused, and a click.
+  - `on`: a region that binds a keyboard key is focusable. `focused()` and `hovered()` let it
+    draw its own state.
+- **Focus** is an object identity: the `Pick`/`Field`/`Scroll`, the `on` map's key set within
+  its screen, or a button's label. It is never a frame index, so it survives redraws and state
+  switches. When the focused thing isn't drawn, the first focusable one is focused. A focused
+  list's selection uses the accent; unfocused, it is dim reversed. A focused input shows the
+  hardware cursor.
+- **Handlers** may be sync or async, and every event runs one, even while an earlier run is
+  pending; the app guards where it must.
+  - An `Exception` from a handler, or from work it started, shows as `✗ <first line>` in red in
+    the status row, and the app keeps running.
+  - An `Error` (a bug) ends `run` and is rethrown, the same rule as `cli`.
+- **Rows.** `title` is the top row, in the accent. The status row is always the bottom row:
+  - left: the error, the `say` message, the running spinners and bars, or else `status`
+    (a mode line such as `⏵⏵ accept edits on`);
+  - right: the key help (`enter send · esc interrupt · shift+tab mode`), with `escape` shown as
+    `esc`, and empty labels and mouse/lifecycle bindings hidden;
+  - when the row is too narrow, the help is cut first.
 - **Console inside the Tui.** While `run` is active, `Console.spin` and `Console.bar` draw in the
   status row instead of stderr, and several can run at once. `Console.ask`/`confirm`/`choose`
   open a modal popup over the screen. `Escape` there is EOF: it throws `StdinException`, and a
-  handler that ends with it shows nothing. This adds no new progress or prompt names.
-- **Drawing.** `write` wraps at the region edge, `\n` breaks a line, `\t` expands, controls show
-  as `�`, and text that runs past the last row ends with `…`. `popup` is drawn last, centered.
-  `rows`/`cols`: a size above 0 is fixed, and 0 shares what is left. `bar` lays out like
-  `Console.bar`. `picture` draws half-block cells and scales down to fit.
+  handler that ends with it shows nothing.
+- **Drawing.**
+  - `write` wraps at the region edge, `\n` breaks a line, `\t` expands, controls show as `�`, and
+    text past the last row ends with `…`. `link` makes it an OSC 8 hyperlink.
+  - `markdown`:
+    - blocks: headings, lists (nested, numbered), `>` quotes, tables (box-drawn), `---`;
+    - inline: bold, italic, strike, `code`, and links (OSC 8);
+    - fenced code is highlighted (strings, comments, numbers, keywords) by one in-house lexer
+      with keyword sets for Dart, JS/TS, Python, shell, JSON, YAML, Rust, Go and C-likes;
+    - it is safe to stream: an unclosed fence or emphasis renders as if it were closed;
+    - its layout is cached by `(source, width)`.
+  - `diff` is a line diff (Myers): unified hunks with 3 context lines, gutter line numbers, and
+    `-`/`+` rows on red/green backgrounds, with the changed words of a paired line brighter.
+  - `popup` is drawn last, centered. `rows`/`cols`: a size above 0 is fixed, and 0 shares what
+    is left. `bar` lays out like `Console.bar`. `picture` draws half-block cells and scales down
+    to fit.
+  - `scroll` lays its content out once per redraw but paints only the viewport.
 - **Colours.** They are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR`
   drops colours and keeps styles. `LANG=C`/no UTF-8 switches boxes, bars and spinners to ASCII.
+  Shift-drag still selects text natively while the mouse is captured.
 - **Terminal life**, Ctrl-Z, resize repaint, synchronized output, restart, and `StdoutException`
   stay as in VISION §4.12. A second `Tui.run` while one is active throws `StateError`.
 - **After `quit`**, `run` returns without waiting for pending handlers (futures can't be
@@ -417,6 +490,27 @@ so they show in the status row instead of ending the run.
 
 ### 15.5 Decisions taken (no backward compat)
 
+- **One `Bind` map for every event.** Keys, mouse (`click`…) and lifecycle (`show`, `resize`,
+  `focus`/`blur`) events share it, in `Screen(keys:)` and `Region.on`. There are no `onClick:`
+  params on every widget and no event class hierarchy (the master Tui had 10 event classes).
+- **Hover is a reading** (`hovered()`), because a redraw follows every pointer move anyway. That
+  saves an enter/leave event pair.
+- **Zone-tracked redraws** replace "every 80 ms while a handler is pending". Streams and
+  timers started by handlers redraw exactly when they deliver.
+- **Inline mode + `print`** is how a chat UI stays fast: committed output leaves the redraw
+  set. In full screen, a long transcript uses `scroll`.
+- **The `markdown` highlighter and the `diff` are in-house** (one lexer with keyword tables;
+  Myers). Pub engines for either pull in large grammars that cost startup. A/B both against
+  startup.
+- **Additions this round:**
+  - App: `print` `notify` `copy`;
+  - Screen: `status:`;
+  - Field: `submit` `history`;
+  - Scroll;
+  - Region: `on` `hovered` `focused` `scroll` `diff`;
+  - options: `link:` `lines:` `suggest:` `fullscreen:`, `Style.strike`.
+
+  Each one deletes a hand-rolled loop or escape sequence at its call site, as §15.8 shows.
 - `keys:` is rebuilt with the screen, so collection `if` makes bindings (and the help) depend on
   the state: `if (tab == .add) 'enter': ('add', …)`.
 - `tabs` takes a `Pick<T>` plus a label like `list`, so an enum `Pick(Tab.values)` makes the
@@ -486,21 +580,109 @@ final queue = Pick<Job>();                 // shared by every view
 
 **Steps.** Each step ends green before the next starts.
 
-1. **Library.** Implement §15.2/§15.3 in `lib/src/tui.dart`, and the Console-in-Tui routing in
+1. **Library.** Implement §15.2/§15.3 in `lib/src/tui.dart` (markdown, diff and the input
+   editor in their own `lib/src/tui_*.dart` files), and the Console-in-Tui routing in
    `console.dart` through a session hook in `terminal.dart`. Fix the §15.6 carry-overs.
 2. **Tests.** Write a pty test per member and rule in `test/tui_test.dart` and `test/tui_pty/`:
    key routing order, focus surviving `go`, `keys:` help, a handler `Exception` going to the
    status row, `Console.bar`/`confirm` inside `run`, idle without redraws, and a second `run`
    throwing `StateError`.
+   Add tests for:
+   - inline `print` landing in scrollback;
+   - mouse `click`/`wheel`/`hovered()` routing;
+   - `suggest` popup keys;
+   - `Field` history and readline keys;
+   - `scroll` follow;
+   - markdown streaming (an unclosed fence);
+   - `diff` hunks;
+   - `notify` doing nothing while the terminal has focus.
 3. **rawfree.** Rewrite it as above. The UI part's target is ≤ 150 lines with the queue (today
    it's ~170 lines without one), and the API part stays as it is apart from the exception types.
 4. **Verify by running.** Drive rawfree in a pty (`test/tui_pty/drive.py`): search, open a
    series, queue 3 chapters with `a`, watch the status row and the `Queue` table advance, kill
    the network for one page, check `failed (1)` and that `r` refetches only that page, and check
    that quitting with jobs left asks first. Check the result by screen state, and the files in
-   `downloads/`.
+   `downloads/`. Write `example/agent.dart` from §15.8 with a fake `reply()`. In a
+   pty, check that a reply streams in, `escape` interrupts, finished turns sit in the scrollback
+   (`tmux capture-pane -S -`), and `/q` + `tab` completes.
 5. **Docs.** Rewrite VISION §4.12, its §3 row and §7 from §15; update the README/CHANGELOG
    table row; delete §15.1–§15.6 here once they're done.
+
+### 15.8 Proof: Claude Code on §15
+
+The bar for §15: Claude Code's own UI can be rebuilt with it, and every Claude Code feature maps
+to a member above.
+
+| Claude Code feature                                           | §15                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------ |
+| inline UI, finished messages in the terminal's scrollback     | `fullscreen: false`, `app.print`                             |
+| reply streaming token by token                                | zone redraws; `markdown` is streaming-safe                   |
+| markdown, highlighted code, tables, clickable links           | `markdown`, `write(link:)`                                   |
+| Edit/Write tool diffs                                         | `diff(before, after)`                                        |
+| `✻ Thinking… (12s · esc to interrupt)`                        | `spin`, `'escape'` binding, a cancelled `StreamSubscription` |
+| multi-line prompt, shift+enter, `\`+enter, history, readline keys | `input(field, lines: 0)`, `Field.submit`/`history`       |
+| `/commands` and `@file` completion                            | `input(suggest:)`                                            |
+| permission prompt (Yes / Yes, don't ask again / No)           | `list` + `enter`, or `Console.choose` as a popup             |
+| `shift+tab` mode cycling, the mode line                       | a binding, `Screen(status:)`                                 |
+| `ctrl+o` to expand/collapse tool output                       | state + binding (`write` cuts with `…`)                      |
+| todo list, progress                                           | `write` with `Style.strike`, `bar`, `Console.bar`            |
+| notification when a long turn ends while unfocused            | `app.notify` (no-op while focused)                           |
+| copy the last reply                                           | `app.copy`                                                   |
+| hover/click affordances (full-screen tools)                   | `hovered()`, `on({'click': …})`                              |
+| resize, CJK/emoji widths, Ctrl-Z, Ctrl-C                      | terminal life (VISION §4.12)                                 |
+
+Not covered, and not planned until a real script needs them: images in the terminal beyond
+half-blocks (Sixel/kitty graphics), `ctrl+r` history search, and vim mode in `input`.
+
+`example/agent.dart` is a ~50-line clone of the loop. `reply()` stands in for any model call that
+streams text (`Stream<String>`):
+
+```dart
+sealed class Turn {}
+final class Chat extends Turn {
+  final prompt = Field();
+  var reply = '';  var mode = 0;  DateTime? since;
+  StreamSubscription<String>? stream;
+}
+const _modes = ['', '⏵⏵ accept edits on', '⏸ plan mode on'];
+const _commands = ['/clear', '/help', '/model', '/quit'];
+
+Future<void> main() async {
+  await Tui.run<Turn>(Chat(), fullscreen: false, (turn, app) => switch (turn) {
+        Chat c => Screen(status: _modes[c.mode], (r) {
+            if (c.since case final t?) {
+              r.markdown(c.reply).spin('Thinking… (${DateTime.now().difference(t).inSeconds}s · esc to interrupt)');
+            }
+            r.box('').input(c.prompt, lines: 0, hint: 'Try "fix the failing test"',
+                suggest: (w) => [for (final x in _commands) if (x.startsWith(w)) x]);
+          }, keys: {
+            'enter': ('send', () => _send(c, app)),
+            if (c.stream != null) 'escape': ('interrupt', () => _done(c, app)),
+            'shift+tab': ('mode', () => c.mode = (c.mode + 1) % _modes.length),
+            'ctrl+y': ('', () => app.copy(c.reply)),
+          }),
+      });
+}
+
+void _send(Chat c, App<Turn> app) {
+  if (c.stream != null || c.prompt.text().trim().isEmpty) return;
+  final text = c.prompt.submit();
+  if (text == '/quit') return app.quit();
+  app.print((r) => r.write('> $text', color: .gray));
+  c..reply = ''..since = DateTime.now();
+  c.stream = reply(text).listen((t) => c.reply += t, onDone: () {
+    _done(c, app);
+    app.notify('Claude is done');        // only shows when the terminal is in the background
+  });
+}
+
+void _done(Chat c, App<Turn> app) {
+  c.stream?.cancel();
+  final text = c.reply;
+  app.print((r) => r.markdown(text));     // into scrollback; the live area shrinks back to the prompt
+  c..stream = null..since = null..reply = '';
+}
+```
 
 ## 16. Charset (`lib/src/charset.dart`, 2559 lines)
 

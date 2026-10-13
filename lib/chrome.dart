@@ -169,25 +169,30 @@ final class Browser implements Closeable {
   @override
   Future<void> close() async {
     if (_closed) return;
+    try {
+      for (final wrap in List<Page>.of(_known)) {
+        try {
+          await wrap._detach();
+        } catch (_) {}
+      }
+      final dir = _downloadDir;
+      _downloadDir = null;
+      if (dir != null) {
+        try {
+          await io.Directory(dir).delete(recursive: true);
+        } catch (_) {}
+      }
+      if (_owned) {
+        await _browser.close();
+      } else {
+        _browser.disconnect();
+      }
+    } catch (_) {
+      // Throw allows a retry: don't mark closed until it succeeded.
+      rethrow;
+    }
     _closed = true;
-    for (final wrap in _known) {
-      try {
-        await wrap._detach();
-      } catch (_) {}
-    }
     _known.clear();
-    final dir = _downloadDir;
-    _downloadDir = null;
-    if (dir != null) {
-      try {
-        await io.Directory(dir).delete(recursive: true);
-      } catch (_) {}
-    }
-    if (_owned) {
-      await _browser.close();
-    } else {
-      _browser.disconnect();
-    }
   }
 
   /// The shared download folder, created on first use.

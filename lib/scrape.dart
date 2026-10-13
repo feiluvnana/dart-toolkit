@@ -26,6 +26,8 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 
+import 'src/charset.dart' as charset;
+
 export 'core.dart';
 export 'html.dart';
 
@@ -82,7 +84,7 @@ abstract final class Scrape {
 /// final URL as the base), `json()`, `text()` and `> file` mean what they
 /// mean everywhere. With a [browser], `html()` is the rendered DOM.
 final class Visit<T> with Reader {
-  Visit._http(this._url, this._status, this._body, this._crawl)
+  Visit._http(this._url, this._status, this._body, this._crawl, this._contentType)
       : _page = null;
 
   Visit._tab(
@@ -91,9 +93,10 @@ final class Visit<T> with Reader {
     this._body,
     this._crawl,
     Page page,
-  ) : _page = page;
+  ) : _page = page,
+      _contentType = null;
 
-  Visit._cached(this._url, this._status, this._body, this._crawl)
+  Visit._cached(this._url, this._status, this._body, this._crawl, this._contentType)
       : _page = null;
 
   final String _url;
@@ -101,6 +104,7 @@ final class Visit<T> with Reader {
   final List<int> _body;
   final _Crawl<T> _crawl;
   final Page? _page;
+  final String? _contentType;
 
   /// The final URL after redirects.
   String url() => _url;
@@ -108,15 +112,49 @@ final class Visit<T> with Reader {
   /// The HTTP status. A 404 reaches its handler; [status] tells it apart.
   int status() => _status;
 
+  /// Whether the status is 2xx.
+  bool ok() {
+    final code = _status;
+    return code >= 200 && code < 300;
+  }
+
+  /// The body length in bytes.
+  int? size() => _body.length;
+
+  /// A file name for the body: the final URL's last segment, else 'download'.
+  String name() {
+    final uri = Uri.tryParse(_url);
+    final segments =
+        uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
+    if (segments.isNotEmpty) {
+      final last = segments.last;
+      try {
+        final decoded = Uri.decodeComponent(last);
+        if (decoded.isNotEmpty) return decoded;
+      } catch (_) {
+        if (last.isNotEmpty) return last;
+      }
+    }
+    return 'download';
+  }
+
   /// Queue [urls] to be handled by [handler]. URLs are made absolute against
   /// this visit's URL and their fragment is dropped; an already-queued URL
-  /// is skipped, whichever handler queued it. Returns this visit.
+  /// is skipped, whichever handler queued it. Bad URLs are skipped, like
+  /// non-http(s). Returns this visit.
   Visit<T> follow(
     Iterable<String> urls,
     Future<void> Function(Visit<T> visit) handler,
   ) {
     for (final u in urls) {
-      _crawl.enqueue(_crawl.normalize(_url, u), handler);
+      String? normalized;
+      try {
+        normalized = _crawl.normalize(_url, u);
+      } catch (_) {
+        // One bad href must not kill the crawl.
+        continue;
+      }
+      _crawl.enqueue(normalized, handler);
     }
     return this;
   }
@@ -128,7 +166,14 @@ final class Visit<T> with Reader {
   }
 
   @override
-  Stream<List<int>> stream() => Stream.value(_body);
+  Stream<List<int>> stream() => Stream.value(List<int>.of(_body));
+
+  @override
+  Future<List<int>> bytes() async => List<int>.of(_body);
+
+  @override
+  Future<String> text() async =>
+      charset.Charset.decode(_body, contentType: _contentType);
 
   /// This page as [Elements]: the rendered DOM with a browser, else the
   /// body parsed with the final URL as the base.
@@ -306,7 +351,7 @@ final class _Crawl<T> {
     final hit = cache == null ? null : await _readCache(task.url);
     Visit<T> visit;
     if (hit != null) {
-      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this);
+      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this, hit.contentType);
     } else {
       if (delay != null) await _polite(uri.host);
       final fetched = await _fetch(task.url);
@@ -357,8 +402,9 @@ final class _Crawl<T> {
         final fetched = await _fetchTab(url);
         if (fetched.status == 429 || fetched.status >= 500) {
           retryAfter = _parseRetryAfter(fetched.retryAfter);
-          lastError = StateError(
+          lastError = io.HttpException(
             'HTTP ${fetched.status}: $url',
+            uri: Uri.tryParse(url),
           );
           // A 5xx/429 tab is closed before the retry: continuing without
           // closing leaks a tab per attempt.
@@ -375,7 +421,8 @@ final class _Crawl<T> {
   }
 
   Duration _backoff(int attempt, Duration? server) {
-    final backoff = Duration(seconds: 1 << attempt);
+    final shift = attempt > 10 ? 10 : attempt;
+    final backoff = Duration(seconds: 1 << shift);
     if (server == null) return backoff;
     return server > backoff ? server : backoff;
   }
@@ -400,18 +447,23 @@ final class _Crawl<T> {
         headers: headers, timeout: timeout, retries: retries);
     if (res.status() == 429 || res.status() >= 500) {
       final status = res.status();
+      final finalUrl = res.url();
       await res.close();
-      throw StateError('HTTP $status: $url');
+      throw io.HttpException('HTTP $status: $finalUrl', uri: Uri.tryParse(finalUrl));
     }
     List<int> body;
+    String? contentType;
+    String finalUrl;
     try {
+      contentType = res.header('content-type');
       body = await res.bytes();
+      finalUrl = res.url();
     } finally {
       // bytes() releases the client by itself; close() is a no-op then.
       await res.close();
     }
     return _Fetched(
-      Visit._http(res.url(), res.status(), body, this),
+      Visit._http(finalUrl, res.status(), body, this, contentType),
       res.status(),
       res.header('retry-after'),
     );
@@ -475,6 +527,7 @@ final class _Crawl<T> {
         meta['finalUrl'] as String,
         (meta['status'] as num).toInt(),
         await bodyFile.bytes(),
+        meta['contentType'] as String?,
       );
     } catch (_) {
       return null;
@@ -488,7 +541,11 @@ final class _Crawl<T> {
       final visit = fetched.visit;
       await Fs.file('$dir/$key.body').write(visit._body);
       await Fs.file('$dir/$key.json').write(
-        jsonEncode({'finalUrl': visit._url, 'status': visit._status}),
+        jsonEncode({
+          'finalUrl': visit._url,
+          'status': visit._status,
+          'contentType': visit._contentType,
+        }),
       );
     } catch (_) {
       // Caching is best-effort; a full disk must not fail the crawl.
@@ -505,11 +562,12 @@ final class _Fetched<T> {
 }
 
 final class _Hit {
-  _Hit(this.finalUrl, this.status, this.body);
+  _Hit(this.finalUrl, this.status, this.body, this.contentType);
 
   final String finalUrl;
   final int status;
   final List<int> body;
+  final String? contentType;
 }
 
 final class _Retry {

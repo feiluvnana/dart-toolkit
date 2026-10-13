@@ -516,14 +516,14 @@ final class Bar extends _Live implements Pipe, Closeable {
     } catch (_) {}
     _sigwinch = null;
     if (Console._animated) {
-      io.stderr.writeln('\r✗ ${_label ?? ''}'.trimRight());
+      io.stderr.writeln('${'\r✗ ${_label ?? ''}'.trimRight()}\x1b[K');
     } else {
       io.stderr.writeln('✗ ${_label ?? ''}'.trimRight());
     }
     Console._release(this);
   }
 
-  void _render({bool force = true}) {
+  void _render({bool force = false}) {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastDraw < 80) return;
     _lastDraw = now;

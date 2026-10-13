@@ -115,8 +115,9 @@ final class File extends Entry with Reader implements Writer {
 
   @override
   Future<File> copy(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
+    await _removeDestLink(to);
     await io.File(_path).copy(to);
     await _preserveFileMeta(_path, to);
     return File._(to);
@@ -124,8 +125,9 @@ final class File extends Entry with Reader implements Writer {
 
   @override
   Future<File> move(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
+    await _removeDestLink(to);
     try {
       await io.File(_path).rename(to);
     } on io.FileSystemException catch (e) {
@@ -296,16 +298,18 @@ final class Dir extends Entry {
 
   @override
   Future<Dir> copy(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.directory);
     await _ensureParent(to);
+    await _removeDestLink(to);
     await _copyDir(_path, to);
     return Dir._(to);
   }
 
   @override
   Future<Dir> move(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.directory);
     await _ensureParent(to);
+    await _removeDestLink(to);
     try {
       await io.Directory(_path).rename(to);
     } on io.FileSystemException catch (e) {
@@ -413,7 +417,7 @@ final class Link extends Entry {
 
   @override
   Future<Link> copy(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.link);
     await _ensureParent(to);
     final t = await target();
     final link = io.Link(to);
@@ -428,7 +432,7 @@ final class Link extends Entry {
 
   @override
   Future<Link> move(String to) async {
-    await _checkSource(_path, to);
+    await _checkSource(_path, to, io.FileSystemEntityType.link);
     await _ensureParent(to);
     try {
       await io.Link(_path).rename(to);
@@ -498,13 +502,36 @@ Future<void> _ensureParent(String path) async {
 /// True only for cross-device renames.
 bool _isExdev(io.FileSystemException e) => e.osError?.errorCode == 18;
 
-/// Throw before creating anything when the source is missing, and reject a
-/// destination inside (or equal to) the source. Must run before
-/// [_ensureParent] so a missing source never leaves an empty destination.
-Future<void> _checkSource(String from, String to) async {
+/// Replace a dest symlink with nothing, so a file/dir copy replaces the
+/// link instead of following it to a target outside the tree.
+Future<void> _removeDestLink(String to) async {
+  try {
+    final t = await io.FileSystemEntity.type(to, followLinks: false);
+    if (t == io.FileSystemEntityType.link) {
+      await io.Link(to).delete();
+    }
+  } catch (_) {}
+}
+
+/// Throw before creating anything when the source is missing or of the wrong
+/// kind, and reject a destination inside (or equal to) the source. Must run
+/// before [_ensureParent] so a missing source never leaves an empty
+/// destination. Symlinks are resolved so `link->real` + `to=real/sub` is
+/// still a self-copy.
+Future<void> _checkSource(
+  String from,
+  String to, [
+  io.FileSystemEntityType? expected,
+]) async {
   final t = await io.FileSystemEntity.type(from, followLinks: false);
   if (t == io.FileSystemEntityType.notFound) {
     throw io.PathNotFoundException(from, const io.OSError());
+  }
+  if (expected != null && t != expected) {
+    throw io.FileSystemException(
+      'source is $t, not $expected',
+      from,
+    );
   }
   final nf = p.normalize(p.absolute(from));
   final nt = p.normalize(p.absolute(to));
@@ -514,6 +541,28 @@ Future<void> _checkSource(String from, String to) async {
       'to',
       'destination must not be inside the source ($from)',
     );
+  }
+  // Resolve symlinks for a real self-copy check.
+  try {
+    final realFrom = await io.File(nf).resolveSymbolicLinks();
+    String realTo;
+    try {
+      // Dest may not exist: resolve its parent.
+      final parent = p.dirname(nt);
+      final realParent = await io.Directory(parent).resolveSymbolicLinks();
+      realTo = p.join(realParent, p.basename(nt));
+    } catch (_) {
+      realTo = nt;
+    }
+    if (p.equals(realFrom, realTo) || p.isWithin(realFrom, realTo)) {
+      throw ArgumentError.value(
+        to,
+        'to',
+        'destination must not be inside the source ($from)',
+      );
+    }
+  } catch (e) {
+    if (e is ArgumentError) rethrow;
   }
 }
 

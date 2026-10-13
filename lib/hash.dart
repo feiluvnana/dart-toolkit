@@ -46,6 +46,7 @@ final class Hasher implements Writer, Pipe {
   late final ByteConversionSink _in;
   var _done = false;
   var _poisoned = false;
+  var _running = false;
 
   void _checkUsable(String action) {
     if (_poisoned) {
@@ -53,6 +54,9 @@ final class Hasher implements Writer, Pipe {
     }
     if (_done) {
       throw StateError('hash is finished; hex() was already called');
+    }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
     }
   }
 
@@ -95,6 +99,10 @@ final class Hasher implements Writer, Pipe {
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
+    }
+    _running = true;
     try {
       await for (final chunk in input) {
         _in.add(chunk);
@@ -104,6 +112,8 @@ final class Hasher implements Writer, Pipe {
       // let a later hex() silently return it.
       _abort(e);
       rethrow;
+    } finally {
+      _running = false;
     }
     _in.close();
     _done = true;
@@ -117,6 +127,10 @@ final class Hasher implements Writer, Pipe {
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
+    }
+    _running = true;
     return _tee(input);
   }
 
@@ -133,6 +147,7 @@ final class Hasher implements Writer, Pipe {
       _done = true;
       ok = true;
     } finally {
+      _running = false;
       // Input failure or downstream cancel (including Reader.to's
       // cancel-on-writer-error for a writer-first failure): the digest is
       // partial, so a later hex()/add() must throw rather than silently

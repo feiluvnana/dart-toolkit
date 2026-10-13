@@ -99,8 +99,12 @@ final class Elements extends Iterable<Element> {
         }
         out.add(Element._(clone, _baseUrl));
       }
-    } on FormatException {
-      rethrow;
+    } on FormatException catch (e) {
+      throw FormatException(
+        "invalid selector '$selector': ${e.message}",
+        e.source,
+        e.offset,
+      );
     } catch (e) {
       throw FormatException("invalid selector '$selector': $e");
     }
@@ -158,7 +162,15 @@ final class Element {
     final clone = _el.clone(true);
     List<dom.Element> found;
     try {
-      found = clone.querySelectorAll(selector);
+      final group = _parseSelector(selector);
+      final evaluator = query.SelectorEvaluator();
+      found = [];
+      if (evaluator.matches(clone, group)) {
+        // Self matches whole (like Elements.without drops it): clear content.
+        clone.nodes.clear();
+        return Element._(clone, _baseUrl);
+      }
+      evaluator.querySelectorAll(clone, group, found);
     } on FormatException catch (e) {
       throw FormatException(
         "invalid selector '$selector': ${e.message}",
@@ -176,17 +188,25 @@ final class Element {
 
   /// Text like `innerText`, so scraped text needs no `.trim()`. Runs of
   /// spaces collapse to one space, and a run that holds a newline becomes one
-  /// newline. The result is trimmed, and `<pre>` keeps its whitespace.
+  /// newline. Block elements and `<br>` break lines; the result has no
+  /// leading/trailing collapsed whitespace, and `<pre>` keeps its whitespace.
   String text() {
     final out = StringBuffer();
     var gaps = 0;
     var gapNewline = false;
     void flushGap() {
       if (gaps > 0) {
-        out.write(gapNewline ? '\n' : ' ');
+        // Drop leading collapsed whitespace; keep a single space/newline
+        // between content.
+        if (out.isNotEmpty) out.write(gapNewline ? '\n' : ' ');
         gaps = 0;
         gapNewline = false;
       }
+    }
+
+    void gap({required bool newline}) {
+      gaps++;
+      if (newline) gapNewline = true;
     }
 
     void push(String s) {
@@ -211,16 +231,25 @@ final class Element {
           push(node.data);
         }
       } else if (node is dom.Element) {
-        final inner = pre || node.localName == 'pre';
+        final tag = node.localName;
+        if (tag == 'br') {
+          // A line break even with no surrounding text nodes.
+          gap(newline: true);
+          return;
+        }
+        final isBlock = tag != null && _blocks.contains(tag);
+        if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
+        final inner = pre || tag == 'pre';
         for (final child in node.nodes) {
           walk(child, inner);
         }
+        if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
       }
     }
 
     walk(_el, _el.localName == 'pre');
-    flushGap();
-    return out.toString().trim();
+    // Drop trailing collapsed whitespace; pre's own trailing spaces stay.
+    return out.toString();
   }
 
   /// Attribute [name] (case-insensitive) or `null` if absent. URL attributes
@@ -249,6 +278,47 @@ final class Element {
 
 /// URL attributes: trimmed and resolved against the base.
 const _urlAttrs = {'href', 'src', 'data-src', 'poster', 'action'};
+
+/// Elements that break lines in `text()` (like `innerText`).
+const _blocks = {
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'details',
+  'dialog',
+  'div',
+  'dl',
+  'dd',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hgroup',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'thead',
+  'tfoot',
+  'tr',
+  'ul',
+};
 
 /// Parse [selector] with the engine's parser; a bad selector is a
 /// [FormatException] naming it.
@@ -283,8 +353,12 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
         add(el);
       }
     }
-  } on FormatException {
-    rethrow;
+  } on FormatException catch (e) {
+    throw FormatException(
+      "invalid selector '$selector': ${e.message}",
+      e.source,
+      e.offset,
+    );
   } catch (e) {
     throw FormatException("invalid selector '$selector': $e");
   }
@@ -301,7 +375,7 @@ extension ReaderHtml on Reader {
       return Html.parse(text, baseUrl: _baseUrlOf(this));
     } on FormatException catch (e) {
       final status = _statusOf(this);
-      if (status == null) rethrow;
+      if (status == null || (status >= 200 && status < 300)) rethrow;
       throw FormatException('${e.message} (HTTP $status)', e.source, e.offset);
     }
   }

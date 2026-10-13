@@ -21,6 +21,7 @@ final class Json extends Iterable<Json> {
   Json._(this._v);
 
   final Object? _v;
+  List<dynamic>? _valuesCache;
 
   /// Parse [json]. Throws [FormatException] on invalid JSON.
   static Json parse(String json) {
@@ -46,18 +47,27 @@ final class Json extends Iterable<Json> {
   /// segment maps over every item: `$('data.users.*.name')` is a [Json] of
   /// the list of names. `*` over an object maps over its values in iteration
   /// order. A missing path (or a missing key inside `*`) gives a [Json]
-  /// holding null, never a throw.
+  /// holding null, never a throw. Use `\` to escape ( `\.` for a literal dot,
+  /// `\*` for a literal star, `\\` for a backslash).
   Json $(String path) {
     if (path.isEmpty) return Json._(_v);
-    return Json._(_walk(_v, path.split('.')));
+    return Json._(_walk(_v, _splitPath(path)));
   }
 
-  /// Index the iteration (array items or object values), O(1) per item.
+  /// Index the iteration (array items or object values), O(1) per item
+  /// after the first (object values are cached).
   /// Throws [RangeError] when out of range or on a scalar.
   Json operator [](int index) {
     final v = _v;
     if (v is List) return Json._(v[index]);
-    if (v is Map) return Json._(v.values.elementAt(index));
+    if (v is Map) {
+      var cache = _valuesCache;
+      if (cache == null) {
+        cache = v.values.toList();
+        _valuesCache = cache;
+      }
+      return Json._(cache[index]);
+    }
     throw RangeError('index $index into a scalar JSON value');
   }
 
@@ -77,7 +87,8 @@ final class Json extends Iterable<Json> {
         if (d is T) return d as T;
       } else if (v.isFinite &&
           v == v.truncateToDouble() &&
-          v.abs() < 9223372036854775808.0) {
+          v >= -9223372036854775808.0 &&
+          v <= 9223372036854775807.0) {
         final i = v.toInt();
         if (i is T) return i as T;
       }
@@ -126,8 +137,9 @@ final class Json extends Iterable<Json> {
         if (!c.containsKey(seg)) return null;
         c = c[seg];
       } else if (c is List) {
-        final i = int.tryParse(seg);
-        if (i == null || i < 0 || i >= c.length) return null;
+        if (!_isIndex(seg)) return null;
+        final i = int.parse(seg);
+        if (i < 0 || i >= c.length) return null;
         c = c[i];
       } else {
         return null;
@@ -135,6 +147,50 @@ final class Json extends Iterable<Json> {
     }
     return c;
   }
+}
+
+/// True for canonical array indexes (`0`, `1`, …): no `+`, no leading
+/// zeros, no whitespace.
+bool _isIndex(String seg) {
+  if (seg.isEmpty) return false;
+  if (seg == '0') return true;
+  if (seg.length > 1 && seg.codeUnitAt(0) == 0x30) return false;
+  for (var i = 0; i < seg.length; i++) {
+    final c = seg.codeUnitAt(i);
+    if (c < 0x30 || c > 0x39) return false;
+  }
+  return true;
+}
+
+/// Split a dotted path, honouring `\` escapes (`\.`, `\*`, `\\`).
+List<String> _splitPath(String path) {
+  final out = <String>[];
+  final buf = StringBuffer();
+  var i = 0;
+  while (i < path.length) {
+    final c = path.codeUnitAt(i);
+    if (c == 0x5C && i + 1 < path.length) {
+      final n = path.codeUnitAt(i + 1);
+      if (n == 0x2E || n == 0x2A || n == 0x5C) {
+        buf.writeCharCode(n);
+        i += 2;
+        continue;
+      }
+      buf.writeCharCode(c);
+      i++;
+      continue;
+    }
+    if (c == 0x2E) {
+      out.add(buf.toString());
+      buf.clear();
+      i++;
+      continue;
+    }
+    buf.writeCharCode(c);
+    i++;
+  }
+  out.add(buf.toString());
+  return out;
 }
 
 /// An array's items, wrapped one at a time.
@@ -194,7 +250,8 @@ Object? _scalar<E>(Object? e) {
   } else if (e is double &&
       e.isFinite &&
       e == e.truncateToDouble() &&
-      e.abs() < 9223372036854775808.0) {
+      e >= -9223372036854775808.0 &&
+      e <= 9223372036854775807.0) {
     final i = e.toInt();
     if (i is E) return i;
   }
@@ -266,13 +323,22 @@ T? _valueList<T>(List<dynamic> v) {
       attempt<List<int?>>(_listOf<int?>(_scalar<int?>)) ??
       attempt<List<String?>>(_listOf<String?>(_scalar<String?>)) ??
       attempt<List<double?>>(_listOf<double?>(_scalar<double?>)) ??
+      attempt<List<bool?>>(_listOf<bool?>(_scalar<bool?>)) ??
       attempt<List<List<int>>>(_listOf<List<int>>(_listOf<int>(_scalar<int>))) ??
       attempt<List<List<String>>>(
         _listOf<List<String>>(_listOf<String>(_scalar<String>)),
       ) ??
+      attempt<List<List<bool>>>(
+        _listOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
+      ) ??
       attempt<Map<String, int>>(_mapOf<int>(_scalar<int>)) ??
       attempt<Map<String, String>>(_mapOf<String>(_scalar<String>)) ??
       attempt<Map<String, double>>(_mapOf<double>(_scalar<double>)) ??
+      attempt<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)) ??
+      attempt<Map<String, num>>(_mapOf<num>(_scalar<num>)) ??
+      attempt<Map<String, List<bool>>>(
+        _mapOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
+      ) ??
       attempt<Object>(_scalar<Object>) ??
       attempt<Object?>(_scalar<Object?>) ??
       attempt<dynamic>(_scalar<dynamic>);
@@ -309,10 +375,23 @@ T? _valueMap<T>(Map<dynamic, dynamic> v) {
       attempt<List<int>>(_listOf<int>(_scalar<int>)) ??
       attempt<List<String>>(_listOf<String>(_scalar<String>)) ??
       attempt<List<double>>(_listOf<double>(_scalar<double>)) ??
+      attempt<List<bool>>(_listOf<bool>(_scalar<bool>)) ??
+      attempt<List<num>>(_listOf<num>(_scalar<num>)) ??
       attempt<List<int?>>(_listOf<int?>(_scalar<int?>)) ??
       attempt<List<String?>>(_listOf<String?>(_scalar<String?>)) ??
+      attempt<List<bool?>>(_listOf<bool?>(_scalar<bool?>)) ??
       attempt<Map<String, int>>(_mapOf<int>(_scalar<int>)) ??
       attempt<Map<String, String>>(_mapOf<String>(_scalar<String>)) ??
+      attempt<Map<String, double>>(_mapOf<double>(_scalar<double>)) ??
+      attempt<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)) ??
+      attempt<Map<String, num>>(_mapOf<num>(_scalar<num>)) ??
+      attempt<List<bool>>(_listOf<bool>(_scalar<bool>)) ??
+      attempt<Map<String, List<bool>>>(
+        _mapOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
+      ) ??
+      attempt<Map<String, Map<String, bool>>>(
+        _mapOf<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)),
+      ) ??
       attempt<Object>(_scalar<Object>) ??
       attempt<Object?>(_scalar<Object?>) ??
       attempt<dynamic>(_scalar<dynamic>);
@@ -348,6 +427,9 @@ int? _statusOf(Reader reader) {
 FormatException _withStatus(Reader reader, FormatException e) {
   final status = _statusOf(reader);
   if (status == null) return e;
+  // Only error pages are annotated; a 2xx body that isn't JSON is just
+  // invalid content.
+  if (status >= 200 && status < 300) return e;
   return FormatException('${e.message} (HTTP $status)', e.source, e.offset);
 }
 

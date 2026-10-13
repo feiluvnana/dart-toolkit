@@ -234,13 +234,14 @@ final class Response with Reader implements Closeable {
       charset.Charset.decode(await bytes(), contentType: header('content-type'));
 
   /// The body as bytes, cached like [text]. Works on any status.
+  /// Returns a copy so callers can't mutate the cache.
   @override
   Future<List<int>> bytes() async {
     if (_closed) {
       throw StateError('response is closed: ${url()}');
     }
     final cached = _cached;
-    if (cached != null) return cached;
+    if (cached != null) return List<int>.of(cached);
     if (_streaming) {
       throw StateError('body already streaming: ${url()}');
     }
@@ -251,7 +252,7 @@ final class Response with Reader implements Closeable {
         out.add(chunk);
       }
       _cached = out.takeBytes();
-      return _cached!;
+      return List<int>.of(_cached!);
     } finally {
       _finish();
     }
@@ -270,7 +271,7 @@ final class Response with Reader implements Closeable {
           uri: Uri.tryParse(url()),
         );
       }
-      return Stream.value(cached);
+      return Stream.value(List<int>.of(cached));
     }
     if (_streaming) {
       throw StateError('body already streaming: ${url()}');
@@ -310,8 +311,10 @@ final class Response with Reader implements Closeable {
     if (_closed || _done) return;
     _closed = true;
     try {
-      // Cancel the socket's subscription if the body never started.
-      await _resp.stream.drain<void>();
+      // Drop, don't hang: a stalled body can't block close forever.
+      // Drain with the response timeout, then release via _finish
+      // (which closes the client).
+      await _resp.stream.drain<void>().timeout(_timeout, onTimeout: () {});
     } catch (_) {
       // Dropping must not throw.
     } finally {
@@ -325,7 +328,7 @@ final class Response with Reader implements Closeable {
         onTimeout: (sink) {
           sink.addError(
             TimeoutException(
-              'body stalled for ${_timeout.inSeconds}s: ${url()}',
+              'body stalled for $_timeout: ${url()}',
               _timeout,
             ),
           );
@@ -563,6 +566,13 @@ Future<Response> _send(
   } catch (e) {
     throw ArgumentError.value(url, 'url', 'invalid URL: $e');
   }
+  if (first.scheme != 'http' && first.scheme != 'https') {
+    throw ArgumentError.value(
+      url,
+      'url',
+      'must be an absolute http(s) URL',
+    );
+  }
   final encoded = _encodeBody(body, json);
   final resendable = encoded is! _StreamBody;
   var attempt = 0;
@@ -662,7 +672,7 @@ Future<Response> _attempt(
   Duration limit,
 ) async {
   // Fresh client per attempt: no pooling, no shared state to leak.
-  final client = http.Client();
+  var client = http.Client();
   try {
     var currentMethod = method;
     var currentUri = first;
@@ -691,13 +701,13 @@ Future<Response> _attempt(
       if (!_isRedirect(resp.statusCode)) {
         return Response._(resp, client, limit, currentUri.toString());
       }
-      final location = resp.headers['location'];
+      final location = _locationOf(resp.headers);
       if (location == null || location.isEmpty) {
         return Response._(resp, client, limit, currentUri.toString());
       }
       if (hop >= Http._maxRedirects) {
         try {
-          await resp.stream.drain<void>();
+          await resp.stream.drain<void>().timeout(limit);
         } catch (_) {}
         throw HttpException(
           'too many redirects (>${Http._maxRedirects}): $currentUri',
@@ -706,11 +716,15 @@ Future<Response> _attempt(
       }
       final next = currentUri.resolve(location);
       try {
-        await resp.stream.drain<void>().timeout(
-          limit,
-          onTimeout: () {},
-        );
-      } catch (_) {}
+        await resp.stream.drain<void>().timeout(limit);
+      } catch (_) {
+        // A stalled drain can't hold the socket for the next hop:
+        // drop the pooled connection and continue with a fresh client.
+        try {
+          client.close();
+        } catch (_) {}
+        client = http.Client();
+      }
       final code = resp.statusCode;
       if ((code == 301 || code == 302) && currentMethod == 'POST') {
         currentMethod = 'GET';
@@ -746,6 +760,14 @@ bool _isRedirect(int status) =>
     status == 307 ||
     status == 308;
 
+/// The `location` header, case-insensitively (servers send `Location`).
+String? _locationOf(Map<String, String> headers) {
+  for (final entry in headers.entries) {
+    if (entry.key.toLowerCase() == 'location') return entry.value;
+  }
+  return null;
+}
+
 bool _hasHeader(Map<String, String> headers, String name) {
   final key = name.toLowerCase();
   for (final existing in headers.keys) {
@@ -778,7 +800,7 @@ Future<http.StreamedResponse> _singleSend(
   Duration limit,
 ) async {
   TimeoutException timeout() =>
-      TimeoutException('no headers for ${limit.inSeconds}s: $uri', limit);
+      TimeoutException('no headers for $limit: $uri', limit);
   try {
     if (body is _StreamBody) {
       final req = http.StreamedRequest(method, uri);

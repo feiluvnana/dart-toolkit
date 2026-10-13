@@ -45,14 +45,15 @@ abstract mixin class Reader {
 
   /// Runs the pipeline to the end; null → run and discard.
   Future<void> to(Writer? writer) async {
-    final s = stream();
-    if (writer == null) {
-      await for (final _ in s) {
-        // discard
-      }
-      return;
-    }
+    Stream<List<int>>? s;
     try {
+      s = stream();
+      if (writer == null) {
+        await for (final _ in s) {
+          // discard
+        }
+        return;
+      }
       await writer.consume(s);
     } catch (e, st) {
       // The writer failed before or during the read (e.g. a missing parent,
@@ -64,7 +65,7 @@ abstract mixin class Reader {
       // this second listen throws StateError and is ignored: the writer's
       // own cancel already propagated.
       try {
-        await s.listen(null, onError: (_) {}).cancel();
+        await s?.listen(null, onError: (_) {}).cancel();
       } catch (_) {}
       Error.throwWithStackTrace(e, st);
     }

@@ -198,6 +198,16 @@ final class _Unpacker implements Writer {
       return;
     }
     if (destType != io.FileSystemEntityType.notFound) {
+      final srcIsDir = srcType == io.FileSystemEntityType.directory;
+      final destIsDir = destType == io.FileSystemEntityType.directory;
+      if (srcIsDir != destIsDir) {
+        // Never delete on type collision: an archive file over an existing
+        // dir (or vice versa) throws instead of rm -rf.
+        throw io.FileSystemException(
+          'archive member collides with existing ${destIsDir ? 'directory' : 'file'}',
+          dest,
+        );
+      }
       try {
         if (destType == io.FileSystemEntityType.directory) {
           await io.Directory(dest).delete(recursive: true);
