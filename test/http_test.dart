@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 /// Python-generated fixtures (codecs with the same names): `python3 -c
