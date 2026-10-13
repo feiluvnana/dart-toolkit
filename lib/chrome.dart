@@ -38,15 +38,8 @@ abstract final class Chrome {
   /// temp profile deleted on [close]. [proxy] routes every request
   /// (`http://host:port`, `socks5://host:port`). Throws when the browser
   /// can't start.
-  static Future<Browser> launch({
-    bool headless = true,
-    String? executable,
-    String? profile,
-    String? proxy,
-  }) async {
-    final args = <String>[
-      if (proxy != null) '--proxy-server=$proxy',
-    ];
+  static Future<Browser> launch({bool headless = true, String? executable, String? profile, String? proxy}) async {
+    final args = <String>[if (proxy != null) '--proxy-server=$proxy'];
     final browser = await pp.puppeteer.launch(
       headless: headless,
       executablePath: executable,
@@ -84,20 +77,12 @@ final class Browser implements Closeable {
   /// the tab loads, [block] aborts requests by resource type (`'image'`,
   /// `'font'`, `'media'`, `'stylesheet'`), [width]/[height] set the viewport.
   /// Dialogs are always dismissed.
-  Future<Page> open(
-    String url, {
-    Map<String, String>? headers,
-    List<String>? block,
-    int? width,
-    int? height,
-  }) async {
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height}) async {
     final page = await _browser.newPage();
     final wrap = Page._(page, this);
     try {
       if (width != null || height != null) {
-        await page.setViewport(
-          pp.DeviceViewport(width: width ?? 1280, height: height ?? 1024),
-        );
+        await page.setViewport(pp.DeviceViewport(width: width ?? 1280, height: height ?? 1024));
       }
       if (headers != null) {
         await page.setExtraHTTPHeaders(headers);
@@ -117,8 +102,7 @@ final class Browser implements Closeable {
   }
 
   /// Every open tab, popups included.
-  Future<List<Page>> pages() async =>
-      [for (final p in await _browser.pages) Page._(p, this)];
+  Future<List<Page>> pages() async => [for (final p in await _browser.pages) Page._(p, this)];
 
   /// Close every tab and the process it launched (or disconnect a connected
   /// browser, leaving it running). Removes downloaded copies. Idempotent.
@@ -138,24 +122,17 @@ final class Browser implements Closeable {
     }
   }
 
-  static Future<void> _block(
-    pp.Page page,
-    Page wrap,
-    List<String> block,
-  ) async {
+  static Future<void> _block(pp.Page page, Page wrap, List<String> block) async {
     final blocked = {for (final b in block) b.toLowerCase()};
     await page.setRequestInterception(true);
-    wrap._blockSub = page.onRequest.listen(
-      (req) {
-        final type = req.resourceType?.toJson().toLowerCase();
-        if (type != null && blocked.contains(type)) {
-          req.abort();
-        } else {
-          req.continueRequest();
-        }
-      },
-      onError: (_) {},
-    );
+    wrap._blockSub = page.onRequest.listen((req) {
+      final type = req.resourceType?.toJson().toLowerCase();
+      if (type != null && blocked.contains(type)) {
+        req.abort();
+      } else {
+        req.continueRequest();
+      }
+    }, onError: (_) {});
   }
 }
 
@@ -215,15 +192,10 @@ final class Page implements Closeable {
 
   /// The rendered DOM as [Elements], with the page's URL as the base.
   /// Chain into it: `page.html().$('a')`.
-  Future<Elements> html() async =>
-      Html.parse(await _page.content ?? '', baseUrl: await url());
+  Future<Elements> html() async => Html.parse(await _page.content ?? '', baseUrl: await url());
 
   /// The page's `innerText`.
-  Future<String> text() async =>
-      (await _page.evaluate<String?>(
-        'document.documentElement.innerText',
-      )) ??
-      '';
+  Future<String> text() async => (await _page.evaluate<String?>('document.documentElement.innerText')) ?? '';
 
   /// Evaluate [js], awaiting it if it is a promise, JSON-decoding the result.
   /// Returns `null` for `null`, `undefined`, or a result that is not a `T`,
@@ -236,7 +208,7 @@ final class Page implements Closeable {
 
   /// The `Cookie` header value for the current URL, ready for [Http],
   /// or `null` when there are no cookies.
-  Future<String?> cookieHeader() async {
+  Future<String?> cookies() async {
     final cookies = await _page.cookies(urls: [await url()]);
     if (cookies.isEmpty) return null;
     return cookies.map((c) => '${c.name}=${c.value}').join('; ');
@@ -252,11 +224,7 @@ final class Page implements Closeable {
 
   /// Replace the field's value keystroke by keystroke (firing `input` and
   /// `change`), waiting until it is actionable. Returns this page.
-  Future<Page> fill(
-    String selector,
-    String value, {
-    Duration? timeout,
-  }) async {
+  Future<Page> fill(String selector, String value, {Duration? timeout}) async {
     await _actionable(selector, timeout: timeout);
     await _page.focus(selector);
     await _page.evaluate<void>(
@@ -313,11 +281,7 @@ final class Page implements Closeable {
 
   /// Pick the `<option>` by its value, waiting until actionable.
   /// Returns this page.
-  Future<Page> select(
-    String selector,
-    String value, {
-    Duration? timeout,
-  }) async {
+  Future<Page> select(String selector, String value, {Duration? timeout}) async {
     await _actionable(selector, timeout: timeout);
     await _page.select(selector, [value]);
     return this;
@@ -325,11 +289,7 @@ final class Page implements Closeable {
 
   /// Set a file input from a [Reader]. A `File` keeps its name; any other
   /// reader is staged under the name `upload`. Returns this page.
-  Future<Page> upload(
-    String selector,
-    Reader file, {
-    Duration? timeout,
-  }) async {
+  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async {
     final staged = await _stage(file);
     try {
       final handle = await _visible(selector, timeout: timeout);
@@ -350,9 +310,7 @@ final class Page implements Closeable {
   /// need); with one, bring that element into view. Returns this page.
   Future<Page> scroll([String? selector]) async {
     if (selector == null) {
-      await _page.evaluate<void>(
-        'window.scrollTo(0, document.body.scrollHeight)',
-      );
+      await _page.evaluate<void>('window.scrollTo(0, document.body.scrollHeight)');
       return this;
     }
     try {
@@ -378,10 +336,7 @@ final class Page implements Closeable {
       final quiet = DateTime.now().difference(_lastTraffic);
       if (quiet >= const Duration(milliseconds: 500)) return this;
       if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException(
-          'network never idle for ${limit.inSeconds}s: ${await url()}',
-          limit,
-        );
+        throw TimeoutException('network never idle for ${limit.inSeconds}s: ${await url()}', limit);
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
@@ -389,54 +344,38 @@ final class Page implements Closeable {
 
   /// A PNG of the viewport (or the whole page with [fullPage]), captured
   /// when read.
-  Reader screenshot({bool fullPage = false}) =>
-      _ShotReader(() => _page.screenshot(fullPage: fullPage));
+  Reader screenshot({bool fullPage = false}) => _ShotReader(() => _page.screenshot(fullPage: fullPage));
 
   /// The page printed, captured when read.
   Reader pdf() => _ShotReader(() async {
-        final bytes = await _page.pdf();
-        if (bytes == null) {
-          throw StateError('pdf failed: ${await url()}');
-        }
-        return bytes;
-      });
+    final bytes = await _page.pdf();
+    if (bytes == null) {
+      throw StateError('pdf failed: ${await url()}');
+    }
+    return bytes;
+  });
 
   /// Click [selector] and wait for the download it starts to finish.
   /// Returns a [Download]: a [Reader] of the file plus the name the site
   /// suggested. The browser's copy is removed when the browser closes.
   Future<Download> download(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
-    final dir =
-        await io.Directory.systemTemp.createTemp('dart_toolkit_download');
+    final dir = await io.Directory.systemTemp.createTemp('dart_toolkit_download');
     _browser._downloads.add(dir.path);
-    await _page.devTools.browser.setDownloadBehavior(
-      'allow',
-      downloadPath: dir.path,
-      eventsEnabled: true,
-    );
+    await _page.devTools.browser.setDownloadBehavior('allow', downloadPath: dir.path, eventsEnabled: true);
     final willBegin = _page.devTools.browser.onDownloadWillBegin.first.timeout(
-          limit,
-          onTimeout: () => throw TimeoutException(
-            'no download from $selector for ${limit.inSeconds}s',
-            limit,
-          ),
-        );
+      limit,
+      onTimeout: () => throw TimeoutException('no download from $selector for ${limit.inSeconds}s', limit),
+    );
     await _actionable(selector, timeout: timeout);
     await _page.click(selector);
     final begun = await willBegin;
     final done = _page.devTools.browser.onDownloadProgress
-        .where(
-          (e) =>
-              e.guid == begun.guid &&
-              e.state == proto.DownloadProgressEventState.completed,
-        )
+        .where((e) => e.guid == begun.guid && e.state == proto.DownloadProgressEventState.completed)
         .first
         .timeout(
           limit,
-          onTimeout: () => throw TimeoutException(
-            'download never finished: ${begun.suggestedFilename}',
-            limit,
-          ),
+          onTimeout: () => throw TimeoutException('download never finished: ${begun.suggestedFilename}', limit),
         );
     final finished = await done;
     final path = finished.filePath ?? '${dir.path}/${begun.suggestedFilename}';
@@ -463,32 +402,18 @@ final class Page implements Closeable {
     }
   }
 
-  Future<pp.ElementHandle> _visible(
-    String selector, {
-    Duration? timeout,
-  }) async {
+  Future<pp.ElementHandle> _visible(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
-      final handle = await _page
-          .waitForSelector(selector, visible: true, timeout: limit)
-          .timeout(limit);
+      final handle = await _page.waitForSelector(selector, visible: true, timeout: limit).timeout(limit);
       if (handle == null) {
-        throw TimeoutException(
-          'no visible $selector for ${limit.inSeconds}s',
-          limit,
-        );
+        throw TimeoutException('no visible $selector for ${limit.inSeconds}s', limit);
       }
       return handle;
     } on TimeoutException catch (e) {
-      throw TimeoutException(
-        'no visible $selector for ${limit.inSeconds}s ($e)',
-        limit,
-      );
+      throw TimeoutException('no visible $selector for ${limit.inSeconds}s ($e)', limit);
     } catch (e) {
-      throw TimeoutException(
-        'no visible $selector for ${limit.inSeconds}s ($e)',
-        limit,
-      );
+      throw TimeoutException('no visible $selector for ${limit.inSeconds}s ($e)', limit);
     }
   }
 
@@ -500,10 +425,7 @@ final class Page implements Closeable {
     Duration remaining() => deadline.difference(DateTime.now());
     var left = remaining();
     if (left <= Duration.zero) {
-      throw TimeoutException(
-        'no actionable $selector for ${limit.inSeconds}s',
-        limit,
-      );
+      throw TimeoutException('no actionable $selector for ${limit.inSeconds}s', limit);
     }
     await _visible(selector, timeout: left);
     for (;;) {
@@ -515,10 +437,7 @@ final class Page implements Closeable {
       );
       if (enabled) return;
       if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException(
-          'no actionable $selector for ${limit.inSeconds}s',
-          limit,
-        );
+        throw TimeoutException('no actionable $selector for ${limit.inSeconds}s', limit);
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
@@ -556,11 +475,7 @@ final class Page implements Closeable {
     return _Staged(staged, keep: false, tmpDir: tmp);
   }
 
-  static Future<io.File> _stableFile(
-    String path,
-    Duration limit,
-    String name,
-  ) async {
+  static Future<io.File> _stableFile(String path, Duration limit, String name) async {
     final deadline = DateTime.now().add(limit);
     var last = -2;
     while (DateTime.now().isBefore(deadline)) {
@@ -576,34 +491,34 @@ final class Page implements Closeable {
   }
 
   static pp.Key? _key(String name) => switch (name) {
-        'enter' => pp.Key.enter,
-        'tab' => pp.Key.tab,
-        'escape' => pp.Key.escape,
-        'backspace' => pp.Key.backspace,
-        'up' => pp.Key.arrowUp,
-        'down' => pp.Key.arrowDown,
-        'left' => pp.Key.arrowLeft,
-        'right' => pp.Key.arrowRight,
-        'home' => pp.Key.home,
-        'end' => pp.Key.end,
-        'pageup' => pp.Key.pageUp,
-        'pagedown' => pp.Key.pageDown,
-        'delete' => pp.Key.delete,
-        'f1' => pp.Key.f1,
-        'f2' => pp.Key.f2,
-        'f3' => pp.Key.f3,
-        'f4' => pp.Key.f4,
-        'f5' => pp.Key.f5,
-        'f6' => pp.Key.f6,
-        'f7' => pp.Key.f7,
-        'f8' => pp.Key.f8,
-        'f9' => pp.Key.f9,
-        'f10' => pp.Key.f10,
-        'f11' => pp.Key.f11,
-        'f12' => pp.Key.f12,
-        ' ' => pp.Key.space,
-        _ => null,
-      };
+    'enter' => pp.Key.enter,
+    'tab' => pp.Key.tab,
+    'escape' => pp.Key.escape,
+    'backspace' => pp.Key.backspace,
+    'up' => pp.Key.arrowUp,
+    'down' => pp.Key.arrowDown,
+    'left' => pp.Key.arrowLeft,
+    'right' => pp.Key.arrowRight,
+    'home' => pp.Key.home,
+    'end' => pp.Key.end,
+    'pageup' => pp.Key.pageUp,
+    'pagedown' => pp.Key.pageDown,
+    'delete' => pp.Key.delete,
+    'f1' => pp.Key.f1,
+    'f2' => pp.Key.f2,
+    'f3' => pp.Key.f3,
+    'f4' => pp.Key.f4,
+    'f5' => pp.Key.f5,
+    'f6' => pp.Key.f6,
+    'f7' => pp.Key.f7,
+    'f8' => pp.Key.f8,
+    'f9' => pp.Key.f9,
+    'f10' => pp.Key.f10,
+    'f11' => pp.Key.f11,
+    'f12' => pp.Key.f12,
+    ' ' => pp.Key.space,
+    _ => null,
+  };
 
   static pp.Key? _charKey(String name) => _chars[name.toLowerCase()];
 
@@ -674,20 +589,8 @@ final class Download with Reader {
 
 /// Future mirrors (rule 6). The extension name is import-only; never reference it.
 extension BrowserFuture on Future<Browser> {
-  Future<Page> open(
-    String url, {
-    Map<String, String>? headers,
-    List<String>? block,
-    int? width,
-    int? height,
-  }) async =>
-      (await this).open(
-        url,
-        headers: headers,
-        block: block,
-        width: width,
-        height: height,
-      );
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height}) async =>
+      (await this).open(url, headers: headers, block: block, width: width, height: height);
   Future<List<Page>> pages() async => (await this).pages();
 }
 
@@ -700,9 +603,8 @@ extension PageFuture on Future<Page> {
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
   Future<T?> eval<T>(String js) async => (await this).eval<T>(js);
-  Future<String?> cookieHeader() async => (await this).cookieHeader();
-  Future<Page> click(String selector, {Duration? timeout}) async =>
-      (await this).click(selector, timeout: timeout);
+  Future<String?> cookies() async => (await this).cookies();
+  Future<Page> click(String selector, {Duration? timeout}) async => (await this).click(selector, timeout: timeout);
   Future<Page> fill(String selector, String value, {Duration? timeout}) async =>
       (await this).fill(selector, value, timeout: timeout);
   Future<Page> press(String key) async => (await this).press(key);
@@ -710,14 +612,10 @@ extension PageFuture on Future<Page> {
       (await this).select(selector, value, timeout: timeout);
   Future<Page> upload(String selector, Reader file, {Duration? timeout}) async =>
       (await this).upload(selector, file, timeout: timeout);
-  Future<Page> scroll([String? selector]) async =>
-      (await this).scroll(selector);
-  Future<Page> wait(String selector, {Duration? timeout}) async =>
-      (await this).wait(selector, timeout: timeout);
-  Future<Page> waitIdle({Duration? timeout}) async =>
-      (await this).waitIdle(timeout: timeout);
-  Reader screenshot({bool fullPage = false}) =>
-      _FutureShot(this, fullPage: fullPage);
+  Future<Page> scroll([String? selector]) async => (await this).scroll(selector);
+  Future<Page> wait(String selector, {Duration? timeout}) async => (await this).wait(selector, timeout: timeout);
+  Future<Page> waitIdle({Duration? timeout}) async => (await this).waitIdle(timeout: timeout);
+  Reader screenshot({bool fullPage = false}) => _FutureShot(this, fullPage: fullPage);
   Reader pdf() => _FutureShot(this, pdf: true);
   Future<Download> download(String selector, {Duration? timeout}) async =>
       (await this).download(selector, timeout: timeout);

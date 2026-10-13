@@ -31,21 +31,17 @@ void main() {
         request.response.write('<img src="/img.png">');
       } else if (path == '/img.png') {
         request.response.headers.contentType = ContentType('image', 'png');
-        request.response.add(base64Decode(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        ));
+        request.response.add(
+          base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+          ),
+        );
       } else if (path == '/file') {
         request.response.headers.contentType = ContentType.binary;
-        request.response.headers.set(
-          'content-disposition',
-          'attachment; filename="hello.txt"',
-        );
+        request.response.headers.set('content-disposition', 'attachment; filename="hello.txt"');
         request.response.write('download-me');
       } else if (path == '/cookie') {
-        request.response.headers.set(
-          'set-cookie',
-          'tok=abc; Path=/',
-        );
+        request.response.headers.set('set-cookie', 'tok=abc; Path=/');
         request.response.write('<title>C</title>');
       } else {
         request.response
@@ -64,8 +60,7 @@ void main() {
 
   setUp(() => hits.clear());
 
-  String dataUrl(String html) =>
-      Uri.dataFromString(html, mimeType: 'text/html').toString();
+  String dataUrl(String html) => Uri.dataFromString(html, mimeType: 'text/html').toString();
 
   const testHtml = '''
 <html><head><title>T</title></head>
@@ -74,10 +69,7 @@ void main() {
 
   group('Chrome', () {
     test('connect to a dead port throws', () async {
-      expect(
-        Chrome.connect('http://127.0.0.1:1'),
-        throwsA(anything),
-      );
+      expect(Chrome.connect('http://127.0.0.1:1'), throwsA(anything));
     });
   });
 
@@ -104,9 +96,7 @@ void main() {
     });
 
     test('block aborts image requests', () async {
-      await browser
-          .open('$base/imgpage', block: ['image'])
-          .then((p) => p.close());
+      await browser.open('$base/imgpage', block: ['image']).then((p) => p.close());
       expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
       // Without block the image loads (settled via waitIdle).
       final page = await browser.open('$base/imgpage');
@@ -128,12 +118,7 @@ void main() {
   group('Page navigation', () {
     test('goto/back/reload return the page', () async {
       final page = await browser.open(dataUrl('<title>One</title>'));
-      expect(
-        (await page.goto(dataUrl('<title>Two</title>')).html())
-            .$('title')
-            .text(),
-        'Two',
-      );
+      expect((await page.goto(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
       await page.goto(dataUrl('<title>One</title>'));
       await page.goto(dataUrl('<title>Two</title>'));
       await page.back();
@@ -178,18 +163,16 @@ void main() {
       await page.close();
     });
 
-    test('cookieHeader() feeds Http', () async {
+    test('cookies() feeds Http', () async {
       final page = await browser.open('$base/cookie');
-      expect(await page.cookieHeader(), contains('tok=abc'));
+      expect(await page.cookies(), contains('tok=abc'));
       await page.close();
     });
   });
 
   group('Page driving', () {
     test('click drives the page', () async {
-      final page = await browser.open(
-        dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'),
-      );
+      final page = await browser.open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'));
       await page.click('#b');
       expect(await page.eval<String>('document.title'), 'C');
       await page.close();
@@ -199,42 +182,32 @@ void main() {
       final page = await browser.open(dataUrl(testHtml));
       expect(
         page.click('#missing', timeout: const Duration(milliseconds: 300)),
-        throwsA(isA<TimeoutException>().having(
-          (e) => e.toString(),
-          'message',
-          contains('#missing'),
-        )),
+        throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('#missing'))),
       );
       await page.close();
     });
 
     test('fill replaces the value with keystrokes', () async {
-      final page = await browser.open(
-        dataUrl('<input id="q" value="old">'),
-      );
+      final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', 'hi');
-      expect(
-        await page.eval<String>("document.querySelector('#q').value"),
-        'hi',
-      );
+      expect(await page.eval<String>("document.querySelector('#q').value"), 'hi');
       await page.close();
     });
 
     test('press sends keys and chords', () async {
-      final page = await browser.open(dataUrl(
-        '<input id="q"><script>window.ks=[];'
-        'document.querySelector("#q").addEventListener("keydown",'
-        'e=>window.ks.push(e.key+"|"+e.ctrlKey));</script>',
-      ));
+      final page = await browser.open(
+        dataUrl(
+          '<input id="q"><script>window.ks=[];'
+          'document.querySelector("#q").addEventListener("keydown",'
+          'e=>window.ks.push(e.key+"|"+e.ctrlKey));</script>',
+        ),
+      );
       await page.click('#q');
       await page.press('a');
       await page.press('b');
       expect(await page.eval<String>("document.querySelector('#q').value"), 'ab');
       await page.press('ctrl+a');
-      expect(
-        await page.eval<String>('JSON.stringify(window.ks)'),
-        contains('a|true'),
-      );
+      expect(await page.eval<String>('JSON.stringify(window.ks)'), contains('a|true'));
       await page.press('backspace');
       expect(await page.eval<String>("document.querySelector('#q').value"), 'a');
       await page.press('enter');
@@ -259,10 +232,7 @@ void main() {
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
         await page.upload('#f', Fs.file('${dir.path}/note.txt'));
-        expect(
-          await page.eval<String>("document.querySelector('#f').files[0].name"),
-          'note.txt',
-        );
+        expect(await page.eval<String>("document.querySelector('#f').files[0].name"), 'note.txt');
       } finally {
         await dir.delete(recursive: true);
       }
@@ -270,11 +240,7 @@ void main() {
     });
 
     test('scroll goes to the bottom, or an element into view', () async {
-      final page = await browser.open(
-        dataUrl(
-          '<div style="height:3000px">top</div><div id="bottom">bot</div>',
-        ),
-      );
+      final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
       await page.scroll();
       expect(await page.eval<bool>('window.scrollY > 0'), isTrue);
       await page.scroll('#bottom');
@@ -299,11 +265,7 @@ void main() {
       final page = await browser.open(dataUrl(testHtml));
       expect(
         page.wait('.never', timeout: const Duration(milliseconds: 300)),
-        throwsA(isA<TimeoutException>().having(
-          (e) => e.toString(),
-          'message',
-          contains('.never'),
-        )),
+        throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('.never'))),
       );
       await page.close();
     });
@@ -325,10 +287,11 @@ void main() {
         final bytes = await Fs.file('${dir.path}/shot.png').bytes();
         expect(bytes.length, greaterThan(100));
         expect(bytes.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10]);
-        await (page.screenshot(fullPage: true) >
-            Fs.file('${dir.path}/full.png'));
-        expect(await Fs.file('${dir.path}/full.png').size(),
-            greaterThanOrEqualTo(await Fs.file('${dir.path}/shot.png').size()));
+        await (page.screenshot(fullPage: true) > Fs.file('${dir.path}/full.png'));
+        expect(
+          await Fs.file('${dir.path}/full.png').size(),
+          greaterThanOrEqualTo(await Fs.file('${dir.path}/shot.png').size()),
+        );
       } finally {
         await dir.delete(recursive: true);
       }
@@ -344,19 +307,14 @@ void main() {
     });
 
     test('download clicks and returns the file plus its name', () async {
-      final page = await browser.open(
-        dataUrl('<a id="d" href="$base/file">get it</a>'),
-      );
+      final page = await browser.open(dataUrl('<a id="d" href="$base/file">get it</a>'));
       final download = await page.download('#d');
       expect(download.name(), 'hello.txt');
       expect(await download.text(), 'download-me');
       final dir = await Directory.systemTemp.createTemp('chrome_dl');
       try {
         await (download > Fs.file('${dir.path}/${download.name()}'));
-        expect(
-          await Fs.file('${dir.path}/hello.txt').text(),
-          'download-me',
-        );
+        expect(await Fs.file('${dir.path}/hello.txt').text(), 'download-me');
       } finally {
         await dir.delete(recursive: true);
       }
