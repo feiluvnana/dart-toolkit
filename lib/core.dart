@@ -63,9 +63,13 @@ abstract mixin class Reader {
       // cancelling runs any pipe generators so their cancel paths poison or
       // release, and releases the source. When the writer already listened,
       // this second listen throws StateError and is ignored: the writer's
-      // own cancel already propagated.
+      // own cancel already propagated. Broadcast streams allow a second
+      // listen, which would run the pipeline twice: skip the probe there.
       try {
-        await s?.listen(null, onError: (_) {}).cancel();
+        final stream = s;
+        if (stream != null && !stream.isBroadcast) {
+          await stream.listen(null, onError: (_) {}).cancel();
+        }
       } catch (_) {}
       Error.throwWithStackTrace(e, st);
     }
@@ -125,6 +129,9 @@ final class _FutureReader with Reader {
   Stream<List<int>> stream() async* {
     yield* (await _future).stream();
   }
+
+  @override
+  Future<List<int>> bytes() async => (await _future).bytes();
 
   @override
   Future<void> to(Writer? writer) => _future.then((r) => r.to(writer));

@@ -47,7 +47,11 @@ abstract final class Pool {
     final draining = _shutdownFuture;
     Future<void> boot() async {
       if (draining != null) await draining;
-      await workerManager.init(isolatesCount: _workerCount);
+      try {
+        await workerManager.init(isolatesCount: _workerCount);
+      } catch (e) {
+        throw StateError('pool unavailable: $e');
+      }
     }
 
     final next = boot();

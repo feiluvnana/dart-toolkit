@@ -123,10 +123,23 @@ abstract final class Console {
   }
 
   /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
-  /// or `✗ label` and a rethrow.
+  /// or `✗ label` and a rethrow. The live line always fits the width.
   static Future<T> spin<T>(String label, Future<T> Function() work) {
     final _Live live = _Spinner(label);
-    _claim(live);
+    try {
+      _claim(live);
+    } catch (_) {
+      rethrow;
+    }
+    String fit(String prefix, String text) {
+      final cols = _columns();
+      final line = '$prefix $text';
+      if (term.displayWidth(line) <= cols) return line;
+      final room = cols - term.displayWidth(prefix) - 1;
+      if (room <= 0) return prefix;
+      return '$prefix ${term.truncateWidth(text, room)}';
+    }
+
     Future<T> fut;
     try {
       fut = work();
@@ -148,19 +161,33 @@ abstract final class Console {
     }
     var i = 0;
     const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    StreamSubscription<io.ProcessSignal>? winch;
+    try {
+      winch = io.ProcessSignal.sigwinch.watch().listen((_) {});
+    } catch (_) {
+      winch = null;
+    }
     final timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      io.stderr.write('\r${frames[i % frames.length]} $label\x1b[K');
+      io.stderr.write('\r${fit(frames[i % frames.length], label)}\x1b[K');
       i++;
     });
-    return fut.then((v) {
+    Future<void> cancelWinch() async {
+      try {
+        await winch?.cancel();
+      } catch (_) {}
+    }
+
+    return fut.then((v) async {
       timer.cancel();
+      await cancelWinch();
       live._free();
-      io.stderr.writeln('\r✓ $label\x1b[K');
+      io.stderr.writeln('\r${fit('✓', label)}\x1b[K');
       return v;
-    }, onError: (Object e, StackTrace st) {
+    }, onError: (Object e, StackTrace st) async {
       timer.cancel();
+      await cancelWinch();
       live._free();
-      io.stderr.writeln('\r✗ $label\x1b[K');
+      io.stderr.writeln('\r${fit('✗', label)}\x1b[K');
       throw e;
     });
   }
@@ -536,18 +563,20 @@ final class Bar extends _Live implements Pipe, Closeable {
     } else {
       final label = _label == null ? '' : '$_label ';
       final total = _total;
+      final secs = DateTime.now().difference(_start).inMilliseconds / 1000;
       if (_piped) {
+        final rate = secs > 0 ? _done / secs : 0.0;
         if (total != null && total > 0) {
-          io.stderr.writeln('$label${_fmtSize(_done)}/${_fmtSize(total)}');
+          io.stderr.writeln(
+              '$label${_fmtSize(_done)}/${_fmtSize(total)}  ${_fmtRate(rate)}');
         } else {
-          io.stderr.writeln('$label${_fmtSize(_done)}');
+          io.stderr.writeln('$label${_fmtSize(_done)}  ${_fmtRate(rate)}');
         }
       } else if (total != null && total > 0) {
         io.stderr.writeln('$label$_done/$total');
-      } else if (_label != null) {
-        io.stderr.writeln('$label$_done');
       } else {
-        io.stderr.writeln('$_done');
+        final rate = secs > 0 ? _done / secs : 0.0;
+        io.stderr.writeln('$label$_done  ${_fmtCount(rate)}/s');
       }
     }
     _free();
