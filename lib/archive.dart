@@ -290,13 +290,17 @@ final class _Unpacker implements Writer {
   static a.Archive _decode(List<int> bytes) {
     try {
       if (bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
-        _verifyGzip(bytes);
+        // Single decompress: verify the trailer from the same output.
+        if (bytes.length < 18) {
+          throw const FormatException('bad gzip data: truncated (no trailer)');
+        }
         List<int> tar;
         try {
-          tar = a.GZipDecoder().decodeBytes(bytes);
+          tar = io.gzip.decode(bytes);
         } catch (e) {
           throw FormatException('bad gzip data: $e');
         }
+        _checkGzipTrailer(bytes, tar);
         if (!_looksLikeTar(tar)) {
           throw const FormatException(
             'corrupt archive: gzip data is not a tar archive',
@@ -309,7 +313,11 @@ final class _Unpacker implements Writer {
         }
       }
       if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) {
-        return a.ZipDecoder().decodeBytes(bytes);
+        try {
+          return a.ZipDecoder().decodeBytes(bytes);
+        } on a.ArchiveException catch (e) {
+          throw FormatException('corrupt archive: $e');
+        }
       }
       // No magic matched: try zip, then tar. The zip decoder answers empty
       // instead of throwing on non-zip input, so only a non-empty hit counts.
@@ -411,22 +419,8 @@ bool _tarChecksumOk(List<int> bytes, int offset) {
   return sum == stored;
 }
 
-/// Verify the gzip trailer (CRC32 + ISIZE) of single-member [compressed].
-/// Throws a [FormatException] when the trailer is missing or mismatched
-/// (truncated or corrupt data).
-void _verifyGzip(List<int> compressed) {
-  if (compressed.length < 18) {
-    throw const FormatException('bad gzip data: truncated (no trailer)');
-  }
-  if (compressed[0] != 0x1f || compressed[1] != 0x8b) {
-    throw const FormatException('bad gzip data: not a gzip stream');
-  }
-  List<int> decompressed;
-  try {
-    decompressed = io.gzip.decode(compressed);
-  } catch (e) {
-    throw FormatException('bad gzip data: $e');
-  }
+/// Check a gzip trailer (CRC32 + ISIZE) against already-decompressed [tar].
+void _checkGzipTrailer(List<int> compressed, List<int> decompressed) {
   final trailer = compressed.sublist(compressed.length - 8);
   final view = ByteData.sublistView(Uint8List.fromList(trailer));
   final wantCrc = view.getUint32(0, Endian.little);

@@ -153,13 +153,30 @@ final class File extends Entry with Reader implements Writer {
     return this;
   }
 
-  /// Add in-memory [data] to the end. Creates missing parents. Returns this.
+  /// Add in-memory [data] to the end, atomically (temp+rename, so a crash
+  /// keeps the old content). Creates missing parents. Returns this.
   Future<File> append(Object data) async {
     await _ensureParent(_path);
-    await io.File(_path).writeAsBytes(
-      _toBytes(data),
-      mode: io.FileMode.append,
-      flush: true,
+    List<int> existing = const [];
+    try {
+      // Through symlinks, like writes (F7): append to the real target.
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.file) {
+        existing = await io.File(_path).readAsBytes();
+      } else if (t == io.FileSystemEntityType.link) {
+        try {
+          final target = await io.Link(_path).resolveSymbolicLinks();
+          existing = await io.File(target).readAsBytes();
+        } catch (_) {
+          existing = const [];
+        }
+      }
+    } catch (_) {
+      existing = const [];
+    }
+    final add = _toBytes(data);
+    await _atomicWrite(
+      Stream.value([...existing, ...add]),
     );
     return this;
   }
@@ -187,7 +204,9 @@ final class File extends Entry with Reader implements Writer {
     // Writes go through symlinks to their real target (F7): resolve first so
     // a handle pointing at a link updates the target instead of replacing
     // the link with a regular file. Broken links fall back to the handle
-    // path (rename will replace the link).
+    // path (rename will replace the link with a file).
+    // Note: rename breaks hardlinks (the target gets a new inode; other
+    // links keep the old content).
     var target = _path;
     try {
       final t =
@@ -207,9 +226,21 @@ final class File extends Entry with Reader implements Writer {
       oldMode = st.mode & 0xFFF;
     } catch (_) {}
     final dir = p.dirname(target);
-    final tmp =
-        '$dir/.${p.basename(target)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
-    final tmpFile = io.File(tmp);
+    // Unique tmp name (pid + micros + 32 random bits); created exclusively
+    // (O_EXCL) so a collision retries instead of clobbering.
+    io.File tmpFile = io.File('');
+    var tmpPath = '';
+    for (var attempt = 0; attempt < 5; attempt++) {
+      tmpPath =
+          '$dir/.${p.basename(target)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+      tmpFile = io.File(tmpPath);
+      try {
+        await tmpFile.create(exclusive: true);
+        break;
+      } on io.FileSystemException {
+        if (attempt == 4) rethrow;
+      }
+    }
     try {
       final sink = tmpFile.openWrite();
       try {
@@ -221,10 +252,9 @@ final class File extends Entry with Reader implements Writer {
         } catch (_) {}
         rethrow;
       }
+      // chmod the tmp before the rename (no umask window on the target).
+      if (oldMode != 0) await _chmod(tmpPath, oldMode);
       await tmpFile.rename(target);
-      // Keep the old file's mode after the rename (POSIX only,
-      // best-effort elsewhere).
-      if (oldMode != 0) await _chmod(target, oldMode);
     } catch (_) {
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
@@ -604,18 +634,27 @@ Future<void> _chmod(String path, int mode) async {
 }
 
 /// Keep the source file's mtime and mode on a copy.
+/// Skips the chmod fork when the mode already matches.
 Future<void> _preserveFileMeta(String from, String to) async {
   try {
     final st = await io.FileStat.stat(from);
     try {
       await io.File(to).setLastModified(st.modified);
     } catch (_) {}
-    await _chmod(to, st.mode & 0xFFF);
+    try {
+      final dst = await io.FileStat.stat(to);
+      if ((dst.mode & 0xFFF) != (st.mode & 0xFFF)) {
+        await _chmod(to, st.mode & 0xFFF);
+      }
+    } catch (_) {
+      await _chmod(to, st.mode & 0xFFF);
+    }
   } catch (_) {}
 }
 
 /// Set a folder's mtime (dart:io has no Directory.setLastModified):
-/// `touch` on POSIX, no-op on Windows. Best-effort.
+/// `touch` on POSIX, no-op on Windows. Best-effort (sub-second kept where
+/// the platform allows: Linux `@secs.frac`, macOS seconds).
 Future<void> _setDirMtime(String path, DateTime mtime) async {
   if (io.Platform.isWindows) return;
   try {
@@ -626,9 +665,10 @@ Future<void> _setDirMtime(String path, DateTime mtime) async {
           '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
       args = ['-t', t, path];
     } else {
+      final secs = mtime.millisecondsSinceEpoch / 1000;
       args = [
         '-d',
-        '@${mtime.millisecondsSinceEpoch ~/ 1000}',
+        '@${secs.toStringAsFixed(3)}',
         path,
       ];
     }
@@ -643,7 +683,9 @@ Future<bool> _missing(io.FileSystemException e) async {
 }
 
 /// The string as given, without trailing separators (the root keeps one).
+/// Windows drive roots (`C:\`, `C:/`) keep their separator.
 String _strip(String path) {
+  if (RegExp(r'^[A-Za-z]:[\\/]?$').hasMatch(path)) return path;
   if (path.length > 1) {
     var end = path.length;
     while (end > 1 &&
