@@ -62,7 +62,11 @@ void main() {
       expect((events('\x08').single as term.TermKey).name, 'backspace');
       expect((events('\x01').single as term.TermKey).name, 'ctrl+a');
       expect((events('\x1a').single as term.TermKey).name, 'ctrl+z');
-      expect((events('\x00').single as term.TermKey).name, 'ctrl+space');
+      // A lone 0x00 is held for a possible Windows extended-key second
+      // byte (see terminal_keys_test 'prefix safety'); it no longer
+      // decodes as ctrl+space on its own.
+      expect(term.decodeKeys([0x00]).events, isEmpty);
+      expect(term.decodeKeys([0x00]).consumed, 0);
       expect((events('\x1c').single as term.TermKey).name, r'ctrl+\');
       expect((events('\x1d').single as term.TermKey).name, 'ctrl+]');
       expect((events('\x1e').single as term.TermKey).name, 'ctrl+^');

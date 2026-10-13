@@ -222,7 +222,7 @@ Future<String> _ptyBar({required int cols}) async {
     markTestSkipped('needs python3 for the pty driver');
   }
   final res = await Process.run('python3', [
-    '${root.path}/test/tui_pty/drive.py',
+    '${root.path}/test/console_pty/drive.py',
     '--size', '24', '$cols',
     '--', Platform.resolvedExecutable,
     '${root.path}/test/console_pty/probe.dart',
@@ -246,7 +246,7 @@ Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
     '${Directory.systemTemp.path}/console-pty-${DateTime.now().microsecondsSinceEpoch}.log',
   );
   final res = await Process.run('python3', [
-    '${root.path}/test/tui_pty/drive.py',
+    '${root.path}/test/console_pty/drive.py',
     '--size', '24', '80',
     // Feeds count from the menu's first draw, not from the process start.
     '--ready', 'blue',

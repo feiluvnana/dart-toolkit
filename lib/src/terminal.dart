@@ -2,8 +2,7 @@
 ///
 /// Not exported by either module: both import it by relative path and keep
 /// their own public surface. It holds what the two must agree on: one
-/// broadcast stdin, one key decoder (the key names of VISION §4.12), and
-/// saving/restoring the terminal modes.
+/// broadcast stdin, one key decoder, and saving/restoring terminal modes.
 library;
 
 // ignore_for_file: avoid_dynamic_calls
@@ -312,6 +311,28 @@ abstract class TuiBridge {
       i += 1 + width;
       continue;
     }
+    if (b == 0x00 || b == 0xe0) {
+      // Windows console extended keys: two bytes (a 0x00/0xE0 prefix plus a
+      // scan code) for arrows, home/end, page up/down, insert/delete and
+      // F1-F12. A bare 0xE0 is also a UTF-8 lead byte, but its continuation
+      // bytes (0x80-0xBF) never match the scan codes below, so real text
+      // falls through to the printable run untouched.
+      if (i + 1 >= bytes.length) break; // split across reads: hold.
+      final String? win = windowsKey(b, bytes[i + 1]);
+      if (win != null) {
+        flush();
+        out.add(TermKey(win));
+        i += 2;
+        continue;
+      }
+      // Unknown prefix pair (never valid UTF-8 either): skip both bytes.
+      if (b == 0x00) {
+        flush();
+        i += 2;
+        continue;
+      }
+      // A 0xE0 that starts real text: fall through to the printable run.
+    }
     if (b == 0x09) {
       flush();
       out.add(TermKey('tab'));
@@ -419,6 +440,7 @@ String? csiName(String params, int fin) {
       if (m & 1 != 0) prefix += 'shift+';
     }
   }
+  code = code.split(':').first;
   String? base;
   switch (fin) {
     case 0x41:
@@ -439,11 +461,33 @@ String? csiName(String params, int fin) {
     case 0x75:
       // Kitty keyboard protocol: CSI unicode-number [; modifiers] u.
       base = switch (code) {
-        '9' => 'tab',
-        '13' => 'enter',
-        '27' => 'escape',
+        '9' || '57346' => 'tab',
+        '13' || '57345' => 'enter',
+        '27' || '57344' => 'escape',
         '32' => 'space',
-        '127' => 'backspace',
+        '127' || '57347' => 'backspace',
+        '57348' => 'insert',
+        '57349' => 'delete',
+        '57350' => 'left',
+        '57351' => 'right',
+        '57352' => 'up',
+        '57353' => 'down',
+        '57354' => 'pageup',
+        '57355' => 'pagedown',
+        '57356' => 'home',
+        '57357' => 'end',
+        '57364' => 'f1',
+        '57365' => 'f2',
+        '57366' => 'f3',
+        '57367' => 'f4',
+        '57368' => 'f5',
+        '57369' => 'f6',
+        '57370' => 'f7',
+        '57371' => 'f8',
+        '57372' => 'f9',
+        '57373' => 'f10',
+        '57374' => 'f11',
+        '57375' => 'f12',
         // Other keys the protocol disambiguates (ctrl+c as `99;5u`).
         _ => switch (int.tryParse(code)) {
             final n? when n > 0x20 && n < 0x7f => String.fromCharCode(n),
@@ -451,6 +495,26 @@ String? csiName(String params, int fin) {
           },
       };
     case 0x7e:
+      if (code == '27') {
+        // xterm modifyOtherKeys: CSI 27 ; modifier ; charcode ~
+        final parts = params.split(';');
+        if (parts.length >= 3) {
+          final charCode = int.tryParse(parts[2].split(':').first);
+          if (charCode != null) {
+            base = switch (charCode) {
+              9 => 'tab',
+              13 => 'enter',
+              27 => 'escape',
+              32 => 'space',
+              127 => 'backspace',
+              _ when charCode > 0x20 && charCode < 0x7f =>
+                String.fromCharCode(charCode).toLowerCase(),
+              _ => null,
+            };
+          }
+        }
+        break;
+      }
       base = switch (code) {
         '1' || '7' => 'home',
         '2' => 'insert',
@@ -474,6 +538,60 @@ String? csiName(String params, int fin) {
   // just the letter, which arrives as typed text, so keep the prefix only
   // for non-printable bases.
   return '$prefix$base';
+}
+
+/// Name a Windows console extended key, or null when [code] is not a known
+/// scan code for [prefix] (`0x00` or `0xE0`). Navigation keys arrive under
+/// both prefixes depending on the keyboard/terminal; F1-F12 only under 0x00.
+String? windowsKey(int prefix, int code) {
+  switch (code) {
+    case 0x48:
+      return 'up';
+    case 0x50:
+      return 'down';
+    case 0x4b:
+      return 'left';
+    case 0x4d:
+      return 'right';
+    case 0x47:
+      return 'home';
+    case 0x4f:
+      return 'end';
+    case 0x49:
+      return 'pageup';
+    case 0x51:
+      return 'pagedown';
+    case 0x52:
+      return 'insert';
+    case 0x53:
+      return 'delete';
+    case 0x3b when prefix == 0x00:
+      return 'f1';
+    case 0x3c when prefix == 0x00:
+      return 'f2';
+    case 0x3d when prefix == 0x00:
+      return 'f3';
+    case 0x3e when prefix == 0x00:
+      return 'f4';
+    case 0x3f when prefix == 0x00:
+      return 'f5';
+    case 0x40 when prefix == 0x00:
+      return 'f6';
+    case 0x41 when prefix == 0x00:
+      return 'f7';
+    case 0x42 when prefix == 0x00:
+      return 'f8';
+    case 0x43 when prefix == 0x00:
+      return 'f9';
+    case 0x44 when prefix == 0x00:
+      return 'f10';
+    case 0x85 when prefix == 0x00:
+      return 'f11';
+    case 0x86 when prefix == 0x00:
+      return 'f12';
+    default:
+      return null;
+  }
 }
 
 /// Pull [end] back past a trailing UTF-8 sequence split across reads.
