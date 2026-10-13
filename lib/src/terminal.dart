@@ -108,6 +108,17 @@ final class TermClick extends TermEvent {
   final int y;
 }
 
+/// Pointer motion with no buttons pressed, at cell (x, y), zero-based.
+/// Only sent when the terminal reports mouse motion (`?1003h`); plain clicks
+/// (`?1000h`) never produce these, so engines that don't track hover can
+/// ignore them.
+final class TermHover extends TermEvent {
+  TermHover(this.x, this.y);
+
+  final int x;
+  final int y;
+}
+
 /// Decode raw stdin [bytes] into events. Returns the events plus how many
 /// bytes were consumed; a trailing incomplete sequence (split ESC/CSI/SS3,
 /// split UTF-8, an unterminated paste) is left unconsumed so the caller can
@@ -157,6 +168,9 @@ final class TermClick extends TermEvent {
             if (btn & 64 != 0) {
               // Wheel: 64 = up, 65 = down.
               out.add(TermKey(btn & 3 == 1 ? 'wheeldown' : 'wheelup'));
+            } else if (btn == 35) {
+              // Motion with no buttons: hover position, not a click.
+              out.add(TermHover(x, y));
             } else if (btn & 32 != 0) {
               // Drag (32): not a click, ignore.
             } else if (btn & 3 == 0) {

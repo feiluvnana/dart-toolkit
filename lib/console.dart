@@ -459,6 +459,9 @@ abstract final class Console {
             case term.TermClick():
               // Clicks are for the TUI; ignore while choosing.
               break;
+            case term.TermHover():
+              // Hover motion is for the TUI; ignore while choosing.
+              break;
           }
         }
         // Incomplete trailing sequence (or a lone ESC): wait briefly; a

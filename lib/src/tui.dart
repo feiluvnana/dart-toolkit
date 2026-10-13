@@ -288,6 +288,10 @@ final class Screen {
           }
         case term.TermClick(:final x, :final y):
           _clicks.add((x, y));
+        case term.TermHover():
+          // Hover motion (?1003h) is only used by the state-driven engine;
+          // the immediate-mode engine has no hovered() reading: ignore.
+          break;
       }
     }
   }
