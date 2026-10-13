@@ -97,9 +97,18 @@ abstract final class Chrome {
 }
 
 /// An open browser. Owns its pages; one browser serves many pages.
+/// Live owned browsers are tracked process-wide so a SIGTERM/SIGHUP (or a
+/// cooked-terminal SIGINT/Ctrl-C) can still close Chromium and delete temp
+/// profiles instead of orphaning them. A raw-terminal SIGINT (the TUI's
+/// `ctrl+c` key) is left to the app.
 final class Browser implements Closeable {
   // ignore: prefer_initializing_formals – the public argument stays `owned`.
-  Browser._(this._browser, {required bool owned}) : _owned = owned;
+  Browser._(this._browser, {required bool owned}) : _owned = owned {
+    if (owned) {
+      _live.add(this);
+      _watchSignals();
+    }
+  }
 
   final pp.Browser _browser;
 
@@ -116,6 +125,47 @@ final class Browser implements Closeable {
   /// apart by their DevTools `guid`, so they never clash.
   String? _downloadDir;
   var _closed = false;
+
+  static final _live = <Browser>{};
+  static bool _watching = false;
+
+  static void _watchSignals() {
+    if (_watching) return;
+    _watching = true;
+    void watch(io.ProcessSignal signal, int code, {required bool sigint}) {
+      try {
+        signal.watch().listen((_) async {
+          if (sigint) {
+            // Raw terminal (TUI active): SIGINT is a key, not termination.
+            try {
+              if (!io.stdin.echoMode) return;
+            } catch (_) {}
+          }
+          for (final b in List<Browser>.of(_live)) {
+            try {
+              await b.close();
+            } catch (_) {}
+          }
+          if (sigint) {
+            // Cooked Ctrl-C once behaved as termination; keep that.
+            io.exit(130);
+          } else {
+            io.exit(code);
+          }
+        });
+      } catch (_) {}
+    }
+
+    watch(io.ProcessSignal.sigint, 130, sigint: true);
+    if (!io.Platform.isWindows) {
+      try {
+        watch(io.ProcessSignal.sigterm, 143, sigint: false);
+      } catch (_) {}
+      try {
+        watch(io.ProcessSignal.sighup, 129, sigint: false);
+      } catch (_) {}
+    }
+  }
 
   /// Wrap an engine page, reusing the cached wrapper for its target.
   Page _wrap(pp.Page page) {
@@ -217,6 +267,7 @@ final class Browser implements Closeable {
     }
     _closed = true;
     _known.clear();
+    _live.remove(this);
   }
 
   /// The shared download folder, created on first use.
@@ -249,6 +300,9 @@ final class Browser implements Closeable {
         final type = req.resourceType?.toJson().toLowerCase();
         if (type != null && blocked.contains(type)) {
           await req.abort();
+          // Aborted requests may never emit finished/failed: balance the
+          // waitIdle count here (guarded, so a later event is a no-op).
+          if (wrap._inflight > 0) wrap._inflight--;
         } else {
           await req.continueRequest();
         }
@@ -291,8 +345,25 @@ final class Page implements Closeable {
   }
 
   void _trackTraffic() {
+    bool countable(String? url) {
+      if (url == null) return true;
+      final lower = url.toLowerCase();
+      // No network to go idle: data URLs, websockets, SSE streams.
+      if (lower.startsWith('data:') ||
+          lower.startsWith('ws:') ||
+          lower.startsWith('wss:')) {
+        return false;
+      }
+      return true;
+    }
+
     _trafficSubs.addAll([
-      _page.onRequest.listen((_) {
+      _page.onRequest.listen((req) {
+        try {
+          // ignore: avoid_dynamic_calls
+          final url = (req as dynamic).url as String?;
+          if (!countable(url)) return;
+        } catch (_) {}
         _inflight++;
       }, onError: (_) {}),
       _page.onResponse.listen((_) {}, onError: (_) {}),
