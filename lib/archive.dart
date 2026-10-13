@@ -55,7 +55,8 @@ final class _Packed with Reader {
   @override
   Stream<List<int>> stream() async* {
     final archive = a.Archive();
-    final root = io.Directory(_dir);
+    final normalizedDir = p.normalize(_dir);
+    final root = io.Directory(normalizedDir);
     if (!await root.exists()) {
       throw io.PathNotFoundException(_dir, const io.OSError());
     }
@@ -66,11 +67,7 @@ final class _Packed with Reader {
       if (t == io.FileSystemEntityType.link) {
         throw FormatException('pack refuses links: ${e.path}');
       }
-      var rel = e.path;
-      final prefix = _dir.endsWith(io.Platform.pathSeparator)
-          ? _dir
-          : _dir + io.Platform.pathSeparator;
-      if (rel.startsWith(prefix)) rel = rel.substring(prefix.length);
+      var rel = p.relative(p.normalize(e.path), from: normalizedDir);
       rel = rel.replaceAll('\\', '/');
       if (t == io.FileSystemEntityType.directory) {
         if (rel.isNotEmpty) {
@@ -124,7 +121,7 @@ final class _Unpacker implements Writer {
     // Check every member before writing anything.
     for (final f in archive.files) {
       _checkMember(f.name);
-      if (f.isSymbolicLink) {
+      if (f.isSymbolicLink || (f.mode & 0xF000) == 0xA000) {
         throw FormatException('archive member is a link: ${f.name}');
       }
     }
@@ -141,8 +138,10 @@ final class _Unpacker implements Writer {
     try {
       await tmpDir.create(recursive: true);
       for (final f in archive.files) {
-        // Split on '/' so member names work on every platform.
-        final relParts = f.name.split('/').where((s) => s.isNotEmpty);
+        // Split on both separators so member names work on every platform
+        // (checked with replaceAll above).
+        final relParts =
+            f.name.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty);
         if (relParts.isEmpty) continue; // trailing '/' dir entry root?
         final dest = p.joinAll([tmpDir.path, ...relParts]);
         // Names ending in '/' are folders (tar emits explicit dir entries);
@@ -253,7 +252,22 @@ final class _Unpacker implements Writer {
     ).list(recursive: false, followLinks: false)) {
       final dest = p.join(to, p.basename(e.path));
       final t = await io.FileSystemEntity.type(e.path, followLinks: false);
-      if (t == io.FileSystemEntityType.directory) {
+      if (t == io.FileSystemEntityType.link) {
+        // Preserve links (fs._copyDir does); dropping them loses data.
+        // Replace an existing dest entry, never follow it.
+        try {
+          final dt = await io.FileSystemEntity.type(dest, followLinks: false);
+          if (dt != io.FileSystemEntityType.notFound) {
+            try {
+              await io.Link(dest).delete();
+            } catch (_) {
+              await io.File(dest).delete();
+            }
+          }
+        } catch (_) {}
+        final target = await io.Link(e.path).target();
+        await io.Link(dest).create(target, recursive: true);
+      } else if (t == io.FileSystemEntityType.directory) {
         await _copyTree(e.path, dest);
       } else if (t == io.FileSystemEntityType.file) {
         await io.File(e.path).copy(dest);
@@ -350,7 +364,7 @@ final class _Unpacker implements Writer {
 /// first 512-byte header block with a valid tar checksum. The checksum test
 /// matters because the engine's own tar writer leaves the magic field zero.
 bool _looksLikeTar(List<int> bytes) {
-  if (bytes.isEmpty) return true;
+  if (bytes.isEmpty) return false;
   if (bytes.length >= 262 &&
       bytes[257] == 0x75 && // u
       bytes[258] == 0x73 && // s
@@ -504,26 +518,98 @@ final class _GzipPipe implements Pipe {
         throw FormatException('bad gzip data: $e');
       }
     }
-    // Decompression verifies the gzip trailer (CRC32 + ISIZE): truncated
-    // or corrupt data fails the run with a FormatException instead of
-    // silently yielding partial bytes.
-    return _gunzipChecked(input);
+    // Streaming decompression with trailer verification (CRC32 + ISIZE):
+    // truncated or corrupt data fails with FormatException instead of
+    // silently yielding partial bytes. Constant memory: compressed trailer
+    // (last 8 bytes) and decompressed CRC/size are tracked incrementally,
+    // output is yielded in chunks. Concatenated members (valid) skip the
+    // single-member trailer check and rely on decoder errors.
+    return _gunzipStreaming(input);
   }
 
-  Stream<List<int>> _gunzipChecked(Stream<List<int>> input) async* {
-    final raw = BytesBuilder(copy: false);
-    await for (final chunk in input) {
-      raw.add(chunk);
+  Stream<List<int>> _gunzipStreaming(Stream<List<int>> input) async* {
+    var totalCompressed = 0;
+    var magicCount = 0;
+    var prevEndedWith1f = false;
+    final last8 = <int>[];
+    void tapCompressed(List<int> chunk) {
+      totalCompressed += chunk.length;
+      // Count gzip magics (naive, may overcount inside deflate; only used
+      // to allow concatenated members through without false trailer failure).
+      for (var i = 0; i < chunk.length; i++) {
+        final b = chunk[i];
+        if (i == 0 && prevEndedWith1f && b == 0x8b) magicCount++;
+        if (b == 0x1f &&
+            i + 1 < chunk.length &&
+            chunk[i + 1] == 0x8b) {
+          magicCount++;
+        }
+      }
+      prevEndedWith1f =
+          chunk.isNotEmpty && chunk.last == 0x1f;
+      // Keep last 8 bytes for the trailer.
+      if (chunk.length >= 8) {
+        last8
+          ..clear()
+          ..addAll(chunk.sublist(chunk.length - 8));
+      } else {
+        last8.addAll(chunk);
+        if (last8.length > 8) last8.removeRange(0, last8.length - 8);
+      }
     }
-    final compressed = raw.takeBytes();
-    _verifyGzip(compressed);
-    List<int> decompressed;
+
+    Stream<List<int>> tapped;
     try {
-      decompressed = io.gzip.decode(compressed);
+      tapped = input.map((chunk) {
+        tapCompressed(chunk);
+        return chunk;
+      });
+    } catch (e) {
+      throw FormatException('bad gzip data: $e');
+    }
+    Stream<List<int>> decoded;
+    try {
+      decoded = tapped.transform(io.gzip.decoder);
+    } catch (e) {
+      throw FormatException('bad gzip data: $e');
+    }
+    var crc = 0xFFFFFFFF;
+    var size = 0;
+    var sawOutput = false;
+    try {
+      await for (final out in decoded) {
+        sawOutput = true;
+        for (final b in out) {
+          crc = _crcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+        }
+        size = (size + out.length) & 0xFFFFFFFF;
+        yield out;
+      }
     } catch (e) {
       if (e is FormatException) rethrow;
       throw FormatException('bad gzip data: $e');
     }
-    yield decompressed;
+    if (totalCompressed == 0) {
+      throw const FormatException('bad gzip data: empty (not a gzip stream)');
+    }
+    if (totalCompressed < 18 && magicCount <= 1) {
+      throw const FormatException('bad gzip data: truncated (no trailer)');
+    }
+    // Single-member strict check; concatenated members skip (decoder already
+    // validated each member's structure).
+    if (magicCount <= 1 && last8.length == 8) {
+      final view = ByteData.sublistView(Uint8List.fromList(last8));
+      final wantCrc = view.getUint32(0, Endian.little);
+      final wantSize = view.getUint32(4, Endian.little);
+      final gotCrc = (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
+      if (!sawOutput) {
+        // Empty member still has CRC 0 and size 0; verify like any other.
+      }
+      if (gotCrc != wantCrc || size != wantSize) {
+        throw const FormatException(
+          'bad gzip data: trailer mismatch (truncated or corrupt)',
+        );
+      }
+    }
   }
 }

@@ -66,17 +66,20 @@ abstract final class Console {
   static Future<String> ask(String question, {bool secret = false}) async {
     io.stderr.writeln(question);
     final modes = term.captureModes();
-    StreamSubscription<io.ProcessSignal>? sig;
+    final sigs = _trapSignals(modes);
     try {
       if (secret) {
         try {
           io.stdin.echoMode = false;
         } catch (_) {}
       }
-      sig = _trapSigint(modes);
       return await _readLine(secret: secret);
     } finally {
-      await sig?.cancel();
+      for (final s in sigs) {
+        try {
+          await s.cancel();
+        } catch (_) {}
+      }
       term.restoreModes(modes);
       if (secret) io.stderr.writeln();
     }
@@ -169,33 +172,60 @@ abstract final class Console {
     // Claim before the first draw, so a second bar throws before it can
     // draw over the live line.
     _claim(bar);
-    bar._render();
+    try {
+      bar._render();
+    } catch (_) {
+      _release(bar);
+      rethrow;
+    }
     return bar;
   }
 
-  /// Trap SIGINT for a prompt: restore the terminal modes, then exit 130.
-  /// Returns the subscription (cancel it when the prompt ends). While the
-  /// listener exists Dart does not terminate on SIGINT by itself.
-  static StreamSubscription<io.ProcessSignal>? _trapSigint(
+  /// Trap signals for a prompt: restore the terminal modes, then exit.
+  /// SIGINT exits 130; SIGTERM/SIGHUP restore then exit 143/129.
+  /// Returns the subscriptions (cancel them when the prompt ends). While a
+  /// SIGINT listener exists Dart does not terminate on SIGINT by itself.
+  static List<StreamSubscription<io.ProcessSignal>> _trapSignals(
     term.TermModes modes,
   ) {
-    try {
-      return io.ProcessSignal.sigint.watch().listen((_) {
-        term.restoreModes(modes);
-        io.exit(130);
-      });
-    } catch (_) {
-      return null;
+    final subs = <StreamSubscription<io.ProcessSignal>>[];
+    void trap(io.ProcessSignal signal, int code) {
+      try {
+        subs.add(signal.watch().listen((_) {
+          term.restoreModes(modes);
+          io.exit(code);
+        }));
+      } catch (_) {}
     }
+
+    trap(io.ProcessSignal.sigint, 130);
+    trap(io.ProcessSignal.sigterm, 143);
+    try {
+      // SIGHUP may not exist on all platforms.
+      subs.add(io.ProcessSignal.sighup.watch().listen((_) {
+        term.restoreModes(modes);
+        io.exit(129);
+      }));
+    } catch (_) {}
+    return subs;
   }
 
+  /// Leftover bytes after a `\n` in one `_readLine` chunk, for the next call.
+  /// Piped `2\n3\n` in one chunk must not lose `3`.
+  static List<int>? _linePushback;
+
   /// One cooked line from the shared broadcast stdin, without blocking the
-  /// event loop. Handles `\n` and `\r`; in secret mode backspace edits.
+  /// event loop. Handles `\n` and `\r`; in secret mode backspace edits by
+  /// grapheme (not byte, so multibyte passwords survive).
   static Future<String> _readLine({required bool secret}) {
     final result = Completer<String>();
-    final buf = <int>[];
+    final buf = <int>[...? _linePushback];
+    _linePushback = null;
+    // A pushback that already holds a full line resolves immediately.
+    final pushNewline = buf.indexWhere((b) => b == 0x0a || b == 0x0d);
     late final StreamSubscription<List<int>> sub;
-    void finish() {
+    void finish([List<int>? rest]) {
+      if (rest != null && rest.isNotEmpty) _linePushback = rest;
       sub.cancel().then((_) {
         if (!result.isCompleted) {
           result.complete(utf8.decode(buf, allowMalformed: true));
@@ -207,18 +237,35 @@ abstract final class Console {
       });
     }
 
+    // Check the pushback first: it may already contain a newline.
+    if (pushNewline >= 0) {
+      final line = buf.sublist(0, pushNewline);
+      final rest = buf.sublist(pushNewline + 1);
+      buf
+        ..clear()
+        ..addAll(line);
+      // Defer to let sub be assigned (finish cancels sub).
+      sub = term.sharedStdin().listen((_) {}, onDone: () {});
+      finish(rest);
+      return result.future;
+    }
+
     sub = term.sharedStdin().listen(
       (chunk) {
-        for (final b in chunk) {
+        var i = 0;
+        while (i < chunk.length) {
+          final b = chunk[i];
           if (b == 0x0a || b == 0x0d) {
-            finish();
+            finish(chunk.sublist(i + 1));
             return;
           }
           if (secret && (b == 0x7f || b == 0x08)) {
-            if (buf.isNotEmpty) buf.removeLast();
+            _backspaceGrapheme(buf);
+            i++;
             continue;
           }
           buf.add(b);
+          i++;
         }
       },
       onError: (Object e) {
@@ -246,6 +293,31 @@ abstract final class Console {
     return result.future;
   }
 
+  /// Remove one grapheme (base char plus combining marks/ZWJ) from [buf].
+  static void _backspaceGrapheme(List<int> buf) {
+    if (buf.isEmpty) return;
+    final text = utf8.decode(buf, allowMalformed: true);
+    final runes = text.runes.toList();
+    var end = runes.length;
+    // Drop trailing zero-width marks with their base? No: backspace deletes
+    // one user-perceived char: the last base plus its trailing marks, or a
+    // lone mark if that's all that's left. Walk back over zero-width runes,
+    // then one more base rune.
+    while (end > 0 && term.isZeroWidth(runes[end - 1])) {
+      end--;
+    }
+    if (end > 0) end--;
+    // If we stopped on a base, keep any zero-width marks before it? No:
+    // those belong to an earlier base, keep them. Just cut at end.
+    // But a dangling ZWJ sequence (man+ZWJ+woman -> backspace leaves ZWJ)?
+    // Cutting one grapheme as defined above leaves no dangling ZWJ for the
+    // common cases; full grapheme-cluster segmentation is overkill here.
+    final kept = String.fromCharCodes(runes.sublist(0, end));
+    buf
+      ..clear()
+      ..addAll(utf8.encode(kept));
+  }
+
   static Future<String> _chooseInteractive(
     String question,
     List<String> choices,
@@ -253,7 +325,7 @@ abstract final class Console {
     var selected = 0;
     final modes = term.captureModes();
     term.setRawModes();
-    final sig = _trapSigint(modes);
+    final sigs = _trapSignals(modes);
     StreamSubscription<List<int>>? sub;
     final pending = <int>[];
     var painted = 0;
@@ -297,7 +369,11 @@ abstract final class Console {
       try {
         await sub?.cancel();
       } catch (_) {}
-      await sig?.cancel();
+      for (final s in sigs) {
+        try {
+          await s.cancel();
+        } catch (_) {}
+      }
       term.restoreModes(modes);
     }
   }
@@ -377,7 +453,7 @@ abstract final class Console {
               quiet = null;
               q?.cancel();
               pending.clear();
-              return 'escape';
+              return null;
             }
             if (pending.length > 1) break;
           }
@@ -572,15 +648,29 @@ final class Bar extends _Live implements Pipe, Closeable {
               '${_bar(width)}  $counts  ${_fmtRate(rate)}',
             ) -
             1;
-        line =
-            '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  ${_fmtRate(rate)}';
+        if (room <= 0) {
+          line = '${_bar(width)}  $counts  ${_fmtRate(rate)}';
+          if (term.displayWidth(line) > cols) {
+            // Even the bar alone doesn't fit: drop to count+rate.
+            line = '$counts  ${_fmtRate(rate)}';
+          }
+        } else {
+          line =
+              '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  ${_fmtRate(rate)}';
+        }
       }
       return line;
     }
     // Unknown total: count and rate, no bar.
     var line = '$label$counts  ${_fmtRate(rate)}';
     if (term.displayWidth(line) > cols) {
-      line = '${term.truncateWidth(label.trimRight(), cols - term.displayWidth('$counts  ${_fmtRate(rate)}') - 1)} $counts  ${_fmtRate(rate)}';
+      final room =
+          cols - term.displayWidth('$counts  ${_fmtRate(rate)}') - 1;
+      if (room <= 0) {
+        line = '$counts  ${_fmtRate(rate)}';
+      } else {
+        line = '${term.truncateWidth(label.trimRight(), room)} $counts  ${_fmtRate(rate)}';
+      }
     }
     return line;
   }
@@ -605,15 +695,25 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (term.displayWidth(line) > cols) {
         final room =
             cols - term.displayWidth('${_bar(width)}  $counts  $rateText') - 1;
-        line =
-            '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  $rateText';
+        if (room <= 0) {
+          line = '${_bar(width)}  $counts  $rateText';
+          if (term.displayWidth(line) > cols) line = '$counts  $rateText';
+        } else {
+          line =
+              '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  $rateText';
+        }
       }
       return line;
     }
     var line = '$label$counts  $rateText';
     if (term.displayWidth(line) > cols) {
-      line =
-          '${term.truncateWidth(label.trimRight(), cols - term.displayWidth('$counts  $rateText') - 1)} $counts  $rateText';
+      final room = cols - term.displayWidth('$counts  $rateText') - 1;
+      if (room <= 0) {
+        line = '$counts  $rateText';
+      } else {
+        line =
+            '${term.truncateWidth(label.trimRight(), room)} $counts  $rateText';
+      }
     }
     return line;
   }

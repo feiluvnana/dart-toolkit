@@ -174,6 +174,12 @@ final class Browser implements Closeable {
         try {
           await wrap._detach();
         } catch (_) {}
+        for (final dir in wrap._stagedDirs) {
+          try {
+            await dir.delete(recursive: true);
+          } catch (_) {}
+        }
+        wrap._stagedDirs.clear();
       }
       final dir = _downloadDir;
       _downloadDir = null;
@@ -235,6 +241,10 @@ final class Page implements Closeable {
   StreamSubscription<pp.Request>? _blockSub;
   StreamSubscription<pp.Dialog>? _dialogSub;
   final _trafficSubs = <StreamSubscription<dynamic>>[];
+
+  /// Staged upload dirs (non-File readers): retained until this tab closes,
+  /// since the browser reads them at submit, not at `uploadFile`.
+  final _stagedDirs = <io.Directory>[];
 
   /// Requests in flight (for [waitIdle]): +1 on request, −1 on
   /// finished/failed.
@@ -430,20 +440,34 @@ final class Page implements Closeable {
 
   /// Set a file input from a [Reader]. A `File` keeps its name; any other
   /// reader is staged under the name `upload`. File inputs are usually
-  /// hidden, so this waits for *attached*, not visible. Returns this page.
+  /// hidden, so this waits for *attached*, not visible. Staged copies are
+  /// retained until this tab closes (the browser reads them at submit).
+  /// Fires `input`/`change` so frameworks see the files. Returns this page.
   Future<Page> upload(String selector, Reader file, {Duration? timeout}) async {
     final staged = await _stage(file);
+    final tmp = staged.tmpDir;
+    if (tmp != null) _stagedDirs.add(tmp);
     try {
       final handle = await _attached(selector, timeout: timeout);
       await handle.uploadFile([staged.file]);
-    } finally {
-      // Staged copies live in a temp dir; remove the dir, not just the file.
-      final tmp = staged.tmpDir;
+      // Like fill: frameworks listen for input/change, not just the file list.
+      try {
+        await _page.evaluate<void>(
+          '(s) => { const el = document.querySelector(s);'
+          ' if (el) { el.dispatchEvent(new Event("input", {bubbles: true}));'
+          ' el.dispatchEvent(new Event("change", {bubbles: true})); } }',
+          args: [selector],
+        );
+      } catch (_) {}
+    } catch (_) {
+      // Don't leak staging when the upload itself failed.
       if (tmp != null) {
+        _stagedDirs.remove(tmp);
         try {
           await tmp.delete(recursive: true);
         } catch (_) {}
       }
+      rethrow;
     }
     return this;
   }
@@ -550,7 +574,17 @@ final class Page implements Closeable {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    // Prune from the browser's known wrappers so they don't retain stale subs.
+    try {
+      _browser._known.remove(this);
+    } catch (_) {}
     await _detach();
+    for (final dir in _stagedDirs) {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+    _stagedDirs.clear();
     try {
       await _page.close();
     } catch (_) {

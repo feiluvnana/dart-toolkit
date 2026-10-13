@@ -37,7 +37,8 @@ final class Image {
     try {
       // frame: 0 keeps GIF to its first frame (an animated GIF otherwise
       // decodes every frame and re-encodes as animated).
-      decoded = img.decodeImage(Uint8List.fromList(bytes), frame: 0);
+      final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+      decoded = img.decodeImage(raw, frame: 0);
     } catch (e) {
       throw FormatException('unknown image format: $e');
     }
@@ -72,12 +73,18 @@ final class Image {
     );
   }
 
-  /// A cut-out copy. A region leaving the image is a [RangeError].
+  /// A cut-out copy. A bad size is an [ArgumentError]; a region leaving
+  /// the image is a [RangeError].
   Image crop(int x, int y, int width, int height) {
+    if (width < 1 || height < 1) {
+      throw ArgumentError.value(
+        '${width}x$height',
+        'width/height',
+        'must be >= 1',
+      );
+    }
     if (x < 0 ||
         y < 0 ||
-        width <= 0 ||
-        height <= 0 ||
         x + width > _inner.width ||
         y + height > _inner.height) {
       throw RangeError(
@@ -92,9 +99,13 @@ final class Image {
 
   /// A [Reader] of the encoded image, encoded when read. Store it with
   /// `> Fs.file(…)`, hash it, or upload it with `body:`. [quality] applies
-  /// to JPEG.
-  Reader encode(ImageFormat format, {int quality = 90}) =>
-      _Encoded(this, format, quality: quality);
+  /// to JPEG (1–100, else [ArgumentError]).
+  Reader encode(ImageFormat format, {int quality = 90}) {
+    if (quality < 1 || quality > 100) {
+      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+    }
+    return _Encoded(this, format, quality: quality);
+  }
 }
 
 /// Bytes → a value.
@@ -115,8 +126,12 @@ extension ImageFuture on Future<Image> {
       (await this).resize(width: width, height: height);
   Future<Image> crop(int x, int y, int width, int height) async =>
       (await this).crop(x, y, width, height);
-  Reader encode(ImageFormat format, {int quality = 90}) =>
-      _FutureEncoded(this, format, quality: quality);
+  Reader encode(ImageFormat format, {int quality = 90}) {
+    if (quality < 1 || quality > 100) {
+      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+    }
+    return _FutureEncoded(this, format, quality: quality);
+  }
 }
 
 final class _Encoded with Reader {
@@ -127,7 +142,9 @@ final class _Encoded with Reader {
   final int quality;
 
   @override
-  Stream<List<int>> stream() => Stream.value(_encode(_image, _format, quality));
+  Stream<List<int>> stream() async* {
+    yield _encode(_image, _format, quality);
+  }
 }
 
 final class _FutureEncoded with Reader {
@@ -149,7 +166,7 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
     case ImageFormat.png:
       return img.encodePng(inner);
     case ImageFormat.jpg:
-      return img.encodeJpg(inner, quality: quality.clamp(1, 100));
+      return img.encodeJpg(inner, quality: quality);
     case ImageFormat.gif:
       return img.encodeGif(inner);
     case ImageFormat.bmp:

@@ -105,6 +105,9 @@ final class File extends Entry with Reader implements Writer {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.file) return;
       await io.File(_path).delete();
     } on io.PathNotFoundException {
       // no-op when nothing is there
@@ -254,6 +257,10 @@ final class Dir extends Entry {
   /// Typed children, sorted by name. With [recursive], descends into
   /// subfolders but never through links.
   Future<List<Entry>> list({bool recursive = false}) async {
+    final t = await io.FileSystemEntity.type(_path, followLinks: false);
+    if (t != io.FileSystemEntityType.directory) {
+      throw io.FileSystemException('not a directory', _path);
+    }
     final out = <Entry>[];
     await for (final e in io.Directory(_path).list(
       recursive: recursive,
@@ -269,7 +276,7 @@ final class Dir extends Entry {
         out.add(Dir._(e.path));
       }
     }
-    out.sort((a, b) => a.path().compareTo(b.path()));
+    out.sort((a, b) => a.name().compareTo(b.name()));
     return out;
   }
 
@@ -288,6 +295,9 @@ final class Dir extends Entry {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.directory) return;
       await io.Directory(_path).delete(recursive: true);
     } on io.PathNotFoundException {
       // no-op
@@ -407,6 +417,9 @@ final class Link extends Entry {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.link) return;
       await io.Link(_path).delete();
     } on io.PathNotFoundException {
       // no-op
@@ -500,7 +513,17 @@ Future<void> _ensureParent(String path) async {
 }
 
 /// True only for cross-device renames.
-bool _isExdev(io.FileSystemException e) => e.osError?.errorCode == 18;
+bool _isExdev(io.FileSystemException e) {
+  final code = e.osError?.errorCode;
+  if (code == 18 || code == 17) return true;
+  if (code == null) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('cross-device') || msg.contains('different device')) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /// Replace a dest symlink with nothing, so a file/dir copy replaces the
 /// link instead of following it to a target outside the tree.
@@ -634,6 +657,8 @@ String _strip(String path) {
 }
 
 Future<void> _copyDir(String from, String to) async {
+  // Throws-before-writes for file<->dir collisions: walk first.
+  await _checkDirCollisions(from, to);
   await io.Directory(to).create(recursive: true);
   await for (final e in io.Directory(from).list(
     recursive: false,
@@ -644,10 +669,27 @@ Future<void> _copyDir(String from, String to) async {
     final t = await io.FileSystemEntity.type(e.path, followLinks: false);
     if (t == io.FileSystemEntityType.link) {
       final target = await io.Link(e.path).target();
-      await io.Link(dest).create(target, recursive: true);
+      try {
+        await io.Link(dest).create(target, recursive: true);
+      } on io.FileSystemException {
+        // Dest exists (file/link): replace, never follow.
+        try {
+          await io.Link(dest).delete();
+        } catch (_) {
+          await io.File(dest).delete();
+        }
+        await io.Link(dest).create(target, recursive: true);
+      }
     } else if (t == io.FileSystemEntityType.directory) {
       await _copyDir(e.path, dest);
     } else if (t == io.FileSystemEntityType.file) {
+      // Replace a dest link, never follow it outside the tree.
+      try {
+        final dt = await io.FileSystemEntity.type(dest, followLinks: false);
+        if (dt == io.FileSystemEntityType.link) {
+          await io.Link(dest).delete();
+        }
+      } catch (_) {}
       await io.File(e.path).copy(dest);
       await _preserveFileMeta(e.path, dest);
     }
@@ -659,4 +701,37 @@ Future<void> _copyDir(String from, String to) async {
     await _setDirMtime(to, st.modified);
     await _chmod(to, st.mode & 0xFFF);
   } catch (_) {}
+}
+
+/// Throw before any writes when a source file would land on a dest dir
+/// (or vice versa). Links are replaced, so they never collide.
+Future<void> _checkDirCollisions(String from, String to) async {
+  await for (final e in io.Directory(from).list(
+    recursive: true,
+    followLinks: false,
+  )) {
+    final rel = p.relative(e.path, from: from);
+    final dest = p.join(to, rel);
+    final st = await io.FileSystemEntity.type(e.path, followLinks: false);
+    io.FileSystemEntityType? dt;
+    try {
+      dt = await io.FileSystemEntity.type(dest, followLinks: false);
+    } catch (_) {
+      continue;
+    }
+    if (dt == io.FileSystemEntityType.notFound) continue;
+    final srcIsDir = st == io.FileSystemEntityType.directory;
+    final destIsDir = dt == io.FileSystemEntityType.directory;
+    // Links are replaced, not collided.
+    if (st == io.FileSystemEntityType.link ||
+        dt == io.FileSystemEntityType.link) {
+      continue;
+    }
+    if (srcIsDir != destIsDir) {
+      throw io.FileSystemException(
+        'copy collides: ${srcIsDir ? 'directory' : 'file'} over ${destIsDir ? 'directory' : 'file'}',
+        dest,
+      );
+    }
+  }
 }

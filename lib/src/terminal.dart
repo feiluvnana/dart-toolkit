@@ -22,12 +22,17 @@ import 'dart:io' as io;
 /// and killed on the last cancel. The child ignores SIGINT, so Ctrl-C still
 /// reaches us (as a key, or as the prompt's exit). Piped stdin, Windows, or
 /// a missing `cat` fall back to stdin itself, which ends at EOF.
-Stream<List<int>> sharedStdin() => _input.stream;
+Stream<List<int>> sharedStdin() {
+  if (_input.isClosed) _input = _makeInput();
+  return _input.stream;
+}
 
-final _input = StreamController<List<int>>.broadcast(
-  onListen: _startInput,
-  onCancel: _stopInput,
-);
+StreamController<List<int>> _makeInput() => StreamController<List<int>>.broadcast(
+      onListen: _startInput,
+      onCancel: _stopInput,
+    );
+
+var _input = _makeInput();
 io.Process? _tty;
 StreamSubscription<List<int>>? _ttySub;
 Stream<List<int>>? _stdinFallback;
@@ -45,14 +50,26 @@ Future<void> _startInput() async {
         return;
       }
       _tty = tty;
-      _ttySub = tty.stdout.listen(_input.add, onError: _input.addError);
+      _ttySub = tty.stdout.listen(
+        _input.add,
+        onError: _input.addError,
+        onDone: () {
+          if (!_input.isClosed) _input.close();
+        },
+      );
       return;
     } catch (_) {
       // No sh/cat or no /dev/tty: fall through to stdin itself.
     }
   }
-  _ttySub = (_stdinFallback ??= io.stdin.asBroadcastStream())
-      .listen(_input.add, onError: _input.addError);
+  if (session != _session) return;
+  _ttySub = (_stdinFallback ??= io.stdin.asBroadcastStream()).listen(
+    _input.add,
+    onError: _input.addError,
+    onDone: () {
+      if (!_input.isClosed) _input.close();
+    },
+  );
 }
 
 Future<void> _stopInput() async {
@@ -123,7 +140,14 @@ final class TermClick extends TermEvent {
         }
         if (j >= bytes.length) break; // split across reads: hold.
         flush();
-        final parts = ascii.decode(bytes.sublist(i + 3, j)).split(';');
+        List<String> parts;
+        try {
+          parts = ascii.decode(bytes.sublist(i + 3, j)).split(';');
+        } catch (_) {
+          // Non-ASCII params: unknown sequence, ignore.
+          i = j + 1;
+          continue;
+        }
         if (parts.length >= 3) {
           final btn = int.tryParse(parts[0]) ?? -1;
           final x = (int.tryParse(parts[1]) ?? 1) - 1;
@@ -133,8 +157,10 @@ final class TermClick extends TermEvent {
             if (btn & 64 != 0) {
               // Wheel: 64 = up, 65 = down.
               out.add(TermKey(btn & 3 == 1 ? 'wheeldown' : 'wheelup'));
+            } else if (btn & 32 != 0) {
+              // Drag (32): not a click, ignore.
             } else if (btn & 3 == 0) {
-              // Left button only; right/middle/drag are not clicks.
+              // Left button only; right/middle are not clicks.
               out.add(TermClick(x, y));
             }
           }
@@ -165,7 +191,14 @@ final class TermClick extends TermEvent {
           continue;
         }
         flush();
-        final params = ascii.decode(bytes.sublist(i + 2, j));
+        String params;
+        try {
+          params = ascii.decode(bytes.sublist(i + 2, j));
+        } catch (_) {
+          // Non-ASCII CSI params: unknown sequence, ignore.
+          i = j + 1;
+          continue;
+        }
         final key = csiName(params, bytes[j]);
         if (key != null) out.add(TermKey(key));
         i = j + 1;

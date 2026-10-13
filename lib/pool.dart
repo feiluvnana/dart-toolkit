@@ -69,6 +69,9 @@ abstract final class Pool {
     _active++;
     () async {
       try {
+        // A close() in the gap before boot fails the result first; skip the
+        // wasted boot.
+        if (result.isCompleted) return;
         await _ensureInit();
         if (!result.isCompleted) {
           result.complete(
@@ -107,6 +110,7 @@ abstract final class Pool {
     _active++;
     () async {
       try {
+        if (result.isCompleted) return;
         await _ensureInit();
         final max = (limit ?? _workerCount).clamp(1, list.length);
         final out = List<R?>.filled(list.length, null);
@@ -121,19 +125,32 @@ abstract final class Pool {
             final i = next++;
             if (i >= list.length) return;
             final item = list[i];
+            R? r;
             try {
-              final r = await _submit<R>(
+              r = await _submit<R>(
                 item,
                 'items[$i]',
                 () => workerManager.execute<R>(_thunk(job, item)),
               );
               out[i] = r;
-              if (!failed && !result.isCompleted) onResult?.call(r);
             } catch (e, st) {
               if (!failed) {
                 failed = true;
                 firstError = e;
                 firstStack = st;
+              }
+              continue;
+            }
+            if (!failed && !result.isCompleted) {
+              try {
+                onResult?.call(r as R);
+              } catch (e, st) {
+                // Progress-callback failure, not a job failure.
+                if (!failed) {
+                  failed = true;
+                  firstError = e;
+                  firstStack = st;
+                }
               }
             }
           }
@@ -163,6 +180,8 @@ abstract final class Pool {
   /// Stop the workers. Static, because the pool is process-wide, so [Pool] is
   /// not a [Closeable]. Idle workers never keep a script alive; the pool
   /// restarts on the next call. Jobs still in flight fail with a [StateError].
+  /// Idempotent: concurrent or repeated calls share one shutdown and never
+  /// throw from the engine teardown itself.
   static Future<void> close() async {
     final boot = _initFuture;
     _initFuture = null;
@@ -177,7 +196,11 @@ abstract final class Pool {
         // A stillborn engine needs no shutdown; drop through to sweep.
       }
     }
-    await _shutdown();
+    try {
+      await _shutdown();
+    } catch (_) {
+      // Teardown itself never fails close().
+    }
   }
 
   /// Shut the engine down when no top-level call is left. Best effort: a
@@ -257,7 +280,7 @@ abstract final class Pool {
     try {
       engine = start();
     } catch (e, st) {
-      result.completeError(e, st);
+      result.completeError(_sendableError(value, name, e), st);
       return result.future;
     }
     unawaited(
@@ -274,16 +297,15 @@ abstract final class Pool {
 
   /// Map an engine failure to the [ArgumentError] the call site expects for
   /// a non-sendable job or item. An [ArgumentError] from the engine already
-  /// is one, so it passes through; anything that does not look like an
-  /// isolate send failure (the job's own errors) is left alone.
+  /// is one, so it passes through; isolate send failures (unsendable values)
+  /// become [ArgumentError], anything else (the job's own errors) passes
+  /// through as is. Matching is on `sendable`/`transferable`, not generic
+  /// `isolate`/`send`, so `throw 'isolate failed'` is not misclassified.
   static Object _sendableError(Object? value, String name, Object error) {
     if (error is ArgumentError) return error;
     final message = error.toString().toLowerCase();
     final sendFailure =
-        message.contains('isolate') ||
-        message.contains('sendport') ||
-        message.contains('transferable') ||
-        (message.contains('send') && message.contains('message'));
+        message.contains('sendable') || message.contains('transferable');
     if (!sendFailure) return error;
     return ArgumentError.value(
       value,
