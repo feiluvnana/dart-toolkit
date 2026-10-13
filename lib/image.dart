@@ -6,11 +6,9 @@
 /// await (avatar.resize(width: 64).encode(ImageFormat.png) > Fs.file('icon.png'));
 /// ```
 ///
-/// Public surface is exactly: [Image], [ImageFormat], [RegionPicture].
+/// Public surface is exactly: [Image], [ImageFormat].
 /// - `Image.decode()` decodes bytes, `Reader.image()` reads a stream.
 /// - [Image] supports `width` `height` `resize` `crop` `encode`.
-/// - `region.picture(image)` draws it in a `Tui` (here, so `tui` doesn't
-///   load the codecs).
 /// CPU-bound batches go through [Pool]. Everything else is private.
 library;
 
@@ -20,7 +18,6 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import 'core.dart';
-import 'src/tui.dart' show Region, drawPicture;
 export 'core.dart';
 
 /// Encodable image formats. WebP decodes but the engine cannot encode it,
@@ -192,22 +189,5 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
         );
       }
       return img.encodeIco(inner);
-  }
-}
-
-/// Draws an [Image] in a `Tui` region.
-extension RegionPicture on Region {
-  /// The rest of the region as half-block cells (`▀`), scaled down to fit
-  /// with the aspect kept. Returns the receiver.
-  Region picture(Image image) {
-    final inner = image._inner;
-    return drawPicture(this, inner.width, inner.height, (x, y) {
-      final p = inner.getPixel(x, y);
-      return (
-        (p.rNormalized * 255).round().clamp(0, 255),
-        (p.gNormalized * 255).round().clamp(0, 255),
-        (p.bNormalized * 255).round().clamp(0, 255),
-      );
-    });
   }
 }

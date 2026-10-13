@@ -9,10 +9,11 @@
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar].
-/// - `Console.ask/confirm/choose/spin/bar()` prompt or show progress.
+/// - `Console.ask/confirm/choose/key/spin/bar/clear()` prompt, read keys,
+///   or show progress.
 /// - [Bar] supports `tick` (plus [Pipe]/[Closeable]).
-/// Key decoding, broadcast stdin and terminal modes are shared with `tui`
-/// through `src/terminal.dart` (imported relatively, never exported).
+/// Key decoding, broadcast stdin and terminal modes live in
+/// `src/terminal.dart` (imported relatively, never exported).
 /// Everything else is private.
 library;
 
@@ -40,8 +41,25 @@ abstract final class Console {
     if (identical(_live, live)) _live = null;
   }
 
-  static bool get _animated =>
-      io.stderr.hasTerminal && io.Platform.environment['NO_COLOR'] == null;
+  /// Force styled output on (`true`) or off (`false`). Null (default)
+  /// follows the terminal: styled when stderr is a terminal without
+  /// `NO_COLOR` set. Set to `true` for terminals misdetected as pipes or
+  /// plain output (e.g. a `NO_COLOR` export you don't want to unset
+  /// globally); motion (live spinners/bars, menu repaints) still needs a
+  /// real terminal, while color codes are emitted wherever styling is on.
+  static bool? forceColor;
+
+  /// Color codes when [forceColor] ?? automatic (terminal + no `NO_COLOR`).
+  static bool get _styled {
+    final force = forceColor;
+    if (force != null) return force;
+    return io.stderr.hasTerminal &&
+        io.Platform.environment['NO_COLOR'] == null;
+  }
+
+  /// Live redraw (spinners, bars, menu repaints): needs a terminal to draw
+  /// on, plus styling. Implies [_styled].
+  static bool get _animated => io.stderr.hasTerminal && _styled;
 
   static int _columns() {
     try {
@@ -62,19 +80,28 @@ abstract final class Console {
   /// Read one line. With [secret], echo is turned off (passwords).
   /// Asynchronous: timers, downloads and bars keep running while one waits.
   /// A closed stdin throws [io.StdinException]. Ctrl-C restores the
-  /// terminal and exits with 130.
-  static Future<String> ask(String question, {bool secret = false}) async {
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.promptAsk(question, secret: secret);
+  /// terminal and exits with 130. With [clear], the screen is cleared first.
+  ///
+  /// The cooked, echoed modes this prompt needs are established up front
+  /// instead of trusting the inherited ones: a run killed mid-menu can
+  /// leave echo off, which makes typing invisible while Enter still
+  /// submits. The captured modes are restored afterwards.
+  static Future<String> ask(
+    String question, {
+    bool secret = false,
+    bool clear = false,
+  }) async {
+    if (clear) Console.clear();
     io.stderr.writeln(question);
     final modes = term.captureModes();
+    try {
+      io.stdin.echoMode = !secret;
+    } catch (_) {}
+    try {
+      io.stdin.lineMode = true;
+    } catch (_) {}
     final sigs = _trapSignals(modes);
     try {
-      if (secret) {
-        try {
-          io.stdin.echoMode = false;
-        } catch (_) {}
-      }
       return await _readLine(secret: secret);
     } finally {
       for (final s in sigs) {
@@ -87,72 +114,162 @@ abstract final class Console {
     }
   }
 
-  /// Yes/no. Enter means no. Asks again on anything else. While a
-  /// state-driven [Tui.run] is active, shows as a popup.
-  static Future<bool> confirm(String question) async {
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.promptConfirm(question);
+  /// Yes/no. Enter means no. Asks again on anything else.
+  /// With [clear], the screen is cleared first.
+  static Future<bool> confirm(String question, {bool clear = false}) async {
     for (;;) {
       final answer =
-          (await ask('$question [y/n]')).trim().toLowerCase();
+          (await ask('$question [y/n]', clear: clear)).trim().toLowerCase();
+      // Only clear before the first prompt; retries keep their context.
+      clear = false;
       if (answer == 'y' || answer == 'yes') return true;
       if (answer == 'n' || answer == 'no' || answer.isEmpty) return false;
     }
   }
 
-  /// Pick one of [choices]. Arrow keys + Enter on a terminal (scrolling when
-  /// the choices outnumber the rows); piped, a numbered list and a number.
-  /// Escape accepts the current selection. Empty [choices] is an
-  /// [ArgumentError]. While a state-driven [Tui.run] is active, shows as a
-  /// popup (Escape cancels with [StdinException]).
+  /// Pick one of [choices]. On a terminal with working raw mode, `↑`/`↓`
+  /// arrows (or `w`/`s`, `j`/`k` where arrows don't reach, e.g. Windows
+  /// consoles where arrow keys never arrive at all) move, `1`-`9` jump to
+  /// that row, and Enter picks, in accent color with a scrolling window
+  /// when the choices outnumber the rows. [shortcuts] adds single keys
+  /// that return immediately without Enter (`{'b': 'back'}` — the value
+  /// need not be one of [choices], just like [escapeValue]); matched
+  /// case-insensitively and taking precedence over movement keys. Where
+  /// raw mode is unavailable (or piped), a numbered list and a number
+  /// instead, so the menu always works. Escape accepts the current
+  /// selection, or returns [escapeValue] when given (handy for
+  /// back-navigation). [initial] preselects an entry. With [clear], the
+  /// screen is cleared first. Empty [choices] is an [ArgumentError].
   static Future<String> choose(
     String question,
-    List<String> choices,
-  ) async {
+    List<String> choices, {
+    bool clear = false,
+    int initial = 0,
+    String? escapeValue,
+    Map<String, String>? shortcuts,
+  }) async {
     if (choices.isEmpty) {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.promptChoose(question, choices);
-    if (!io.stdin.hasTerminal || !io.stderr.hasTerminal) {
-      io.stderr.writeln(question);
-      for (var i = 0; i < choices.length; i++) {
-        io.stderr.writeln('  ${i + 1}. ${choices[i]}');
-      }
-      for (;;) {
-        final line = await ask('Enter a number (1-${choices.length}):');
-        final n = int.tryParse(line.trim());
-        if (n != null && n >= 1 && n <= choices.length) {
-          return choices[n - 1];
-        }
+    if (clear) Console.clear();
+    if (!io.stdin.hasTerminal || !io.stderr.hasTerminal || !_rawKeys()) {
+      return _chooseNumbered(question, choices);
+    }
+    return _chooseInteractive(
+      question,
+      choices,
+      initial,
+      escapeValue,
+      shortcuts,
+    );
+  }
+
+  /// Numbered choose: print the list, read a number. Used piped and
+  /// wherever raw single-key mode is unavailable. Restores cooked, echoed
+  /// input first (best effort), so typing stays visible.
+  static Future<String> _chooseNumbered(
+    String question,
+    List<String> choices,
+  ) async {
+    _cooked();
+    io.stderr.writeln(question);
+    for (var i = 0; i < choices.length; i++) {
+      io.stderr.writeln('  ${i + 1}. ${choices[i]}');
+    }
+    for (;;) {
+      final line = await ask('Enter a number (1-${choices.length}):');
+      final n = int.tryParse(line.trim());
+      if (n != null && n >= 1 && n <= choices.length) {
+        return choices[n - 1];
       }
     }
-    return _chooseInteractive(question, choices);
+  }
+
+  /// Best-effort cooked, echoed input: undoes a half-applied raw mode so
+  /// fallback prompts stay visible and line-buffered.
+  static void _cooked() {
+    try {
+      io.stdin.echoMode = true;
+    } catch (_) {}
+    try {
+      io.stdin.lineMode = true;
+    } catch (_) {}
+  }
+
+  /// True when single keypresses (arrows included) will actually arrive:
+  /// raw mode engages and sticks. Restores the terminal modes either way.
+  /// A half-applied raw mode (echo off, line buffering still on) is the
+  /// worst case — invisible typing that only arrives on Enter — so that
+  /// counts as unavailable too.
+  static bool _rawKeys() {
+    final modes = term.captureModes();
+    term.setRawModes();
+    try {
+      if (io.stdin.lineMode) return false;
+    } catch (_) {
+      return false;
+    } finally {
+      term.restoreModes(modes);
+    }
+    return true;
+  }
+
+  /// Read a single keypress, without waiting for Enter. Prints [prompt]
+  /// first when given. Returns the key: a printable key as itself (`'q'`,
+  /// `'Q'`, `'1'` — case is preserved, only the first rune of a burst),
+  /// anything else by name (`'enter'`, `'escape'`, `'space'`, `'tab'`,
+  /// `'backspace'`, `'up'`, `'down'`, `'left'`, `'right'`, `'home'`,
+  /// `'end'`, `'pageup'`, `'pagedown'`, `'delete'`, `'insert'`, `'f1'` …
+  /// `'f12'`, `'ctrl+c'` …). A bracketed paste is not a keypress and is
+  /// skipped. A closed stdin throws [io.StdinException]. Ctrl-C restores
+  /// the terminal and exits with 130. With [clear], the screen is cleared
+  /// first.
+  ///
+  /// ```dart
+  /// stderr.writeln('Downloaded. Press q to quit, any other key for more.');
+  /// if ((await Console.key()).toLowerCase() == 'q') return;
+  /// ```
+  ///
+  /// Where raw mode is unavailable (or piped), a line is read instead and
+  /// its first character counts as the key (an empty line counts as Enter).
+  static Future<String> key({String? prompt, bool clear = false}) async {
+    if (clear) Console.clear();
+    if (!io.stdin.hasTerminal || !io.stderr.hasTerminal || !_rawKeys()) {
+      _cooked();
+      final line = await ask(prompt ?? 'Press a key, then Enter:');
+      if (line.isEmpty) return 'enter';
+      return String.fromCharCode(line.runes.first);
+    }
+    if (prompt != null) io.stderr.writeln(prompt);
+    return _withKeys((pending, isDone) async {
+      for (;;) {
+        final event = await _nextEvent(pending, isDone);
+        if (event == null) throw const io.StdinException('stdin is closed');
+        switch (event) {
+          case term.TermKey(:final name):
+            return name;
+          case term.TermType(text: final text, paste: false):
+            if (text.isNotEmpty) {
+              return String.fromCharCode(text.runes.first);
+            }
+          default:
+            break; // paste, clicks, focus: not a keypress, keep waiting.
+        }
+      }
+    });
+  }
+
+  /// Clear the terminal screen. Everything [Console] draws goes to stderr,
+  /// so this clears exactly that. No-op without a terminal.
+  static void clear() {
+    try {
+      if (io.stderr.hasTerminal) io.stderr.write('\x1b[2J\x1b[H');
+    } catch (_) {}
   }
 
   /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
   /// or `✗ label` and a rethrow. The live line always fits the width.
-  /// While a state-driven [Tui.run] is active, draws in its status row
-  /// instead (several at once).
   static Future<T> spin<T>(String label, Future<T> Function() work) {
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) {
-      final id = bridge.spinStarted(label);
-      Future<T> fut;
-      try {
-        fut = work();
-      } catch (e, st) {
-        bridge.spinEnded(id, false);
-        return Future.error(e, st);
-      }
-      return fut.then((v) {
-        bridge.spinEnded(id, true);
-        return v;
-      }, onError: (Object e, StackTrace st) {
-        bridge.spinEnded(id, false);
-        throw e;
-      });
-    }
     final _Live live = _Spinner(label);
     try {
       _claim(live);
@@ -221,15 +338,8 @@ abstract final class Console {
   }
 
   /// A progress bar over [total] items or bytes (`null` or 0 means unknown).
-  /// As a [Pipe] it counts bytes; with [tick] it counts items. While a
-  /// state-driven [Tui.run] is active, draws in its status row instead
-  /// (several at once).
+  /// As a [Pipe] it counts bytes; with [tick] it counts items.
   static Bar bar(int? total, {String? label}) {
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) {
-      return Bar._bridged(bridge, bridge.barStarted(total, label), total,
-          label: label);
-    }
     final bar = Bar._(total, label: label);
     // Claim before the first draw, so a second bar throws before it can
     // draw over the live line.
@@ -252,23 +362,26 @@ abstract final class Console {
   ) {
     final subs = <StreamSubscription<io.ProcessSignal>>[];
     void trap(io.ProcessSignal signal, int code) {
+      if (io.Platform.isWindows && signal != io.ProcessSignal.sigint) return;
       try {
         subs.add(signal.watch().listen((_) {
           term.restoreModes(modes);
           io.exit(code);
-        }));
+        }, onError: (_) {}));
       } catch (_) {}
     }
 
     trap(io.ProcessSignal.sigint, 130);
     trap(io.ProcessSignal.sigterm, 143);
-    try {
-      // SIGHUP may not exist on all platforms.
-      subs.add(io.ProcessSignal.sighup.watch().listen((_) {
-        term.restoreModes(modes);
-        io.exit(129);
-      }));
-    } catch (_) {}
+    if (!io.Platform.isWindows) {
+      try {
+        // SIGHUP may not exist on all platforms.
+        subs.add(io.ProcessSignal.sighup.watch().listen((_) {
+          term.restoreModes(modes);
+          io.exit(129);
+        }, onError: (_) {}));
+      } catch (_) {}
+    }
     return subs;
   }
 
@@ -383,33 +496,33 @@ abstract final class Console {
   static Future<String> _chooseInteractive(
     String question,
     List<String> choices,
+    int initial,
+    String? escapeValue,
+    Map<String, String>? shortcuts,
   ) async {
-    var selected = 0;
-    final modes = term.captureModes();
-    term.setRawModes();
-    final sigs = _trapSignals(modes);
-    StreamSubscription<List<int>>? sub;
-    final pending = <int>[];
-    var painted = 0;
-    var stdinDone = false;
-    try {
-      io.stderr.writeln(question);
-      sub = term.sharedStdin().listen(
-        pending.addAll,
-        onError: (_) {},
-        onDone: () => stdinDone = true,
-        cancelOnError: false,
-      );
+    var selected = initial.clamp(0, choices.length - 1);
+    return _withKeys((pending, isDone) async {
+      var painted = 0;
+      io.stderr.writeln(_emph(question));
       for (;;) {
         painted = _paintChoices(choices, selected, painted);
-        final key = await _nextKey(pending, () => stdinDone);
-        if (key == null) {
+        final keyName = await _nextKey(pending, isDone);
+        if (keyName == null) {
           throw const io.StdinException('stdin is closed');
         }
-        switch (key) {
-          case 'up':
+        // Single-key shortcuts return at once, no Enter needed. They win
+        // over movement keys, so consoles without arrows/escape stay fully
+        // operable from letters alone.
+        final shortcut =
+            shortcuts?[keyName] ?? shortcuts?[keyName.toLowerCase()];
+        if (shortcut != null) {
+          io.stderr.writeln();
+          return shortcut;
+        }
+        switch (keyName) {
+          case 'up' || 'w' || 'W' || 'k' || 'K':
             selected = (selected - 1 + choices.length) % choices.length;
-          case 'down':
+          case 'down' || 's' || 'S' || 'j' || 'J':
             selected = (selected + 1) % choices.length;
           case 'wheelup':
             selected = (selected - 1 + choices.length) % choices.length;
@@ -419,14 +532,49 @@ abstract final class Console {
             selected = 0;
           case 'end':
             selected = choices.length - 1;
-          case 'enter' || 'escape':
+          case 'pageup':
+            selected = (selected - 10).clamp(0, choices.length - 1);
+          case 'pagedown':
+            selected = (selected + 10).clamp(0, choices.length - 1);
+          case 'enter':
             io.stderr.writeln();
             return choices[selected];
+          case 'escape':
+            io.stderr.writeln();
+            return escapeValue ?? choices[selected];
           default:
-            // Typed text and anything else: ignore while choosing.
+            // `1`-`9` jump straight to that row (still needs Enter);
+            // anything else is ignored while choosing.
+            final n = int.tryParse(keyName);
+            if (n != null && n >= 1 && n <= 9 && n <= choices.length) {
+              selected = n - 1;
+            }
             break;
         }
       }
+    });
+  }
+
+  /// Run [body] with stdin in raw mode (no echo, no line buffering) and the
+  /// Ctrl-C traps armed; restores the terminal modes afterwards. Shared by
+  /// the interactive [choose] menu and [key].
+  static Future<T> _withKeys<T>(
+    Future<T> Function(List<int> pending, bool Function() isDone) body,
+  ) async {
+    final modes = term.captureModes();
+    term.setRawModes();
+    final sigs = _trapSignals(modes);
+    StreamSubscription<List<int>>? sub;
+    final pending = <int>[];
+    var stdinDone = false;
+    try {
+      sub = term.sharedStdin().listen(
+        pending.addAll,
+        onError: (_) {},
+        onDone: () => stdinDone = true,
+        cancelOnError: false,
+      );
+      return await body(pending, () => stdinDone);
     } finally {
       try {
         await sub?.cancel();
@@ -440,7 +588,8 @@ abstract final class Console {
     }
   }
 
-  /// Paint the scrolling window around [selected]; each choice cut to fit.
+  /// Paint the scrolling window around [selected] plus a dim key-hint row;
+  /// each choice cut to fit. The selection draws in the [Bar] accent.
   /// Returns the rows painted (for the next repaint's move-up).
   static int _paintChoices(
     List<String> choices,
@@ -448,7 +597,7 @@ abstract final class Console {
     int painted,
   ) {
     final cols = _columns();
-    final rows = _lines() - 2;
+    final rows = _lines() - 3; // question, hint, and a spare row
     final visible = rows.clamp(1, choices.length);
     var start = selected - visible ~/ 2;
     if (start < 0) start = 0;
@@ -457,22 +606,75 @@ abstract final class Console {
     final width = cols - 2 > 0 ? cols - 2 : 0;
     var n = 0;
     for (var r = 0; r < visible; r++) {
+      final current = start + r == selected;
       final choice = term.truncateWidth(choices[start + r], width);
-      io.stderr.writeln(
-        '${start + r == selected ? '❯' : ' '}${choice.isEmpty ? '' : ' $choice'}\x1b[K',
-      );
+      final row =
+          '${current ? '❯' : ' '}${choice.isEmpty ? '' : ' $choice'}';
+      if (_styled && current) {
+        io.stderr.writeln('$_accent$row$_reset\x1b[K');
+      } else {
+        io.stderr.writeln('$row\x1b[K');
+      }
       n++;
     }
-    return n;
+    const hint = 'w/s or ↑↓ move · 1-9 jump · enter select · esc accept';
+    final hintRow = term.truncateWidth(hint, cols > 0 ? cols : hint.length);
+    if (_styled) {
+      io.stderr.writeln('$_dim$hintRow$_reset\x1b[K');
+    } else {
+      io.stderr.writeln('$hintRow\x1b[K');
+    }
+    return n + 1;
   }
 
-  /// The next decoded key name, waiting for bytes as needed. A lone ESC
-  /// that gains no sequel within 150 ms counts as `escape` (it is not held
-  /// forever, and it never swallows the next key). `null` when stdin closed
-  /// with nothing left to decode.
+  /// Emphasize [text] (bold) when styling is on.
+  static String _emph(String text) => _styled ? '$_bold$text$_reset' : text;
+
+  /// Selection accent: Claude Code orange (#D97757, xterm-256 index 173),
+  /// the same accent [Bar] draws its live line in.
+  static const _accent = '\x1b[38;5;173m';
+  static const _bold = '\x1b[1m';
+  static const _dim = '\x1b[2m';
+  static const _reset = '\x1b[0m';
+
+  /// The next decoded key name, waiting for bytes as needed: special keys
+  /// by name (`'up'`, `'enter'` …), single typed characters as themselves
+  /// (`'w'`). Longer typed runs, pastes and mouse/focus reports are not
+  /// keys and are skipped. A lone ESC that gains no sequel within 150 ms
+  /// counts as `escape` (it is not held forever, and it never swallows the
+  /// next key). `null` when stdin closed with nothing left to decode.
   static Future<String?> _nextKey(
     List<int> pending,
     bool Function() stdinDone,
+  ) =>
+      _pumpKeys<String>(pending, stdinDone, (event) => switch (event) {
+            term.TermKey(:final name) => name,
+            term.TermType(text: final text, paste: false)
+                when text.runes.length == 1 =>
+              text,
+            _ => null,
+          });
+
+  /// The next decoded input event that counts as a keypress (a [term.TermKey]
+  /// or non-paste [term.TermType]); mouse, focus and paste events are
+  /// skipped. Same waiting semantics as [_nextKey].
+  static Future<term.TermEvent?> _nextEvent(
+    List<int> pending,
+    bool Function() stdinDone,
+  ) =>
+      _pumpKeys<term.TermEvent>(pending, stdinDone, (event) => switch (event) {
+            term.TermKey() || term.TermType(paste: false) => event,
+            _ => null,
+          });
+
+  /// Pull decoded events off [pending], returning the first one [pick]
+  /// accepts. Bytes arrive in chunks, so a trailing incomplete sequence (or
+  /// a lone ESC) is held briefly for its sequel instead of being emitted
+  /// as mojibake. `null` when stdin closed with nothing left to decode.
+  static Future<T?> _pumpKeys<T>(
+    List<int> pending,
+    bool Function() stdinDone,
+    T? Function(term.TermEvent event) pick,
   ) async {
     Timer? quiet;
     for (;;) {
@@ -484,32 +686,20 @@ abstract final class Console {
           ..clear()
           ..addAll(rest);
         for (final event in parsed.events) {
-          switch (event) {
-            case term.TermKey(:final name):
-              quiet?.cancel();
-              return name;
-            case term.TermType():
-              // Typed or pasted text: ignore while choosing.
-              break;
-            case term.TermClick():
-              // Clicks are for the TUI; ignore while choosing.
-              break;
-            case term.TermHover():
-              // Hover motion is for the TUI; ignore while choosing.
-              break;
-            case term.TermFocus():
-              // Focus reports are for the TUI; ignore while choosing.
-              break;
+          final hit = pick(event);
+          if (hit != null) {
+            quiet?.cancel();
+            return hit;
           }
         }
         // Incomplete trailing sequence (or a lone ESC): wait briefly; a
         // real lone Escape resolves on the quiet timer.
         if (pending.isNotEmpty && pending[0] == 0x1b) {
           quiet?.cancel();
-          final done = Completer<String?>();
+          final done = Completer<void>();
           quiet = Timer(const Duration(milliseconds: 150), () {
             pending.clear();
-            if (!done.isCompleted) done.complete('escape');
+            if (!done.isCompleted) done.complete();
           });
           // Either more bytes arrive (outer loop re-pumps first), the
           // timer fires, or stdin closes mid-sequence.
@@ -527,7 +717,11 @@ abstract final class Console {
           }
           if (done.isCompleted) {
             quiet = null;
-            return await done.future;
+            // A lone Escape: surface it as a key event for the caller to
+            // take (or skip, when its picker wants nothing of it).
+            final esc = pick(term.TermKey('escape'));
+            if (esc != null) return esc;
+            continue;
           }
           final q = quiet;
           quiet = null;
@@ -567,16 +761,15 @@ String _fmtSize(num bytes) {
 /// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
 /// count and a rate with no bar, so `Console.bar(res.size())` just works.
 final class Bar extends _Live implements Pipe, Closeable {
-  Bar._(this._total, {this._label})
-      : _bridge = null,
-        _bridgeId = null;
+  Bar._(this._total, {this._label});
 
-  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
+  /// Primary accent for the live line: Claude Code orange (#D97757,
+  /// xterm-256 index 173). Shared with the TUI selection accent.
+  static const _accent = '\x1b[38;5;173m';
+  static const _reset = '\x1b[0m';
 
   final int? _total;
   final String? _label;
-  final term.TuiBridge? _bridge;
-  final Object? _bridgeId;
   var _done = 0;
   var _closed = false;
   var _piped = false;
@@ -587,16 +780,6 @@ final class Bar extends _Live implements Pipe, Closeable {
 
   /// Add [count] (1 by default), stopping at the total. Returns this bar.
   Bar tick([int count = 1]) {
-    final bridge = _bridge;
-    final id = _bridgeId;
-    if (bridge != null && id != null) {
-      if (_closed) return this;
-      _done += count;
-      final total = _total;
-      if (total != null && total > 0 && _done > total) _done = total;
-      bridge.barTick(id, count);
-      return this;
-    }
     if (_closed) return this;
     _done += count;
     final total = _total;
@@ -608,15 +791,6 @@ final class Bar extends _Live implements Pipe, Closeable {
   /// Print the final line. Call it in `finally`.
   @override
   Future<void> close() async {
-    final bridge = _bridge;
-    final id = _bridgeId;
-    if (bridge != null && id != null) {
-      if (_closed) return;
-      _closed = true;
-      bridge.barEnded(id, true);
-      _free();
-      return;
-    }
     if (_closed) return;
     _closed = true;
     try {
@@ -661,9 +835,6 @@ final class Bar extends _Live implements Pipe, Closeable {
     // stream, which starts this generator and tears it down, running the
     // finally below.
     _piped = true;
-    final bridge = _bridge;
-    final id = _bridgeId;
-    if (bridge != null && id != null) bridge.barMode(id, true);
     var ok = false;
     try {
       await for (final chunk in input) {
@@ -683,15 +854,6 @@ final class Bar extends _Live implements Pipe, Closeable {
   }
 
   Future<void> _fail() async {
-    final bridge = _bridge;
-    final id = _bridgeId;
-    if (bridge != null && id != null) {
-      if (_closed) return;
-      _closed = true;
-      bridge.barEnded(id, false);
-      Console._release(this);
-      return;
-    }
     if (_closed) return;
     _closed = true;
     try {
@@ -717,7 +879,11 @@ final class Bar extends _Live implements Pipe, Closeable {
     _cols = Console._columns();
     final label = _label == null ? '' : '$_label ';
     final line = _piped ? _byteLine(_cols) : _itemLine(_cols, label);
-    io.stderr.write('\r$line\x1b[K');
+    // The live line draws in the primary accent (Claude orange, xterm 173).
+    // Wrapping happens here at the write point so every width fit above
+    // keeps measuring the plain line. Only reached when animated, which
+    // implies styling is on; piped output stays plain.
+    io.stderr.write('\r$_accent$line$_reset\x1b[K');
   }
 
   StreamSubscription<io.ProcessSignal>? _watchWinch() {
