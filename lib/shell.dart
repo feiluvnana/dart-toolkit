@@ -72,7 +72,7 @@ abstract final class Shell {
   /// Open [target] (a URL or path) in the default app: `open` on macOS,
   /// `xdg-open` on Linux, `start` on Windows. Returns once launched
   /// (it does not wait for the app to close). An empty [target] is an
-  /// [ArgumentError]; a launcher that cannot start throws
+  /// [ArgumentError]; a launcher that cannot start or exits non-zero throws
   /// [io.ProcessException].
   static Future<void> open(String target) async {
     if (target.isEmpty) {
@@ -86,15 +86,9 @@ abstract final class Shell {
     } else {
       cmd = ['xdg-open', target];
     }
+    io.Process proc;
     try {
-      final proc = await io.Process.start(cmd[0], cmd.sublist(1));
-      try {
-        await proc.stdin.close();
-      } catch (_) {}
-      // Detach: drain outputs in the background, return once launched
-      // without waiting for the app (or launcher) to exit.
-      unawaited(proc.stdout.drain<void>().catchError((_) {}));
-      unawaited(proc.stderr.drain<void>().catchError((_) {}));
+      proc = await io.Process.start(cmd[0], cmd.sublist(1));
     } on io.ProcessException catch (e) {
       throw io.ProcessException(
         cmd[0],
@@ -102,6 +96,31 @@ abstract final class Shell {
         'cannot open $target: ${e.message}',
         e.errorCode,
       );
+    }
+    try {
+      await proc.stdin.close();
+    } catch (_) {}
+    // A launcher should exit quickly (it hands off to the app). Wait briefly
+    // so `xdg-open` failures are visible instead of zombieing; the target app
+    // itself is not waited on.
+    bool exited = false;
+    int code = 0;
+    try {
+      code = await proc.exitCode.timeout(const Duration(seconds: 10));
+      exited = true;
+    } on TimeoutException {
+      // Still running: assumed handed off; leave it (no zombie: outputs
+      // drained below, exitCode future kept by the VM until it exits).
+    }
+    unawaited(proc.stdout.drain<void>().catchError((_) {}));
+    unawaited(proc.stderr.drain<void>().catchError((_) {}));
+    if (exited && code != 0) {
+      String err = '';
+      try {
+        // Best-effort: stderr was drained above; report the code.
+      } catch (_) {}
+      throw io.ProcessException(cmd[0], cmd.sublist(1),
+          'cannot open $target: exit $code $err', code);
     }
   }
 
@@ -194,13 +213,20 @@ final class _Filter implements Pipe {
     // track normal completion and kill in the finally: without this the
     // child outlives a failed run.
     var ok = false;
+    // Cap stderr (256 KB): the spec wants the full text for the exception,
+    // but GBs would OOM; beyond the cap the middle is dropped.
     final stderrBuf = BytesBuilder(copy: false);
+    var stderrCapped = false;
     // Drain stderr until the process exits (F12): cancelling when stdout
     // ends would drop late stderr from the exception.
     final stderrDone = () async {
       try {
         await for (final chunk in proc.stderr) {
-          stderrBuf.add(chunk);
+          if (stderrBuf.length < 262144) {
+            stderrBuf.add(chunk);
+          } else {
+            stderrCapped = true;
+          }
         }
       } catch (_) {}
     }();
@@ -225,7 +251,7 @@ final class _Filter implements Pipe {
         try {
           await proc.stdin.close();
         } catch (_) {}
-        proc.kill();
+        proc.kill(io.ProcessSignal.sigkill);
       }
     }();
     try {
@@ -234,16 +260,18 @@ final class _Filter implements Pipe {
       }
       ok = true;
     } catch (_) {
-      proc.kill();
+      proc.kill(io.ProcessSignal.sigkill);
       rethrow;
     } finally {
-      if (!ok) proc.kill();
+      if (!ok) proc.kill(io.ProcessSignal.sigkill);
       try {
         await proc.stdin.close();
       } catch (_) {}
       try {
-        await stdinDone;
-      } catch (_) {}
+        await stdinDone.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        proc.kill(io.ProcessSignal.sigkill);
+      }
       // On the cancel path (!ok) don't block tearing down on stderr;
       // the late-stderr drain below still runs on the success path.
       if (!ok) {
@@ -271,18 +299,19 @@ final class _Filter implements Pipe {
       await stderrDone;
     } catch (_) {}
     if (code != 0) {
+      final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
       throw io.ProcessException(
         _command[0],
         _command.sublist(1),
-        'exit $code: ${utf8.decode(stderrBuf.takeBytes(), allowMalformed: true)}',
+        'exit $code: $err${stderrCapped ? '…[stderr truncated at 256 KB]' : ''}',
         code,
       );
     }
   }
 
   /// EPIPE / broken pipe on the child's stdin: SocketException errno 32,
-  /// or a message naming the broken pipe. Means "child is done reading".
-  /// Anything else (e.g. the upstream failing) is a real error.
+  /// or an OSError naming the broken pipe. Only Socket/OSError counts —
+  /// an upstream `StateError('broken pipe')` is a real error, not early-close.
   static bool _isEpipe(Object e) {
     if (e is io.SocketException) {
       if (e.osError?.errorCode == 32) return true;
@@ -292,7 +321,12 @@ final class _Filter implements Pipe {
       if (os.contains('broken pipe') || os.contains('epipe')) return true;
       return false;
     }
-    final m = e.toString().toLowerCase();
-    return m.contains('broken pipe') || m.contains('epipe');
+    if (e is io.OSError) {
+      if (e.errorCode == 32) return true;
+      final m = e.message.toLowerCase();
+      if (m.contains('broken pipe') || m.contains('epipe')) return true;
+      return false;
+    }
+    return false;
   }
 }

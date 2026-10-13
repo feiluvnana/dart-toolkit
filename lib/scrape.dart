@@ -282,6 +282,27 @@ final class _Crawl<T> {
     if (_cancelled || _failure != null) return;
     if (!_seen.add(url)) return;
     _queue.add(_Task(url, handler));
+    _notify();
+  }
+
+  Completer<void>? _signal;
+
+  void _notify() {
+    final s = _signal;
+    _signal = null;
+    try {
+      s?.complete();
+    } catch (_) {}
+  }
+
+  Future<void> _waitWork() async {
+    final s = _signal ??= Completer<void>();
+    // Fallback timeout guards a missed notify; normally enqueue/finish wakes us.
+    try {
+      await s.future.timeout(const Duration(milliseconds: 500));
+    } on TimeoutException {
+      // Re-check conditions on timeout.
+    }
   }
 
   void emit(T item) {
@@ -296,7 +317,7 @@ final class _Crawl<T> {
         task = _take();
       } else {
         if (_active == 0) break;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await _waitWork();
         continue;
       }
       _active++;
@@ -313,6 +334,7 @@ final class _Crawl<T> {
         }
       } finally {
         _active--;
+        _notify();
       }
     }
     _drain();
@@ -322,17 +344,12 @@ final class _Crawl<T> {
 
   void _drain() {
     if (_drained || _active != 0 || _hasWork) return;
-    // Wait for sibling workers sharing the queue.
-    Future<void>.delayed(const Duration(milliseconds: 50)).then((_) {
-      if (_active != 0 || _hasWork) return;
-      if (_drained) return;
-      _drained = true;
-      final failure = _failure;
-      if (failure != null) {
-        out.addError(failure, _failureStack);
-      }
-      out.close();
-    });
+    _drained = true;
+    final failure = _failure;
+    if (failure != null) {
+      out.addError(failure, _failureStack);
+    }
+    out.close();
   }
 
   void _fail(String? url, Object e, StackTrace st) {

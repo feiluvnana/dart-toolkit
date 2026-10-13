@@ -213,6 +213,39 @@ final class IncrementalDecoder {
   }
 
   void _utf8(List<int> chunk, bool last, StringBuffer out) {
+    // Avoid per-chunk copies when there's no split tail (the common case).
+    if (_tail.isEmpty) {
+      var end = chunk.length;
+      if (!last && chunk.isNotEmpty) {
+        // Withhold a possibly-incomplete trailing sequence.
+        var k = chunk.length;
+        var cont = 0;
+        while (k > 0 && cont < 4 && (chunk[k - 1] & 0xC0) == 0x80) {
+          k--;
+          cont++;
+        }
+        if (cont == 0) {
+          if (k > 0) {
+            final lead = chunk[k - 1];
+            if (lead >= 0xC2 && lead <= 0xF4) end = k - 1;
+          }
+        } else if (k > 0) {
+          final lead = chunk[k - 1];
+          var need = -1;
+          if (lead >= 0xC2 && lead <= 0xDF) {
+            need = 1;
+          } else if (lead >= 0xE0 && lead <= 0xEF) {
+            need = 2;
+          } else if (lead >= 0xF0 && lead <= 0xF4) {
+            need = 3;
+          }
+          if (need >= 0 && cont < need) end = k - 1;
+        }
+      }
+      out.write(utf8.decode(chunk.sublist(0, end), allowMalformed: true));
+      _tail = end == chunk.length ? const [] : chunk.sublist(end);
+      return;
+    }
     final data = [..._tail, ...chunk];
     var end = data.length;
     if (!last) {
@@ -247,7 +280,12 @@ final class IncrementalDecoder {
   }
 
   void _utf16(List<int> chunk, bool little, bool last, StringBuffer out) {
-    final data = <int>[if (_odd >= 0) _odd, ...chunk];
+    final List<int> data;
+    if (_odd < 0) {
+      data = chunk;
+    } else {
+      data = <int>[_odd, ...chunk];
+    }
     _odd = -1;
     var stop = data.length;
     if (stop.isOdd) {
@@ -437,11 +475,9 @@ final class IncrementalDecoder {
 
   void _gb18030(List<int> chunk, StringBuffer out) {
     final table = _gb18030Table;
-    // A mutable copy: errors restore consumed bytes ahead of the cursor.
-    final queue = List<int>.of(chunk);
     var i = 0;
-    while (i < queue.length) {
-      final byte = queue[i++];
+    while (i < chunk.length) {
+      final byte = chunk[i++];
       if (_c != 0) {
         if (byte >= 0x30 && byte <= 0x39) {
           final pointer =
@@ -452,12 +488,15 @@ final class IncrementalDecoder {
           out.writeCharCode(codePoint ?? 0xFFFD);
           continue;
         }
-        // The first byte is dropped; second, third and this byte re-run.
-        queue.insert(i - 1, _c);
-        queue.insert(i - 1, _b);
-        i--;
+        // Drop _a; re-run _b, _c and this byte without shifting the tail:
+        // _b is ASCII so it emits itself, _c becomes the new lead, and this
+        // byte is reread (i--).
+        final b = _b, c = _c;
         _a = _b = _c = 0;
         out.writeCharCode(0xFFFD);
+        out.writeCharCode(b);
+        _a = c;
+        i--; // reread byte with the new lead
         continue;
       }
       if (_b != 0) {
@@ -465,10 +504,11 @@ final class IncrementalDecoder {
           _c = byte;
           continue;
         }
-        queue.insert(i - 1, _b);
-        i--;
+        final b = _b;
         _a = _b = 0;
         out.writeCharCode(0xFFFD);
+        out.writeCharCode(b);
+        i--; // reread byte fresh
         continue;
       }
       if (_a != 0) {
