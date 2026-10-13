@@ -2,8 +2,9 @@
 
 Act as a **Senior Software Architect and Library Maintainer**. Analyze the
 library codebase and generate a comprehensive `PROPOSAL.md`: take the good
-ideas of the current API and make them better — keep what works, fix what
-hurts, and propose a new syntax/API wherever you have anything better.
+ideas of the current API and make them better — propose a new syntax/API
+wherever you have anything better. Backward compatibility is not a concern:
+replacing with good syntax is always OK, even if it breaks existing call sites.
 
 ## Required structure for `PROPOSAL.md`
 
@@ -35,9 +36,9 @@ hurts, and propose a new syntax/API wherever you have anything better.
 - Examine the codebase first: entry points, the import/export graph, the
   public surface of each module, error handling, resource lifetimes, and the
   real example scripts.
-- Evolve, don't redesign: keep the good ideas of the current API; proposals
-  stay in the codebase's own style and are additive by default, so existing
-  call sites keep working unless a break is justified.
+- Prefer the best syntax over compatibility: keep the good ideas of the
+  current API, but replace freely wherever the new design is cleaner — no
+  need to keep old call sites compiling, no forwarders, no deprecation path.
 - Side-by-side or sequential examples must be syntactically accurate and
   idiomatic.
 - Be explicit about performance implications (e.g. `O(n)` vs `O(1)`, reduced
