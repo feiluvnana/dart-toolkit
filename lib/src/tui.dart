@@ -11,36 +11,47 @@ import 'terminal.dart' as term;
 
 /// Entry point: run an immediate-mode app.
 abstract final class Tui {
+  static bool _active = false;
+
   /// Enter raw mode, the alternate screen and mouse reporting, run [app],
   /// and restore the terminal when it returns or throws, on Ctrl-C (which
   /// is just `pressed('ctrl+c')` while running), on SIGTERM/SIGHUP, and on
   /// an uncaught error in work the app started without awaiting (that error
   /// is rethrown from [run]). Throws [io.StdoutException] when stdout is not
-  /// a terminal. [run] can be called again in the same process.
+  /// a terminal. [run] can be called again in the same process, but not
+  /// concurrently: a second [run] while one is active throws [StateError].
   static Future<void> run(Future<void> Function(Screen screen) app) async {
+    if (_active) {
+      throw StateError('Tui.run is already active');
+    }
     if (!io.stdout.hasTerminal) {
       throw const io.StdoutException('no terminal for the TUI');
     }
+    _active = true;
     final screen = Screen._(io.stdout.write, _terminalSize);
-    await screen._enter();
-    final done = Completer<void>();
-    void fail(Object e, StackTrace st) {
-      if (done.isCompleted) {
-        io.stderr.writeln('Uncaught after Tui.run: $e\n$st');
-      } else {
-        done.completeError(e, st);
-      }
-    }
-
-    runZonedGuarded(() {
-      app(screen).then((_) {
-        if (!done.isCompleted) done.complete();
-      }, onError: fail);
-    }, fail);
     try {
-      await done.future;
+      await screen._enter();
+      final done = Completer<void>();
+      void fail(Object e, StackTrace st) {
+        if (done.isCompleted) {
+          io.stderr.writeln('Uncaught after Tui.run: $e\n$st');
+        } else {
+          done.completeError(e, st);
+        }
+      }
+
+      runZonedGuarded(() {
+        app(screen).then((_) {
+          if (!done.isCompleted) done.complete();
+        }, onError: fail);
+      }, fail);
+      try {
+        await done.future;
+      } finally {
+        await screen._leave();
+      }
     } finally {
-      await screen._leave();
+      _active = false;
     }
   }
 }
@@ -192,9 +203,11 @@ final class Screen {
   Future<void> _leave() async {
     if (!_entered) return;
     _entered = false;
-    for (final sub in _subs) {
-      await sub.cancel();
-    }
+    await Future.wait(_subs.map((sub) async {
+      try {
+        await sub.cancel();
+      } catch (_) {}
+    }));
     _subs.clear();
     _out('\x1b[0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h'
         '\x1b[?1049l');
@@ -221,9 +234,11 @@ final class Screen {
       _heldSince = null;
       return;
     }
-    // An undecodable prefix is held for a split sequence's next bytes. When
-    // nothing arrives for 30 ms, a lone ESC was the Escape key and ESC + one
-    // byte was Alt+key; anything longer that never completes is dropped.
+    // An undecodable prefix is held for a split sequence's next bytes.
+    // A lone ESC resolves after 30 ms; ESC + one byte resolves as Alt+key
+    // after 30 ms — unless it could still complete as CSI (ESC [) or SS3
+    // (ESC O), which are held up to 1000 ms. Anything that never completes
+    // is dropped after 1000 ms.
     final now = _now();
     if (_heldSince == null || _pending.length != _heldLength) {
       _heldSince = now;
@@ -231,15 +246,26 @@ final class Screen {
       return;
     }
     final waited = now - _heldSince!;
+    final maybeCsi = _pending.length >= 2 &&
+        _pending[0] == 0x1b &&
+        (_pending[1] == 0x5b || _pending[1] == 0x4f);
+    if (maybeCsi) {
+      if (waited < 1000) return; // split CSI/SS3: hold for the rest
+      _pending.clear();
+      _heldSince = null;
+      return;
+    }
     if (_pending.length <= 2 && waited >= 30) {
       if (_pending.length == 1 || _pending[1] == 0x1b) {
         _key('escape');
       } else if (_pending[1] < 0x80) {
         _key('alt+${String.fromCharCode(_pending[1])}');
       }
-    } else if (waited < 1000) {
-      return; // keep holding
+      _pending.clear();
+      _heldSince = null;
+      return;
     }
+    if (waited < 1000) return; // keep holding
     _pending.clear();
     _heldSince = null;
   }
@@ -379,12 +405,18 @@ final class Region {
   /// Draw [text] at the cursor and move the cursor down past the lines it
   /// used. `\n` starts the next line, `\t` expands to the next multiple of
   /// 8 columns, ANSI colour codes are dropped, other control characters
-  /// show as `�`, and anything past the edge is clipped. Wide CJK/emoji take
-  /// two cells; combining marks join the previous char. [color] is a
-  /// 256-colour index. Returns this region.
+  /// show as `�`, and anything past the edge is clipped. A trailing `\n`
+  /// moves past the last line without drawing an extra empty row. Wide
+  /// CJK/emoji take two cells; combining marks join the previous char.
+  /// [color] is a 256-colour index. Returns this region.
   Region write(String text, {int? color, bool bold = false}) {
     final style = _styleOf(color, bold: bold);
-    for (final line in text.split('\n')) {
+    final parts = text.split('\n');
+    // A trailing newline terminates the last line; it doesn't add an empty row.
+    final lines = parts.isNotEmpty && parts.last.isEmpty
+        ? parts.sublist(0, parts.length - 1)
+        : parts;
+    for (final line in lines) {
       if (_cursor < _h) _text(_y + _cursor, _x, _x + _w, line, style);
       _cursor++;
     }
@@ -522,14 +554,34 @@ final class Region {
       .replaceAll(RegExp('[\r\n\t]'), ' ')
       .replaceAll(RegExp('[\x00-\x1f\x7f]'), '');
 
-  /// [v] without its last grapheme (base char plus combining marks).
+  /// [v] without its last grapheme cluster (a base char plus combining
+  /// marks, ZWJ sequences included, so no dangling `ZWJ` remains).
   static String _dropLast(String v) {
     final runes = v.runes.toList();
     var end = runes.length;
+    // Drop trailing combining marks to reach the last base.
     while (end > 0 && term.isZeroWidth(runes[end - 1])) {
+      // Keep ZWJ for the join check below; drop other marks.
+      if (runes[end - 1] == 0x200D) break;
       end--;
     }
-    return String.fromCharCodes(runes.sublist(0, math.max(0, end - 1)));
+    if (end <= 0) {
+      // All marks (or empty): drop one rune.
+      return String.fromCharCodes(runes.sublist(0, math.max(0, runes.length - 1)));
+    }
+    // Drop the base rune itself.
+    end--;
+    // If it was ZWJ-joined to the previous cluster, drop the joiner and the
+    // previous cluster's trailing marks + base as well (one press deletes one
+    // joined grapheme, e.g. 👨‍👩 → empty, not 👨‍).
+    while (end > 0 && runes[end - 1] == 0x200D) {
+      end--; // the joiner
+      while (end > 0 && term.isZeroWidth(runes[end - 1]) && runes[end - 1] != 0x200D) {
+        end--;
+      }
+      if (end > 0) end--; // the joined base
+    }
+    return String.fromCharCodes(runes.sublist(0, math.max(0, end)));
   }
 
   /// The longest tail of [v] that fits in [cells].
