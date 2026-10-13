@@ -1,374 +1,334 @@
-// Browser pipelines through a real Chrome: open, navigate, drive, capture.
+// Launching Chromium is slow on a cold cache: allow minutes overall.
+@Timeout(Duration(minutes: 5))
+library;
+
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
-import 'dart:isolate';
+import 'dart:io';
 
 import 'package:dart_toolkit/chrome.dart';
+import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
-import 'package:dart_toolkit/image.dart';
-import 'package:dart_toolkit/native.dart';
-import 'package:dart_toolkit/path.dart';
 import 'package:test/test.dart';
 
-/// The browser executable, or `null` when there is none to drive.
-String? _browserExe() {
-  final env = io.Platform.environment;
-  if (env['DART_TOOLKIT_CHROME'] case final path? when path.isNotEmpty && io.File(path).existsSync()) return path;
-  final candidates = <String>[
-    if (io.Platform.isWindows) ...[
-      '${env['ProgramFiles']}\\Google\\Chrome\\Application\\chrome.exe',
-      '${env['ProgramFiles(x86)']}\\Google\\Chrome\\Application\\chrome.exe',
-      '${env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe',
-      '${env['ProgramFiles']}\\Microsoft\\Edge\\Application\\msedge.exe',
-      '${env['ProgramFiles(x86)']}\\Microsoft\\Edge\\Application\\msedge.exe',
-    ],
-    if (io.Platform.isMacOS) ...['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
-    if (io.Platform.isLinux) ...['/usr/bin/google-chrome', '/usr/bin/chromium'],
-  ];
-  for (final c in candidates) {
-    if (io.File(c).existsSync()) return c;
-  }
-  return null;
-}
-
-/// Throws a skip unless the native libraries and a browser are all here.
-String _requireChrome() {
-  if (!Native.ok) markTestSkipped('native libraries not built: ${Native.reason}');
-  final exe = _browserExe();
-  if (exe == null) markTestSkipped('no Chrome or Edge executable found');
-  return exe!;
-}
-
-/// Runs [_serve] on a helper isolate and answers its port. The browser calls
-/// below block the calling isolate inside FFI, so the fixture server cannot
-/// live on this isolate's event loop (it would never answer while a call is
-/// in flight — a deadlock, not a browser bug).
-Future<(int, Isolate)> _serveIsolated() async {
-  final ready = ReceivePort();
-  final isolate = await Isolate.spawn(_serveEntry, ready.sendPort);
-  final port = await ready.first as int;
-  return (port, isolate);
-}
-
-/// Helper-isolate entry: serves fixtures until killed.
-void _serveEntry(SendPort back) async {
-  final server = await _serve();
-  back.send(server.port);
-  await Completer<void>().future;
-}
-
-/// The fixture pages: an SPA that hydrates late, and a form driven by script.
-Future<io.HttpServer> _serve() async {
-  final server = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, 0);
-  server.listen((request) async {
-    final response = request.response;
-    void html(String body) {
-      response.headers.contentType = io.ContentType.html;
-      response.write('<html><head><title>fixture</title></head><body>$body</body></html>');
-    }
-
-    switch (request.uri.path) {
-      case '/spa':
-        html('''<div id="app"></div><script>
-  setTimeout(() => {
-    document.getElementById('app').innerHTML =
-      '<div class="product-card"><span class="name">Gadget</span></div>' +
-      '<div class="product-card"><span class="name">Widget</span></div>';
-  }, 400);
-</script>''');
-      case '/form':
-        html('''<input id="name"><button id="go">go</button><div id="out"></div>
-<script>
-  document.getElementById('go').addEventListener('click', () => setTimeout(() => {
-    document.getElementById('out').innerHTML =
-      '<p class="greeting">hello ' + document.getElementById('name').value + '</p>';
-  }, 100));
-</script>''');
-      default:
-        response.statusCode = 404;
-        response.write('no such fixture');
-    }
-    await response.close();
-  });
-  return server;
-}
-
-/// Live browser pids right now (tasklist on Windows, pgrep elsewhere).
-Future<Set<int>> _chromePids() async {
-  if (io.Platform.isWindows) {
-    final r = await io.Process.run('tasklist', ['/FO', 'CSV', '/NH']);
-    final pids = <int>{};
-    for (final line in '${r.stdout}'.split('\n')) {
-      final cells = line.split('","');
-      if (cells.length < 2) continue;
-      final image = cells[0].replaceAll('"', '').toLowerCase();
-      if (image != 'chrome.exe' && image != 'msedge.exe') continue;
-      final pid = int.tryParse(cells[1].replaceAll('"', '').trim());
-      if (pid != null && pid > 0) pids.add(pid);
-    }
-    return pids;
-  }
-  final r = await io.Process.run('pgrep', ['-f', 'chrome|chromium|msedge']);
-  return '${r.stdout}'.split('\n').map(int.tryParse).whereType<int>().toSet();
-}
-
-/// Temp profiles the engine made (`tk_chrome_profile_*` under the temp dir).
-Future<Set<String>> _tempProfiles() async {
-  final root = io.Directory.systemTemp;
-  final out = <String>{};
-  await for (final e in root.list()) {
-    if (e is io.Directory && e.path.split(io.Platform.pathSeparator).last.startsWith('tk_chrome_profile_')) {
-      out.add(e.path);
-    }
-  }
-  return out;
-}
-
 void main() {
-  group('browser pipeline', () {
-    late int port;
-    late Isolate serverIsolate;
-    late String base;
-    late String exe;
+  late Browser browser;
+  late HttpServer server;
+  late String base;
+  final hits = <String>[];
 
-    setUpAll(() async {
-      exe = _requireChrome();
-      final served = await _serveIsolated();
-      port = served.$1;
-      serverIsolate = served.$2;
-      base = 'http://127.0.0.1:$port';
-    });
-
-    tearDownAll(() async {
-      serverIsolate.kill();
-    });
-
-    test('open → wait → html() carries hydrated markup', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        expect(await chrome.alive(), isFalse);
-        final page = await chrome.open('$base/spa');
-        expect(await chrome.alive(), isTrue);
-        await page.wait('.product-card');
-        final doc = await page.html();
-        expect(doc.text, contains('Gadget'));
-        expect(doc.all('.product-card'), hasLength(2));
-        expect(doc.url, '$base/spa');
-        expect(await page.text(), startsWith('<html'));
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('type + click drive the form', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('$base/form');
-        await page.type('#name', 'ada');
-        await page.click('#go');
-        await page.wait('.greeting');
-        expect((await page.html()).text, contains('hello ada'));
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('screenshot() pipes to a File Image decodes', () async {
-      final tmp = await io.Directory.systemTemp.createTemp('tk_phased_shot_');
-      try {
-        final chrome = Chrome(executable: exe);
-        try {
-          final page = await chrome.open('$base/spa');
-          await page.wait('.product-card');
-          final png = await page.screenshot();
-          expect(png.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10]);
-          final path = '${tmp.path}/shot.png';
-          await page.screenshot().pipe(File(path));
-          final back = Image.decode(await io.File(path).readAsBytes());
-          expect(back.w, greaterThan(0));
-          expect(back.h, greaterThan(0));
-          await page.close();
-        } finally {
-          await chrome.close();
-        }
-      } finally {
-        await tmp.delete(recursive: true);
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('pdf() starts with %PDF', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('$base/spa');
-        final pdf = await page.pdf();
-        expect(utf8.decode(pdf.sublist(0, 5)), '%PDF-');
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('an attached pages() does not close the owner tabs on exit', () async {
-      final owner = Chrome(executable: exe);
-      try {
-        final keep = <Page>[
-          await owner.open('$base/spa'),
-          await owner.open('$base/spa'),
-          await owner.open('$base/spa'),
-        ];
-        final endpoint = (await owner.pages()).first.endpoint;
-        final port = Uri.parse(endpoint).port;
-        final before = (await owner.pages()).length;
-        expect(before, greaterThanOrEqualTo(3));
-        final tmp = await io.Directory.systemTemp.createTemp('tk_attach_');
-        try {
-          io.File('${tmp.path}/second.dart').writeAsStringSync(r'''
-import 'package:dart_toolkit/chrome.dart';
-Future<void> main(List<String> args) async {
-  final chrome = Chrome(port: int.parse(args[0]));
-  final pages = await chrome.pages();
-  print('second script saw ${pages.length} pages');
-  // Nudge the GC while alive, then exit without closing anything.
-  var sink = 0;
-  for (var i = 0; i < 500000; i++) {
-    sink += '$i'.length;
-  }
-  await Future<void>.delayed(const Duration(milliseconds: 500));
-  if (sink == -1) print('unreachable');
-}
-''');
-          final res = await io.Process.run(io.Platform.executable, [
-            '--packages=${io.Directory.current.path}/.dart_tool/package_config.json',
-            '${tmp.path}/second.dart',
-            '$port',
-          ]);
-          expect(res.exitCode, 0, reason: '${res.stdout}${res.stderr}');
-        } finally {
-          await tmp.delete(recursive: true);
-        }
-        expect((await owner.pages()).length, before);
-        expect(keep.length, 3);
-      } finally {
-        await owner.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('automation marks stay hidden: navigator.webdriver is not true', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
-        expect(await page.eval('navigator.webdriver'), isNot(true));
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('headless launch reports a Chrome user agent without HeadlessChrome', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
-        final ua = (await page.eval('navigator.userAgent')).toString();
-        expect(ua, contains('Chrome/'));
-        expect(ua, isNot(contains('HeadlessChrome')));
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
-
-    test('a failing eval reports the thrown description, not raw exceptionDetails', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('data:text/html,<title>x</title><p>hi</p>');
-        await expectLater(
-          page.eval('noSuchVariable_xyz'),
-          throwsA(
-            predicate(
-              (e) => e.toString().contains('ReferenceError:') && !e.toString().contains('exceptionDetails'),
-              'an error naming ReferenceError: without exceptionDetails',
-            ),
+  setUpAll(() async {
+    browser = await Chrome.launch();
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    base = 'http://${server.address.host}:${server.port}';
+    server.listen((request) async {
+      hits.add('${request.method} ${request.uri.path}');
+      final path = request.uri.path;
+      if (path == '/echo-header') {
+        request.response.write(request.headers.value('x-test') ?? 'none');
+      } else if (path == '/imgpage') {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write('<img src="/img.png">');
+      } else if (path == '/img.png') {
+        request.response.headers.contentType = ContentType('image', 'png');
+        request.response.add(
+          base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
           ),
         );
-        await page.close();
-      } finally {
-        await chrome.close();
+      } else if (path == '/file') {
+        request.response.headers.contentType = ContentType.binary;
+        request.response.headers.set('content-disposition', 'attachment; filename="hello.txt"');
+        request.response.write('download-me');
+      } else if (path == '/cookie') {
+        request.response.headers.set('set-cookie', 'tok=abc; Path=/');
+        request.response.write('<title>C</title>');
+      } else {
+        request.response
+          ..statusCode = HttpStatus.notFound
+          ..write('nope');
       }
-    }, timeout: const Timeout(Duration(seconds: 120)));
+      await request.response.close();
+    });
+  });
 
-    test('a failed launch leaves no temp profile behind', () async {
-      final before = await _tempProfiles();
-      final chrome = Chrome(executable: '/nonexistent-chrome-xyz');
-      await expectLater(chrome.open('$base/spa'), throwsA(isA<NativeException>()));
-      final after = await _tempProfiles()
-        ..removeAll(before);
-      expect(after, isEmpty, reason: 'temp profiles left behind: $after');
-    }, timeout: const Timeout(Duration(seconds: 120)));
+  tearDownAll(() async {
+    await browser.close();
+    await browser.close(); // idempotent
+    await server.close(force: true);
+  });
 
-    test('the event loop stays free during navigate: a 5 ms timer keeps ticking', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('$base/spa');
-        var last = DateTime.now();
-        var worst = Duration.zero;
-        final tick = Timer.periodic(const Duration(milliseconds: 5), (_) {
-          final now = DateTime.now();
-          final gap = now.difference(last);
-          last = now;
-          if (gap > worst) worst = gap;
-        });
-        try {
-          await page.navigate('$base/form');
-          await page.wait('#go');
-        } finally {
-          tick.cancel();
-        }
-        expect(worst, lessThan(const Duration(milliseconds: 50)), reason: 'worst timer gap was $worst');
-        await page.close();
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
+  setUp(() => hits.clear());
 
-    test('closing a page fails its in-flight calls with StateError(closed)', () async {
-      final chrome = Chrome(executable: exe);
-      try {
-        final page = await chrome.open('$base/spa');
-        final waiting = page.wait('#never-appears', timeout: const Duration(seconds: 30));
-        final check = expectLater(waiting, throwsA(isA<StateError>()));
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        await page.close();
-        await check;
-        await expectLater(page.navigate('$base/spa'), throwsA(isA<StateError>()));
-      } finally {
-        await chrome.close();
-      }
-    }, timeout: const Timeout(Duration(seconds: 120)));
+  String dataUrl(String html) => Uri.dataFromString(html, mimeType: 'text/html').toString();
 
-    test('close() leaves zero children and drops the temp profile', () async {
-      final beforePids = await _chromePids();
-      final beforeProfiles = await _tempProfiles();
-      final chrome = Chrome(executable: exe);
-      final page = await chrome.open('$base/spa');
-      expect(await chrome.alive(), isTrue);
+  const testHtml = '''
+<html><head><title>T</title></head>
+<body><p class="a">Hi <a href="/x">L</a></p></body></html>
+''';
+
+  group('Chrome', () {
+    test('connect to a dead port throws', () async {
+      expect(Chrome.connect('http://127.0.0.1:1'), throwsA(anything));
+    });
+  });
+
+  group('Browser', () {
+    test('open waits for load and pages lists tabs', () async {
+      final before = (await browser.pages()).length;
+      final page = await browser.open(dataUrl(testHtml));
+      expect((await browser.pages()).length, greaterThanOrEqualTo(before + 1));
       await page.close();
-      await chrome.close();
-      expect(await chrome.alive(), isFalse);
-      for (var i = 0; i < 150; i++) {
-        final now = await _chromePids();
-        now.removeAll(beforePids);
-        if (now.isEmpty) break;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+
+    test('open applies headers, block, viewport', () async {
+      final page = await browser.open(
+        '$base/echo-header',
+        headers: {'x-test': 'hi'},
+        block: ['image'],
+        width: 800,
+        height: 600,
+      );
+      expect(await page.text(), contains('hi'));
+      expect(await page.eval<int>('window.innerWidth'), 800);
+      await page.close();
+      expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
+    });
+
+    test('block aborts image requests', () async {
+      await browser.open('$base/imgpage', block: ['image']).then((p) => p.close());
+      expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
+      // Without block the image loads (settled via waitIdle).
+      final page = await browser.open('$base/imgpage');
+      await page.waitIdle();
+      await page.close();
+      expect(hits.any((h) => h.endsWith('/img.png')), isTrue);
+    });
+
+    test('Future mirrors match', () async {
+      final f = Chrome.launch();
+      final b = await f;
+      final page = await f.open(dataUrl(testHtml));
+      expect((await f.pages()).length, greaterThanOrEqualTo(1));
+      await page.close();
+      await b.close();
+    });
+  });
+
+  group('Page navigation', () {
+    test('goto/back/reload return the page', () async {
+      final page = await browser.open(dataUrl('<title>One</title>'));
+      expect((await page.goto(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
+      await page.goto(dataUrl('<title>One</title>'));
+      await page.goto(dataUrl('<title>Two</title>'));
+      await page.back();
+      expect((await page.html()).$('title').text(), 'One');
+      await page.reload();
+      expect((await page.html()).$('title').text(), 'One');
+      await page.close();
+    });
+
+    test('url() is the current URL', () async {
+      final page = await browser.open('$base/echo-header');
+      expect(await page.url(), '$base/echo-header');
+      await page.close();
+    });
+  });
+
+  group('Page reading', () {
+    test('html() is the rendered DOM with the page URL as base', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final doc = await page.html();
+      expect(doc.$('title').text(), 'T');
+      expect(doc.$('a').attr('href'), isNotNull);
+      await page.close();
+    });
+
+    test('text() is innerText', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final text = await page.text();
+      expect(text, contains('Hi'));
+      expect(text, contains('L'));
+      await page.close();
+    });
+
+    test('eval<T>() evaluates, awaits, and nulls mistypes', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(await page.eval<String>('document.title'), 'T');
+      expect(await page.eval<int>('1 + 1'), 2);
+      expect(await page.eval<String>('1 + 1'), isNull);
+      expect(await page.eval<String>('null'), isNull);
+      expect(await page.eval<String>('undefined'), isNull);
+      expect(await page.eval<String>('document.title'), 'T');
+      await page.close();
+    });
+
+    test('cookies() feeds Http', () async {
+      final page = await browser.open('$base/cookie');
+      expect(await page.cookies(), contains('tok=abc'));
+      await page.close();
+    });
+  });
+
+  group('Page driving', () {
+    test('click drives the page', () async {
+      final page = await browser.open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'));
+      await page.click('#b');
+      expect(await page.eval<String>('document.title'), 'C');
+      await page.close();
+    });
+
+    test('click on a missing selector times out naming it', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(
+        page.click('#missing', timeout: const Duration(milliseconds: 300)),
+        throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('#missing'))),
+      );
+      await page.close();
+    });
+
+    test('fill replaces the value with keystrokes', () async {
+      final page = await browser.open(dataUrl('<input id="q" value="old">'));
+      await page.fill('#q', 'hi');
+      expect(await page.eval<String>("document.querySelector('#q').value"), 'hi');
+      await page.close();
+    });
+
+    test('press sends keys and chords', () async {
+      final page = await browser.open(
+        dataUrl(
+          '<input id="q"><script>window.ks=[];'
+          'document.querySelector("#q").addEventListener("keydown",'
+          'e=>window.ks.push(e.key+"|"+e.ctrlKey));</script>',
+        ),
+      );
+      await page.click('#q');
+      await page.press('a');
+      await page.press('b');
+      expect(await page.eval<String>("document.querySelector('#q').value"), 'ab');
+      await page.press('ctrl+a');
+      expect(await page.eval<String>('JSON.stringify(window.ks)'), contains('a|true'));
+      await page.press('backspace');
+      expect(await page.eval<String>("document.querySelector('#q').value"), 'a');
+      await page.press('enter');
+      await page.close();
+    });
+
+    test('select picks the option by value', () async {
+      final page = await browser.open(
+        dataUrl(
+          '<select id="s"><option value="a">A</option>'
+          '<option value="b">B</option></select>',
+        ),
+      );
+      await page.select('#s', 'b');
+      expect(await page.eval<String>("document.querySelector('#s').value"), 'b');
+      await page.close();
+    });
+
+    test('upload sets a file input from a Reader', () async {
+      final page = await browser.open(dataUrl('<input type="file" id="f">'));
+      final dir = await Directory.systemTemp.createTemp('chrome_up');
+      try {
+        await Fs.file('${dir.path}/note.txt').write('up-bytes');
+        await page.upload('#f', Fs.file('${dir.path}/note.txt'));
+        expect(await page.eval<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+      } finally {
+        await dir.delete(recursive: true);
       }
-      final after = await _chromePids()
-        ..removeAll(beforePids);
-      expect(after, isEmpty, reason: 'orphaned browser processes: $after');
-      final profiles = await _tempProfiles()
-        ..removeAll(beforeProfiles);
-      expect(profiles, isEmpty, reason: 'temp profiles left behind: $profiles');
-    }, timeout: const Timeout(Duration(seconds: 120)));
+      await page.close();
+    });
+
+    test('scroll goes to the bottom, or an element into view', () async {
+      final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
+      await page.scroll();
+      expect(await page.eval<bool>('window.scrollY > 0'), isTrue);
+      await page.scroll('#bottom');
+      await page.close();
+    });
+  });
+
+  group('Page waiting', () {
+    test('wait resolves when the selector appears', () async {
+      final page = await browser.open(
+        dataUrl(
+          '<script>setTimeout(() => document.body.innerHTML = '
+          '"<p class=late>now</p>", 300)</script>',
+        ),
+      );
+      await page.wait('.late');
+      expect((await page.html()).$('.late').text(), 'now');
+      await page.close();
+    });
+
+    test('wait times out naming the selector', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(
+        page.wait('.never', timeout: const Duration(milliseconds: 300)),
+        throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('.never'))),
+      );
+      await page.close();
+    });
+
+    test('waitIdle returns on a quiet page', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      await page.waitIdle();
+      await page.close();
+    });
+  });
+
+  group('Page content out', () {
+    test('screenshot is a PNG Reader, captured when read', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final reader = page.screenshot();
+      final dir = await Directory.systemTemp.createTemp('chrome_shot');
+      try {
+        await (reader > Fs.file('${dir.path}/shot.png'));
+        final bytes = await Fs.file('${dir.path}/shot.png').bytes();
+        expect(bytes.length, greaterThan(100));
+        expect(bytes.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10]);
+        await (page.screenshot(fullPage: true) > Fs.file('${dir.path}/full.png'));
+        expect(
+          await Fs.file('${dir.path}/full.png').size(),
+          greaterThanOrEqualTo(await Fs.file('${dir.path}/shot.png').size()),
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+      await page.close();
+    });
+
+    test('pdf is a Reader', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final bytes = await page.pdf().bytes();
+      expect(bytes.length, greaterThan(100));
+      expect(String.fromCharCodes(bytes.take(4)), '%PDF');
+      await page.close();
+    });
+
+    test('download clicks and returns the file plus its name', () async {
+      final page = await browser.open(dataUrl('<a id="d" href="$base/file">get it</a>'));
+      final download = await page.download('#d');
+      expect(download.name(), 'hello.txt');
+      expect(await download.text(), 'download-me');
+      final dir = await Directory.systemTemp.createTemp('chrome_dl');
+      try {
+        await (download > Fs.file('${dir.path}/${download.name()}'));
+        expect(await Fs.file('${dir.path}/hello.txt').text(), 'download-me');
+      } finally {
+        await dir.delete(recursive: true);
+      }
+      await page.close();
+    });
+
+    test('Future mirrors chain without an inner await', () async {
+      final page = await browser
+          .open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'))
+          .click('#b')
+          .waitIdle();
+      expect(await page.eval<String>('document.title'), 'C');
+      expect(await browser.open(dataUrl(testHtml)).html().$('p').text(), 'Hi L');
+      await page.close();
+    });
   });
 }

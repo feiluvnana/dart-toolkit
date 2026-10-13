@@ -1,13 +1,154 @@
-/// # Hashing & Checksums
+/// Incremental hashes, one-shot or in a pipe. Thin facade over `package:crypto`.
 ///
-/// `Hash.sha256` and friends — all callable, all with an optional `key` for
-/// keyed authentication — plus `source.hash(algo)` for files and streams, and
-/// `.hex`/`.base64`/`.toInt()` on digests with `Hex`/`Base64.decode`.
-/// Digests run natively (`tk_digest_*`); without the library the call is an
-/// [UnsupportedError] (rule 42: no Dart fallback).
+/// ```dart
+/// final id = Hash.md5().add(url).hex();
+/// final check = Hash.sha256();
+/// await (Http.get(isoUrl) | check > Fs.file('disc.iso'));
+/// if (check.hex() != expected) await Fs.file('disc.iso').delete();
+/// ```
+///
+/// Public surface is exactly: [Hash], [Hasher].
+/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher].
+/// - [Hasher] supports `add` (feed data) `hex` (finish).
+/// Everything else is private.
 library;
 
-export 'src/hash/hash.dart';
-export 'src/core/errors.dart';
-export 'src/core/pipe.dart';
-export 'src/core/traits.dart';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart' as c;
+
+import 'core.dart';
+export 'core.dart';
+
+/// Entry point: one method per algorithm.
+abstract final class Hash {
+  /// MD5 hasher.
+  static Hasher md5() => Hasher._(c.md5);
+
+  /// SHA-1 hasher.
+  static Hasher sha1() => Hasher._(c.sha1);
+
+  /// SHA-256 hasher.
+  static Hasher sha256() => Hasher._(c.sha256);
+
+  /// SHA-512 hasher.
+  static Hasher sha512() => Hasher._(c.sha512);
+}
+
+/// A hash in progress: a [Writer] you feed, a [Pipe] that passes through.
+final class Hasher implements Writer, Pipe {
+  Hasher._(this._hash) : _capture = _DigestCapture() {
+    _in = _hash.startChunkedConversion(_capture);
+  }
+
+  final c.Hash _hash;
+  final _DigestCapture _capture;
+  late final ByteConversionSink _in;
+  var _done = false;
+  var _poisoned = false;
+
+  void _checkUsable(String action) {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; $action is stale');
+    }
+    if (_done) {
+      throw StateError('hash is finished; hex() was already called');
+    }
+  }
+
+  /// Feed more data: a `String` (UTF-8) or a `List<int>`. Returns this.
+  /// Anything else is an [ArgumentError]. An [add] after [hex], or after a
+  /// failed run through this hasher, is a [StateError].
+  Hasher add(Object data) {
+    _checkUsable('add');
+    _in.add(_toBytes(data));
+    return this;
+  }
+
+  /// Finish the hash. Calling it again returns the same digest. After a
+  /// failed run through this hasher it throws instead of a partial digest.
+  String hex() {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; hex is stale');
+    }
+    if (!_done) {
+      _in.close();
+      _done = true;
+    }
+    return _capture.digest.toString();
+  }
+
+  @override
+  Future<void> consume(Stream<List<int>> input) async {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; reuse is stale');
+    }
+    if (_done) {
+      throw StateError('hash is finished; cannot take another pipeline');
+    }
+    try {
+      await for (final chunk in input) {
+        _in.add(chunk);
+      }
+    } catch (_) {
+      // The run failed: the digest is partial, so poison it rather than
+      // let a later hex() silently return it.
+      _poisoned = true;
+      rethrow;
+    }
+    _in.close();
+    _done = true;
+  }
+
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; reuse is stale');
+    }
+    if (_done) {
+      throw StateError('hash is finished; cannot take another pipeline');
+    }
+    return _tee(input);
+  }
+
+  Stream<List<int>> _tee(Stream<List<int>> input) async* {
+    var ok = false;
+    try {
+      await for (final chunk in input) {
+        _in.add(chunk);
+        yield chunk;
+      }
+      // The pipe ran to the end: finish here so hex() is stable and a second
+      // pipeline is a StateError, as specced.
+      _in.close();
+      _done = true;
+      ok = true;
+    } finally {
+      // Input failure or downstream cancel: the digest is partial, so a
+      // later hex()/add() must throw rather than silently use it.
+      if (!ok) _poisoned = true;
+    }
+  }
+
+  static List<int> _toBytes(Object data) {
+    if (data is String) return utf8.encode(data);
+    if (data is List<int>) return data;
+    throw ArgumentError.value(
+      data,
+      'data',
+      'must be a String or List<int>',
+    );
+  }
+}
+
+final class _DigestCapture implements Sink<c.Digest> {
+  late c.Digest digest;
+
+  @override
+  void add(c.Digest data) {
+    digest = data;
+  }
+
+  @override
+  void close() {}
+}

@@ -3,13 +3,3 @@
 .packages
 build/
 coverage/
-
-# The native libraries: the build tree and staged libraries are never committed
-native/target/
-native/lib/
-
-# Agent config: the /optimize skills are shared; worktrees and local settings are not
-.claude/*
-!.claude/skills/
-.agents/*
-!.agents/skills/

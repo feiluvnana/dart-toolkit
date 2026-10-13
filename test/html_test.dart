@@ -1,174 +1,192 @@
 import 'package:dart_toolkit/html.dart';
-import 'package:dart_toolkit/path.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('html documents', () {
-    test('drop(css) copies without the match; the receiver is unchanged', () {
-      final doc = Html.parse('<div><p>keep</p><script>var x = 1;</script></div>');
-      final clean = doc.drop('script');
-      expect(clean.all('script'), isEmpty);
-      expect(clean.find('p')?.text, 'keep');
-      expect(doc.all('script'), hasLength(1));
+  group('Html.parse', () {
+    test('returns Elements', () {
+      expect(Html.parse('<div></div>'), isA<Elements>());
     });
 
-    test('prev/next skip text nodes', () {
-      final doc = Html.parse('<div><b id="a">x</b> tail <i id="b">y</i></div>');
-      expect(doc.find('#b')?.prev?.attr('id'), 'a');
-      expect(doc.find('#a')?.next?.attr('id'), 'b');
-      expect(doc.find('#a')?.prev, isNull);
+    test('never throws on malformed markup', () {
+      expect(() => Html.parse('<div><p>oops'), returnsNormally);
+      expect(() => Html.parse(''), returnsNormally);
+      expect(() => Html.parse('<'), returnsNormally);
     });
 
-    test('doc.html is the whole markup as a String', () {
-      final doc = Html.parse('<p>hi</p>');
-      expect(doc.html, isA<String>());
-      expect(doc.html, contains('<p>hi</p>'));
-    });
-
-    test('a real page parses: hn.html has links', () async {
-      final doc = await File('test/fixtures/hn.html').html();
-      expect(doc.all('a[href]'), isNotEmpty);
-    });
-
-    test('every selector runs on a drop()ed doc without throwing', () {
-      final doc = Html.parse('<div><p>x</p><script>s</script></div>').drop('script');
-      const selectors = [
-        'div',
-        'p',
-        'section p',
-        'div p',
-        'div > p',
-        '*',
-        '*:first-child',
-        ':root',
-        'p:first-child',
-        'p:last-child',
-        'p:nth-child(1)',
-        'p:contains(x)',
-        ':not(script)',
-        'div:has(p)',
-        '#missing',
-        '.missing',
-        '[data-x]',
-      ];
-      for (final s in selectors) {
-        doc.all(s);
-        doc.find(s);
-      }
-      expect(doc.find('p')?.text, 'x');
-      expect(doc.all('script'), isEmpty);
-    });
-
-    test('serialised markup reparses to the same tree', () {
-      const src =
-          '<!DOCTYPE html><html><head><title>a & b</title></head><body>'
-          '<p>a &lt;b&gt; &amp; c</p><br><img src="x?a=1&b=2">'
-          '<script>if (a < b && c > d) { x = "y"; }</script>'
-          '<a title=\'q "quoted" & amped\'>t</a></body></html>';
-      final once = Html.parse(src).html;
-      expect(Html.parse(once).html, once);
-      expect(once, startsWith('<!DOCTYPE html>'));
-      expect(once, contains('<br>'));
-      expect(once, isNot(contains('</br>')));
-      expect(once, contains('x?a=1&amp;b=2'));
-      expect(once, contains('q &quot;quoted&quot; &amp; amped'));
-      expect(once, contains('if (a < b && c > d)'));
-      // No element smuggled in through entities.
-      expect(Html.parse(src).all('b'), isEmpty);
-    });
-
-    test('angle brackets in text and quoted attributes stay text', () {
-      final doc = Html.parse('<p>1 < 2 and 3 > 2</p>');
-      expect(doc.find('p')?.text, '1 < 2 and 3 > 2');
-      expect(doc.all('*').where((e) => e.tag == '2'), isEmpty);
-      final a = Html.parse('<a title="x>y">t</a>');
-      expect(a.find('a')?.attr('title'), 'x>y');
-      expect(a.find('a')?.text, 't');
-    });
-
-    test('bad numeric entities become U+FFFD, named ones decode', () {
-      expect(Html.parse('<p>&#99999999;</p>').find('p')?.text, '�');
-      expect(Html.parse('<p>&#0;</p>').find('p')?.text, '�');
-      expect(Html.parse('<p>&#xD800;</p>').find('p')?.text, '�');
-      expect(Html.parse('<p>&rsquo;&eacute;&euro;</p>').find('p')?.text, '’é€');
-    });
-
-    test('hn.html parses as before: same links and text', () async {
-      final doc = await File('test/fixtures/hn.html').html();
-      expect(doc.all('a[href]'), hasLength(225));
-      expect(doc.text.length, 3894);
+    test('takes a baseUrl', () {
+      final doc = Html.parse('<a href="/x">t</a>', baseUrl: 'https://e.com/d/');
+      expect(doc.$('a')[0].attr('href'), 'https://e.com/x');
     });
   });
 
-  group('selector scope and errors', () {
-    test('find and all search below the element, never the element itself', () {
-      final doc = Html.parse('<div class="card"><div class="body"><p>x</p></div></div>');
-      final card = doc.find('.card')!;
-      expect(card.find('div')!.attr('class'), 'body');
-      expect(card.all('div').map((e) => e.attr('class')), ['body']);
-      expect(card.matches('div'), isTrue);
+  group('Reader.html', () {
+    test('parses bytes', () async {
+      final doc = await _Mem('<p>hi</p>').html();
+      expect(doc.$('p').text(), 'hi');
     });
 
-    test('the synthetic document root never appears in results', () {
-      final doc = Html.parse('<p>a</p>');
-      expect(doc.find('*')!.tag, 'html');
-      expect(doc.all(':not(p)').map((e) => e.tag), isNot(contains('#document')));
-      expect(doc.all(':root').map((e) => e.tag), ['html']);
-    });
-
-    test('an unknown pseudo-class is a FormatException', () {
-      final doc = Html.parse('<ul><li>a</li><li>b</li></ul>');
-      expect(() => doc.all('li:hovr'), throwsFormatException);
-      expect(() => doc.all('li:nth-last-child(1)'), throwsFormatException);
-    });
-
-    test(':has(> x) looks at children only', () {
-      final doc = Html.parse('<ul id="a"><li>x</li></ul><div id="b"><ul><li>y</li></ul></div>');
-      expect(doc.all('div:has(> li)'), isEmpty);
-      expect(doc.all('ul:has(> li)').map((e) => e.attr('id')), contains('a'));
-      expect(doc.all('div:has(li)').map((e) => e.attr('id')), ['b']);
+    test('mirror on Future<Reader>', () async {
+      final doc = await Future<Reader>.value(_Mem('<p>hi</p>')).html();
+      expect(doc.$('p').text(), 'hi');
     });
   });
 
-  group('links, lines and closest', () {
-    test('link resolves against the document URL, moved by <base href>', () {
-      final doc = Html.parse('<a href="b/c?x=1">c</a><img src="/i.png">', url: 'https://h.test/a/page.html');
-      expect(doc.url, 'https://h.test/a/page.html');
-      expect(doc.find('a')!.link(), 'https://h.test/a/b/c?x=1');
-      expect(doc.find('img')!.link('src'), 'https://h.test/i.png');
-      expect(doc.find('img')!.link(), isNull);
-      final based = Html.parse('<base href="/root/"><a href="x">x</a>', url: 'https://h.test/a/page.html');
-      expect(based.find('a')!.link(), 'https://h.test/root/x');
-      expect(based.drop('base').find('a')!.link(), 'https://h.test/root/x');
+  group('Elements', () {
+    final doc = Html.parse(
+      '<div class="a"><p>Hello <a href="/">link</a></p><p>Two</p></div>'
+      '<ul><li>1</li><li>2</li></ul>',
+    );
+
+    test(r'$() filters', () {
+      expect(doc.$('div.a').length, 1);
+      expect(doc.$('p').length, 2);
     });
 
-    test('without a URL a link reads as written', () {
-      expect(Html.parse('<a href=" rel/x ">x</a>').find('a')!.link(), 'rel/x');
+    test(r'chained $() searches within all hits', () {
+      expect(doc.$('div').$('p').length, 2);
+      expect(doc.$('div.a').$('a').length, 1);
     });
 
-    test('a file reading links against the file', () async {
-      final dir = await Dir.temp();
-      try {
-        final file = dir.file('p.html');
-        await file.write('<a href="next.html">n</a>');
-        final doc = await file.html();
-        expect(Uri.parse(doc.find('a')!.link()!).toFilePath(), endsWith('next.html'));
-        expect(Uri.parse(doc.url!).isAbsolute, isTrue);
-      } finally {
-        await dir.drop();
-      }
+    test(r'$() matches self as well as descendants', () {
+      expect(doc.$('div').$('div').length, 1);
     });
 
-    test('lines break at <br> and blocks, trimmed, blanks dropped', () {
-      final doc = Html.parse('<div id=t> 1. One<br>2. Two <br/><br> <p>Three</p><span>Four</span>\n Five</div>');
-      expect(doc.find('#t')!.lines, ['1. One', '2. Two', 'Three', 'Four', 'Five']);
+    test(r'$() dedupes overlapping subtrees', () {
+      expect(doc.$('div, p').$('p').length, 2);
     });
 
-    test('closest is the nearest matching ancestor, never the element', () {
-      final doc = Html.parse('<div class=row id=outer><div class=row id=inner><a class=row>x</a></div></div>');
-      expect(doc.find('a')!.closest('.row')!.id, 'inner');
-      expect(doc.find('#outer')!.closest('.row'), isNull);
-      expect(doc.find('a')!.closest('table'), isNull);
+    test('no match is empty, never null', () {
+      final els = doc.$('.missing');
+      expect(els, isEmpty);
+      expect(els.$('p'), isEmpty);
+    });
+
+    test('[] indexing', () {
+      expect(doc.$('li')[0].text(), '1');
+      expect(doc.$('li')[1].text(), '2');
+      expect(() => doc.$('li')[2], throwsRangeError);
+    });
+
+    test('without removes matches and subtrees', () {
+      final clean = doc.without('ul');
+      expect(clean.$('li'), isEmpty);
+      expect(clean.$('p').length, 2);
+      expect(doc.$('li').length, 2); // receiver unchanged
+    });
+
+    test('without sees only the new tree', () {
+      final clean = doc.without('div');
+      expect(clean.$('div'), isEmpty);
+      expect(clean.$('ul').$('li').length, 2);
+    });
+
+    test('text joins every element', () {
+      expect(doc.$('li').text(), '12');
+      expect(doc.$('title').text(), '');
+    });
+
+    test('attr is the first match, null when nothing matched', () {
+      final linked = Html.parse('<a href="/1">a</a><a href="/2">b</a>');
+      expect(linked.$('a').attr('href'), '/1');
+      expect(linked.$('.missing').attr('href'), isNull);
+    });
+
+    test('attrs lists every value, absent skipped', () {
+      final mixed = Html.parse('<a href="/1">a</a><a>b</a><a href="/3">c</a>');
+      expect(mixed.$('a').attrs('href'), ['/1', '/3']);
+    });
+
+    test('attrs resolves links against the base', () {
+      final based = Html.parse(
+        '<a class="i" href="/x">a</a><a class="i" href="/y">b</a>',
+        baseUrl: 'https://e.com/',
+      );
+      expect(based.$('a.i').attrs('href'),
+          ['https://e.com/x', 'https://e.com/y']);
+    });
+
+    test('bad selector is a FormatException naming it', () {
+      expect(() => doc.$('['), throwsA(isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains('['),
+      )));
+      expect(() => doc.without('['), throwsA(isA<FormatException>()));
+    });
+
+    test('is iterable', () {
+      expect(doc.$('p').map((e) => e.text()), ['Hello link', 'Two']);
+    });
+
+    test('Future mirrors match', () async {
+      final f = Future.value(doc);
+      expect((await f.$('p')).length, 2);
+      expect(await f.$('li')[0].text(), '1');
+      expect((await f.without('ul')).$('li'), isEmpty);
+      expect(await f.$('li').text(), '12');
+      expect(await f.$('a').attr('href'), '/');
+      expect(await f.$('a').attrs('href'), ['/']);
     });
   });
+
+  group('Element', () {
+    test(r'$() queries within the element, self included', () {
+      final doc = Html.parse('<div><p>Hello <a>link</a></p></div>');
+      final div = doc.$('div')[0];
+      expect(div.$('p').length, 1);
+      expect(div.$('div').length, 1);
+      expect(div.$('span'), isEmpty);
+    });
+
+    test('without copies without the parts', () {
+      final doc = Html.parse('<div><p>a</p><script>var x = 1;</script></div>');
+      final clean = doc.$('div')[0].without('script');
+      expect(clean.$('script'), isEmpty);
+      expect(clean.$('p').text(), 'a');
+      expect(doc.$('script').length, 1);
+    });
+
+    test('text() concatenates descendant text', () {
+      final doc = Html.parse('<div><p>Hello <a>link</a></p></div>');
+      expect(doc.$('div')[0].text(), 'Hello link');
+    });
+
+    test('attr() is case-insensitive, null if absent', () {
+      final doc = Html.parse('<a HREF="/" CLASS="x">t</a>');
+      final a = doc.$('a')[0];
+      expect(a.attr('href'), '/');
+      expect(a.attr('HREF'), '/');
+      expect(a.attr('missing'), isNull);
+    });
+
+    test('attr resolves href and src with a base', () {
+      final doc = Html.parse('<img src="i.png">', baseUrl: 'https://e.com/d/');
+      expect(doc.$('img')[0].attr('src'), 'https://e.com/d/i.png');
+    });
+
+    test('parent() walks up, null at top level', () {
+      final doc = Html.parse('<div><p><a>t</a></p></div>');
+      final a = doc.$('a')[0];
+      expect(a.parent()?.text(), 't');
+      expect(a.parent()?.parent()?.text(), 't');
+      expect(doc.$('div')[0].parent(), isNull);
+    });
+
+    test('Future mirrors match', () async {
+      final doc = Html.parse('<div><p><a href="/x">t</a></p></div>');
+      final f = Future.value(doc.$('div')[0]);
+      expect((await f.$('a')).length, 1);
+      expect((await f.without('p')).$('a'), isEmpty);
+      expect(await f.text(), contains('t'));
+      expect(await f.$('a').attr('href'), '/x');
+      expect(await f.parent(), isNull);
+    });
+  });
+}
+
+final class _Mem with Reader {
+  _Mem(String text) : _data = text;
+  final String _data;
+  @override
+  Stream<List<int>> stream() => Stream.value(_data.codeUnits);
 }
