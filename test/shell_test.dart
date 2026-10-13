@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dart_toolkit/json.dart';
+import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/shell.dart';
 import 'package:test/test.dart';
 
@@ -86,6 +87,37 @@ void main() {
     test('empty command is an ArgumentError', () {
       expect(() => Shell.filter([]), throwsArgumentError);
       expect(() => Shell.run([]), throwsArgumentError);
+    });
+
+    test('F4: a child that stops reading early is not an error', () async {
+      final lines = List.generate(10000, (i) => 'line $i').join('\n');
+      final tmp = await Directory.systemTemp.createTemp('shell_f4');
+      try {
+        await (_Mem(lines) |
+                Shell.filter(['head', '-n', '1']) >
+            Fs.file('${tmp.path}/one.txt'));
+        final first = await Fs.file('${tmp.path}/one.txt').text();
+        expect(first.trim(), 'line 0');
+      } finally {
+        await tmp.delete(recursive: true);
+      }
+    });
+
+    test('F12: late stderr survives into the exception', () async {
+      await expectLater(
+        _Mem('x') |
+            Shell.filter([
+              'sh',
+              '-c',
+              'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2',
+            ]) >
+                null,
+        throwsA(isA<ProcessException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('2'), contains('late-stderr')),
+        )),
+      );
     });
   });
 }

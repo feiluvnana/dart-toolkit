@@ -46,6 +46,38 @@ void main() {
       expect(() => Image.decode(tinyPng).resize(), throwsArgumentError);
     });
 
+    test('F14: non-positive resize sizes are an ArgumentError', () {
+      final img = Image.decode(tinyPng);
+      expect(() => img.resize(width: 0), throwsArgumentError);
+      expect(() => img.resize(width: -5), throwsArgumentError);
+      expect(() => img.resize(height: -1), throwsArgumentError);
+    });
+
+    test('F14: GIF decodes its first frame only', () async {
+      // 1x1 two-frame GIF (red, then blue).
+      final gif = base64Decode(
+        'R0lGODlhAQABAIAAAP///////yH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
+      );
+      final img = Image.decode(gif);
+      expect(img.width(), 1);
+      expect(img.height(), 1);
+      // A single frame re-encodes as a still, not an animation.
+      final png = await img.encode(ImageFormat.png).bytes();
+      expect(Image.decode(png).width(), 1);
+    });
+
+    test('F14: .ico above 256px is an ArgumentError', () async {
+      final big = Image.decode(tinyPng).resize(width: 300, height: 300);
+      // Encoding is lazy: the error surfaces when read.
+      await expectLater(
+        big.encode(ImageFormat.ico).bytes(),
+        throwsArgumentError,
+      );
+      // 256px is fine.
+      final ok = Image.decode(tinyPng).resize(width: 256, height: 256);
+      expect(await ok.encode(ImageFormat.ico).bytes(), isNotEmpty);
+    });
+
     test('crop cuts a region; outside is a RangeError', () {
       final big = Image.decode(tinyPng).resize(width: 4, height: 4);
       expect(big.crop(0, 0, 2, 2).width(), 2);
