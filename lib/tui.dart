@@ -17,19 +17,25 @@
 /// Public surface is exactly: [Tui], [Screen], [Region].
 /// - `Tui.run()` runs an app on the alternate screen.
 /// - [Screen] supports `frame` `pressed` `typed` `width` `height`.
-/// - [Region] supports `write` `box` `rows` `cols` `button`.
-/// Everything else is private.
+/// - [Region] supports `width` `height` `write` `box` `rows` `cols`
+///   `button` `list` `input`.
+/// Everything else is private. Key decoding, broadcast stdin and terminal
+/// modes are shared with `console` through `src/terminal.dart` (imported
+/// relatively, never exported).
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'src/terminal.dart' as term;
+
 /// Entry point: run an immediate-mode app.
 abstract final class Tui {
   /// Enter raw mode, the alternate screen and mouse reporting; always restore
   /// the terminal when [app] returns or throws. Throws [io.StdoutException]
   /// when stdout is not a terminal. `^C` is just `pressed('ctrl+c')`.
+  /// [run] can be called again in the same process.
   static Future<void> run(Future<void> Function(Screen screen) app) async {
     final out = io.stdout;
     if (!out.hasTerminal) {
@@ -55,17 +61,27 @@ final class Screen {
   final _typed = StringBuffer();
   final _clicks = <_Cell>[];
   final _pending = <int>[];
-  var _escHeld = false;
+  final _signals = <String>[];
+  var _quietFrames = 0;
   StreamSubscription<List<int>>? _sub;
   StreamSubscription<io.ProcessSignal>? _sigwinchSub;
+  StreamSubscription<io.ProcessSignal>? _sigintSub;
+  StreamSubscription<io.ProcessSignal>? _sigtermSub;
+  StreamSubscription<io.ProcessSignal>? _sighupSub;
   var _lastFrame = 0;
   var _entered = false;
+  var _exiting = false;
+  term.TermModes? _savedModes;
 
   List<List<_Cell>>? _last;
+  List<List<_Cell>>? _gridA;
+  List<List<_Cell>>? _gridB;
+  var _useA = true;
   List<_Button> _buttons = const [];
   List<_Button> _nextButtons = [];
   var _focus = 0;
   var _mouse = false;
+  var _paste = false;
 
   /// This frame's width in cells.
   int width() => _width;
@@ -74,17 +90,22 @@ final class Screen {
   int height() => _height;
 
   /// True when [key] was pressed since the last frame. Names are shared with
-  /// `Page.press`: `'a'`, `'A'`, `'enter'`, `'tab'`, `'backspace'`,
-  /// `'escape'`, `'up'`, `'down'`, `'left'`, `'right'`, `'home'`, `'end'`,
-  /// `'pageup'`, `'pagedown'`, `'delete'`, `'f1'`…`'f12'`, `'ctrl+c'`,
-  /// `'alt+x'`.
+  /// `Page.press`: printable characters as themselves (`'a'`, `'A'`, `'1'`,
+  /// plus `'space'`), `'enter'` `'tab'` `'shift+tab'` `'backspace'`
+  /// `'escape'` `'insert'` `'delete'`, `'up'` `'down'` `'left'` `'right'`
+  /// `'home'` `'end'` `'pageup'` `'pagedown'`, `'f1'`…`'f12'`,
+  /// `'ctrl+c'` `'alt+x'` `'ctrl+up'`, `'wheelup'` `'wheeldown'`.
+  /// Unknown sequences are ignored, never reported as `escape`.
   bool pressed(String key) => _pressed.contains(key);
 
-  /// Printable text typed since the last frame.
+  /// Printable text typed since the last frame (pasted text included).
   String typed() => _typed.toString();
 
   /// One tick: wait for the next frame slot (~60 fps), collect input, run
   /// [build] on the whole screen, and write only the changed cells.
+  /// Input stays available after `frame` returns, until the next `frame`,
+  /// so `while (!screen.pressed('escape')) await screen.frame(…)` works,
+  /// and so does `screen.frame(…).pressed('q')`.
   /// Returns this screen.
   Future<Screen> frame(void Function(Region region) build) async {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -94,12 +115,15 @@ final class Screen {
     }
     _lastFrame = DateTime.now().millisecondsSinceEpoch;
     _poll();
-    _width = io.stdout.terminalColumns;
-    _height = io.stdout.terminalLines;
-    final grid = List.generate(
-      _height,
-      (_) => List.generate(_width, (_) => const _Cell(' ')),
-    );
+    try {
+      _width = io.stdout.terminalColumns;
+      _height = io.stdout.terminalLines;
+    } catch (_) {
+      // Keep the previous size when the terminal won't answer mid-resize.
+    }
+    if (_width < 1) _width = 1;
+    if (_height < 1) _height = 1;
+    final grid = _gridFor(_width, _height);
     _nextButtons = [];
     build(Region._(grid, 0, 0, _width, _height, this));
     _buttons = _nextButtons;
@@ -109,100 +133,183 @@ final class Screen {
       _focus = 0;
     }
     _paint(grid);
-    _pressed.clear();
-    _typed.clear();
-    _clicks.clear();
     return this;
   }
 
   Future<void> _enter() async {
     _width = io.stdout.terminalColumns;
     _height = io.stdout.terminalLines;
-    final stdin = io.stdin;
-    try {
-      stdin.echoMode = false;
-      stdin.lineMode = false;
-    } catch (_) {}
-    _sub = stdin.listen(
+    if (_width < 1) _width = 1;
+    if (_height < 1) _height = 1;
+    _savedModes = term.captureModes();
+    term.setRawModes();
+    _sub = term.sharedStdin().listen(
       _pending.addAll,
       onError: (_) {},
       cancelOnError: false,
     );
     try {
       _sigwinchSub = io.ProcessSignal.sigwinch.watch().listen((_) {
+        // A resize repaints everything, row by row, on the next frame.
         _last = null;
       });
     } catch (_) {}
+    // While a SIGINT listener exists Dart does not terminate on Ctrl-C:
+    // it becomes just another key.
+    try {
+      _sigintSub = io.ProcessSignal.sigint.watch().listen((_) {
+        _signals.add('ctrl+c');
+      });
+    } catch (_) {}
+    try {
+      _sigtermSub = io.ProcessSignal.sigterm.watch().listen((_) async {
+        await _leave();
+        io.exit(143);
+      });
+    } catch (_) {}
+    try {
+      _sighupSub = io.ProcessSignal.sighup.watch().listen((_) async {
+        await _leave();
+        io.exit(129);
+      });
+    } catch (_) {}
     final out = io.stdout;
-    out.write('\x1b[?1049h\x1b[?25l');
+    out.write('\x1b[?1049h\x1b[?25l\x1b[?7l');
     try {
       out.write('\x1b[?1000h\x1b[?1006h');
       _mouse = true;
+    } catch (_) {}
+    try {
+      out.write('\x1b[?2004h');
+      _paste = true;
     } catch (_) {}
     _lastFrame = DateTime.now().millisecondsSinceEpoch;
     _entered = true;
   }
 
   Future<void> _leave() async {
-    if (!_entered) return;
-    _entered = false;
-    await _sub?.cancel();
-    _sub = null;
-    await _sigwinchSub?.cancel();
-    _sigwinchSub = null;
-    final stdin = io.stdin;
+    if (!_entered || _exiting) return;
+    _exiting = true;
     try {
-      stdin.echoMode = true;
-      stdin.lineMode = true;
-    } catch (_) {}
-    final out = io.stdout;
-    if (_mouse) out.write('\x1b[?1000l\x1b[?1006l');
-    out.write('\x1b[?25h\x1b[?1049l');
-    try {
-      await out.flush();
-    } catch (_) {}
+      // Our own subscriptions only; the broadcast stdin source is shared
+      // and never closed, so a later run (or a prompt) still works.
+      await _sub?.cancel();
+      _sub = null;
+      await _sigwinchSub?.cancel();
+      _sigwinchSub = null;
+      await _sigintSub?.cancel();
+      _sigintSub = null;
+      await _sigtermSub?.cancel();
+      _sigtermSub = null;
+      await _sighupSub?.cancel();
+      _sighupSub = null;
+      final saved = _savedModes;
+      if (saved != null) term.restoreModes(saved);
+      final out = io.stdout;
+      if (_paste) out.write('\x1b[?2004l');
+      if (_mouse) out.write('\x1b[?1000l\x1b[?1006l');
+      out.write('\x1b[?7h\x1b[?25h\x1b[?1049l');
+      try {
+        await out.flush();
+      } catch (_) {}
+    } finally {
+      _entered = false;
+      _exiting = false;
+    }
   }
 
   void _poll() {
     _pressed.clear();
     _typed.clear();
     _clicks.clear();
-    if (_pending.isEmpty) return;
-    if (_escHeld && _pending.length == 1 && _pending[0] == 0x1b) {
-      // The held ESC got no sequel: it was a real Escape press.
-      _escHeld = false;
-      _pending.clear();
-      _pressed.add('escape');
-      return;
+    for (final s in _signals) {
+      _pressed.add(s);
     }
-    _escHeld = false;
+    _signals.clear();
+    if (_pending.isEmpty) return;
+    final had = _pending.length;
     final bytes = List<int>.of(_pending);
-    final parsed = _parse(bytes);
-    // Keep an incomplete trailing sequence (split ESC/CSI/SS3, or a UTF-8
-    // char cut across reads) for the next frame instead of dropping it.
-    final rest = bytes.sublist(parsed.consumed);
-    if (rest.length == 1 && rest[0] == 0x1b) {
-      // Maybe a split sequence's first byte: hold it one frame; a real
-      // lone Escape is emitted on the next poll if nothing follows.
-      _escHeld = true;
+    final parsed = term.decodeKeys(bytes);
+    var rest = bytes.sublist(parsed.consumed);
+    if (rest.isNotEmpty && rest.length == had) {
+      // No progress and no new bytes: a lone ESC (or ESC-prefixed unit) the
+      // user actually finished typing. Force-decode one unit so a lone
+      // Escape doesn't wait forever; a split sequence keeps arriving and
+      // keeps making progress, so it is never forced.
+      _quietFrames++;
+      if (_quietFrames >= 1) {
+        _quietFrames = 0;
+        rest = _forceOne(rest);
+      }
+    } else {
+      _quietFrames = 0;
     }
     _pending
       ..clear()
       ..addAll(rest);
     for (final event in parsed.events) {
-      switch (event) {
-        case _Key(:final name):
-          _pressed.add(name);
-          if (name == 'tab') {
-            if (_buttons.isNotEmpty) {
-              _focus = (_focus + 1) % _buttons.length;
-            }
-          }
-        case _Type(:final text):
-          _typed.write(text);
-        case _Click(:final x, :final y):
-          _clicks.add(_Cell('', x: x, y: y));
+      _apply(event);
+    }
+  }
+
+  /// Force-decode one leading ESC unit from held [rest]; return the rest.
+  List<int> _forceOne(List<int> rest) {
+    if (rest.isEmpty || rest[0] != 0x1b) return rest;
+    if (rest.length == 1) {
+      _apply(term.TermKey('escape'));
+      return const [];
+    }
+    if (rest[1] == 0x1b) {
+      _apply(term.TermKey('escape'));
+      return rest.sublist(2);
+    }
+    var width = 1;
+    final b = rest[1];
+    if (b >= 0x80) {
+      if (b < 0xc2) {
+        width = 1;
+      } else if (b < 0xe0) {
+        width = 2;
+      } else if (b < 0xf0) {
+        width = 3;
+      } else {
+        width = 4;
       }
+      if (1 + width > rest.length) return rest; // still split: keep holding.
+      _apply(term.TermKey(
+        'alt+${utf8.decode(rest.sublist(1, 1 + width), allowMalformed: true)}',
+      ));
+      return rest.sublist(1 + width);
+    }
+    _apply(term.TermKey('alt+${String.fromCharCode(b)}'));
+    return rest.sublist(2);
+  }
+
+  void _apply(term.TermEvent event) {
+    switch (event) {
+      case term.TermKey(:final name):
+        _pressed.add(name);
+        if (name == 'tab') {
+          if (_buttons.isNotEmpty) {
+            _focus = (_focus + 1) % _buttons.length;
+          }
+        } else if (name == 'shift+tab') {
+          if (_buttons.isNotEmpty) {
+            _focus = (_focus - 1 + _buttons.length) % _buttons.length;
+          }
+        }
+      case term.TermType(:final text, :final paste):
+        _typed.write(text);
+        if (!paste) {
+          // Printable keys are also `pressed` ('a', 'A', '1'; 'space').
+          for (final rune in text.runes) {
+            _pressed.add(
+              rune == 0x20 ? 'space' : String.fromCharCode(rune),
+            );
+          }
+        }
+      case term.TermClick(:final x, :final y):
+        _clicks.add(_Cell('', x: x, y: y));
     }
   }
 
@@ -213,7 +320,45 @@ final class Screen {
     return false;
   }
 
+  /// The build grid for this frame, reused across frames (swapped each
+  /// frame, cleared with `fillRange`) instead of allocated per frame.
+  List<List<_Cell>> _gridFor(int width, int height) {
+    _useA = !_useA;
+    var grid = _useA ? _gridA : _gridB;
+    if (grid == null || grid.length != height) {
+      grid = List.generate(
+        height,
+        (_) => List.filled(width, const _Cell(' '), growable: true),
+        growable: false,
+      );
+      if (_useA) {
+        _gridA = grid;
+      } else {
+        _gridB = grid;
+      }
+      // A resized grid may also have a new width: fix every row.
+      for (var y = 0; y < grid.length; y++) {
+        if (grid[y].length != width) {
+          grid[y] = List.filled(width, const _Cell(' '), growable: true);
+        } else {
+          grid[y].fillRange(0, grid[y].length, const _Cell(' '));
+        }
+      }
+      return grid;
+    }
+    for (var y = 0; y < grid.length; y++) {
+      final row = grid[y];
+      if (row.length != width) {
+        grid[y] = List.filled(width, const _Cell(' '), growable: true);
+      } else {
+        row.fillRange(0, row.length, const _Cell(' '));
+      }
+    }
+    return grid;
+  }
+
   void _paint(List<List<_Cell>> grid) {
+    if (grid.isEmpty) return;
     final out = io.stdout;
     final buf = StringBuffer();
     if (_last == null ||
@@ -222,7 +367,8 @@ final class Screen {
       buf.write('\x1b[2J\x1b[H');
       _last = List.generate(
         grid.length,
-        (y) => List.of(grid[y]),
+        (y) => List.of(grid[y], growable: true),
+        growable: false,
       );
       _paintFull(buf, grid);
       out.write(buf.toString());
@@ -231,12 +377,26 @@ final class Screen {
     final last = _last!;
     var cy = -1;
     var cx = -1;
-    var style = '';
+    var style = '\x1b[0m';
     for (var y = 0; y < grid.length; y++) {
-      for (var x = 0; x < grid[y].length; x++) {
-        final c = grid[y][x];
-        if (c == last[y][x]) continue;
-        last[y][x] = _Cell(c.ch, color: c.color, bold: c.bold);
+      final row = grid[y];
+      final lastRow = last[y];
+      for (var x = 0; x < row.length; x++) {
+        final c = row[x];
+        if (c.width == 0) {
+          // Continuation half of a wide char: never emitted on its own.
+          cx++;
+          continue;
+        }
+        final l = lastRow[x];
+        final continuationChanged =
+            c.width == 2 && lastRow[x + 1].width != 0;
+        if (c == l && !continuationChanged) {
+          cx += c.width;
+          continue;
+        }
+        lastRow[x] = _Cell(c.ch,
+            color: c.color, bold: c.bold, inverse: c.inverse, width: c.width);
         if (y != cy || x != cx) {
           buf.write('\x1b[${y + 1};${x + 1}H');
           cy = y;
@@ -244,41 +404,62 @@ final class Screen {
         }
         final s = _style(c);
         if (s != style) {
-          buf.write(s.isEmpty ? '\x1b[0m' : s);
+          buf.write(s);
           style = s;
         }
         buf.write(c.ch.isEmpty ? ' ' : c.ch);
-        cx++;
+        if (c.width == 2) {
+          lastRow[x + 1] = const _Cell('', width: 0);
+          cx = x + 2;
+        } else {
+          // A narrowed cell orphans its old continuation half: blank it.
+          if (x + 1 < row.length && lastRow[x + 1].width == 0) {
+            buf.write(' ');
+            lastRow[x + 1] = const _Cell(' ');
+            cx = x + 2;
+          } else {
+            cx = x + 1;
+          }
+        }
       }
     }
-    if (style.isNotEmpty) buf.write('\x1b[0m');
+    if (style != '\x1b[0m') buf.write('\x1b[0m');
     out.write(buf.toString());
   }
 
   void _paintFull(StringBuffer buf, List<List<_Cell>> grid) {
-    var style = '';
-    for (final row in grid) {
-      for (final c in row) {
+    // Autowrap is off, so every row is addressed explicitly: one cell whose
+    // width we misjudged can only damage its own row, never the screen.
+    var style = '\x1b[0m';
+    for (var y = 0; y < grid.length; y++) {
+      buf.write('\x1b[${y + 1};1H');
+      for (final c in grid[y]) {
+        if (c.width == 0) continue;
         final s = _style(c);
         if (s != style) {
-          buf.write(s.isEmpty ? '\x1b[0m' : s);
+          buf.write(s);
           style = s;
         }
         buf.write(c.ch.isEmpty ? ' ' : c.ch);
       }
     }
-    if (style.isNotEmpty) buf.write('\x1b[0m');
+    if (style != '\x1b[0m') buf.write('\x1b[0m');
   }
 
+  /// Always from a reset, so a style never leaks into the next cell.
   static String _style(_Cell c) {
-    final buf = StringBuffer();
-    if (c.bold) buf.write('\x1b[1m');
-    if (c.color != null) buf.write('\x1b[38;5;${c.color}m');
+    if (!c.bold && !c.inverse && c.color == null) return '\x1b[0m';
+    final buf = StringBuffer('\x1b[0');
+    if (c.bold) buf.write(';1');
+    if (c.inverse) buf.write(';7');
+    if (c.color != null) buf.write(';38;5;${c.color}');
+    buf.write('m');
     return buf.toString();
   }
 }
 
-/// A rectangle with a cursor at its top-left.
+/// A rectangle with a cursor at its top-left. Every method draws or splits
+/// *below the cursor* and clips to the region.
 final class Region {
   Region._(this._grid, this._x, this._y, this._w, this._h, this._screen)
       : _cursor = 0;
@@ -291,63 +472,328 @@ final class Region {
   final Screen _screen;
   int _cursor;
 
-  /// Draw [text] at the cursor, move the cursor to the next line, clip at
-  /// the edge. Wide characters count two cells. Returns this region.
+  /// This region's width in cells.
+  int width() => _w;
+
+  /// This region's height in cells.
+  int height() => _h;
+
+  /// Draw [text] at the cursor and move the cursor down past the lines it
+  /// used. `\n` starts the next line, `\t` expands to spaces (tab stops
+  /// every 8 columns), other control characters show as `�`, and anything
+  /// past the edge is clipped. Wide CJK/emoji take two cells; a wide char
+  /// that doesn't fit in the last column becomes a space. Returns this
+  /// region.
   Region write(String text, {int? color, bool bold = false}) {
-    final row = _y + _cursor;
-    if (row < _y + _h && row < _grid.length) {
-      var col = _x;
-      for (final rune in text.runes) {
-        final ch = String.fromCharCode(rune);
-        if (ch == '\n') break;
-        final w = _cellWidth(rune);
-        if (col + w > _x + _w) break;
-        if (col < _grid[row].length && col >= 0) {
-          _grid[row][col] = _Cell(ch, color: color, bold: bold);
-          if (w == 2 && col + 1 < _grid[row].length) {
-            _grid[row][col + 1] = _Cell('', color: color, bold: bold);
-          }
-        }
-        col += w;
-      }
+    for (final line in text.split('\n')) {
+      if (_cursor < _h) _drawLine(line, color: color, bold: bold);
+      _cursor++;
     }
-    _cursor++;
     return this;
   }
 
-  /// Draw a border with [title]; returns the inner region.
-  Region box(String title) {
-    _drawBorder(title);
-    if (_w < 3 || _h < 3) {
-      return Region._(_grid, _x, _y, 0, 0, _screen);
+  void _drawLine(String line, {int? color, bool bold = false}) {
+    final row = _y + _cursor;
+    if (row < 0 || row >= _grid.length) return;
+    var col = _x;
+    final end = _x + _w;
+    final runes = line.runes.toList();
+    var i = 0;
+    while (i < runes.length) {
+      final rune = runes[i];
+      if (rune == 0x09) {
+        // Tab: spaces up to the next multiple of 8 (region-relative).
+        var next = col + (8 - (col - _x) % 8);
+        if (next <= col) next = col + 1;
+        while (col < next && col < end) {
+          _place(row, col, ' ', 1, color, bold, false);
+          col++;
+        }
+        i++;
+        continue;
+      }
+      if (rune < 0x20 || rune == 0x7f || (rune >= 0x80 && rune <= 0x9f)) {
+        // Other C0/C1 controls and DEL never reach the terminal raw.
+        if (col < end) {
+          _place(row, col, '�', 1, color, bold, false);
+          col++;
+        }
+        i++;
+        continue;
+      }
+      if (isZeroWidth(rune)) {
+        // Combining mark / ZWJ / variation selector: attach to the previous
+        // cell's string instead of taking a cell.
+        if (col > _x) {
+          final prev = _grid[row][col - 1];
+          if (prev.width != 0 && col - 1 < end) {
+            _grid[row][col - 1] = _Cell(
+              '${prev.ch}${String.fromCharCode(rune)}',
+              color: prev.color,
+              bold: prev.bold,
+              inverse: prev.inverse,
+              width: prev.width,
+            );
+          }
+        }
+        i++;
+        continue;
+      }
+      final w = cellWidth(rune);
+      final ch = String.fromCharCode(rune);
+      // Attach any following zero-width runes to this cluster.
+      final cluster = StringBuffer(ch);
+      var j = i + 1;
+      while (j < runes.length && isZeroWidth(runes[j])) {
+        cluster.writeCharCode(runes[j]);
+        j++;
+      }
+      i = j;
+      if (col >= end) break;
+      if (w == 2 && col + 1 >= end) {
+        _place(row, col, ' ', 1, color, bold, false);
+        col++;
+        continue;
+      }
+      _place(row, col, cluster.toString(), w, color, bold, false);
+      col += w;
     }
-    return Region._(_grid, _x + 1, _y + 1, _w - 2, _h - 2, _screen);
+  }
+
+  /// Place one cluster at ([row], [col]), blanking the orphaned half when a
+  /// cell overwrites half of an existing wide char.
+  void _place(
+      int row, int col, String ch, int w, int? color, bool bold, bool inverse) {
+    if (row < 0 || row >= _grid.length) return;
+    final gridRow = _grid[row];
+    final end = _x + _w;
+    if (col < _x || col >= end || col >= gridRow.length) return;
+    // Overwriting a continuation half: blank its lead.
+    if (gridRow[col].width == 0 && col - 1 >= _x) {
+      gridRow[col - 1] = const _Cell(' ');
+    }
+    gridRow[col] = _Cell(ch,
+        color: color, bold: bold, inverse: inverse, width: w);
+    if (w == 2) {
+      if (col + 1 < end && col + 1 < gridRow.length) {
+        gridRow[col + 1] = _Cell('', color: color, bold: bold,
+            inverse: inverse, width: 0);
+      }
+    } else if (col + 1 < end &&
+        col + 1 < gridRow.length &&
+        gridRow[col + 1].width == 0) {
+      // A narrowed cell orphans the old continuation half: blank it.
+      gridRow[col + 1] = const _Cell(' ');
+    }
+  }
+
+  /// Draw a border with [title] around the rest of the region (below the
+  /// cursor) and return the inside. Consumes the region, like [rows]/[cols].
+  Region box(String title) {
+    final top = _y + _cursor;
+    final rest = _h - _cursor;
+    _drawBorder(_x, top, _w, rest, title);
+    _cursor = _h;
+    if (_w < 3 || rest < 3) {
+      return Region._(_grid, _x, top, 0, 0, _screen);
+    }
+    return Region._(_grid, _x + 1, top + 1, _w - 2, rest - 2, _screen);
   }
 
   /// Split what is below the cursor into rows. A size above 0 is fixed
-  /// cells; 0 shares what is left equally.
+  /// cells; 0 shares what is left equally. A negative size is an
+  /// [ArgumentError].
   List<Region> rows(List<int> sizes) => _split(sizes, horizontal: true);
 
-  /// Split what is below the cursor into columns.
+  /// Split what is below the cursor into columns. A negative size is an
+  /// [ArgumentError].
   List<Region> cols(List<int> sizes) => _split(sizes, horizontal: false);
 
-  /// Draw a button at the cursor. True in the frame it is clicked, or when
-  /// it has focus and Enter is pressed. Tab moves focus in drawing order.
+  /// Draw a button at the cursor. True in the frame it is clicked (left
+  /// button), or when it has focus and Enter is pressed. Tab and Shift+Tab
+  /// move the focus, drawn inverted. A button that doesn't fit is neither
+  /// drawn nor focusable (and can't fire).
   bool button(String label) {
+    if (_cursor >= _h) {
+      _cursor++;
+      return false;
+    }
     final text = '[ $label ]';
     final row = _y + _cursor;
     final index = _screen._nextButtons.length;
-    _screen._nextButtons.add(_Button(row, _x, text.length));
+    // Clip the click area to what is actually drawn.
+    var room = _w;
+    if (row >= 0 && row < _grid.length) {
+      room = _w.clamp(0, _grid[row].length - _x);
+    }
+    if (room < 0) room = 0;
+    final drawn = text.length.clamp(0, room);
+    _screen._nextButtons.add(_Button(row, _x, drawn));
     final isFocused = (_screen._buttons.isEmpty && index == 0) ||
         (index == _screen._focus);
-    _drawButton(row, _x, text, isFocused);
+    _drawButton(row, _x, text, drawn, isFocused);
     _cursor++;
-    if (_screen._clicked(_x, row, text.length)) return true;
+    if (drawn > 0 && _screen._clicked(_x, row, drawn)) return true;
     if (isFocused && _screen._pressed.contains('enter')) return true;
     return false;
   }
 
+  /// A scrollable list: draws the rows that fit with [selected] in view and
+  /// highlighted, handles `up` `down` `pageup` `pagedown` `home` `end`, the
+  /// wheel and clicks, and returns the new selected index. Consumes the
+  /// region. An empty list draws nothing and returns 0.
+  int list(List<String> items, int selected) {
+    final top = _y + _cursor;
+    final h = _h - _cursor;
+    _cursor = _h;
+    if (items.isEmpty || h <= 0) return 0;
+    var sel = selected.clamp(0, items.length - 1);
+    if (_screen._pressed.contains('up')) sel--;
+    if (_screen._pressed.contains('down')) sel++;
+    if (_screen._pressed.contains('pageup')) sel -= h;
+    if (_screen._pressed.contains('pagedown')) sel += h;
+    if (_screen._pressed.contains('home')) sel = 0;
+    if (_screen._pressed.contains('end')) sel = items.length - 1;
+    if (_screen._pressed.contains('wheelup')) sel -= 3;
+    if (_screen._pressed.contains('wheeldown')) sel += 3;
+    sel = sel.clamp(0, items.length - 1);
+    // Clicks select directly.
+    for (var r = 0; r < h && r < items.length; r++) {
+      if (_screen._clicked(_x, top + r, _w)) {
+        sel = (_selStart(sel, items.length, h) + r)
+            .clamp(0, items.length - 1);
+        break;
+      }
+    }
+    final start = _selStart(sel, items.length, h);
+    for (var r = 0; r < h; r++) {
+      final idx = start + r;
+      if (idx >= items.length) break;
+      final row = top + r;
+      final isSel = idx == sel;
+      _drawRowText(row, items[idx], isSel);
+    }
+    return sel;
+  }
+
+  /// Window start keeping [sel] in view without stored scroll state.
+  int _selStart(int sel, int len, int h) {
+    if (len <= h) return 0;
+    final start = (sel ~/ h) * h;
+    return start + h > len ? len - h : start;
+  }
+
+  void _drawRowText(int row, String text, bool highlight) {
+    if (row < 0 || row >= _grid.length) return;
+    var col = _x;
+    final end = _x + _w;
+    // Highlight the whole row, then draw the (clipped) text over it.
+    while (col < end && col < _grid[row].length && col >= 0) {
+      _grid[row][col] = _Cell(' ', inverse: highlight);
+      col++;
+    }
+    col = _x;
+    for (final rune in text.runes) {
+      if (col >= end) break;
+      if (rune == 0x09) {
+        var next = col + (8 - (col - _x) % 8);
+        if (next <= col) next = col + 1;
+        while (col < next && col < end) {
+          _place(row, col, ' ', 1, null, false, highlight);
+          col++;
+        }
+        continue;
+      }
+      if (rune < 0x20 || rune == 0x7f || (rune >= 0x80 && rune <= 0x9f)) {
+        _place(row, col, '�', 1, null, false, highlight);
+        col++;
+        continue;
+      }
+      if (isZeroWidth(rune)) continue;
+      final w = cellWidth(rune);
+      if (w == 2 && col + 1 >= end) {
+        _place(row, col, ' ', 1, null, false, highlight);
+        col++;
+        continue;
+      }
+      _place(row, col, String.fromCharCode(rune), w, null, false, highlight);
+      col += w;
+    }
+  }
+
+  /// A single-line text field showing [value] with a cursor. Handles
+  /// `typed()`, `backspace` (by grapheme) and pastes, and returns the edited
+  /// text. Consumes one row.
+  String input(String value) {
+    var v = value;
+    final typed = _screen._typed.toString();
+    if (typed.isNotEmpty) v += typed;
+    if (_screen._pressed.contains('backspace')) {
+      v = _deleteLastGrapheme(v);
+    }
+    // Draw the tail that fits, with a block cursor at the end.
+    final row = _y + _cursor;
+    _cursor++;
+    if (row < 0 || row >= _grid.length) return v;
+    const cursor = '▌';
+    final room = _w - 1;
+    var visible = v;
+    if (room <= 0) {
+      if (_w >= 1) _place(row, _x, cursor, 1, null, false, false);
+      return v;
+    }
+    // Keep the tail whose width fits in `room` (plus the cursor cell).
+    var width = 0;
+    final runes = visible.runes.toList();
+    var i = runes.length;
+    while (i > 0) {
+      final r = runes[i - 1];
+      if (isZeroWidth(r)) {
+        i--;
+        continue;
+      }
+      width += cellWidth(r);
+      if (width > room) break;
+      i--;
+    }
+    visible = String.fromCharCodes(runes.sublist(i));
+    var col = _x;
+    final end = _x + _w;
+    for (final rune in visible.runes) {
+      if (col >= end - 1) break;
+      if (isZeroWidth(rune)) continue;
+      final w = cellWidth(rune);
+      if (w == 2 && col + 1 >= end - 1) {
+        _place(row, col, ' ', 1, null, false, false);
+        col++;
+        break;
+      }
+      _place(row, col, String.fromCharCode(rune), w, null, false, false);
+      col += w;
+    }
+    if (col < end) _place(row, col, cursor, 1, null, false, false);
+    return v;
+  }
+
+  /// Delete the last grapheme cluster (base char + combining marks).
+  String _deleteLastGrapheme(String v) {
+    if (v.isEmpty) return v;
+    final runes = v.runes.toList();
+    var end = runes.length;
+    while (end > 0 && isZeroWidth(runes[end - 1])) {
+      end--;
+    }
+    if (end > 0) end--;
+    return String.fromCharCodes(runes.sublist(0, end));
+  }
+
   List<Region> _split(List<int> sizes, {required bool horizontal}) {
+    for (final s in sizes) {
+      if (s < 0) {
+        throw ArgumentError.value(
+            sizes, 'sizes', 'negative size $s: use 0 for a flex share');
+      }
+    }
     final total = horizontal ? _h - _cursor : _w;
     final fixed = sizes.where((s) => s > 0).fold(0, (a, b) => a + b);
     final flex = sizes.where((s) => s <= 0).length;
@@ -375,46 +821,70 @@ final class Region {
     return out;
   }
 
-  void _drawBorder(String title) {
-    if (_w <= 0 || _h <= 0) return;
-    const tl = '┌', tr = '┐', bl = '└', br = '┘', h = '─', v = '│';
-    _put(_x, _y, tl);
-    _put(_x + _w - 1, _y, tr);
-    _put(_x, _y + _h - 1, bl);
-    _put(_x + _w - 1, _y + _h - 1, br);
-    for (var x = _x + 1; x < _x + _w - 1; x++) {
-      _put(x, _y, h);
-      _put(x, _y + _h - 1, h);
+  void _drawBorder(int x, int y, int w, int h, String title) {
+    if (w <= 0 || h <= 0) return;
+    const tl = '┌', tr = '┐', bl = '└', br = '┘', hh = '─', v = '│';
+    _put(x, y, tl);
+    _put(x + w - 1, y, tr);
+    _put(x, y + h - 1, bl);
+    _put(x + w - 1, y + h - 1, br);
+    for (var xx = x + 1; xx < x + w - 1; xx++) {
+      _put(xx, y, hh);
+      _put(xx, y + h - 1, hh);
     }
-    for (var y = _y + 1; y < _y + _h - 1; y++) {
-      _put(_x, y, v);
-      _put(_x + _w - 1, y, v);
+    for (var yy = y + 1; yy < y + h - 1; yy++) {
+      _put(x, yy, v);
+      _put(x + w - 1, yy, v);
     }
-    var col = _x + 2;
-    for (final rune in ' $title '.runes) {
-      if (col >= _x + _w - 1) break;
-      _put(col, _y, String.fromCharCode(rune));
-      col += _cellWidth(rune);
+    // Title with wide-char continuation cells; never the `┐` corner.
+    var col = x + 2;
+    final runes = ' $title '.runes.toList();
+    var i = 0;
+    while (i < runes.length && col < x + w - 1) {
+      final rune = runes[i];
+      if (isZeroWidth(rune)) {
+        i++;
+        continue;
+      }
+      final wch = cellWidth(rune);
+      if (wch == 2 && col + 1 >= x + w - 1) break;
+      _putWide(col, y, String.fromCharCode(rune), wch);
+      col += wch;
+      i++;
     }
   }
 
-  void _drawButton(int row, int x, String text, bool focused) {
+  void _drawButton(int row, int x, String text, int drawn, bool focused) {
     if (row < 0 || row >= _grid.length) return;
     var col = x;
+    var left = drawn;
     for (final rune in text.runes) {
+      if (left <= 0) break;
       if (col >= x + _w || col >= _grid[row].length) break;
       if (col >= 0) {
-        _grid[row][col] =
-            _Cell(String.fromCharCode(rune), bold: focused);
+        _grid[row][col] = _Cell(String.fromCharCode(rune),
+            inverse: focused, width: 1);
       }
       col++;
+      left--;
     }
   }
 
   void _put(int x, int y, String ch) {
     if (y < 0 || y >= _grid.length) return;
     if (x < 0 || x >= _grid[y].length) return;
-    _grid[y][x] = const _Cell(' ').copy(ch);
+    final old = _grid[y][x];
+    _grid[y][x] = _Cell(ch,
+        color: old.color, bold: old.bold, inverse: old.inverse, width: 1);
+  }
+
+  void _putWide(int x, int y, String ch, int w) {
+    if (y < 0 || y >= _grid.length) return;
+    if (x < 0 || x >= _grid[y].length) return;
+    _grid[y][x] = _Cell(ch, width: w);
+    if (w == 2 && x + 1 < _grid[y].length) {
+      _grid[y][x + 1] = const _Cell('', width: 0);
+    }
   }
 }
 
@@ -429,25 +899,36 @@ extension ScreenFuture on Future<Screen> {
 }
 
 final class _Cell {
-  const _Cell(this.ch, {this.color, this.bold = false, this.x = -1, this.y = -1});
+  const _Cell(this.ch,
+      {this.color,
+      this.bold = false,
+      this.inverse = false,
+      this.width = 1,
+      this.x = -1,
+      this.y = -1});
 
   final String ch;
   final int? color;
   final bool bold;
+  final bool inverse;
+
+  /// Cells taken by this char: 2 for a wide char (lead), 0 for its
+  /// continuation half (never emitted on its own).
+  final int width;
   final int x;
   final int y;
-
-  _Cell copy(String ch) => _Cell(ch, color: color, bold: bold);
 
   @override
   bool operator ==(Object other) =>
       other is _Cell &&
       other.ch == ch &&
       other.color == color &&
-      other.bold == bold;
+      other.bold == bold &&
+      other.inverse == inverse &&
+      other.width == width;
 
   @override
-  int get hashCode => Object.hash(ch, color, bold);
+  int get hashCode => Object.hash(ch, color, bold, inverse, width);
 }
 
 final class _Button {
@@ -458,28 +939,27 @@ final class _Button {
   final int width;
 }
 
-sealed class _Event {}
+/// True for runes that take no cell and attach to the previous cell's string:
+/// combining marks, ZWJ/ZWNJ, variation selectors, emoji modifiers, tags.
+bool isZeroWidth(int rune) =>
+    (rune >= 0x0300 && rune <= 0x036f) ||
+    (rune >= 0x0483 && rune <= 0x0489) ||
+    (rune >= 0x1ab0 && rune <= 0x1aff) ||
+    (rune >= 0x1dc0 && rune <= 0x1dff) ||
+    (rune >= 0x20d0 && rune <= 0x20ff) ||
+    (rune >= 0xfe00 && rune <= 0xfe0f) ||
+    rune == 0x200c ||
+    rune == 0x200d ||
+    (rune >= 0x1f3fb && rune <= 0x1f3ff) ||
+    (rune >= 0xe0020 && rune <= 0xe007f);
 
-final class _Key extends _Event {
-  _Key(this.name);
-
-  final String name;
-}
-
-final class _Type extends _Event {
-  _Type(this.text);
-
-  final String text;
-}
-
-final class _Click extends _Event {
-  _Click(this.x, this.y);
-
-  final int x;
-  final int y;
-}
-
-int _cellWidth(int rune) {
+/// Cells taken by [rune] on screen: 2 for wide CJK and emoji, else 1
+/// (zero-width runes are answered by [isZeroWidth], not here).
+int cellWidth(int rune) {
+  // Emoji blocks that terminals render wide (all above U+1100, so they
+  // cannot live in the fast path below).
+  if (rune >= 0x2600 && rune <= 0x27bf) return 2;
+  if (rune >= 0x2b00 && rune <= 0x2bff) return 2;
   if (rune < 0x1100) return 1;
   if (rune <= 0x115f) return 2;
   if (rune == 0x2329 || rune == 0x232a) return 2;
@@ -490,179 +970,7 @@ int _cellWidth(int rune) {
   if (rune >= 0xfe30 && rune <= 0xfe4f) return 2;
   if (rune >= 0xff00 && rune <= 0xff60) return 2;
   if (rune >= 0xffe0 && rune <= 0xffe6) return 2;
+  if (rune >= 0x1f000 && rune <= 0x1faff) return 2;
   if (rune >= 0x20000 && rune <= 0x3fffd) return 2;
   return 1;
-}
-
-({List<_Event> events, int consumed}) _parse(List<int> bytes) {
-  final out = <_Event>[];
-  var i = 0;
-  final text = StringBuffer();
-  void flush() {
-    if (text.isNotEmpty) {
-      out.add(_Type(text.toString()));
-      text.clear();
-    }
-  }
-
-  while (i < bytes.length) {
-    final b = bytes[i];
-    if (b == 0x1b) {
-      // Mouse SGR: ESC [ < btn ; x ; y M/m.
-      if (i + 2 < bytes.length &&
-          bytes[i + 1] == 0x5b &&
-          bytes[i + 2] == 0x3c) {
-        var j = i + 3;
-        while (j < bytes.length &&
-            bytes[j] != 0x4d &&
-            bytes[j] != 0x6d) {
-          j++;
-        }
-        if (j < bytes.length) {
-          flush();
-          final parts = ascii.decode(bytes.sublist(i + 3, j)).split(';');
-          final btn = int.tryParse(parts[0]) ?? -1;
-          final x = (int.tryParse(parts[1]) ?? 1) - 1;
-          final y = (int.tryParse(parts[2]) ?? 1) - 1;
-          if (bytes[j] == 0x4d && (btn & 64) == 0) {
-            out.add(_Click(x, y));
-          }
-          i = j + 1;
-          continue;
-        }
-        break;
-      }
-      if (i + 1 >= bytes.length) {
-        // Lone trailing ESC: hold for the next frame (a split sequence's
-        // first byte?) rather than emitting or dropping it here.
-        break;
-      }
-      final n1 = bytes[i + 1];
-      if (n1 == 0x5b) {
-        // CSI sequence.
-        var j = i + 2;
-        while (j < bytes.length &&
-            (bytes[j] < 0x40 || bytes[j] > 0x7e)) {
-          j++;
-        }
-        if (j >= bytes.length) break;
-        flush();
-        final params = ascii.decode(bytes.sublist(i + 2, j));
-        final fin = bytes[j];
-        out.add(_Key(_csiName(params, fin)));
-        i = j + 1;
-        continue;
-      }
-      if (n1 == 0x4f) {
-        // SS3: F1-F4.
-        if (i + 2 >= bytes.length) break;
-        flush();
-        out.add(_Key(switch (bytes[i + 2]) {
-          0x50 => 'f1',
-          0x51 => 'f2',
-          0x52 => 'f3',
-          0x53 => 'f4',
-          _ => 'escape',
-        }));
-        i += 3;
-        continue;
-      }
-      // Alt+x: ESC followed by a char.
-      flush();
-      out.add(_Key('alt+${String.fromCharCode(n1)}'));
-      i += 2;
-      continue;
-    }
-    if (b == 0x09) {
-      flush();
-      out.add(_Key('tab'));
-      i++;
-      continue;
-    }
-    if (b == 0x0d || b == 0x0a) {
-      flush();
-      out.add(_Key('enter'));
-      // Swallow a paired LF after CR.
-      if (b == 0x0d && i + 1 < bytes.length && bytes[i + 1] == 0x0a) {
-        i += 2;
-      } else {
-        i++;
-      }
-      continue;
-    }
-    if (b == 0x7f || b == 0x08) {
-      flush();
-      out.add(_Key('backspace'));
-      i++;
-      continue;
-    }
-    if (b < 0x20) {
-      flush();
-      // Ctrl+letter: 0x01..0x1A → a..z.
-      final letter = String.fromCharCode(b + 0x60);
-      out.add(_Key('ctrl+$letter'));
-      i++;
-      continue;
-    }
-    // Printable run: decode UTF-8 up to the next control/ESC.
-    var j = i;
-    while (j < bytes.length &&
-        bytes[j] >= 0x20 &&
-        bytes[j] != 0x1b &&
-        bytes[j] != 0x7f) {
-      j++;
-    }
-    if (j > i && j == bytes.length) {
-      // The run hits the buffer end: hold back a trailing UTF-8 char split
-      // across reads instead of emitting mojibake.
-      j = _utf8Split(bytes, i, j);
-      if (j == i) break;
-    }
-    flush();
-    out.add(_Type(utf8.decode(bytes.sublist(i, j), allowMalformed: true)));
-    i = j;
-  }
-  flush();
-  return (events: out, consumed: i);
-}
-
-/// Pull [end] back past a trailing UTF-8 sequence split across reads.
-int _utf8Split(List<int> bytes, int start, int end) {
-  var k = end - 1;
-  while (k >= start && bytes[k] & 0xc0 == 0x80) {
-    k--;
-  }
-  if (k < start) return start; // all continuation bytes: hold everything
-  final lead = bytes[k];
-  final want = lead < 0x80
-      ? 1
-      : lead < 0xe0
-          ? 2
-          : lead < 0xf0
-              ? 3
-              : 4;
-  if (end - k < want) return k; // incomplete: hold from the lead byte
-  return end;
-}
-
-String _csiName(String params, int fin) {
-  if (fin == 0x41) return 'up';
-  if (fin == 0x42) return 'down';
-  if (fin == 0x43) return 'right';
-  if (fin == 0x44) return 'left';
-  if (fin == 0x48) return 'home';
-  if (fin == 0x46) return 'end';
-  if (fin != 0x7e) return 'escape';
-  return switch (params) {
-    '1' || '7' => 'home',
-    '2' => 'enter',
-    '3' => 'delete',
-    '4' || '8' => 'end',
-    '5' => 'pageup',
-    '6' => 'pagedown',
-    '11' || '12' || '13' || '14' || '15' => 'f${int.parse(params) - 10}',
-    '17' || '18' || '19' || '20' || '21' => 'f${int.parse(params) - 11}',
-    '23' || '24' => 'f${int.parse(params) - 12}',
-    _ => 'escape',
-  };
 }
