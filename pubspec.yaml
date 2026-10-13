@@ -8,6 +8,7 @@ environment:
 dependencies:
   archive: ^4.5.1
   crypto: ^3.0.7
+  csslib: ^1.0.2
   html: ^0.15.7
   http: ^1.6.0
   image: ^4.12.0
