@@ -64,6 +64,8 @@ abstract final class Console {
   /// A closed stdin throws [io.StdinException]. Ctrl-C restores the
   /// terminal and exits with 130.
   static Future<String> ask(String question, {bool secret = false}) async {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptAsk(question, secret: secret);
     io.stderr.writeln(question);
     final modes = term.captureModes();
     final sigs = _trapSignals(modes);
@@ -85,8 +87,11 @@ abstract final class Console {
     }
   }
 
-  /// Yes/no. Enter means no. Asks again on anything else.
+  /// Yes/no. Enter means no. Asks again on anything else. While a
+  /// state-driven [Tui.run] is active, shows as a popup.
   static Future<bool> confirm(String question) async {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptConfirm(question);
     for (;;) {
       final answer =
           (await ask('$question [y/n]')).trim().toLowerCase();
@@ -98,7 +103,8 @@ abstract final class Console {
   /// Pick one of [choices]. Arrow keys + Enter on a terminal (scrolling when
   /// the choices outnumber the rows); piped, a numbered list and a number.
   /// Escape accepts the current selection. Empty [choices] is an
-  /// [ArgumentError].
+  /// [ArgumentError]. While a state-driven [Tui.run] is active, shows as a
+  /// popup (Escape cancels with [StdinException]).
   static Future<String> choose(
     String question,
     List<String> choices,
@@ -106,6 +112,8 @@ abstract final class Console {
     if (choices.isEmpty) {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptChoose(question, choices);
     if (!io.stdin.hasTerminal || !io.stderr.hasTerminal) {
       io.stderr.writeln(question);
       for (var i = 0; i < choices.length; i++) {
@@ -124,7 +132,27 @@ abstract final class Console {
 
   /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
   /// or `✗ label` and a rethrow. The live line always fits the width.
+  /// While a state-driven [Tui.run] is active, draws in its status row
+  /// instead (several at once).
   static Future<T> spin<T>(String label, Future<T> Function() work) {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) {
+      final id = bridge.spinStarted(label);
+      Future<T> fut;
+      try {
+        fut = work();
+      } catch (e, st) {
+        bridge.spinEnded(id, false);
+        return Future.error(e, st);
+      }
+      return fut.then((v) {
+        bridge.spinEnded(id, true);
+        return v;
+      }, onError: (Object e, StackTrace st) {
+        bridge.spinEnded(id, false);
+        throw e;
+      });
+    }
     final _Live live = _Spinner(label);
     try {
       _claim(live);
@@ -193,8 +221,15 @@ abstract final class Console {
   }
 
   /// A progress bar over [total] items or bytes (`null` or 0 means unknown).
-  /// As a [Pipe] it counts bytes; with [tick] it counts items.
+  /// As a [Pipe] it counts bytes; with [tick] it counts items. While a
+  /// state-driven [Tui.run] is active, draws in its status row instead
+  /// (several at once).
   static Bar bar(int? total, {String? label}) {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) {
+      return Bar._bridged(bridge, bridge.barStarted(total, label), total,
+          label: label);
+    }
     final bar = Bar._(total, label: label);
     // Claim before the first draw, so a second bar throws before it can
     // draw over the live line.
@@ -462,6 +497,9 @@ abstract final class Console {
             case term.TermHover():
               // Hover motion is for the TUI; ignore while choosing.
               break;
+            case term.TermFocus():
+              // Focus reports are for the TUI; ignore while choosing.
+              break;
           }
         }
         // Incomplete trailing sequence (or a lone ESC): wait briefly; a
@@ -529,10 +567,16 @@ String _fmtSize(num bytes) {
 /// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
 /// count and a rate with no bar, so `Console.bar(res.size())` just works.
 final class Bar extends _Live implements Pipe, Closeable {
-  Bar._(this._total, {this._label});
+  Bar._(this._total, {this._label})
+      : _bridge = null,
+        _bridgeId = null;
+
+  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
 
   final int? _total;
   final String? _label;
+  final term.TuiBridge? _bridge;
+  final Object? _bridgeId;
   var _done = 0;
   var _closed = false;
   var _piped = false;
@@ -543,6 +587,16 @@ final class Bar extends _Live implements Pipe, Closeable {
 
   /// Add [count] (1 by default), stopping at the total. Returns this bar.
   Bar tick([int count = 1]) {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return this;
+      _done += count;
+      final total = _total;
+      if (total != null && total > 0 && _done > total) _done = total;
+      bridge.barTick(id, count);
+      return this;
+    }
     if (_closed) return this;
     _done += count;
     final total = _total;
@@ -554,6 +608,15 @@ final class Bar extends _Live implements Pipe, Closeable {
   /// Print the final line. Call it in `finally`.
   @override
   Future<void> close() async {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return;
+      _closed = true;
+      bridge.barEnded(id, true);
+      _free();
+      return;
+    }
     if (_closed) return;
     _closed = true;
     try {
@@ -598,6 +661,9 @@ final class Bar extends _Live implements Pipe, Closeable {
     // stream, which starts this generator and tears it down, running the
     // finally below.
     _piped = true;
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) bridge.barMode(id, true);
     var ok = false;
     try {
       await for (final chunk in input) {
@@ -617,6 +683,15 @@ final class Bar extends _Live implements Pipe, Closeable {
   }
 
   Future<void> _fail() async {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return;
+      _closed = true;
+      bridge.barEnded(id, false);
+      Console._release(this);
+      return;
+    }
     if (_closed) return;
     _closed = true;
     try {

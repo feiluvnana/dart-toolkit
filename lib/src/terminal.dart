@@ -100,12 +100,14 @@ final class TermType extends TermEvent {
   final bool paste;
 }
 
-/// A left-button press at cell (x, y), zero-based.
+/// A button press at cell (x, y), zero-based: [kind] is `click` (left),
+/// `middleclick` or `rightclick`.
 final class TermClick extends TermEvent {
-  TermClick(this.x, this.y);
+  TermClick(this.x, this.y, [this.kind = 'click']);
 
   final int x;
   final int y;
+  final String kind;
 }
 
 /// Pointer motion with no buttons pressed, at cell (x, y), zero-based.
@@ -117,6 +119,32 @@ final class TermHover extends TermEvent {
 
   final int x;
   final int y;
+}
+
+/// Terminal window focus change (`?1004h` reports). Engines that don't track
+/// focus can ignore these.
+final class TermFocus extends TermEvent {
+  TermFocus(this.gained);
+
+  final bool gained;
+}
+
+/// Console-in-Tui routing: while a state-driven [Tui.run] is active,
+/// `Console.spin`/`bar` draw in the status row (several at once) and
+/// `ask`/`confirm`/`choose` open modal popups. The active session publishes
+/// itself here; `console.dart` delegates when it is non-null.
+abstract class TuiBridge {
+  static TuiBridge? current;
+
+  Object spinStarted(String label);
+  void spinEnded(Object id, bool ok);
+  Object barStarted(int? total, String? label);
+  void barMode(Object id, bool bytes);
+  void barTick(Object id, int count);
+  void barEnded(Object id, bool ok);
+  Future<String> promptAsk(String question, {required bool secret});
+  Future<bool> promptConfirm(String question);
+  Future<String> promptChoose(String question, List<String> choices);
 }
 
 /// Decode raw stdin [bytes] into events. Returns the events plus how many
@@ -166,16 +194,25 @@ final class TermHover extends TermEvent {
           final isRelease = bytes[j] == 0x6d;
           if (!isRelease) {
             if (btn & 64 != 0) {
-              // Wheel: 64 = up, 65 = down.
+              // Wheel: 64 = up, 65 = down. The pointer position comes
+              // first as a hover, so the wheel goes to what is under it.
+              out.add(TermHover(x, y));
               out.add(TermKey(btn & 3 == 1 ? 'wheeldown' : 'wheelup'));
             } else if (btn == 35) {
               // Motion with no buttons: hover position, not a click.
               out.add(TermHover(x, y));
             } else if (btn & 32 != 0) {
               // Drag (32): not a click, ignore.
-            } else if (btn & 3 == 0) {
-              // Left button only; right/middle are not clicks.
-              out.add(TermClick(x, y));
+            } else {
+              // Press: left, middle or right.
+              switch (btn & 3) {
+                case 0:
+                  out.add(TermClick(x, y));
+                case 1:
+                  out.add(TermClick(x, y, 'middleclick'));
+                case 2:
+                  out.add(TermClick(x, y, 'rightclick'));
+              }
             }
           }
         }
@@ -214,7 +251,13 @@ final class TermHover extends TermEvent {
           continue;
         }
         final key = csiName(params, bytes[j]);
-        if (key != null) out.add(TermKey(key));
+        if (key == 'focus') {
+          out.add(TermFocus(true));
+        } else if (key == 'blur') {
+          out.add(TermFocus(false));
+        } else if (key != null) {
+          out.add(TermKey(key));
+        }
         i = j + 1;
         continue;
       }
@@ -247,6 +290,19 @@ final class TermHover extends TermEvent {
         continue;
       }
       // Alt+<char>: decode one full UTF-8 char so Alt+é etc. are not mojibake.
+      // Alt+Enter arrives as ESC CR (or ESC LF): name it directly.
+      if ((n1 == 0x0d || n1 == 0x0a) && i + 1 < bytes.length) {
+        flush();
+        out.add(TermKey('alt+enter'));
+        i += 2;
+        continue;
+      }
+      if (n1 == 0x7f || n1 == 0x08) {
+        flush();
+        out.add(TermKey('alt+backspace'));
+        i += 2;
+        continue;
+      }
       final width = _utf8Width(bytes, i + 1);
       if (width < 0) break; // split char: hold.
       flush();
@@ -342,9 +398,12 @@ final class TermHover extends TermEvent {
 /// sequences are never reported as `escape`). [params] is the raw text
 /// between `[` and the final byte [fin]. Modifiers (`;2` shift, `;3` alt,
 /// `;5` ctrl and combinations) become `ctrl+`/`alt+`/`shift+` prefixes.
+/// Focus reports (`CSI I`/`CSI O`, from `?1004h`) are returned as the
+/// sentinel names `focus`/`blur` for [decodeKeys] to wrap.
 String? csiName(String params, int fin) {
-  // Focus in/out reports: ignore.
-  if ((fin == 0x49 || fin == 0x4f) && params.isEmpty) return null;
+  // Focus in/out reports.
+  if (fin == 0x49 && params.isEmpty) return 'focus';
+  if (fin == 0x4f && params.isEmpty) return 'blur';
   var prefix = '';
   var code = params;
   final semi = params.indexOf(';');
@@ -375,6 +434,20 @@ String? csiName(String params, int fin) {
     case 0x5a:
       // Shift+Tab (CSI Z, no params on most terminals).
       return 'shift+tab';
+    case 0x75:
+      // Kitty keyboard protocol: CSI unicode-number [; modifiers] u.
+      base = switch (code) {
+        '9' => 'tab',
+        '13' => 'enter',
+        '27' => 'escape',
+        '32' => 'space',
+        '127' => 'backspace',
+        // Other keys the protocol disambiguates (ctrl+c as `99;5u`).
+        _ => switch (int.tryParse(code)) {
+            final n? when n > 0x20 && n < 0x7f => String.fromCharCode(n),
+            _ => null,
+          },
+      };
     case 0x7e:
       base = switch (code) {
         '1' || '7' => 'home',
@@ -463,8 +536,7 @@ int _pasteEnd(List<int> bytes, int from) {
 
 /// Saved stdin terminal modes, best-effort (a non-terminal stdin throws on
 /// access, in which case there is nothing to save or restore).
-final class TermModes {
-  TermModes(this.echo, this.line);
+final class TermModes {  TermModes(this.echo, this.line);
 
   final bool? echo;
   final bool? line;

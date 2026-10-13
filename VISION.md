@@ -109,16 +109,19 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`          | `Response`, `Page`, `Visit`                   |
 | a file name / a size in bytes          | `name()` / `size()`                    | `Entry`, `Download`, `Response`, `Visit` / `File`, `Response` |
 | run a program, a job, an app           | `run`                                  | `Shell`, `Pool`, `Tui`, `Scrape`              |
-| a key                                  | `press(key)` sends, `pressed(key)` tests; one key-name set (§4.12) | `Page`, `Screen` |
+| a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen` |
 | draw or store into                     | `write`                                | `File`, `Region`                              |
-| dimensions                             | `width()` `height()` / `width:` `height:` | `Image`, `Screen`, `Region` / `open`, `resize` |
+| dimensions                             | `width()` `height()` / `width:` `height:` | `Image`, `Region` / `open`, `resize`, `popup` |
 | the function that does the work        | `handler`                              | `Command(handler:)`, `Scrape.run`, `follow`   |
-| a notification                         | `on…:`                                 | `onResult:`, `onError:`                       |
+| a notification / a bound event         | `on…:` / `on(events)`, `keys:`         | `onResult:`, `onError:` / `Region`, `Screen`  |
+| switch the current state               | `go(state)`                            | `App`                                         |
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `baseUrl` `headless`
 `executable` `profile` `proxy` `block` `width` `height` `fullPage` `workingDir` `env` `recursive`
 `json` `pretty` `limit` `delay` `retries` `cache` `browser` `onResult` `onError` `short` `or`
-`required` `parse` `values` `commands` `aliases` `handler` `secret` `label` `quality` `color` `bold`.
+`required` `parse` `values` `commands` `aliases` `handler` `secret` `label` `quality` `color`
+`background` `style` `link` `title` `status` `keys` `fullscreen` `accent` `hint` `lines` `suggest`
+`empty` `header` `follow`.
 
 ## 4. Modules
 
@@ -135,8 +138,8 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `baseUrl` `h
 | `pool`    | `Pool.run` `map` `close`                                                                                                                          | `worker_manager`      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Def<T>`) · `Command` `parse` · `Ctx` `call` `rest` `usage` · `UsageException`                                  | in-house              |
 | `console` | `Console.ask` `confirm` `choose` `spin` `bar` · `Bar` `tick`                                                                                      | in-house              |
-| `tui`     | `Tui.run` · `Screen` `frame` `pressed` `typed` `width` `height` · `Region` `width` `height` `write` `box` `rows` `cols` `button` `list` `input`              | in-house              |
-| `image`   | `Image.decode` · `Reader.image` · `Image` `width` `height` `resize` `crop` `encode` · `ImageFormat`                                               | `package:image`       |
+| `tui`     | `Tui.run` · `App` `state` `go` `say` `print` `notify` `copy` `quit` · `Screen` · `Bind` · `Pick` · `Field` · `Scroll` · `Region` (20, below) · `Color` · `Style` | in-house              |
+| `image`   | `Image.decode` · `Reader.image` · `Image` `width` `height` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
 | `scrape`  | `Scrape.run` · `Visit` `url` `status` `follow` `emit`                                                                                             | http + html + chrome  |
 
 A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
@@ -517,84 +520,153 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]); }
 ### 4.12 tui
 
 ```dart
-abstract final class Tui { static Future<void> run(Future<void> Function(Screen screen) app); }
+abstract final class Tui {
+  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen,
+      {bool fullscreen = true, Color accent = .orange});
+}
+final class App<S> {
+  S state();  void go(S state);  void say(String message);
+  void print(void Function(Region r) draw);   // inline: commit above the live area, into scrollback
+  void notify(String message);                // OSC 9/777, bell fallback; no-op while focused
+  void copy(String text);                     // OSC 52
+  void quit();                                // run() returns state()
+}
 final class Screen {
-  Future<Screen> frame(void Function(Region region) build);
-  bool pressed(String key);  String typed();  int width();  int height();
+  Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Bind> keys = const {}});
 }
+typedef Bind = (String label, FutureOr<void> Function() action);
+final class Pick<T> {                          // a list's items and selection
+  Pick([List<T> items = const []]);
+  List<T> items();  int index();  T? selected();  Pick<T> set(List<T> items);  Pick<T> select(int index);
+}
+final class Field {                            // an editor's text, cursor and history
+  Field({String text = '', List<String> history = const []});
+  String text();  List<String> history();  Field set(String text);  String submit();
+}
+final class Scroll { Scroll({bool follow = true}); }
 final class Region {
-  int width();  int height();
-  Region write(String text, {int? color, bool bold = false});
-  Region box(String title);
-  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
-  bool button(String label);                       // widgets take the app's state
-  int list(List<String> items, int selected);      // and return the new state
-  String input(String value);
+  int width();  int height();  bool hovered();  bool focused();
+  Region write(String text, {Color? color, Color? background, Set<Style> style = const {}, String? link});
+  Region markdown(String source);  Region diff(String before, String after);
+  Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
+  Region tabs<T>(Pick<T> tabs, String Function(T tab) label);  Region scroll(Scroll scroll);
+  Region popup(String title, {int width = 40, int height = 10});
+  Region on(Map<String, Bind> events);
+  Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''});
+  Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
+  Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest});
+  Region button(String label, FutureOr<void> Function() action);
+  Region bar(int done, int? total, {String? label});  Region spin(String label);
 }
+final class Color {                            // black red green yellow blue magenta cyan white gray orange
+  const factory Color.index(int index);  const factory Color.rgb(int r, int g, int b);
+}
+enum Style { bold, dim, italic, underline, strike, reverse }
 ```
 
-- **Immediate mode.** The app keeps its state in its own variables and redraws everything in
-  `build`. State changed by async work (`.then`) shows on the next frame.
-- **`frame`** waits for the next ~60 fps slot, collects input, runs `build` on the whole screen,
-  and writes only the changed cells.
-- **Input is state** for one frame: available inside `build` and after `frame` returns, until the
-  next `frame`. The loop is `while (!screen.pressed('escape')) await screen.frame(…);`.
-  - A printable key is in both `typed()` (as text) and `pressed('a')`.
-  - Unknown sequences are ignored, never reported as `escape`.
-  - Pasted text arrives in `typed()` only, never as `enter`.
+`image` adds `Region.picture(Image)` (half-block cells), so `tui` doesn't load the codecs.
+
+- **State-driven.** The state is the app's own value, usually a sealed class with one subclass per
+  view, so `screen` is an exhaustive `switch`. `screen` runs on every redraw, only describes the
+  screen and never blocks. Widget state lives in `Pick`/`Field`/`Scroll` objects held by the
+  state, so `app.go(previous)` brings back the query, selection, scroll and focus.
+- **Redraws are event-driven**, coalesced to 60 fps, writing only changed cells: after each input
+  event, on `go`/`say`/`print`, on resize, and whenever work started by a handler (timer, future,
+  stream event) delivers, since handlers run in a zone. Spinners animate at 80 ms while visible.
+  An idle app uses no CPU.
+- **Modes.** `fullscreen: true` uses the alternate screen and captures the mouse. `false` is
+  inline: the live area sits below the prompt, as tall as what is drawn (a `0` row takes its
+  content's height), and `print` commits rendered output into the terminal's scrollback. In full
+  screen, `print` throws `StateError`.
+- **One `Bind` map for every event**, in `Screen(keys:)` and `Region.on`: key names (below, plus
+  `shift+enter`/`ctrl+enter` where the terminal reports them), `click` `doubleclick` `rightclick`
+  `middleclick` `wheelup` `wheeldown`, and `show` `resize` `focus` `blur`. A name may list
+  alternatives (`'b escape'`). Hover is a reading: `if (r.hovered()) …`. `keys:` is rebuilt with
+  the screen, so collection `if` makes bindings and help depend on the state.
+- **Routing.** A key goes to the first taker: an open popup (a `Console` prompt, a `suggest` list);
+  the focused widget or `on` region; `tab`/`shift+tab` moving the focus unless bound; the `Screen`
+  keys; any other drawn widget that uses it, in drawn order; unbound `ctrl+c`, which quits. Mouse
+  events go to the innermost region under the pointer, then outwards, then to `keys`.
+- **Widgets:**
+  - `list`/`table`: `up` `down` `pageup` `pagedown` `home` `end`, the wheel, and a click (selects
+    and focuses). `tabs`: `left` `right` and a click. `button`: `enter`/`space` and a click.
+  - `scroll`: the wheel, and when focused the page keys; a scrollbar when it overflows. With
+    `follow`, it stays at the end as content grows; scrolling up unpins, `end` re-pins.
+  - `input`: text and bracketed paste; `backspace`/`delete` by grapheme, `ctrl+w`/`alt+backspace`
+    by word, `ctrl+u`/`ctrl+k` to the line's start/end; `left` `right` `home` `end` `ctrl+a`
+    `ctrl+e`, `alt+`/`ctrl+left`/`right` by word. `lines > 1` grows to that many rows (`0` = no
+    cap); `shift+enter`, `alt+enter` or `\` + `enter` insert a newline; `up`/`down` at the first or
+    last line walk the history. `enter` is never consumed, so `keys` decides it. `suggest` opens a
+    popup of matches for the word at the cursor (`up`/`down`, `tab`/`enter` replace, `escape`
+    closes; a stale async answer is dropped).
+  - `on`: a region binding a keyboard key is focusable; `focused()`/`hovered()` draw its state.
+- **Focus** is object identity (the `Pick`/`Field`/`Scroll`, the `on` key set, a button's label),
+  so it survives redraws and state switches. When the focused thing isn't drawn, the first
+  focusable one is. A focused list uses the accent, unfocused dim reversed; a focused input shows
+  the hardware cursor.
+- **Handlers** may be sync or async, and every event runs one, even while an earlier run is
+  pending. An `Exception` from a handler, or from work it started, shows as `✗ <first line>` in
+  the status row and the app keeps running. An `Error` ends `run` and is rethrown.
+- **Rows.** `title` is the top row, in the accent. The bottom status row shows, on the left, the
+  error, the `say` message, running spinners and bars, or else `status`; on the right, the key
+  help from `keys:` (`enter send · esc interrupt`), with empty labels and mouse/lifecycle bindings
+  hidden. A narrow row cuts the help first.
+- **Console inside the Tui.** While `run` is active, `Console.spin`/`bar` draw in the status row
+  (several at once), and `Console.ask`/`confirm`/`choose` open a modal popup, where `escape` is EOF
+  (`StdinException`; a handler that ends with it shows nothing).
+- **Drawing.**
+  - `write` wraps at the edge, `\n` breaks, `\t` expands, controls show as `�`, and text past the
+    last row ends with `…`. Widths follow grapheme clusters: CJK and emoji take 2 cells, combining
+    marks and ZWJ 0. `link` makes an OSC 8 hyperlink.
+  - `markdown`: headings, nested and numbered lists, quotes, box-drawn tables, `---`; bold,
+    italic, strike, `code`, links; fenced code highlighted by one in-house lexer (Dart, JS/TS,
+    Python, shell, JSON, YAML, Rust, Go, C-likes). Safe to stream: an unclosed fence or emphasis
+    renders as closed. Layout is cached by `(source, width)`.
+  - `diff`: a Myers line diff in unified hunks with 3 context lines, gutter line numbers, and
+    `-`/`+` rows on red/green with the changed words of paired lines brighter.
+  - `rows`/`cols`: a size above 0 is fixed, 0 shares what is left. `box(title)` borders the rest
+    and returns the inside. `popup` is drawn last, centered. `bar` lays out like `Console.bar`.
+    `scroll` lays out its content once per redraw and paints only the viewport.
+  - Colours are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR` drops them
+    and keeps styles. `LANG=C`/no UTF-8 switches boxes, bars and spinners to ASCII.
 - **Key names**, shared with `Page.press`:
   - printable characters as themselves, plus `'space'`;
   - `'enter'` `'tab'` `'shift+tab'` `'backspace'` `'escape'` `'insert'` `'delete'`;
   - `'up'` `'down'` `'left'` `'right'` `'home'` `'end'` `'pageup'` `'pagedown'`, `'f1'`…`'f12'`;
-  - `ctrl+`/`alt+`/`shift+` prefixes (`'ctrl+c'`, `'alt+x'`, `'ctrl+up'`);
-  - `'wheelup'` `'wheeldown'`.
-- **`Region`** is a rectangle with a cursor at its top-left. Every method draws or splits *below
-  the cursor* and clips to the region.
-  - `write`: `\n` starts the next line and `\t` expands to spaces. Control characters show as `�`.
-  - Widths follow grapheme clusters: wide CJK and emoji take 2 cells, combining marks and ZWJ
-    take 0.
-  - `color` is a 256-colour index.
-  - `box(title)` borders the rest of the region and returns the inside.
-  - `rows`/`cols` split the rest: a size above 0 is fixed, and 0 shares what is left.
-  - `button` is true when clicked (left button), or when it has focus and Enter is pressed. Tab and
-    Shift+Tab move the focus, which is drawn inverted. A button that doesn't fit is neither drawn
-    nor focusable.
-  - **Widgets take the app's state and return the new state** (as in Dear ImGui), and react to
-    keys only while drawn:
-    - `button(label)` → `bool`.
-    - `list(items, selected)` → the selected index. It scrolls by the least needed, and every
-      press in a frame counts. It handles `up` `down` `pageup` `pagedown`
-      `home` `end`, the wheel and clicks, and draws the rows that fit with `selected` in view and
-      highlighted.
-    - `input(value)` → the edited text. It handles `typed()`, `backspace` (by grapheme) and paste,
-      and draws the value with a cursor.
+  - `ctrl+`/`alt+`/`shift+` prefixes (`'ctrl+c'`, `'alt+x'`, `'ctrl+up'`).
+  - Unknown sequences are ignored, never reported as `escape`; a split sequence is held up to 1 s.
 - **Terminal life:**
-  - `run` enters raw mode, the alternate screen and mouse reporting, and turns autowrap and
-    bracketed paste on and off.
-  - It restores the previous terminal state when the app returns or throws, on Ctrl-C (which is
-    `pressed('ctrl+c')` while running), on SIGTERM/SIGHUP, and on an uncaught error in work the
-    app started without awaiting (rethrown from `run`).
-  - A resize, or a gap of more than 500 ms between frames (such as resuming after Ctrl-Z),
-    repaints every cell. Frames use synchronized output, so nothing tears.
-  - `run` can be called again, and prompts work before and after it. Nothing is left listening
-    to the terminal afterwards, so the script exits when `main` ends. On POSIX, input is read
-    through a child `cat /dev/tty` that can be restarted, since `dart:io` stdin can be listened
-    to only once and keeps the process alive.
+  - `run` enters raw mode (and in full screen the alternate screen and mouse reporting), turns
+    autowrap, bracketed paste and focus reports on and off, and restores the terminal when the
+    app quits or throws, on Ctrl-C, on SIGTERM/SIGHUP, and on an uncaught error in work the app
+    started (rethrown from `run`). Ctrl-Z suspends and resumes with a full repaint.
+  - A resize repaints every cell. Frames use synchronized output, so nothing tears. Shift-drag
+    still selects text natively while the mouse is captured.
+  - `run` can be called again, and prompts work before and after it; a second `run` while one
+    is active throws `StateError`. After `quit`, `run` returns without waiting for pending
+    handlers. Nothing is left listening to the terminal, so the script exits when `main` ends.
+    On POSIX, input is read through a restartable child `cat /dev/tty`.
   - It throws `StdoutException` when stdout is not a terminal.
 
 ```dart
-await Tui.run((screen) async {
-  var sel = 0, filter = '';
-  final all = ['alpha', 'beta', '日本語'];
-  while (!screen.pressed('escape')) {
-    await screen.frame((r) {
-      final [head, body, foot] = r.rows([3, 0, 3]);
-      filter = head.box('Filter').input(filter);
-      final items = [for (final i in all) if (i.contains(filter)) i];
-      sel = body.box('Items · ${r.width()}×${r.height()}').list(items, sel);
-      if (foot.box('').button('Open') && items.isNotEmpty) open(items[sel]);
-    });
-  }
+typedef Hit = ({String title, String url});
+sealed class Page {}
+final class Search extends Page { final query = Field(); final hits = Pick<Hit>(); }
+final class Series extends Page { Series(this.back, this.hit); final Search back; final Hit hit; final chapters = Pick<String>(); }
+
+await Tui.run<Page>(Search(), (page, app) => switch (page) {
+  Search s => Screen(title: 'search', (r) {
+      final [body, foot] = r.rows([0, 3]);
+      body.list(s.hits, (h) => h.title, empty: 'type a title, press enter');
+      foot.box('query').input(s.query);
+    }, keys: {
+      'enter': ('search', () async => s.hits.set(await Console.spin('searching', () => search(s.query.text())))),
+      'ctrl+o': ('open', () => app.go(Series(s, s.hits.selected()!))),
+      'escape': ('quit', app.quit),
+    }),
+  Series c => Screen(title: c.hit.title, (r) => r.list(c.chapters, (t) => t), keys: {
+      'b escape': ('back', () => app.go(c.back)),
+    }),
 });
 ```
 
@@ -691,7 +763,8 @@ surfaces from its `>`/`to`, after cleanup. An error in a chain surfaces at its s
 
 Native code and codegen; test seams in the public API; sync twins and aliases; fan-out to several
 writers; download resume; file watching and globbing; browser interception beyond `block`, frames
-and `hover`; colours outside the TUI; retained TUI widgets; HMAC; torrents. Each comes back only
-when a real script needs it.
+and `hover`; colours outside the TUI; a TUI widget tree (widget state lives in
+`Pick`/`Field`/`Scroll`); terminal images beyond half-blocks (Sixel, kitty), `ctrl+r` history search
+and vim mode in `input`; HMAC; torrents. Each comes back only when a real script needs it.
 
 Known bugs and the work left against this document are in `REPORT.md`.

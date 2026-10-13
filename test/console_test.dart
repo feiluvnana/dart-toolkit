@@ -248,6 +248,8 @@ Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
   final res = await Process.run('python3', [
     '${root.path}/test/tui_pty/drive.py',
     '--size', '24', '80',
+    // Feeds count from the menu's first draw, not from the process start.
+    '--ready', 'blue',
     for (final (delay, bytes) in feeds) ...['--feed', '$delay', bytes],
     '--', Platform.resolvedExecutable,
     '${root.path}/test/console_pty/probe.dart', log.path, 'choose',

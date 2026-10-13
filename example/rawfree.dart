@@ -1,26 +1,19 @@
-/// rawfree TUI: search manga, open pages, download chapters.
+/// rawfree: search manga, browse chapters, queue downloads.
 ///
-/// No flags, no args — just run it:
 /// ```sh
 /// dart run example/rawfree.dart
 /// ```
 ///
-/// Keys (search view): type to edit · enter search/open · ↑↓ move ·
-/// `ctrl+o` open in browser · `esc` quit.
-/// Keys (chapters view): ↑↓ move · enter download chapter ·
-/// `o` open series in browser · `b`/`esc` back.
-/// `ctrl+c` quits from anywhere; while a download runs, quitting asks for a
-/// second press.
-///
-/// Downloads go to `downloads/<series>/<chapter>/` as `001.jpg`, `002.jpg`,
-/// … Network failures show a one-line status and the app keeps running.
-///
-/// Immediate mode: async work (search, chapters, downloads) mutates this
-/// state from `.then` callbacks, and the next frame shows it.
+/// Search: type, `enter` searches, `enter` again opens the series.
+/// Series: `enter` queues a chapter, `a` queues every chapter not on disk.
+/// `ctrl+d` shows the download queue from any view (`r` retries the missing
+/// pages of a failed job, `delete` drops a queued one, `c` clears finished).
+/// Pages land in `downloads/<series>/<chapter>/001.jpg`, …
 library;
 
-import 'dart:io' show StdoutException, exit, stderr;
+import 'dart:io' show HttpException, StdoutException, exit, stderr;
 
+import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
@@ -31,228 +24,265 @@ import 'package:dart_toolkit/tui.dart';
 const _base = 'https://rawfree.you';
 
 const _headers = {
-  'accept':
-      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'accept-language': 'ja,en-US;q=0.9,en;q=0.8',
-  'user-agent':
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
 };
 
-typedef Hit = Map<String, String?>; // title, url
+typedef Hit = ({String title, String url});
 typedef Chapter = ({String title, String url, int postId});
 
-Future<void> main(List<String> argv) async {
+// --- UI ---
+
+sealed class Page {}
+
+final class Search extends Page {
+  final query = Field();
+  final hits = Pick<Hit>();
+  var searched = '';
+}
+
+final class Series extends Page {
+  Series(this.back, this.hit);
+  final Search back;
+  final Hit hit;
+  final chapters = Pick<Chapter>();
+  final onDisk = <String>{};
+}
+
+final class Queue extends Page {
+  Queue(this.back);
+  final Page back;
+}
+
+enum JobStatus { queued, active, done, failed }
+
+final class Job {
+  Job(this.series, this.chapter);
+  final Hit series;
+  final Chapter chapter;
+  var status = JobStatus.queued, done = 0, total = 0;
+  final missing = <int>[]; // page indexes to (re)fetch; empty = all
+  String get dir => 'downloads/${_safe(series.title)}/${_safe(chapter.title)}';
+}
+
+final queue = Pick<Job>();
+var _working = false;
+
+Future<void> main() async {
   try {
-    await Tui.run(_app);
+    await Tui.run<Page>(Search(), _screen);
   } on StdoutException {
     stderr.writeln('rawfree needs a terminal');
     exit(1);
   }
-  // Searches and downloads still in flight would keep the process alive
-  // after the screen is gone; quitting means quitting.
-  exit(0);
+  exit(0); // downloads still in flight end with the app
 }
 
-Future<void> _app(Screen screen) async {
-  final st = _State();
-  while (!st.quit) {
-    await screen.frame((r) => st.draw(screen, r));
-  }
+Screen _screen(Page page, App<Page> app) {
+  final keys = <String, Bind>{
+    'ctrl+d': ('queue', () => app.go(page is Queue ? page.back : Queue(page))),
+    'ctrl+c': ('', () => _quit(app)),
+  };
+  return switch (page) {
+    Search s => Screen(
+      title: '✻ rawfree',
+      (r) {
+        final [body, foot] = r.rows([0, 3]);
+        body.list(s.hits, (h) => h.title, empty: 'type a manga title, press enter');
+        foot.box('search').input(s.query);
+      },
+      keys: {
+        'enter': s.query.text().trim() != s.searched ? ('search', () => _search(s)) : ('open', () => _open(s, app)),
+        'ctrl+o': ('browser', () => _browse(s.hits.selected()?.url, app)),
+        'escape': ('quit', () => _quit(app)),
+        ...keys,
+      },
+    ),
+    Series c => Screen(
+      title: '✻ ${c.hit.title}',
+      (r) => r.list(c.chapters, (ch) => '${_mark(c, ch)} ${ch.title}', empty: 'no chapters'),
+      keys: {
+        'enter': ('queue', () => _enqueue(c, [?c.chapters.selected()], app)),
+        'a': ('queue all', () => _enqueue(c, c.chapters.items(), app)),
+        'o': ('browser', () => _browse(c.hit.url, app)),
+        'b escape': ('back', () => app.go(c.back)),
+        ...keys,
+      },
+    ),
+    Queue q => Screen(
+      title: '✻ downloads',
+      (r) {
+        final [body, foot] = r.rows([0, 1]);
+        body.table(
+          queue,
+          (j) => [
+            j.chapter.title,
+            j.status == JobStatus.failed ? 'failed (${j.missing.length})' : j.status.name,
+            '${j.done}/${j.total}',
+          ],
+          header: ['chapter', 'status', 'pages'],
+          empty: 'nothing queued · enter on a chapter queues it',
+        );
+        if (_active() case final j?) foot.bar(j.done, j.total, label: '↓ ${j.chapter.title}');
+      },
+      keys: {
+        if (queue.selected()?.status == JobStatus.failed) 'r': ('retry', () => _retry(queue.selected()!, app)),
+        if (queue.selected()?.status == JobStatus.queued) 'delete': ('remove', () => _remove(queue.selected()!)),
+        'c': (
+          'clear done',
+          () => queue.set([
+            for (final j in queue.items())
+              if (j.status != JobStatus.done) j,
+          ]),
+        ),
+        'b escape': ('back', () => app.go(q.back)),
+        ...keys,
+      },
+    ),
+  };
 }
 
-final class _State {
-  var query = '';
-  var searched = '';
-  var hits = <Hit>[];
-  var sel = 0;
-  var searching = false;
+Job? _active() => queue.items().where((j) => j.status == JobStatus.active).firstOrNull;
+Job? _job(Chapter ch) => queue.items().where((j) => j.chapter.postId == ch.postId).firstOrNull;
+int get _left => queue.items().where((j) => j.status.index < JobStatus.done.index).length;
 
-  Hit? series;
-  var chapters = <Chapter>[];
-  var csel = 0;
-  var loadingCh = false;
+String _mark(Series c, Chapter ch) => c.onDisk.contains(ch.title)
+    ? '✓'
+    : switch (_job(ch)?.status) {
+        JobStatus.done => '✓',
+        JobStatus.failed => '✗',
+        null => ' ',
+        _ => '⇣',
+      };
 
-  var status = 'type a manga title, press enter';
-  var statusErr = false;
+Future<void> _search(Search s) async {
+  s.searched = s.query.text().trim();
+  if (s.searched.isEmpty) return;
+  s.hits.set(await Console.spin('searching', () => searchManga(s.searched)));
+}
 
-  String? downloading;
-  var dlDone = 0;
-  var dlTotal = 0;
-
-  var quit = false;
-  var quitAsked = false;
-
-  void draw(Screen s, Region r) {
-    final [head, body, line, foot] = r.rows([1, 0, 1, 3]);
-    head.write(
-      series == null
-          ? '✻ rawfree · ↑↓ enter · ctrl+o browser · esc quit'
-          : '✻ rawfree · enter download · o browser · b back',
-      color: 208,
-    );
-    var msg = status;
-    if (downloading != null && dlTotal > 0) {
-      msg = '↓ $downloading $dlDone/$dlTotal';
-    }
-    line.write(
-      msg,
-      color: statusErr ? 203 : (msg.startsWith('✓') ? 78 : 240),
-    );
-    if (s.pressed('ctrl+c')) _quit();
-    if (series case final open?) {
-      if (chapters.isEmpty) {
-        body.write(loadingCh ? '  loading chapters…' : '  no chapters',
-            color: 240);
-      } else {
-        csel = body.list([for (final c in chapters) c.title], csel);
-      }
-      foot
-          .box(open['title'] ?? 'manga')
-          .write('enter downloads the chapter', color: 240);
-      if (s.pressed('enter') && chapters.isNotEmpty) {
-        _download(chapters[csel]);
-      }
-      if (s.pressed('o')) _browse(open['url']!);
-      if (s.pressed('b') || s.pressed('escape')) series = null;
-    } else {
-      query = foot.box('search').input(query);
-      if (hits.isEmpty) {
-        body.write(searching ? '  searching…' : '  no results yet',
-            color: 240);
-      } else {
-        sel = body.list([for (final h in hits) h['title'] ?? ''], sel);
-      }
-      if (s.pressed('enter') && query.trim() != searched) {
-        _search();
-      } else if (s.pressed('enter') && hits.isNotEmpty) {
-        _openSeries(hits[sel]);
-      }
-      if (s.pressed('ctrl+o') && hits.isNotEmpty) _browse(hits[sel]['url']!);
-      if (s.pressed('escape')) _quit();
-    }
+Future<void> _open(Search s, App<Page> app) async {
+  final hit = s.hits.selected();
+  if (hit == null) return;
+  final page = Series(s, hit);
+  app.go(page);
+  final chapters = await Console.spin('loading chapters', () => resolveChapters(hit.url));
+  for (final ch in chapters) {
+    if (await Fs.dir(Job(hit, ch).dir).exists()) page.onDisk.add(ch.title);
   }
+  page.chapters.set(chapters);
+}
 
-  void _quit() {
-    if (downloading != null && !quitAsked) {
-      quitAsked = true;
-      statusErr = true;
-      status = '$downloading is still downloading · press again to quit';
-      return;
-    }
-    quit = true;
-  }
+Future<void> _browse(String? url, App<Page> app) async {
+  if (url == null) return;
+  await Shell.open(url);
+  app.say('opened in browser');
+}
 
-  void _browse(String url) {
-    Shell.open(url).then((_) {
-      statusErr = false;
-      status = 'opened in browser';
-    }).catchError((Object e) {
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    });
-  }
+Future<void> _quit(App<Page> app) async {
+  if (_left == 0 || await Console.confirm('$_left downloads left. Quit?')) app.quit();
+}
 
-  void _search() {
-    final q = query.trim();
-    if (q.isEmpty) return;
-    searched = q;
-    searching = true;
-    statusErr = false;
-    status = 'searching…';
-    searchManga(q).then((found) {
-      hits = found;
-      sel = 0;
-      searching = false;
-      status = found.isEmpty ? 'no results' : '${found.length} result(s)';
-    }).catchError((Object e) {
-      searching = false;
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    });
-  }
+void _enqueue(Series c, List<Chapter> chapters, App<Page> app) {
+  final add = [
+    for (final ch in chapters)
+      if (!c.onDisk.contains(ch.title) && _job(ch) == null) Job(c.hit, ch),
+  ];
+  queue.set([...queue.items(), ...add]);
+  app.say('queued ${add.length} chapter(s)');
+  _work(app);
+}
 
-  void _openSeries(Hit h) {
-    series = h;
-    chapters = [];
-    csel = 0;
-    loadingCh = true;
-    statusErr = false;
-    status = 'loading chapters…';
-    resolveChapters(h['url']!).then((found) {
-      chapters = found;
-      loadingCh = false;
-      status = '${found.length} chapter(s)';
-    }).catchError((Object e) {
-      loadingCh = false;
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    });
-  }
+void _retry(Job job, App<Page> app) {
+  job.status = JobStatus.queued;
+  _work(app);
+}
 
-  void _download(Chapter c) {
-    if (downloading != null) {
-      status = 'already downloading…';
-      return;
-    }
-    downloading = c.title;
-    quitAsked = false;
-    // Read now: the user may go back to the search before the images load.
-    final dir = 'downloads/${_safe(series?['title'] ?? 'manga')}/${_safe(c.title)}';
-    dlDone = 0;
-    dlTotal = 0;
-    statusErr = false;
-    () async {
+void _remove(Job job) => queue.set([
+  for (final j in queue.items())
+    if (j != job) j,
+]);
+
+/// The worker: one chapter at a time, 4 pages in parallel; idles when the
+/// queue has nothing queued.
+Future<void> _work(App<Page> app) async {
+  if (_working) return;
+  _working = true;
+  try {
+    for (;;) {
+      final job = queue.items().where((j) => j.status == JobStatus.queued).firstOrNull;
+      if (job == null) break;
+      job.status = JobStatus.active;
       try {
-        final imgs = await chapterImages(c.postId);
-        if (imgs.isEmpty) {
-          statusErr = true;
-          status = '✗ ${c.title}: no images found';
-          downloading = null;
-          return;
-        }
-        dlTotal = imgs.length;
-        var failed = 0;
-        for (final (i, u) in imgs.indexed) {
-          dlDone = i + 1;
-          final img = await Http.get(u,
-              headers: {..._headers, 'referer': '$_base/'}, retries: 2);
-          if (!img.ok()) {
-            failed++;
-            await img.close();
-            continue;
-          }
-          final data = await img.bytes();
-          // An expired signed URL serves a <1 KB stub.
-          if (data.length < 1024) {
-            failed++;
-            continue;
-          }
-          // Numbered pages: the host answers `application/octet-stream`
-          // and its URLs carry no extension, so `img.name()` is a bare id.
-          final name =
-              '${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, img)}';
-          await Fs.dir(dir).file(name).write(data);
-        }
-        status = '✓ ${c.title} ($dlTotal img) → $dir'
-            '${failed > 0 ? ' · $failed failed, retry the chapter' : ''}';
-      } catch (e) {
-        statusErr = true;
-        status = '✗ ${_short(e)}';
+        await _fetch(job);
+      } on Exception catch (e) {
+        job.status = JobStatus.failed;
+        app.say('✗ ${job.chapter.title}: ${_short(e)}');
       }
-      downloading = null;
-    }();
+    }
+  } finally {
+    _working = false;
+  }
+}
+
+Future<void> _fetch(Job job) async {
+  final imgs = await chapterImages(job.chapter.postId);
+  if (imgs.isEmpty) throw FormatException('no images found');
+  final todo = job.missing.isEmpty ? [for (var i = 0; i < imgs.length; i++) i] : [...job.missing];
+  job
+    ..total = imgs.length
+    ..done = imgs.length - todo.length;
+  final finished = queue.items().where((j) => j.status.index >= JobStatus.done.index).length;
+  final label = '⇣ ${finished + 1}/${queue.items().length} chapters · ↓ ${job.chapter.title}';
+  final bar = Console.bar(imgs.length, label: label)..tick(job.done);
+  final failed = <int>[];
+  var next = 0;
+  Future<void> lane() async {
+    while (next < todo.length) {
+      final i = todo[next++];
+      if (await _page(job, i, imgs[i])) {
+        job.done++;
+      } else {
+        failed.add(i);
+      }
+      bar.tick();
+    }
+  }
+
+  try {
+    await Future.wait([for (var k = 0; k < 4; k++) lane()]);
+  } finally {
+    await bar.close();
+  }
+  job.missing
+    ..clear()
+    ..addAll(failed..sort());
+  job.status = failed.isEmpty ? JobStatus.done : JobStatus.failed;
+}
+
+/// One page; false when it failed (non-2xx, network, or a <1 KB stub).
+Future<bool> _page(Job job, int i, String url) async {
+  try {
+    final img = await Http.get(url, headers: {..._headers, 'referer': '$_base/'}, retries: 2);
+    final data = img.ok() ? await img.bytes() : const <int>[];
+    if (!img.ok()) await img.close();
+    if (data.length < 1024) return false; // error page or expired-URL stub
+    await Fs.dir(job.dir).file('${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, img)}').write(data);
+    return true;
+  } on Exception {
+    return false;
   }
 }
 
 // --- rawfree API (JSON only, works where HTML is region-blocked) ---
 
 Future<Json> _apiGet(String path) async {
-  final res = await Http.get('$_base/wp-json/wp/v2/$path',
-      headers: _headers, retries: 2);
+  final res = await Http.get('$_base/wp-json/wp/v2/$path', headers: _headers, retries: 2);
   if (!res.ok()) {
     final text = await res.text();
     await res.close();
-    throw StateError('HTTP ${res.status()}: $text');
+    throw HttpException('HTTP ${res.status()}: ${_short(text)}', uri: Uri.parse(res.url()));
   }
   return res.json();
 }
@@ -282,19 +312,16 @@ Future<List<Hit>> searchManga(String query, {int limit = 30}) async {
     if (url == null || url.isEmpty) return;
     if (!seen.add(url)) return;
     if ((title ?? '').trim().isEmpty) return;
-    out.add({'title': title!.trim(), 'url': url});
+    out.add((title: title!.trim(), url: url));
   }
 
   final q = Uri.encodeQueryComponent(query);
-  final tags =
-      await _apiGet('tags?search=$q&per_page=$limit');
+  final tags = await _apiGet('tags?search=$q&per_page=$limit');
   for (final t in tags) {
     if (out.length >= limit) break;
-    add(_htmlText(t.$('name').value<String>() ?? ''),
-        t.$('link').value<String>());
+    add(_htmlText(t.$('name').value<String>() ?? ''), t.$('link').value<String>());
   }
-  final posts = await _apiGet(
-      'posts?search=$q&per_page=$limit&_embed=wp:featuredmedia');
+  final posts = await _apiGet('posts?search=$q&per_page=$limit&_embed=wp:featuredmedia');
   for (final p in posts) {
     if (out.length >= limit) break;
     add(_titleOf(p), p.$('link').value<String>());
@@ -305,8 +332,7 @@ Future<List<Hit>> searchManga(String query, {int limit = 30}) async {
 Future<int?> _seriesTag(List<int> ids) async {
   if (ids.isEmpty) return null;
   if (ids.length == 1) return ids.first;
-  final tags =
-      await _apiGet('tags?include=${ids.join(',')}&per_page=100');
+  final tags = await _apiGet('tags?include=${ids.join(',')}&per_page=100');
   var best = ids.first;
   var bestCount = -1;
   for (final t in tags) {
@@ -334,27 +360,24 @@ List<Chapter> _toChapters(Json list) {
 
 /// Chapters of the series behind a chapter or series URL, newest first.
 Future<List<Chapter>> resolveChapters(String pageUrl) async {
-  final segs =
-      Uri.parse(pageUrl).pathSegments.where((s) => s.isNotEmpty).toList();
-  if (segs.isEmpty) throw StateError('bad url');
+  final segs = Uri.parse(pageUrl).pathSegments.where((s) => s.isNotEmpty).toList();
+  if (segs.isEmpty) throw FormatException('bad url', pageUrl);
   final sq = Uri.encodeQueryComponent(segs.last);
   final posts = await _apiGet('posts?slug=$sq&_fields=id,tags');
   for (final p in posts) {
     if (p.$('id').value<int>() == null) continue;
     final tagIds = p.$('tags').value<List<int>>() ?? [];
     final tagId = await _seriesTag(tagIds);
-    if (tagId == null) throw StateError('no series tag');
-    return _toChapters(await _apiGet(
-        'posts?tags=$tagId&per_page=100&_fields=id,link,title'));
+    if (tagId == null) throw const FormatException('no series tag');
+    return _toChapters(await _apiGet('posts?tags=$tagId&per_page=100&_fields=id,link,title'));
   }
   final tags = await _apiGet('tags?slug=$sq&_fields=id');
   for (final t in tags) {
     final tagId = t.$('id').value<int>();
     if (tagId == null) continue;
-    return _toChapters(await _apiGet(
-        'posts?tags=$tagId&per_page=100&_fields=id,link,title'));
+    return _toChapters(await _apiGet('posts?tags=$tagId&per_page=100&_fields=id,link,title'));
   }
-  throw StateError('not found');
+  throw FormatException('series not found', pageUrl);
 }
 
 /// Chapter page images via the theme's AJAX endpoint.
@@ -363,21 +386,21 @@ Future<List<String>> chapterImages(int postId) async {
   final seen = <String>{};
   var index = 0;
   for (var round = 0; round < 12; round++) {
-    final decoded = await Http.post('$_base/wp-admin/admin-ajax.php', body: {
-      'action': 'z_do_ajax',
-      '_action': 'decode_images',
-      'p': '$postId',
-      'img_index': '$index',
-      'content': '',
-      'nonce': 'x',
-    }).json();
+    final decoded = await Http.post(
+      '$_base/wp-admin/admin-ajax.php',
+      body: {
+        'action': 'z_do_ajax',
+        '_action': 'decode_images',
+        'p': '$postId',
+        'img_index': '$index',
+        'content': '',
+        'nonce': 'x',
+      },
+    ).json();
     final mes = decoded.$('mes').value<String>() ?? '';
     if (mes.isNotEmpty) {
       for (final img in Html.parse(mes, baseUrl: '$_base/').$('img')) {
-        final src = img.attr('src') ??
-            img.attr('data-src') ??
-            img.attr('data-original') ??
-            img.attr('data-lazy-src');
+        final src = img.attr('src') ?? img.attr('data-src') ?? img.attr('data-original') ?? img.attr('data-lazy-src');
         if (src == null || src.isEmpty || src.startsWith('data:')) continue;
         if (seen.add(src)) out.add(src);
       }
@@ -400,10 +423,7 @@ Future<List<String>> chapterImages(int postId) async {
 /// host serves), so pages land as `001.jpg`, `002.jpg`, … and open in any
 /// viewer.
 String _imgExt(List<int> bytes, Response res) {
-  if (bytes.length >= 3 &&
-      bytes[0] == 0xFF &&
-      bytes[1] == 0xD8 &&
-      bytes[2] == 0xFF) {
+  if (bytes.length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
     return '.jpg';
   }
   if (bytes.length >= 8 &&
