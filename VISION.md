@@ -140,7 +140,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `baseUrl` `h
 | `scrape`  | `Scrape.run` · `Visit` `url` `status` `follow` `emit`                                                                                             | http + html + chrome  |
 
 A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
-for `Elements`, and `scrape`, which composes `http`, `html` and `chrome`. `console` and `tui`
+for `Elements` and `json` for the `eval<T>` coercion rules, and `scrape`, which composes `http`, `html` and `chrome`. `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
 ### 4.1 html
@@ -248,7 +248,7 @@ final class Page implements Closeable {
   Future<Page> fill(String selector, String value, {Duration? timeout});
   Future<Page> select(String selector, String value, {Duration? timeout});
   Future<Page> upload(String selector, Reader file, {Duration? timeout});
-  Future<Page> press(String key);  Future<Page> scroll([String? selector]);              // scroll auto-waits too
+  Future<Page> press(String key);  Future<Page> scroll([String? selector, Duration? timeout]);  // scroll auto-waits too
   Future<Page> wait(String selector, {Duration? timeout});  Future<Page> waitIdle({Duration? timeout});
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
   Future<Download> download(String selector, {Duration? timeout});

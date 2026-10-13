@@ -140,6 +140,34 @@ void main() {
       );
     });
 
+    test('S1: a failure with queued URLs errors instead of hanging',
+        () async {
+      // limit: 1, the handler queues two URLs then throws: without the
+      // queue-clearing fix the workers exit but _drain waits forever.
+      await expectLater(
+        Scrape.run<String>(
+          ['$base/'],
+          (v) async {
+            v.follow(['$base/a', '$base/b'], (w) async {});
+            throw StateError('handler blew up after queueing');
+          },
+          limit: 1,
+        ).toList().timeout(const Duration(seconds: 30)),
+        throwsStateError,
+      );
+    });
+
+    test('S2: non-http(s) links are skipped, never visited', () async {
+      final seen = <String>[];
+      await Scrape.run<void>(['$base/'], (v) async {
+        v.follow(
+          ['mailto:a@b.c', 'tel:+1', 'javascript:void(0)', 'data:,x', '$base/a'],
+          (w) async => seen.add(w.url()),
+        );
+      }).toList();
+      expect(seen, ['$base/a']);
+    });
+
     test('onError reports and the crawl goes on', () async {
       final errors = <String>[];
       final out = await Scrape.run<String>(

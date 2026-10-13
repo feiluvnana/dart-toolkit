@@ -24,10 +24,10 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
-import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 
 export 'core.dart';
+export 'html.dart';
 
 /// Entry point: crawl start URLs with a handler per kind of page.
 abstract final class Scrape {
@@ -213,7 +213,9 @@ final class _Crawl<T> {
   }
 
   /// Make [url] absolute against [base] and drop its fragment.
-  String normalize(String? base, String url) {
+  /// Non-http(s) links (`mailto:`, `tel:`, `javascript:`, `data:`) are
+  /// skipped: null, never a failed visit.
+  String? normalize(String? base, String url) {
     Uri uri;
     try {
       uri = base == null ? Uri.parse(url) : Uri.parse(base).resolve(url);
@@ -223,13 +225,15 @@ final class _Crawl<T> {
     if (!uri.hasScheme) {
       throw FormatException('relative URL without a page: $url');
     }
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
     return uri.removeFragment().toString();
   }
 
   void enqueue(
-    String url,
+    String? url,
     Future<void> Function(Visit<T> visit) handler,
   ) {
+    if (url == null) return;
     if (_cancelled || _failure != null) return;
     if (!_seen.add(url)) return;
     _queue.add(_Task(url, handler));
@@ -287,8 +291,13 @@ final class _Crawl<T> {
   }
 
   void _fail(String? url, Object e, StackTrace st) {
+    // A failure ends the run: drop the queue so _drain can fire once the
+    // visits in flight finish, and the stream errors. Without this the
+    // workers exit but _drain waits on queued work forever.
     _failure = e;
     _failureStack = st;
+    _queue.clear();
+    _head = 0;
   }
 
   Future<void> _visit(_Task<T> task) async {
@@ -304,7 +313,12 @@ final class _Crawl<T> {
       if (cache != null) await _writeCache(task.url, fetched);
       visit = fetched.visit;
     }
-    if (_cancelled || _failure != null) return;
+    // The tab (or body) fetched after a failure or cancel is dropped, but
+    // its tab is still closed: every tab is closed whatever happens.
+    if (_cancelled || _failure != null) {
+      await visit._page?.close();
+      return;
+    }
     try {
       await task.handler(visit);
     } finally {
@@ -328,6 +342,10 @@ final class _Crawl<T> {
   }
 
   Future<_Fetched<T>> _fetch(String url) async {
+    // The HTTP path delegates retries to Http (transport errors, timeouts,
+    // 5xx and 429 with backoff or Retry-After, in one place); the browser
+    // path keeps its own loop around tabs.
+    if (browser == null) return _fetchHttp(url);
     Object? lastError;
     Duration? retryAfter;
     for (var attempt = 0; attempt <= retries; attempt++) {
@@ -336,14 +354,15 @@ final class _Crawl<T> {
       }
       retryAfter = null;
       try {
-        final fetched = browser == null
-            ? await _fetchHttp(url)
-            : await _fetchTab(url);
+        final fetched = await _fetchTab(url);
         if (fetched.status == 429 || fetched.status >= 500) {
           retryAfter = _parseRetryAfter(fetched.retryAfter);
           lastError = StateError(
             'HTTP ${fetched.status}: $url',
           );
+          // A 5xx/429 tab is closed before the retry: continuing without
+          // closing leaks a tab per attempt.
+          await fetched.visit._page?.close();
           continue;
         }
         return fetched;
@@ -374,21 +393,22 @@ final class _Crawl<T> {
   }
 
   Future<_Fetched<T>> _fetchHttp(String url) async {
-    Response res;
-    try {
-      res = await Http.get(url, headers: headers, timeout: timeout);
-    } on TimeoutException catch (e) {
-      throw _Retry(e);
-    } on io.IOException catch (e) {
-      throw _Retry(e);
+    // Transport retries (and 5xx/429 with backoff) happen inside Http; an
+    // exhausted 5xx/429 still comes back as a response and fails the visit
+    // here, like any other failure.
+    final res = await Http.get(url,
+        headers: headers, timeout: timeout, retries: retries);
+    if (res.status() == 429 || res.status() >= 500) {
+      final status = res.status();
+      await res.close();
+      throw StateError('HTTP $status: $url');
     }
     List<int> body;
     try {
       body = await res.bytes();
-    } on TimeoutException catch (e) {
-      throw _Retry(e);
-    } on io.IOException catch (e) {
-      throw _Retry(e);
+    } finally {
+      // bytes() releases the client by itself; close() is a no-op then.
+      await res.close();
     }
     return _Fetched(
       Visit._http(res.url(), res.status(), body, this),
@@ -398,15 +418,21 @@ final class _Crawl<T> {
   }
 
   Future<_Fetched<T>> _fetchTab(String url) async {
-    final page = await browser!
-        .open(url, headers: headers)
-        .timeout(
-          timeout ?? const Duration(seconds: 30),
-          onTimeout: () => throw TimeoutException(
-            'tab never loaded: $url',
-            timeout,
-          ),
-        );
+    Page page;
+    try {
+      // open() carries the timeout inside, so a late tab is closed by
+      // open itself instead of orphaned by an outer .timeout().
+      page = await browser!.open(url,
+          headers: headers, timeout: timeout ?? const Duration(seconds: 30));
+    } on TimeoutException catch (e) {
+      throw _Retry(e);
+    } on io.IOException catch (e) {
+      throw _Retry(e);
+    } catch (e) {
+      // A Chrome navigation failure is a bare net::ERR_… Exception: name
+      // the URL as a SocketException so it retries like any network error.
+      throw _Retry(io.SocketException('navigation failed: $url ($e)'));
+    }
     try {
       final content = await page
           .eval<String>('document.documentElement.outerHTML')

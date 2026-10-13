@@ -8,7 +8,6 @@ import 'dart:io';
 
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -43,6 +42,21 @@ void main() {
       } else if (path == '/cookie') {
         request.response.headers.set('set-cookie', 'tok=abc; Path=/');
         request.response.write('<title>C</title>');
+      } else if (path == '/slow-img') {
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        request.response.headers.contentType = ContentType('image', 'png');
+        request.response.add(base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        ));
+      } else if (path == '/trigger') {
+        // Starts a slow image 100 ms after load (with a cache-buster so
+        // every run really flies it over the network).
+        final b = DateTime.now().microsecondsSinceEpoch;
+        request.response.headers.contentType = ContentType.html;
+        request.response.write(
+          '<script>setTimeout(() => { const i = new Image();'
+          ' i.src = "/slow-img?b=$b"; }, 100);</script>',
+        );
       } else {
         request.response
           ..statusCode = HttpStatus.notFound
@@ -163,6 +177,18 @@ void main() {
       await page.close();
     });
 
+    test('B5: eval coerces numbers and collections like Json.value', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(await page.eval<double>('1.0'), 1.0);
+      expect(await page.eval<int>('1.0'), 1);
+      expect(await page.eval<List<String>>('["a", "b"]'), ['a', 'b']);
+      expect(
+        await page.eval<Map<String, Object?>>('({"x": 1})'),
+        {'x': 1},
+      );
+      await page.close();
+    });
+
     test('cookies() feeds Http', () async {
       final page = await browser.open('$base/cookie');
       expect(await page.cookies(), contains('tok=abc'));
@@ -194,6 +220,13 @@ void main() {
       await page.close();
     });
 
+    test('B5: fill with an empty value clears the field', () async {
+      final page = await browser.open(dataUrl('<input id="q" value="old">'));
+      await page.fill('#q', '');
+      expect(await page.eval<String>("document.querySelector('#q').value"), '');
+      await page.close();
+    });
+
     test('press sends keys and chords', () async {
       final page = await browser.open(
         dataUrl(
@@ -211,6 +244,22 @@ void main() {
       await page.press('backspace');
       expect(await page.eval<String>("document.querySelector('#q').value"), 'a');
       await page.press('enter');
+      await page.close();
+    });
+
+    test('B3: press names are case-insensitive; chars typed; unknown throws',
+        () async {
+      final page = await browser.open(dataUrl('<input id="q">'));
+      await page.click('#q');
+      await page.press('Enter');
+      expect(await page.eval<String>("document.querySelector('#q').value"), '');
+      await page.press('esc');
+      await page.press('+');
+      expect(await page.eval<String>("document.querySelector('#q').value"), '+');
+      expect(
+        page.press('frobnicate'),
+        throwsA(isA<ArgumentError>()),
+      );
       await page.close();
     });
 
@@ -239,11 +288,35 @@ void main() {
       await page.close();
     });
 
+    test('B4: upload works on hidden file inputs', () async {
+      final page = await browser.open(
+          dataUrl('<input type="file" id="f" style="display:none">'));
+      final dir = await Directory.systemTemp.createTemp('chrome_up');
+      try {
+        await Fs.file('${dir.path}/note.txt').write('up-bytes');
+        await page.upload('#f', Fs.file('${dir.path}/note.txt'));
+        expect(await page.eval<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+      } finally {
+        await dir.delete(recursive: true);
+      }
+      await page.close();
+    });
+
     test('scroll goes to the bottom, or an element into view', () async {
       final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
       await page.scroll();
       expect(await page.eval<bool>('window.scrollY > 0'), isTrue);
       await page.scroll('#bottom');
+      await page.close();
+    });
+
+    test('B6: scroll on a missing selector times out, not StateError',
+        () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(
+        page.scroll('#missing', const Duration(milliseconds: 500)),
+        throwsA(isA<TimeoutException>()),
+      );
       await page.close();
     });
   });
@@ -273,6 +346,17 @@ void main() {
     test('waitIdle returns on a quiet page', () async {
       final page = await browser.open(dataUrl(testHtml));
       await page.waitIdle();
+      await page.close();
+    });
+
+    test('B2: waitIdle waits for requests in flight', () async {
+      // The image starts after load (open already returned): at the
+      // waitIdle call it is still in flight for ~1.5 s.
+      final page = await browser.open('$base/trigger');
+      final sw = Stopwatch()..start();
+      await page.waitIdle();
+      sw.stop();
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(1000));
       await page.close();
     });
   });
@@ -318,6 +402,16 @@ void main() {
       } finally {
         await dir.delete(recursive: true);
       }
+      await page.close();
+    });
+
+    test('B1: download on a missing selector throws, never crashes',
+        () async {
+      final page = await browser.open(dataUrl(testHtml));
+      await expectLater(
+        page.download('#missing', timeout: const Duration(seconds: 2)),
+        throwsA(isA<TimeoutException>()),
+      );
       await page.close();
     });
 
