@@ -355,6 +355,18 @@ void main() {
       await expectLater(f.text(), throwsStateError);
       await f.close();
     });
+
+    test('json() on an error page names the status', () async {
+      final bad = await Http.get('$base/nope');
+      await expectLater(
+        bad.json(),
+        throwsA(isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('404'),
+        )),
+      );
+    });
   });
 }
 

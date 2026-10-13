@@ -318,9 +318,37 @@ T? _valueMap<T>(Map<dynamic, dynamic> v) {
       attempt<dynamic>(_scalar<dynamic>);
 }
 
-/// Bytes → a value. Throws [FormatException] on invalid JSON.
+/// Bytes → a value. Throws [FormatException] on invalid JSON; a failure
+/// on an error page names the HTTP status in the message.
 extension ReaderJson on Reader {
-  Future<Json> json() async => Json.parse(await text());
+  Future<Json> json() async {
+    final text = await this.text();
+    try {
+      return Json.parse(text);
+    } on FormatException catch (e) {
+      throw _withStatus(this, e);
+    }
+  }
+}
+
+/// The status of a response-like reader, or null for anything else.
+/// Dynamic so this module never imports http or fs.
+int? _statusOf(Reader reader) {
+  try {
+    // ignore: avoid_dynamic_calls
+    final s = (reader as dynamic).status() as int?;
+    return s;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Annotate a content [FormatException] with the HTTP status when the
+/// reader is an error page.
+FormatException _withStatus(Reader reader, FormatException e) {
+  final status = _statusOf(reader);
+  if (status == null) return e;
+  return FormatException('${e.message} (HTTP $status)', e.source, e.offset);
 }
 
 /// Same, from an async reader.

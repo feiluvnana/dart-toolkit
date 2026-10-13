@@ -292,10 +292,29 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
 }
 
 /// Bytes → a value. Relative links resolve against the response's URL
-/// (or the file's URI); other readers parse without a base.
+/// (or the file's URI); other readers parse without a base. A failure on
+/// an error page names the HTTP status in the message.
 extension ReaderHtml on Reader {
-  Future<Elements> html() async =>
-      Html.parse(await text(), baseUrl: _baseUrlOf(this));
+  Future<Elements> html() async {
+    final text = await this.text();
+    try {
+      return Html.parse(text, baseUrl: _baseUrlOf(this));
+    } on FormatException catch (e) {
+      final status = _statusOf(this);
+      if (status == null) rethrow;
+      throw FormatException('${e.message} (HTTP $status)', e.source, e.offset);
+    }
+  }
+}
+
+int? _statusOf(Reader reader) {
+  try {
+    // ignore: avoid_dynamic_calls
+    final s = (reader as dynamic).status() as int?;
+    return s;
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Same, from an async reader.
