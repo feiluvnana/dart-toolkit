@@ -414,3 +414,71 @@ void restoreModes(TermModes modes) {
     } catch (_) {}
   }
 }
+
+/// True for runes that take no cell and attach to the previous cell's
+/// string: combining marks, ZWJ/ZWNJ, variation selectors, emoji
+/// modifiers, tags.
+bool isZeroWidth(int rune) =>
+    (rune >= 0x0300 && rune <= 0x036f) ||
+    (rune >= 0x0483 && rune <= 0x0489) ||
+    (rune >= 0x1ab0 && rune <= 0x1aff) ||
+    (rune >= 0x1dc0 && rune <= 0x1dff) ||
+    (rune >= 0x20d0 && rune <= 0x20ff) ||
+    (rune >= 0xfe00 && rune <= 0xfe0f) ||
+    rune == 0x200c ||
+    rune == 0x200d ||
+    (rune >= 0x1f3fb && rune <= 0x1f3ff) ||
+    (rune >= 0xe0020 && rune <= 0xe007f);
+
+/// Cells taken by [rune] on screen: 2 for wide CJK and emoji, else 1
+/// (zero-width runes are answered by [isZeroWidth], not here).
+int cellWidth(int rune) {
+  // Emoji blocks that terminals render wide (all above U+1100, so they
+  // cannot live in the fast path below).
+  if (rune >= 0x2600 && rune <= 0x27bf) return 2;
+  if (rune >= 0x2b00 && rune <= 0x2bff) return 2;
+  if (rune < 0x1100) return 1;
+  if (rune <= 0x115f) return 2;
+  if (rune == 0x2329 || rune == 0x232a) return 2;
+  if (rune >= 0x2e80 && rune <= 0xa4cf && rune != 0x303f) return 2;
+  if (rune >= 0xac00 && rune <= 0xd7a3) return 2;
+  if (rune >= 0xf900 && rune <= 0xfaff) return 2;
+  if (rune >= 0xfe10 && rune <= 0xfe19) return 2;
+  if (rune >= 0xfe30 && rune <= 0xfe4f) return 2;
+  if (rune >= 0xff00 && rune <= 0xff60) return 2;
+  if (rune >= 0xffe0 && rune <= 0xffe6) return 2;
+  if (rune >= 0x1f000 && rune <= 0x1faff) return 2;
+  if (rune >= 0x20000 && rune <= 0x3fffd) return 2;
+  return 1;
+}
+
+/// Display width of [text] in cells (zero-width runes attach for free).
+int displayWidth(String text) {
+  var w = 0;
+  for (final rune in text.runes) {
+    if (!isZeroWidth(rune)) w += cellWidth(rune);
+  }
+  return w;
+}
+
+/// Cut [text] to at most [width] cells, ending with `…` when cut. Wide
+/// chars that don't fit are dropped whole.
+String truncateWidth(String text, int width) {
+  if (width <= 0) return '';
+  if (displayWidth(text) <= width) return text;
+  if (width == 1) return '…';
+  final buf = StringBuffer();
+  var w = 0;
+  for (final rune in text.runes) {
+    if (isZeroWidth(rune)) {
+      buf.writeCharCode(rune);
+      continue;
+    }
+    final cw = cellWidth(rune);
+    if (w + cw + 1 > width) break;
+    buf.writeCharCode(rune);
+    w += cw;
+  }
+  buf.write('…');
+  return buf.toString();
+}
