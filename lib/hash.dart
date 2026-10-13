@@ -45,19 +45,32 @@ final class Hasher implements Writer, Pipe {
   final _DigestCapture _capture;
   late final ByteConversionSink _in;
   var _done = false;
+  var _poisoned = false;
 
-  /// Feed more data: a `String` (UTF-8) or a `List<int>`. Returns this.
-  /// Anything else is an [ArgumentError]. An [add] after [hex] is a [StateError].
-  Hasher add(Object data) {
+  void _checkUsable(String action) {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; $action is stale');
+    }
     if (_done) {
       throw StateError('hash is finished; hex() was already called');
     }
+  }
+
+  /// Feed more data: a `String` (UTF-8) or a `List<int>`. Returns this.
+  /// Anything else is an [ArgumentError]. An [add] after [hex], or after a
+  /// failed run through this hasher, is a [StateError].
+  Hasher add(Object data) {
+    _checkUsable('add');
     _in.add(_toBytes(data));
     return this;
   }
 
-  /// Finish the hash. Calling it again returns the same digest.
+  /// Finish the hash. Calling it again returns the same digest. After a
+  /// failed run through this hasher it throws instead of a partial digest.
   String hex() {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; hex is stale');
+    }
     if (!_done) {
       _in.close();
       _done = true;
@@ -67,11 +80,21 @@ final class Hasher implements Writer, Pipe {
 
   @override
   Future<void> consume(Stream<List<int>> input) async {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; reuse is stale');
+    }
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
-    await for (final chunk in input) {
-      _in.add(chunk);
+    try {
+      await for (final chunk in input) {
+        _in.add(chunk);
+      }
+    } catch (_) {
+      // The run failed: the digest is partial, so poison it rather than
+      // let a later hex() silently return it.
+      _poisoned = true;
+      rethrow;
     }
     _in.close();
     _done = true;
@@ -79,6 +102,9 @@ final class Hasher implements Writer, Pipe {
 
   @override
   Stream<List<int>> transform(Stream<List<int>> input) {
+    if (_poisoned) {
+      throw StateError('hash saw only part of a failed run; reuse is stale');
+    }
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
@@ -86,20 +112,22 @@ final class Hasher implements Writer, Pipe {
   }
 
   Stream<List<int>> _tee(Stream<List<int>> input) async* {
+    var ok = false;
     try {
       await for (final chunk in input) {
         _in.add(chunk);
         yield chunk;
       }
-    } catch (_) {
-      // The run failed upstream: leave the digest open so the error (not a
-      // partial hex) is what the caller sees.
-      rethrow;
+      // The pipe ran to the end: finish here so hex() is stable and a second
+      // pipeline is a StateError, as specced.
+      _in.close();
+      _done = true;
+      ok = true;
+    } finally {
+      // Input failure or downstream cancel: the digest is partial, so a
+      // later hex()/add() must throw rather than silently use it.
+      if (!ok) _poisoned = true;
     }
-    // The pipe ran to the end: finish here so hex() is stable and a second
-    // pipeline is a StateError, as specced.
-    _in.close();
-    _done = true;
   }
 
   static List<int> _toBytes(Object data) {

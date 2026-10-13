@@ -78,6 +78,15 @@ void main() {
       expect(h.hex(), Hash.sha256().add('hello').hex());
     });
 
+    test('a failed run poisons the hasher instead of a partial hex',
+        () async {
+      final h = Hash.sha256();
+      await expectLater(_Boom() | h > null, throwsStateError);
+      expect(() => h.hex(), throwsStateError);
+      expect(() => h.add('more'), throwsStateError);
+      expect(_Boom() | h > null, throwsStateError);
+    });
+
     test('a finished hasher cannot take another pipeline', () async {
       final h = Hash.sha256().add('x');
       h.hex();
@@ -93,4 +102,12 @@ final class _Mem with Reader {
   final String _text;
   @override
   Stream<List<int>> stream() => Stream.value(utf8.encode(_text));
+}
+
+final class _Boom with Reader {
+  @override
+  Stream<List<int>> stream() async* {
+    yield utf8.encode('part');
+    throw StateError('reader blew up mid-write');
+  }
 }
