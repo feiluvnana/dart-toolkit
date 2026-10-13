@@ -46,6 +46,7 @@ final class Hasher implements Writer, Pipe {
   late final ByteConversionSink _in;
   var _done = false;
   var _poisoned = false;
+  var _running = false;
 
   void _checkUsable(String action) {
     if (_poisoned) {
@@ -54,6 +55,18 @@ final class Hasher implements Writer, Pipe {
     if (_done) {
       throw StateError('hash is finished; hex() was already called');
     }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
+    }
+  }
+
+  /// Poison the hasher: a later [hex]/[add] throws instead of returning a
+  /// partial or empty-input digest. Called when the run failed anywhere,
+  /// including a writer that failed before this stage was read (wired via
+  /// [Reader.to]'s cancel-on-writer-error, which tears down the pipe stream
+  /// and lands in [_tee]'s finally / [consume]'s catch).
+  void _abort(Object e) {
+    _poisoned = true;
   }
 
   /// Feed more data: a `String` (UTF-8) or a `List<int>`. Returns this.
@@ -71,6 +84,10 @@ final class Hasher implements Writer, Pipe {
     if (_poisoned) {
       throw StateError('hash saw only part of a failed run; hex is stale');
     }
+    if (_running) {
+      throw StateError(
+          'hash is in flight; wait for the stream to finish before calling hex()');
+    }
     if (!_done) {
       _in.close();
       _done = true;
@@ -86,15 +103,21 @@ final class Hasher implements Writer, Pipe {
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
+    }
+    _running = true;
     try {
       await for (final chunk in input) {
         _in.add(chunk);
       }
-    } catch (_) {
+    } catch (e) {
       // The run failed: the digest is partial, so poison it rather than
       // let a later hex() silently return it.
-      _poisoned = true;
+      _abort(e);
       rethrow;
+    } finally {
+      _running = false;
     }
     _in.close();
     _done = true;
@@ -108,6 +131,10 @@ final class Hasher implements Writer, Pipe {
     if (_done) {
       throw StateError('hash is finished; cannot take another pipeline');
     }
+    if (_running) {
+      throw StateError('hash is already running; concurrent use is stale');
+    }
+    _running = true;
     return _tee(input);
   }
 
@@ -124,9 +151,12 @@ final class Hasher implements Writer, Pipe {
       _done = true;
       ok = true;
     } finally {
-      // Input failure or downstream cancel: the digest is partial, so a
-      // later hex()/add() must throw rather than silently use it.
-      if (!ok) _poisoned = true;
+      _running = false;
+      // Input failure or downstream cancel (including Reader.to's
+      // cancel-on-writer-error for a writer-first failure): the digest is
+      // partial, so a later hex()/add() must throw rather than silently
+      // use it (or return the empty-input digest when nothing was read).
+      if (!ok) _abort(StateError('pipe did not run to the end'));
     }
   }
 

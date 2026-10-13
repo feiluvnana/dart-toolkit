@@ -105,6 +105,9 @@ final class File extends Entry with Reader implements Writer {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.file) return;
       await io.File(_path).delete();
     } on io.PathNotFoundException {
       // no-op when nothing is there
@@ -115,18 +118,27 @@ final class File extends Entry with Reader implements Writer {
 
   @override
   Future<File> copy(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
+    await _removeDestLink(to);
     await io.File(_path).copy(to);
+    await _preserveFileMeta(_path, to);
     return File._(to);
   }
 
   @override
   Future<File> move(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
+    await _removeDestLink(to);
     try {
       await io.File(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      // Rename across devices is EXDEV (18); anything else (missing
+      // source, occupied destination, permissions) must surface.
+      if (!_isExdev(e)) rethrow;
       await io.File(_path).copy(to);
+      await _preserveFileMeta(_path, to);
       await io.File(_path).delete();
     }
     return File._(to);
@@ -141,13 +153,30 @@ final class File extends Entry with Reader implements Writer {
     return this;
   }
 
-  /// Add in-memory [data] to the end. Creates missing parents. Returns this.
+  /// Add in-memory [data] to the end, atomically (temp+rename, so a crash
+  /// keeps the old content). Creates missing parents. Returns this.
   Future<File> append(Object data) async {
     await _ensureParent(_path);
-    await io.File(_path).writeAsBytes(
-      _toBytes(data),
-      mode: io.FileMode.append,
-      flush: true,
+    List<int> existing = const [];
+    try {
+      // Through symlinks, like writes (F7): append to the real target.
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.file) {
+        existing = await io.File(_path).readAsBytes();
+      } else if (t == io.FileSystemEntityType.link) {
+        try {
+          final target = await io.Link(_path).resolveSymbolicLinks();
+          existing = await io.File(target).readAsBytes();
+        } catch (_) {
+          existing = const [];
+        }
+      }
+    } catch (_) {
+      existing = const [];
+    }
+    final add = _toBytes(data);
+    await _atomicWrite(
+      Stream.value([...existing, ...add]),
     );
     return this;
   }
@@ -172,10 +201,46 @@ final class File extends Entry with Reader implements Writer {
   }
 
   Future<void> _atomicWrite(Stream<List<int>> input) async {
-    final dir = p.dirname(_path);
-    final tmp =
-        '$dir/.${p.basename(_path)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
-    final tmpFile = io.File(tmp);
+    // Writes go through symlinks to their real target (F7): resolve first so
+    // a handle pointing at a link updates the target instead of replacing
+    // the link with a regular file. Broken links fall back to the handle
+    // path (rename will replace the link with a file).
+    // Note: rename breaks hardlinks (the target gets a new inode; other
+    // links keep the old content).
+    var target = _path;
+    try {
+      final t =
+          await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.link) {
+        try {
+          target = await io.Link(_path).resolveSymbolicLinks();
+        } catch (_) {
+          target = _path;
+        }
+      }
+    } catch (_) {}
+    // Remember the old mode so the atomic replace keeps it (755 stays 755).
+    var oldMode = 0;
+    try {
+      final st = await io.FileStat.stat(target);
+      oldMode = st.mode & 0xFFF;
+    } catch (_) {}
+    final dir = p.dirname(target);
+    // Unique tmp name (pid + micros + 32 random bits); created exclusively
+    // (O_EXCL) so a collision retries instead of clobbering.
+    io.File tmpFile = io.File('');
+    var tmpPath = '';
+    for (var attempt = 0; attempt < 5; attempt++) {
+      tmpPath =
+          '$dir/.${p.basename(target)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+      tmpFile = io.File(tmpPath);
+      try {
+        await tmpFile.create(exclusive: true);
+        break;
+      } on io.FileSystemException {
+        if (attempt == 4) rethrow;
+      }
+    }
     try {
       final sink = tmpFile.openWrite();
       try {
@@ -187,7 +252,9 @@ final class File extends Entry with Reader implements Writer {
         } catch (_) {}
         rethrow;
       }
-      await tmpFile.rename(_path);
+      // chmod the tmp before the rename (no umask window on the target).
+      if (oldMode != 0) await _chmod(tmpPath, oldMode);
+      await tmpFile.rename(target);
     } catch (_) {
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
@@ -220,6 +287,10 @@ final class Dir extends Entry {
   /// Typed children, sorted by name. With [recursive], descends into
   /// subfolders but never through links.
   Future<List<Entry>> list({bool recursive = false}) async {
+    final t = await io.FileSystemEntity.type(_path, followLinks: false);
+    if (t != io.FileSystemEntityType.directory) {
+      throw io.FileSystemException('not a directory', _path);
+    }
     final out = <Entry>[];
     await for (final e in io.Directory(_path).list(
       recursive: recursive,
@@ -235,7 +306,7 @@ final class Dir extends Entry {
         out.add(Dir._(e.path));
       }
     }
-    out.sort((a, b) => a.path().compareTo(b.path()));
+    out.sort((a, b) => a.name().compareTo(b.name()));
     return out;
   }
 
@@ -254,6 +325,9 @@ final class Dir extends Entry {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.directory) return;
       await io.Directory(_path).delete(recursive: true);
     } on io.PathNotFoundException {
       // no-op
@@ -264,17 +338,29 @@ final class Dir extends Entry {
 
   @override
   Future<Dir> copy(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.directory);
     await _ensureParent(to);
+    await _removeDestLink(to);
     await _copyDir(_path, to);
     return Dir._(to);
   }
 
   @override
   Future<Dir> move(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.directory);
     await _ensureParent(to);
+    await _removeDestLink(to);
     try {
       await io.Directory(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      // Only EXDEV falls back to copy-then-delete. Anything else (e.g.
+      // moving into a non-empty folder, permissions) must rethrow instead
+      // of silently merging/overwriting and deleting the source.
+      if (!_isExdev(e)) rethrow;
+      final destType = await io.FileSystemEntity.type(to, followLinks: false);
+      if (destType != io.FileSystemEntityType.notFound) {
+        throw io.FileSystemException('Destination already exists', to);
+      }
       await _copyDir(_path, to);
       await io.Directory(_path).delete(recursive: true);
     }
@@ -290,25 +376,68 @@ final class Link extends Entry {
   Future<String> target() => io.Link(_path).target();
 
   /// Follow the chain to what is finally there, or null when broken.
+  /// Returns a handle AT THE TARGET path (not the link's own path).
   Future<Entry?> resolve() async {
-    final t = await io.FileSystemEntity.type(_path, followLinks: true);
+    String resolved;
+    try {
+      resolved = await io.Link(_path).resolveSymbolicLinks();
+    } catch (_) {
+      return null;
+    }
+    final t =
+        await io.FileSystemEntity.type(resolved, followLinks: false);
     return switch (t) {
-      io.FileSystemEntityType.file => File._(_path),
-      io.FileSystemEntityType.directory => Dir._(_path),
-      io.FileSystemEntityType.link => Link._(_path),
+      io.FileSystemEntityType.file => File._(resolved),
+      io.FileSystemEntityType.directory => Dir._(resolved),
+      io.FileSystemEntityType.link => Link._(resolved),
       _ => null,
     };
   }
 
-  /// Make the link, replacing an existing one atomically. Returns this.
+  /// Make the link, replacing an existing link or file atomically.
+  /// A temp link is created next to the target and renamed over it.
+  /// Returns this.
   Future<Link> create(String target) async {
     await _ensureParent(_path);
-    final link = io.Link(_path);
+    final dir = p.dirname(_path);
+    final tmp =
+        '$dir/.${p.basename(_path)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+    final tmpLink = io.Link(tmp);
+    await tmpLink.create(target, recursive: true);
     try {
-      await link.create(target, recursive: true);
-    } on io.FileSystemException {
-      await link.delete();
-      await link.create(target, recursive: true);
+      try {
+        await tmpLink.rename(_path);
+      } on io.FileSystemException {
+        // POSIX rename replaces a link or file atomically. On platforms
+        // where rename over an existing file fails, remove the destination
+        // (link only: never a folder) and retry once.
+        final dt = await io.FileSystemEntity.type(
+          _path,
+          followLinks: false,
+        );
+        if (dt == io.FileSystemEntityType.directory) {
+          await tmpLink.delete();
+          throw io.FileSystemException(
+            'cannot replace directory with link',
+            _path,
+          );
+        }
+        if (dt != io.FileSystemEntityType.notFound) {
+          try {
+            await io.Link(_path).delete();
+          } catch (_) {
+            await io.File(_path).delete();
+          }
+          await tmpLink.rename(_path);
+        } else {
+          rethrow;
+        }
+      }
+    } catch (_) {
+      try {
+        await tmpLink.delete();
+      } catch (_) {}
+      rethrow;
     }
     return this;
   }
@@ -322,6 +451,9 @@ final class Link extends Entry {
   @override
   Future<void> delete() async {
     try {
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.notFound) return;
+      if (t != io.FileSystemEntityType.link) return;
       await io.Link(_path).delete();
     } on io.PathNotFoundException {
       // no-op
@@ -332,6 +464,7 @@ final class Link extends Entry {
 
   @override
   Future<Link> copy(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.link);
     await _ensureParent(to);
     final t = await target();
     final link = io.Link(to);
@@ -346,10 +479,12 @@ final class Link extends Entry {
 
   @override
   Future<Link> move(String to) async {
+    await _checkSource(_path, to, io.FileSystemEntityType.link);
     await _ensureParent(to);
     try {
       await io.Link(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      if (!_isExdev(e)) rethrow;
       final t = await target();
       await io.Link(to).create(t, recursive: true);
       await io.Link(_path).delete();
@@ -358,8 +493,19 @@ final class Link extends Entry {
   }
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it. Sync members come back as Futures.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it. Sync members come back as Futures.
 /// [Reader]/[Writer]/[Closeable] members come from `Future<Reader>`.
+extension EntryFuture on Future<Entry> {
+  Future<String> path() async => (await this).path();
+  Future<String> name() async => (await this).name();
+  Future<Dir> parent() async => (await this).parent();
+  Future<bool> exists() async => (await this).exists();
+  Future<void> delete() async => (await this).delete();
+  Future<Entry> copy(String to) async => (await this).copy(to);
+  Future<Entry> move(String to) async => (await this).move(to);
+}
+
+/// Future mirrors for [File].
 extension FileFuture on Future<File> {
   Future<String> path() async => (await this).path();
   Future<String> name() async => (await this).name();
@@ -411,6 +557,140 @@ Future<void> _ensureParent(String path) async {
   }
 }
 
+/// True only for cross-device renames.
+bool _isExdev(io.FileSystemException e) {
+  final code = e.osError?.errorCode;
+  if (code == 18 || code == 17) return true;
+  if (code == null) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('cross-device') || msg.contains('different device')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Replace a dest symlink with nothing, so a file/dir copy replaces the
+/// link instead of following it to a target outside the tree.
+Future<void> _removeDestLink(String to) async {
+  try {
+    final t = await io.FileSystemEntity.type(to, followLinks: false);
+    if (t == io.FileSystemEntityType.link) {
+      await io.Link(to).delete();
+    }
+  } catch (_) {}
+}
+
+/// Throw before creating anything when the source is missing or of the wrong
+/// kind, and reject a destination inside (or equal to) the source. Must run
+/// before [_ensureParent] so a missing source never leaves an empty
+/// destination. Symlinks are resolved so `link->real` + `to=real/sub` is
+/// still a self-copy.
+Future<void> _checkSource(
+  String from,
+  String to, [
+  io.FileSystemEntityType? expected,
+]) async {
+  final t = await io.FileSystemEntity.type(from, followLinks: false);
+  if (t == io.FileSystemEntityType.notFound) {
+    throw io.PathNotFoundException(from, const io.OSError());
+  }
+  if (expected != null && t != expected) {
+    throw io.FileSystemException(
+      'source is $t, not $expected',
+      from,
+    );
+  }
+  final nf = p.normalize(p.absolute(from));
+  final nt = p.normalize(p.absolute(to));
+  if (p.equals(nf, nt) || p.isWithin(nf, nt)) {
+    throw ArgumentError.value(
+      to,
+      'to',
+      'destination must not be inside the source ($from)',
+    );
+  }
+  // Resolve symlinks for a real self-copy check.
+  try {
+    final realFrom = await io.File(nf).resolveSymbolicLinks();
+    String realTo;
+    try {
+      // Dest may not exist: resolve its parent.
+      final parent = p.dirname(nt);
+      final realParent = await io.Directory(parent).resolveSymbolicLinks();
+      realTo = p.join(realParent, p.basename(nt));
+    } catch (_) {
+      realTo = nt;
+    }
+    if (p.equals(realFrom, realTo) || p.isWithin(realFrom, realTo)) {
+      throw ArgumentError.value(
+        to,
+        'to',
+        'destination must not be inside the source ($from)',
+      );
+    }
+  } catch (e) {
+    if (e is ArgumentError) rethrow;
+  }
+}
+
+/// chmod on POSIX, best-effort elsewhere (Windows has no POSIX modes).
+Future<void> _chmod(String path, int mode) async {
+  if (io.Platform.isWindows) return;
+  try {
+    final perms = mode & 0xFFF;
+    final r = await io.Process.run(
+      'chmod',
+      [perms.toRadixString(8), path],
+    );
+    // Ignore launcher/exit failures: best-effort.
+    if (r.exitCode != 0) return;
+  } catch (_) {}
+}
+
+/// Keep the source file's mtime and mode on a copy.
+/// Skips the chmod fork when the mode already matches.
+Future<void> _preserveFileMeta(String from, String to) async {
+  try {
+    final st = await io.FileStat.stat(from);
+    try {
+      await io.File(to).setLastModified(st.modified);
+    } catch (_) {}
+    try {
+      final dst = await io.FileStat.stat(to);
+      if ((dst.mode & 0xFFF) != (st.mode & 0xFFF)) {
+        await _chmod(to, st.mode & 0xFFF);
+      }
+    } catch (_) {
+      await _chmod(to, st.mode & 0xFFF);
+    }
+  } catch (_) {}
+}
+
+/// Set a folder's mtime (dart:io has no Directory.setLastModified):
+/// `touch` on POSIX, no-op on Windows. Best-effort (sub-second kept where
+/// the platform allows: Linux `@secs.frac`, macOS seconds).
+Future<void> _setDirMtime(String path, DateTime mtime) async {
+  if (io.Platform.isWindows) return;
+  try {
+    final List<String> args;
+    if (io.Platform.isMacOS) {
+      String two(int n) => n.toString().padLeft(2, '0');
+      final t =
+          '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
+      args = ['-t', t, path];
+    } else {
+      final secs = mtime.millisecondsSinceEpoch / 1000;
+      args = [
+        '-d',
+        '@${secs.toStringAsFixed(3)}',
+        path,
+      ];
+    }
+    await io.Process.run('touch', args);
+  } catch (_) {}
+}
+
 Future<bool> _missing(io.FileSystemException e) async {
   // Already handled PathNotFoundException; other "not found" OS errors
   // (e.g. delete on a missing dir on some platforms) are also a no-op.
@@ -418,7 +698,9 @@ Future<bool> _missing(io.FileSystemException e) async {
 }
 
 /// The string as given, without trailing separators (the root keeps one).
+/// Windows drive roots (`C:\`, `C:/`) keep their separator.
 String _strip(String path) {
+  if (RegExp(r'^[A-Za-z]:[\\/]?$').hasMatch(path)) return path;
   if (path.length > 1) {
     var end = path.length;
     while (end > 1 &&
@@ -432,6 +714,8 @@ String _strip(String path) {
 }
 
 Future<void> _copyDir(String from, String to) async {
+  // Throws-before-writes for file<->dir collisions: walk first.
+  await _checkDirCollisions(from, to);
   await io.Directory(to).create(recursive: true);
   await for (final e in io.Directory(from).list(
     recursive: false,
@@ -442,11 +726,69 @@ Future<void> _copyDir(String from, String to) async {
     final t = await io.FileSystemEntity.type(e.path, followLinks: false);
     if (t == io.FileSystemEntityType.link) {
       final target = await io.Link(e.path).target();
-      await io.Link(dest).create(target, recursive: true);
+      try {
+        await io.Link(dest).create(target, recursive: true);
+      } on io.FileSystemException {
+        // Dest exists (file/link): replace, never follow.
+        try {
+          await io.Link(dest).delete();
+        } catch (_) {
+          await io.File(dest).delete();
+        }
+        await io.Link(dest).create(target, recursive: true);
+      }
     } else if (t == io.FileSystemEntityType.directory) {
       await _copyDir(e.path, dest);
     } else if (t == io.FileSystemEntityType.file) {
+      // Replace a dest link, never follow it outside the tree.
+      try {
+        final dt = await io.FileSystemEntity.type(dest, followLinks: false);
+        if (dt == io.FileSystemEntityType.link) {
+          await io.Link(dest).delete();
+        }
+      } catch (_) {}
       await io.File(e.path).copy(dest);
+      await _preserveFileMeta(e.path, dest);
+    }
+  }
+  // Folders keep modes AND mtimes: set the folder mtime after its contents
+  // are copied (writing children bumps it), and chmod to the source mode.
+  try {
+    final st = await io.FileStat.stat(from);
+    await _setDirMtime(to, st.modified);
+    await _chmod(to, st.mode & 0xFFF);
+  } catch (_) {}
+}
+
+/// Throw before any writes when a source file would land on a dest dir
+/// (or vice versa). Links are replaced, so they never collide.
+Future<void> _checkDirCollisions(String from, String to) async {
+  await for (final e in io.Directory(from).list(
+    recursive: true,
+    followLinks: false,
+  )) {
+    final rel = p.relative(e.path, from: from);
+    final dest = p.join(to, rel);
+    final st = await io.FileSystemEntity.type(e.path, followLinks: false);
+    io.FileSystemEntityType? dt;
+    try {
+      dt = await io.FileSystemEntity.type(dest, followLinks: false);
+    } catch (_) {
+      continue;
+    }
+    if (dt == io.FileSystemEntityType.notFound) continue;
+    final srcIsDir = st == io.FileSystemEntityType.directory;
+    final destIsDir = dt == io.FileSystemEntityType.directory;
+    // Links are replaced, not collided.
+    if (st == io.FileSystemEntityType.link ||
+        dt == io.FileSystemEntityType.link) {
+      continue;
+    }
+    if (srcIsDir != destIsDir) {
+      throw io.FileSystemException(
+        'copy collides: ${srcIsDir ? 'directory' : 'file'} over ${destIsDir ? 'directory' : 'file'}',
+        dest,
+      );
     }
   }
 }

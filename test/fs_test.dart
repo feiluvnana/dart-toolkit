@@ -87,6 +87,45 @@ void main() {
       expect(await Fs.file(p('dst/nested/b.txt')).text(), 'b');
       expect(await Fs.entry(p('dst/lnk')), isA<Link>());
     });
+
+    test('F8: move into a non-empty folder throws and keeps the source',
+        () async {
+      await Fs.file(p('src/a.txt')).write('a');
+      await Fs.file(p('dst/b.txt')).write('b');
+      await expectLater(
+        Fs.dir(p('src')).move(p('dst')),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await Fs.file(p('src/a.txt')).exists(), isTrue);
+      expect(await Fs.file(p('dst/b.txt')).text(), 'b');
+    });
+
+    test('F9: copy into itself and missing sources fail before writing',
+        () async {
+      await Fs.file(p('src/a.txt')).write('a');
+      await expectLater(
+        Fs.dir(p('src')).copy(p('src/sub')),
+        throwsArgumentError,
+      );
+      expect(await Fs.entry(p('src/sub')), isNull);
+      await expectLater(
+        Fs.file(p('missing.txt')).copy(p('dst.txt')),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await Fs.entry(p('dst.txt')), isNull);
+    });
+
+    test('F16: dir copy keeps folder modes and mtimes', () async {
+      await Fs.file(p('src/a.txt')).write('a');
+      await Fs.dir(p('src')).copy(p('dst'));
+      final srcStat = await Directory(p('src')).stat();
+      final dstStat = await Directory(p('dst')).stat();
+      expect(
+        dstStat.modified.millisecondsSinceEpoch ~/ 1000,
+        srcStat.modified.millisecondsSinceEpoch ~/ 1000,
+      );
+      expect(dstStat.mode & 0xfff, srcStat.mode & 0xfff);
+    });
   });
 
   group('File', () {
@@ -150,6 +189,19 @@ void main() {
       await f.delete();
       expect(await f.exists(), isFalse);
     });
+
+    test('F7: writes keep the old mode and go through symlinks', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      final f = Fs.file(p('run.sh'));
+      await f.write('#!/bin/sh\necho hi\n');
+      await Process.run('chmod', ['755', p('run.sh')]);
+      await f.write('#!/bin/sh\necho new\n');
+      expect((await FileStat.stat(p('run.sh'))).mode & 0x1ff, 0x1ff & 493);
+      await Fs.link(p('link.sh')).create(p('run.sh'));
+      await Fs.file(p('link.sh')).write('via link');
+      expect(await FileSystemEntity.isLink(p('link.sh')), isTrue);
+      expect(await Fs.file(p('run.sh')).text(), 'via link');
+    });
   });
 
   group('Dir', () {
@@ -206,6 +258,23 @@ void main() {
       await Fs.link(p('lnk')).create(p('a.txt'));
       await Fs.link(p('lnk')).create(p('b.txt'));
       expect(await Fs.link(p('lnk')).target(), p('b.txt'));
+    });
+
+    test('F10: resolve returns a handle at the target; create over a file',
+        () async {
+      await Fs.file(p('real.txt')).write('r');
+      await Fs.link(p('lnk')).create(p('real.txt'));
+      final resolved = await Fs.link(p('lnk')).resolve();
+      expect(resolved, isA<File>());
+      // resolveSymbolicLinks may normalize the temp prefix (/var vs
+      // /private/var on macOS): compare the tail.
+      expect(resolved!.path(), endsWith('real.txt'));
+      expect(await resolved.exists(), isTrue);
+      // Atomic replace over a regular file (not "Cannot delete link").
+      await Fs.file(p('plain.txt')).write('x');
+      await Fs.link(p('plain.txt')).create(p('real.txt'));
+      expect(await Fs.link(p('plain.txt')).target(), p('real.txt'));
+      expect(await Fs.file(p('real.txt')).text(), 'r');
     });
 
     test('delete never takes the target', () async {

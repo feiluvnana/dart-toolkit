@@ -80,8 +80,8 @@ void main() {
       expect(clean.$('ul').$('li').length, 2);
     });
 
-    test('text joins every element', () {
-      expect(doc.$('li').text(), '12');
+    test('text reads the first match', () {
+      expect(doc.$('li').text(), '1');
       expect(doc.$('title').text(), '');
     });
 
@@ -123,7 +123,7 @@ void main() {
       expect((await f.$('p')).length, 2);
       expect(await f.$('li')[0].text(), '1');
       expect((await f.without('ul')).$('li'), isEmpty);
-      expect(await f.$('li').text(), '12');
+      expect(await f.$('li').text(), '1');
       expect(await f.$('a').attr('href'), '/');
       expect(await f.$('a').attrs('href'), ['/']);
     });
@@ -180,6 +180,118 @@ void main() {
       expect(await f.text(), contains('t'));
       expect(await f.$('a').attr('href'), '/x');
       expect(await f.parent(), isNull);
+    });
+  });
+
+  group('document parsing (M1)', () {
+    test('a full document keeps html/head/body', () {
+      final doc = Html.parse(
+        '<html><head><title>t</title></head><body><p>hi</p></body></html>',
+      );
+      expect(doc.$('body').length, 1);
+      expect(doc.$('body').text(), 'hi');
+      expect(doc.$('html').length, 1);
+      expect(doc.$('title').text(), 't');
+    });
+
+    test('doctype and case variants parse as documents', () {
+      expect(
+        Html.parse(
+          '<!DOCTYPE html><html><body><p>x</p></body></html>',
+        ).$('body').text(),
+        'x',
+      );
+      expect(
+        Html.parse('  <HTML><BODY><P>y</P></BODY></HTML>').$('body').text(),
+        'y',
+      );
+    });
+
+    test('anything else stays a fragment', () {
+      final frag = Html.parse('<p>hi</p>');
+      expect(frag.$('body'), isEmpty);
+      expect(frag.length, 1);
+      expect(frag.$('p').text(), 'hi');
+    });
+  });
+
+  group('without clones (M2)', () {
+    test('table rows survive without', () {
+      final doc = Html.parse(
+        '<table><tr class="x"><td>a</td></tr><tr><td>b</td></tr></table>',
+      );
+      final kept = doc.$('tr').without('.x');
+      expect(kept.length, 1);
+      expect(kept.text(), 'b');
+      expect(doc.$('tr').length, 2); // receiver unchanged
+    });
+
+    test('a top-level self match drops the subtree', () {
+      final doc = Html.parse('<div class="x"><p>a</p></div><div><p>b</p></div>');
+      final kept = doc.$('div').without('.x');
+      expect(kept.length, 1);
+      expect(kept.text(), 'b');
+    });
+  });
+
+  group('self matching (M3)', () {
+    test('a lone top-level element sees the real tree', () {
+      final frag = Html.parse('<p>hi</p>');
+      expect(frag.$('div p'), isEmpty);
+      expect(frag.$('p').length, 1);
+    });
+
+    test('chained queries include the element itself', () {
+      final doc = Html.parse('<div class="o"><p>x</p></div><span>y</span>');
+      expect(doc.$('div, span').$('div.o').length, 1);
+      expect(doc.$('div').$('div.o').length, 1);
+      expect(doc.$('div')[0].$('div.o').length, 1);
+    });
+  });
+
+  group('URL attributes (M4)', () {
+    test('attr trims before resolving', () {
+      final doc = Html.parse(
+        '<a href=" /path ">t</a>',
+        baseUrl: 'https://e.com/d/',
+      );
+      expect(doc.$('a')[0].attr('href'), 'https://e.com/path');
+    });
+
+    test('data-src, poster and action resolve too', () {
+      final doc = Html.parse(
+        '<img data-src=" img.png "><video poster=" p.png ">',
+        baseUrl: 'https://e.com/d/',
+      );
+      expect(doc.$('img')[0].attr('data-src'), 'https://e.com/d/img.png');
+      expect(doc.$('video')[0].attr('poster'), 'https://e.com/d/p.png');
+      final form = Html.parse(
+        '<form action=" /go ">',
+        baseUrl: 'https://e.com/d/',
+      );
+      expect(form.$('form')[0].attr('action'), 'https://e.com/go');
+    });
+
+    test('trim applies without a base', () {
+      expect(Html.parse('<a href=" /x ">t</a>').$('a')[0].attr('href'), '/x');
+    });
+  });
+
+  group('innerText text() (V10)', () {
+    test('collapses spaces, one newline per run, trims', () {
+      final doc = Html.parse('<div>  a   b\n\n  c  </div>');
+      expect(doc.$('div')[0].text(), 'a b\nc');
+    });
+
+    test('Elements.text reads the first match only', () {
+      final doc = Html.parse('<li>1</li><li>2</li>');
+      expect(doc.$('li').text(), '1');
+      expect(doc.$('.missing').text(), '');
+    });
+
+    test('pre keeps its whitespace', () {
+      final doc = Html.parse('<div><pre>x   y\nz</pre></div>');
+      expect(doc.$('div')[0].text(), 'x   y\nz');
     });
   });
 }

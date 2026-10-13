@@ -24,10 +24,12 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
-import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 
+import 'src/charset.dart' as charset;
+
 export 'core.dart';
+export 'html.dart';
 
 /// Entry point: crawl start URLs with a handler per kind of page.
 abstract final class Scrape {
@@ -82,7 +84,7 @@ abstract final class Scrape {
 /// final URL as the base), `json()`, `text()` and `> file` mean what they
 /// mean everywhere. With a [browser], `html()` is the rendered DOM.
 final class Visit<T> with Reader {
-  Visit._http(this._url, this._status, this._body, this._crawl)
+  Visit._http(this._url, this._status, this._body, this._crawl, this._contentType)
       : _page = null;
 
   Visit._tab(
@@ -91,9 +93,10 @@ final class Visit<T> with Reader {
     this._body,
     this._crawl,
     Page page,
-  ) : _page = page;
+  ) : _page = page,
+      _contentType = null;
 
-  Visit._cached(this._url, this._status, this._body, this._crawl)
+  Visit._cached(this._url, this._status, this._body, this._crawl, this._contentType)
       : _page = null;
 
   final String _url;
@@ -101,6 +104,7 @@ final class Visit<T> with Reader {
   final List<int> _body;
   final _Crawl<T> _crawl;
   final Page? _page;
+  final String? _contentType;
 
   /// The final URL after redirects.
   String url() => _url;
@@ -108,15 +112,49 @@ final class Visit<T> with Reader {
   /// The HTTP status. A 404 reaches its handler; [status] tells it apart.
   int status() => _status;
 
+  /// Whether the status is 2xx.
+  bool ok() {
+    final code = _status;
+    return code >= 200 && code < 300;
+  }
+
+  /// The body length in bytes.
+  int? size() => _body.length;
+
+  /// A file name for the body: the final URL's last segment, else 'download'.
+  String name() {
+    final uri = Uri.tryParse(_url);
+    final segments =
+        uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
+    if (segments.isNotEmpty) {
+      final last = segments.last;
+      try {
+        final decoded = Uri.decodeComponent(last);
+        if (decoded.isNotEmpty) return decoded;
+      } catch (_) {
+        if (last.isNotEmpty) return last;
+      }
+    }
+    return 'download';
+  }
+
   /// Queue [urls] to be handled by [handler]. URLs are made absolute against
   /// this visit's URL and their fragment is dropped; an already-queued URL
-  /// is skipped, whichever handler queued it. Returns this visit.
+  /// is skipped, whichever handler queued it. Bad URLs are skipped, like
+  /// non-http(s). Returns this visit.
   Visit<T> follow(
     Iterable<String> urls,
     Future<void> Function(Visit<T> visit) handler,
   ) {
     for (final u in urls) {
-      _crawl.enqueue(_crawl.normalize(_url, u), handler);
+      String? normalized;
+      try {
+        normalized = _crawl.normalize(_url, u);
+      } catch (_) {
+        // One bad href must not kill the crawl.
+        continue;
+      }
+      _crawl.enqueue(normalized, handler);
     }
     return this;
   }
@@ -128,7 +166,14 @@ final class Visit<T> with Reader {
   }
 
   @override
-  Stream<List<int>> stream() => Stream.value(_body);
+  Stream<List<int>> stream() => Stream.value(List<int>.of(_body));
+
+  @override
+  Future<List<int>> bytes() async => List<int>.of(_body);
+
+  @override
+  Future<String> text() async =>
+      charset.Charset.decode(_body, contentType: _contentType);
 
   /// This page as [Elements]: the rendered DOM with a browser, else the
   /// body parsed with the final URL as the base.
@@ -213,7 +258,9 @@ final class _Crawl<T> {
   }
 
   /// Make [url] absolute against [base] and drop its fragment.
-  String normalize(String? base, String url) {
+  /// Non-http(s) links (`mailto:`, `tel:`, `javascript:`, `data:`) are
+  /// skipped: null, never a failed visit.
+  String? normalize(String? base, String url) {
     Uri uri;
     try {
       uri = base == null ? Uri.parse(url) : Uri.parse(base).resolve(url);
@@ -223,16 +270,39 @@ final class _Crawl<T> {
     if (!uri.hasScheme) {
       throw FormatException('relative URL without a page: $url');
     }
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
     return uri.removeFragment().toString();
   }
 
   void enqueue(
-    String url,
+    String? url,
     Future<void> Function(Visit<T> visit) handler,
   ) {
+    if (url == null) return;
     if (_cancelled || _failure != null) return;
     if (!_seen.add(url)) return;
     _queue.add(_Task(url, handler));
+    _notify();
+  }
+
+  Completer<void>? _signal;
+
+  void _notify() {
+    final s = _signal;
+    _signal = null;
+    try {
+      s?.complete();
+    } catch (_) {}
+  }
+
+  Future<void> _waitWork() async {
+    final s = _signal ??= Completer<void>();
+    // Fallback timeout guards a missed notify; normally enqueue/finish wakes us.
+    try {
+      await s.future.timeout(const Duration(milliseconds: 500));
+    } on TimeoutException {
+      // Re-check conditions on timeout.
+    }
   }
 
   void emit(T item) {
@@ -247,7 +317,7 @@ final class _Crawl<T> {
         task = _take();
       } else {
         if (_active == 0) break;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await _waitWork();
         continue;
       }
       _active++;
@@ -264,6 +334,7 @@ final class _Crawl<T> {
         }
       } finally {
         _active--;
+        _notify();
       }
     }
     _drain();
@@ -273,22 +344,22 @@ final class _Crawl<T> {
 
   void _drain() {
     if (_drained || _active != 0 || _hasWork) return;
-    // Wait for sibling workers sharing the queue.
-    Future<void>.delayed(const Duration(milliseconds: 50)).then((_) {
-      if (_active != 0 || _hasWork) return;
-      if (_drained) return;
-      _drained = true;
-      final failure = _failure;
-      if (failure != null) {
-        out.addError(failure, _failureStack);
-      }
-      out.close();
-    });
+    _drained = true;
+    final failure = _failure;
+    if (failure != null) {
+      out.addError(failure, _failureStack);
+    }
+    out.close();
   }
 
   void _fail(String? url, Object e, StackTrace st) {
+    // A failure ends the run: drop the queue so _drain can fire once the
+    // visits in flight finish, and the stream errors. Without this the
+    // workers exit but _drain waits on queued work forever.
     _failure = e;
     _failureStack = st;
+    _queue.clear();
+    _head = 0;
   }
 
   Future<void> _visit(_Task<T> task) async {
@@ -297,14 +368,19 @@ final class _Crawl<T> {
     final hit = cache == null ? null : await _readCache(task.url);
     Visit<T> visit;
     if (hit != null) {
-      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this);
+      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this, hit.contentType);
     } else {
       if (delay != null) await _polite(uri.host);
       final fetched = await _fetch(task.url);
       if (cache != null) await _writeCache(task.url, fetched);
       visit = fetched.visit;
     }
-    if (_cancelled || _failure != null) return;
+    // The tab (or body) fetched after a failure or cancel is dropped, but
+    // its tab is still closed: every tab is closed whatever happens.
+    if (_cancelled || _failure != null) {
+      await visit._page?.close();
+      return;
+    }
     try {
       await task.handler(visit);
     } finally {
@@ -328,6 +404,10 @@ final class _Crawl<T> {
   }
 
   Future<_Fetched<T>> _fetch(String url) async {
+    // The HTTP path delegates retries to Http (transport errors, timeouts,
+    // 5xx and 429 with backoff or Retry-After, in one place); the browser
+    // path keeps its own loop around tabs.
+    if (browser == null) return _fetchHttp(url);
     Object? lastError;
     Duration? retryAfter;
     for (var attempt = 0; attempt <= retries; attempt++) {
@@ -336,14 +416,16 @@ final class _Crawl<T> {
       }
       retryAfter = null;
       try {
-        final fetched = browser == null
-            ? await _fetchHttp(url)
-            : await _fetchTab(url);
+        final fetched = await _fetchTab(url);
         if (fetched.status == 429 || fetched.status >= 500) {
           retryAfter = _parseRetryAfter(fetched.retryAfter);
-          lastError = StateError(
+          lastError = io.HttpException(
             'HTTP ${fetched.status}: $url',
+            uri: Uri.tryParse(url),
           );
+          // A 5xx/429 tab is closed before the retry: continuing without
+          // closing leaks a tab per attempt.
+          await fetched.visit._page?.close();
           continue;
         }
         return fetched;
@@ -356,7 +438,8 @@ final class _Crawl<T> {
   }
 
   Duration _backoff(int attempt, Duration? server) {
-    final backoff = Duration(seconds: 1 << attempt);
+    final shift = attempt > 10 ? 10 : attempt;
+    final backoff = Duration(seconds: 1 << shift);
     if (server == null) return backoff;
     return server > backoff ? server : backoff;
   }
@@ -374,39 +457,52 @@ final class _Crawl<T> {
   }
 
   Future<_Fetched<T>> _fetchHttp(String url) async {
-    Response res;
-    try {
-      res = await Http.get(url, headers: headers, timeout: timeout);
-    } on TimeoutException catch (e) {
-      throw _Retry(e);
-    } on io.IOException catch (e) {
-      throw _Retry(e);
+    // Transport retries (and 5xx/429 with backoff) happen inside Http; an
+    // exhausted 5xx/429 still comes back as a response and fails the visit
+    // here, like any other failure.
+    final res = await Http.get(url,
+        headers: headers, timeout: timeout, retries: retries);
+    if (res.status() == 429 || res.status() >= 500) {
+      final status = res.status();
+      final finalUrl = res.url();
+      await res.close();
+      throw io.HttpException('HTTP $status: $finalUrl', uri: Uri.tryParse(finalUrl));
     }
     List<int> body;
+    String? contentType;
+    String finalUrl;
     try {
+      contentType = res.header('content-type');
       body = await res.bytes();
-    } on TimeoutException catch (e) {
-      throw _Retry(e);
-    } on io.IOException catch (e) {
-      throw _Retry(e);
+      finalUrl = res.url();
+      _seen.add(finalUrl);
+    } finally {
+      // bytes() releases the client by itself; close() is a no-op then.
+      await res.close();
     }
     return _Fetched(
-      Visit._http(res.url(), res.status(), body, this),
+      Visit._http(finalUrl, res.status(), body, this, contentType),
       res.status(),
       res.header('retry-after'),
     );
   }
 
   Future<_Fetched<T>> _fetchTab(String url) async {
-    final page = await browser!
-        .open(url, headers: headers)
-        .timeout(
-          timeout ?? const Duration(seconds: 30),
-          onTimeout: () => throw TimeoutException(
-            'tab never loaded: $url',
-            timeout,
-          ),
-        );
+    Page page;
+    try {
+      // open() carries the timeout inside, so a late tab is closed by
+      // open itself instead of orphaned by an outer .timeout().
+      page = await browser!.open(url,
+          headers: headers, timeout: timeout ?? const Duration(seconds: 30));
+    } on TimeoutException catch (e) {
+      throw _Retry(e);
+    } on io.IOException catch (e) {
+      throw _Retry(e);
+    } catch (e) {
+      // A Chrome navigation failure is a bare net::ERR_… Exception: name
+      // the URL as a SocketException so it retries like any network error.
+      throw _Retry(io.SocketException('navigation failed: $url ($e)'));
+    }
     try {
       final content = await page
           .eval<String>('document.documentElement.outerHTML')
@@ -418,8 +514,10 @@ final class _Crawl<T> {
           .timeout(timeout ?? const Duration(seconds: 30));
       final body = utf8.encode(content ?? '');
       final code = (status ?? 0).toInt();
+      final finalUrl = await page.url();
+      _seen.add(finalUrl);
       return _Fetched(
-        Visit._tab(await page.url(), code == 0 ? 200 : code, body, this, page),
+        Visit._tab(finalUrl, code == 0 ? 200 : code, body, this, page),
         code == 0 ? 200 : code,
         null,
       );
@@ -449,6 +547,7 @@ final class _Crawl<T> {
         meta['finalUrl'] as String,
         (meta['status'] as num).toInt(),
         await bodyFile.bytes(),
+        meta['contentType'] as String?,
       );
     } catch (_) {
       return null;
@@ -462,7 +561,11 @@ final class _Crawl<T> {
       final visit = fetched.visit;
       await Fs.file('$dir/$key.body').write(visit._body);
       await Fs.file('$dir/$key.json').write(
-        jsonEncode({'finalUrl': visit._url, 'status': visit._status}),
+        jsonEncode({
+          'finalUrl': visit._url,
+          'status': visit._status,
+          'contentType': visit._contentType,
+        }),
       );
     } catch (_) {
       // Caching is best-effort; a full disk must not fail the crawl.
@@ -479,11 +582,12 @@ final class _Fetched<T> {
 }
 
 final class _Hit {
-  _Hit(this.finalUrl, this.status, this.body);
+  _Hit(this.finalUrl, this.status, this.body, this.contentType);
 
   final String finalUrl;
   final int status;
   final List<int> body;
+  final String? contentType;
 }
 
 final class _Retry {

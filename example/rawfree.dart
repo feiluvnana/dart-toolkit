@@ -1,387 +1,298 @@
-/// rawfree TUI: search manga, open pages, download chapters.
+/// rawfree: search manga, browse chapters, queue downloads.
 ///
-/// No flags, no args — just run it:
 /// ```sh
 /// dart run example/rawfree.dart
 /// ```
 ///
-/// Keys (search view): type to edit · enter search/open · ↑↓ move ·
-/// `ctrl+o` open in browser · `esc` quit.
-/// Keys (chapters view): ↑↓ move · enter download chapter ·
-/// `o` open series in browser · `b`/`esc` back.
-///
-/// Downloads go to `downloads/<series>/<chapter>/`. Network failures show a
-/// one-line status and the app keeps running.
+/// Search: type, `enter` searches, `enter` again opens the series.
+/// Series: `enter` queues a chapter, `a` queues every chapter not on disk.
+/// `ctrl+d` shows the download queue from any view (`r` retries the missing
+/// pages of a failed job, `delete` drops a queued one, `c` clears finished).
+/// Pages land in `downloads/<series>/<chapter>/001.jpg`, …
 library;
 
-import 'dart:io' show Platform, Process, stderr;
+import 'dart:io' show HttpException, StdoutException, exit, stderr;
 
+import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
+import 'package:dart_toolkit/shell.dart';
 import 'package:dart_toolkit/tui.dart';
 
 const _base = 'https://rawfree.you';
 
 const _headers = {
-  'accept':
-      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'accept-language': 'ja,en-US;q=0.9,en;q=0.8',
-  'user-agent':
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
 };
 
-typedef Hit = Map<String, String?>; // title, url
+typedef Hit = ({String title, String url});
 typedef Chapter = ({String title, String url, int postId});
 
-enum _View { search, chapters }
+// --- UI ---
 
-Future<void> main(List<String> argv) async {
+sealed class Page {}
+
+final class Search extends Page {
+  final query = Field();
+  final hits = Pick<Hit>();
+  var searched = '';
+}
+
+final class Series extends Page {
+  Series(this.back, this.hit);
+  final Search back;
+  final Hit hit;
+  final chapters = Pick<Chapter>();
+  final onDisk = <String>{};
+}
+
+final class Queue extends Page {
+  Queue(this.back);
+  final Page back;
+}
+
+enum JobStatus { queued, active, done, failed }
+
+final class Job {
+  Job(this.series, this.chapter);
+  final Hit series;
+  final Chapter chapter;
+  var status = JobStatus.queued, done = 0, total = 0;
+  final missing = <int>[]; // page indexes to (re)fetch; empty = all
+  String get dir => 'downloads/${_safe(series.title)}/${_safe(chapter.title)}';
+}
+
+final queue = Pick<Job>();
+var _working = false;
+
+Future<void> main() async {
   try {
-    await Tui.run((screen) => _app(screen));
-  } catch (e) {
-    stderr.writeln('tui needs a terminal: $e');
+    await Tui.run<Page>(Search(), _screen);
+  } on StdoutException {
+    stderr.writeln('rawfree needs a terminal');
+    exit(1);
   }
+  exit(0); // downloads still in flight end with the app
 }
 
-Future<void> _app(Screen screen) async {
-  final st = _State();
-  while (!st.quit) {
-    await screen.frame((r) => st.frame(screen, r));
-  }
+Screen _screen(Page page, App<Page> app) {
+  final keys = <String, Bind>{
+    'ctrl+d': ('queue', () => app.go(page is Queue ? page.back : Queue(page))),
+    'ctrl+c': ('', () => _quit(app)),
+  };
+  return switch (page) {
+    Search s => Screen(
+      title: '✻ rawfree',
+      (r) {
+        final [body, foot] = r.rows([0, 3]);
+        body.list(s.hits, (h) => h.title, empty: 'type a manga title, press enter');
+        foot.box('search').input(s.query);
+      },
+      keys: {
+        'enter': s.query.text().trim() != s.searched ? ('search', () => _search(s)) : ('open', () => _open(s, app)),
+        'ctrl+o': ('browser', () => _browse(s.hits.selected()?.url, app)),
+        'escape': ('quit', () => _quit(app)),
+        ...keys,
+      },
+    ),
+    Series c => Screen(
+      title: '✻ ${c.hit.title}',
+      (r) => r.list(c.chapters, (ch) => '${_mark(c, ch)} ${ch.title}', empty: 'no chapters'),
+      keys: {
+        'enter': ('queue', () => _enqueue(c, [?c.chapters.selected()], app)),
+        'a': ('queue all', () => _enqueue(c, c.chapters.items(), app)),
+        'o': ('browser', () => _browse(c.hit.url, app)),
+        'b escape': ('back', () => app.go(c.back)),
+        ...keys,
+      },
+    ),
+    Queue q => Screen(
+      title: '✻ downloads',
+      (r) {
+        final [body, foot] = r.rows([0, 1]);
+        body.table(
+          queue,
+          (j) => [
+            j.chapter.title,
+            j.status == JobStatus.failed ? 'failed (${j.missing.length})' : j.status.name,
+            '${j.done}/${j.total}',
+          ],
+          header: ['chapter', 'status', 'pages'],
+          empty: 'nothing queued · enter on a chapter queues it',
+        );
+        if (_active() case final j?) foot.bar(j.done, j.total, label: '↓ ${j.chapter.title}');
+      },
+      keys: {
+        if (queue.selected()?.status == JobStatus.failed) 'r': ('retry', () => _retry(queue.selected()!, app)),
+        if (queue.selected()?.status == JobStatus.queued) 'delete': ('remove', () => _remove(queue.selected()!)),
+        'c': ('clear done', () => queue.removeWhere((j) => j.status == JobStatus.done)),
+        'b escape': ('back', () => app.go(q.back)),
+        ...keys,
+      },
+    ),
+  };
 }
 
-final class _State {
-  _View view = _View.search;
-  String query = '';
-  bool dirty = true;
-  List<Hit> hits = [];
-  int sel = 0;
-  int scroll = 0;
-  bool searching = false;
+Job? _active() => queue.items().where((j) => j.status == JobStatus.active).firstOrNull;
+Job? _job(Chapter ch) => queue.items().where((j) => j.chapter.postId == ch.postId).firstOrNull;
+int get _left => queue.items().where((j) => j.status.index < JobStatus.done.index).length;
 
-  String? seriesTitle;
-  String? seriesUrl;
-  List<Chapter> chapters = [];
-  int csel = 0;
-  int cscroll = 0;
-  bool loadingCh = false;
+String _mark(Series c, Chapter ch) => c.onDisk.contains(ch.title)
+    ? '✓'
+    : switch (_job(ch)?.status) {
+        JobStatus.done => '✓',
+        JobStatus.failed => '✗',
+        null => ' ',
+        _ => '⇣',
+      };
 
-  String status = 'type a manga title, press enter';
-  bool statusErr = false;
+Future<void> _search(Search s) async {
+  s.searched = s.query.text().trim();
+  if (s.searched.isEmpty) return;
+  s.hits.set(await Console.spin('searching', () => searchManga(s.searched)));
+}
 
-  String? downloading;
-  int dlDone = 0;
-  int dlTotal = 0;
-
-  bool quit = false;
-
-  void frame(Screen s, Region r) {
-    _input(s);
-    _draw(s, r);
+Future<void> _open(Search s, App<Page> app) async {
+  final hit = s.hits.selected();
+  if (hit == null) return;
+  final page = Series(s, hit);
+  app.go(page);
+  final chapters = await Console.spin('loading chapters', () => resolveChapters(hit.url));
+  for (final ch in chapters) {
+    if (await Fs.dir(Job(hit, ch).dir).exists()) page.onDisk.add(ch.title);
   }
+  page.chapters.set(chapters);
+}
 
-  void _input(Screen s) {
-    if (s.pressed('ctrl+c')) {
-      quit = true;
-      return;
-    }
-    if (view == _View.search) {
-      final typed = s.typed();
-      if (typed.isNotEmpty) {
-        query += typed;
-        dirty = true;
-      }
-      if (s.pressed('backspace') && query.isNotEmpty) {
-        final runes = query.runes.toList()..removeLast();
-        query = String.fromCharCodes(runes);
-        dirty = true;
-      }
-      if (s.pressed('up')) {
-        sel = (sel - 1 + hits.length).clamp(0, hits.isEmpty ? 0 : hits.length - 1);
-      }
-      if (s.pressed('down')) {
-        sel = (sel + 1).clamp(0, hits.isEmpty ? 0 : hits.length - 1);
-      }
-      if (s.pressed('enter')) {
-        if (dirty && query.trim().isNotEmpty) {
-          _search();
-        } else if (hits.isNotEmpty) {
-          _openSeries(hits[sel.clamp(0, hits.length - 1)]);
-        }
-      }
-      // NB: plain `o` would also fire while typing, so browser is ctrl+o here.
-      if (s.pressed('ctrl+o')) {
-        final i = sel.clamp(0, hits.length - 1);
-        if (hits.isNotEmpty) _browse(hits[i]['url']!);
-      }
-      if (s.pressed('escape')) quit = true;
-    } else {
-      if (s.pressed('up')) {
-        csel = (csel - 1 + chapters.length)
-            .clamp(0, chapters.isEmpty ? 0 : chapters.length - 1);
-      }
-      if (s.pressed('down')) {
-        csel = (csel + 1)
-            .clamp(0, chapters.isEmpty ? 0 : chapters.length - 1);
-      }
-      if (s.pressed('enter') && chapters.isNotEmpty) {
-        _download(chapters[csel.clamp(0, chapters.length - 1)]);
-      }
-      if (s.pressed('o') && seriesUrl != null) _browse(seriesUrl!);
-      if (s.pressed('b') || s.pressed('escape')) view = _View.search;
-    }
-  }
+Future<void> _browse(String? url, App<Page> app) async {
+  if (url == null) return;
+  await Shell.open(url);
+  app.say('opened in browser');
+}
 
-  void _draw(Screen s, Region r) {
-    final hint = view == _View.search
-        ? '↑↓ move · enter open · ctrl+o browser · esc quit'
-        : 'enter download · o browser · b back';
-    // NB: split rows first: cols() consumes its region's cursor, so a
-    // header built with cols() on `r` would leave nothing below it.
-    final [top, rest] = r.rows([1, 0]);
-    final [head, tail] = top.cols([11, 0]);
-    head.write('✻ rawfree', color: 208, bold: true);
-    tail.write(hint, color: 240);
-    final [list, statusRow, bottom] = rest.rows([0, 1, 3]);
-    // Keep the cursor on screen: the list owns everything but the
-    // header (1), status (1) and input box (3) rows.
-    final visible = (s.height() - 5).clamp(1, 1 << 30);
+Future<void> _quit(App<Page> app) async {
+  if (_left == 0 || await Console.confirm('$_left downloads left. Quit?')) app.quit();
+}
 
-    if (view == _View.search) {
-      while (sel < scroll) {
-        scroll--;
-      }
-      while (sel >= scroll + visible) {
-        scroll++;
-      }
-      _drawList(list, hits.map((h) => h['title'] ?? '').toList(), sel,
-          scroll, empty: searching ? '  searching…' : '  no results yet');
-    } else {
-      while (csel < cscroll) {
-        cscroll--;
-      }
-      while (csel >= cscroll + visible) {
-        cscroll++;
-      }
-      _drawList(list, chapters.map((c) => c.title).toList(), csel, cscroll,
-          empty: loadingCh ? '  loading chapters…' : '  no chapters');
-    }
+void _enqueue(Series c, List<Chapter> chapters, App<Page> app) {
+  final add = [
+    for (final ch in chapters)
+      if (!c.onDisk.contains(ch.title) && _job(ch) == null) Job(c.hit, ch),
+  ];
+  queue.addAll(add);
+  app.say('queued ${add.length} chapter(s)');
+  _work(app);
+}
 
-    var msg = status;
-    if (downloading != null && dlTotal > 0) {
-      msg = '↓ $downloading $dlDone/$dlTotal';
-    }
-    statusRow.write(
-      msg,
-      color: statusErr ? 203 : (msg.startsWith('✓') ? 78 : 240),
-    );
+void _retry(Job job, App<Page> app) {
+  job.status = JobStatus.queued;
+  _work(app);
+}
 
-    final box = bottom.box(view == _View.search ? 'search' : (seriesTitle ?? 'manga'));
-    if (view == _View.search) {
-      box.write('> $query▌', bold: true);
-    } else {
-      box.write('enter downloads the chapter as images · o opens the page',
-          color: 240);
-    }
-  }
+void _remove(Job job) => queue.remove(job);
 
-  void _drawList(
-    Region list,
-    List<String> rows,
-    int cur,
-    int sc, {
-    required String empty,
-  }) {
-    if (rows.isEmpty) {
-      list.write(empty, color: 240);
-      return;
-    }
-    for (var i = sc; i < rows.length; i++) {
-      final mark = i == cur ? '❯ ' : '  ';
-      list.write('$mark${rows[i]}', bold: i == cur, color: i == cur ? 81 : null);
-    }
-  }
-
-  void _search() {
-    final q = query.trim();
-    searching = true;
-    statusErr = false;
-    status = 'searching…';
-    searchManga(q).then((found) {
-      hits = found;
-      sel = 0;
-      scroll = 0;
-      searching = false;
-      dirty = false;
-      status = found.isEmpty ? 'no results' : '${found.length} result(s)';
-    }).catchError((Object e) {
-      searching = false;
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    });
-  }
-
-  void _openSeries(Hit h) {
-    seriesTitle = h['title'];
-    seriesUrl = h['url'];
-    view = _View.chapters;
-    chapters = [];
-    csel = 0;
-    cscroll = 0;
-    loadingCh = true;
-    statusErr = false;
-    status = 'loading chapters…';
-    resolveChapters(h['url']!).then((found) {
-      chapters = found;
-      loadingCh = false;
-      status = '${found.length} chapter(s)';
-    }).catchError((Object e) {
-      loadingCh = false;
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    });
-  }
-
-  void _download(Chapter c) {
-    if (downloading != null) {
-      status = 'already downloading…';
-      return;
-    }
-    downloading = c.title;
-    dlDone = 0;
-    dlTotal = 0;
-    statusErr = false;
-    () async {
+/// The worker: one chapter at a time, 4 pages in parallel; idles when the
+/// queue has nothing queued.
+Future<void> _work(App<Page> app) async {
+  if (_working) return;
+  _working = true;
+  try {
+    for (;;) {
+      final job = queue.items().where((j) => j.status == JobStatus.queued).firstOrNull;
+      if (job == null) break;
+      job.status = JobStatus.active;
       try {
-        final imgs = await chapterImages(c.postId);
-        dlTotal = imgs.length;
-        final dir = 'downloads/${_safe(seriesTitle ?? 'manga')}/${_safe(c.title)}';
-        var i = 0;
-        var tiny = 0;
-        for (final u in imgs) {
-          i++;
-          dlDone = i;
-          final res = await Http.get(u, headers: {
-            ..._headers,
-            'referer': '$_base/',
-          });
-          if (res.status() < 200 || res.status() >= 300) {
-            await res.close();
-            tiny++;
-            continue;
-          }
-          final tail = Uri.parse(u).pathSegments.lastOrNull ?? 'img';
-          final name = '${'$i'.padLeft(3, '0')}_$tail';
-          final bytes = await res.bytes();
-          if (bytes.length < 1024) tiny++; // expired signed URL stub
-          await Fs.file('$dir/$name').write(bytes);
-        }
-        status = '✓ ${c.title} ($dlTotal img) → $dir'
-            '${tiny > 0 ? ' · $tiny failed, retry the chapter' : ''}';
-      } catch (e) {
-        statusErr = true;
-        status = '✗ ${_short(e)}';
+        await _fetch(job);
+      } on Exception catch (e) {
+        job.status = JobStatus.failed;
+        app.say('✗ ${job.chapter.title}: ${_short(e)}');
       }
-      downloading = null;
-    }();
+    }
+  } finally {
+    _working = false;
+  }
+}
+
+Future<void> _fetch(Job job) async {
+  final imgs = await chapterImages(job.chapter.postId);
+  if (imgs.isEmpty) throw FormatException('no images found');
+  final todo = job.missing.isEmpty ? [for (var i = 0; i < imgs.length; i++) i] : [...job.missing];
+  job
+    ..total = imgs.length
+    ..done = imgs.length - todo.length;
+  final finished = queue.items().where((j) => j.status.index >= JobStatus.done.index).length;
+  final label = '⇣ ${finished + 1}/${queue.items().length} chapters · ↓ ${job.chapter.title}';
+  final bar = Console.bar(imgs.length, label: label)..tick(job.done);
+  final failed = <int>[];
+  var next = 0;
+  Future<void> lane() async {
+    while (next < todo.length) {
+      final i = todo[next++];
+      if (await _page(job, i, imgs[i])) {
+        job.done++;
+      } else {
+        failed.add(i);
+      }
+      bar.tick();
+    }
   }
 
-  void _browse(String url) {
-    try {
-      final done = Platform.isMacOS
-          ? Process.run('open', [url])
-          : Platform.isLinux
-              ? Process.run('xdg-open', [url])
-              : Process.run('start', [url, ''], runInShell: true);
-      done.then((_) {}).catchError((Object _) {});
-      statusErr = false;
-      status = 'opened in browser';
-    } catch (e) {
-      statusErr = true;
-      status = '✗ ${_short(e)}';
-    }
+  try {
+    await Future.wait([for (var k = 0; k < 4; k++) lane()]);
+  } finally {
+    await bar.close();
+  }
+  job.missing
+    ..clear()
+    ..addAll(failed..sort());
+  job.status = failed.isEmpty ? JobStatus.done : JobStatus.failed;
+}
+
+/// One page; false when it failed (non-2xx, network, or a <1 KB stub).
+Future<bool> _page(Job job, int i, String url) async {
+  try {
+    final img = await Http.get(url, headers: {..._headers, 'referer': '$_base/'}, retries: 2);
+    final data = img.ok() ? await img.bytes() : const <int>[];
+    if (!img.ok()) await img.close();
+    if (data.length < 1024) return false; // error page or expired-URL stub
+    await Fs.dir(job.dir).file('${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, img)}').write(data);
+    return true;
+  } on Exception {
+    return false;
   }
 }
 
 // --- rawfree API (JSON only, works where HTML is region-blocked) ---
 
-Future<Json> _apiGet(String url) async {
-  final res = await Http.get(url, headers: _headers);
-  if (res.status() < 200 || res.status() >= 300) {
+Future<Json> _apiGet(String path) async {
+  final res = await Http.get('$_base/wp-json/wp/v2/$path', headers: _headers, retries: 2);
+  if (!res.ok()) {
+    final text = await res.text();
     await res.close();
-    throw StateError('HTTP ${res.status()}');
+    throw HttpException('HTTP ${res.status()}: ${_short(text)}', uri: Uri.parse(res.url()));
   }
   return res.json();
 }
 
-Future<Json> _postForm(String url, Map<String, String> fields) async {
-  var current = url;
-  final headers = {
-    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    'x-requested-with': 'XMLHttpRequest',
-    'referer': '$_base/',
-    'user-agent': _headers['user-agent']!,
-  };
-  for (var hop = 0; hop < 4; hop++) {
-    final res = await Http.post(
-      current,
-      body: Uri(queryParameters: fields).query,
-      headers: headers,
-    );
-    if (const {301, 302, 303, 307, 308}.contains(res.status())) {
-      final loc = res.header('location');
-      await res.close();
-      if (loc == null || loc.isEmpty) throw StateError('redirect loop');
-      current = Uri.parse(current).resolve(loc).toString();
-      continue;
-    }
-    if (res.status() < 200 || res.status() >= 300) {
-      await res.close();
-      throw StateError('HTTP ${res.status()}');
-    }
-    return res.json();
-  }
-  throw StateError('too many redirects');
-}
-
-String _unescape(String s) {
-  var out = s
-      .replaceAllMapped(
-        RegExp(r'&#(\d+);'),
-        (m) => String.fromCharCode(int.parse(m.group(1)!)),
-      )
-      .replaceAllMapped(
-        RegExp(r'&#x([0-9a-fA-F]+);'),
-        (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)),
-      );
-  const entities = {
-    'amp': '&',
-    'lt': '<',
-    'gt': '>',
-    'quot': '"',
-    'apos': "'",
-    '#039': "'",
-    'nbsp': ' ',
-    'ndash': '–',
-    'mdash': '—',
-    'lsquo': '‘',
-    'rsquo': '’',
-    'ldquo': '“',
-    'rdquo': '”',
-    'hellip': '…',
-  };
-  return out.replaceAllMapped(
-    RegExp(r'&([a-zA-Z#0-9]+);'),
-    (m) => entities[m.group(1)] ?? m.group(0)!,
-  );
-}
-
 String _titleOf(Json item) {
-  final nested = item.$('title.rendered').value<String>();
-  if (nested != null) return _unescape(nested);
-  return _unescape(item.$('title').value<String>() ?? '');
+  final rendered = item.$('title.rendered').value<String>();
+  if (rendered != null) return _htmlText(rendered);
+  return _htmlText(item.$('title').value<String>() ?? '');
+}
+
+/// Strip tags / decode entities from a WP title or tag name.
+///
+/// WP `title.rendered` may hold entities or inline tags, while tag `name`s
+/// are usually bare text with no tags at all. `Html.parse` only keeps
+/// element nodes, so bare text parses to zero elements and `.text()` reads
+/// `''`. Wrapping in a `<div>` keeps both cases as element content.
+String _htmlText(String html) {
+  if (html.trim().isEmpty) return '';
+  return Html.parse('<div>$html</div>').text();
 }
 
 /// Series first, then chapters.
@@ -392,17 +303,16 @@ Future<List<Hit>> searchManga(String query, {int limit = 30}) async {
     if (url == null || url.isEmpty) return;
     if (!seen.add(url)) return;
     if ((title ?? '').trim().isEmpty) return;
-    out.add({'title': title!.trim(), 'url': url});
+    out.add((title: title!.trim(), url: url));
   }
 
   final q = Uri.encodeQueryComponent(query);
-  final tags = await _apiGet('$_base/wp-json/wp/v2/tags?search=$q&per_page=$limit');
+  final tags = await _apiGet('tags?search=$q&per_page=$limit');
   for (final t in tags) {
     if (out.length >= limit) break;
-    add(_unescape(t.$('name').value<String>() ?? ''), t.$('link').value<String>());
+    add(_htmlText(t.$('name').value<String>() ?? ''), t.$('link').value<String>());
   }
-  final posts = await _apiGet(
-      '$_base/wp-json/wp/v2/posts?search=$q&per_page=$limit&_embed=wp:featuredmedia');
+  final posts = await _apiGet('posts?search=$q&per_page=$limit&_embed=wp:featuredmedia');
   for (final p in posts) {
     if (out.length >= limit) break;
     add(_titleOf(p), p.$('link').value<String>());
@@ -413,13 +323,12 @@ Future<List<Hit>> searchManga(String query, {int limit = 30}) async {
 Future<int?> _seriesTag(List<int> ids) async {
   if (ids.isEmpty) return null;
   if (ids.length == 1) return ids.first;
-  final tags = await _apiGet(
-      '$_base/wp-json/wp/v2/tags?include=${ids.join(',')}&per_page=100');
+  final tags = await _apiGet('tags?include=${ids.join(',')}&per_page=100');
   var best = ids.first;
   var bestCount = -1;
   for (final t in tags) {
-    final id = t.$('id').value<num>()?.toInt();
-    final count = t.$('count').value<num>()?.toInt() ?? 0;
+    final id = t.$('id').value<int>();
+    final count = t.$('count').value<int>() ?? 0;
     if (id != null && count > bestCount) {
       best = id;
       bestCount = count;
@@ -431,7 +340,7 @@ Future<int?> _seriesTag(List<int> ids) async {
 List<Chapter> _toChapters(Json list) {
   final out = <Chapter>[];
   for (final p in list) {
-    final id = p.$('id').value<num>()?.toInt();
+    final id = p.$('id').value<int>();
     final link = p.$('link').value<String>();
     final title = _titleOf(p).trim();
     if (id == null || link == null || title.isEmpty) continue;
@@ -442,29 +351,24 @@ List<Chapter> _toChapters(Json list) {
 
 /// Chapters of the series behind a chapter or series URL, newest first.
 Future<List<Chapter>> resolveChapters(String pageUrl) async {
-  final segs =
-      Uri.parse(pageUrl).pathSegments.where((s) => s.isNotEmpty).toList();
-  if (segs.isEmpty) throw StateError('bad url');
+  final segs = Uri.parse(pageUrl).pathSegments.where((s) => s.isNotEmpty).toList();
+  if (segs.isEmpty) throw FormatException('bad url', pageUrl);
   final sq = Uri.encodeQueryComponent(segs.last);
-  final posts = await _apiGet('$_base/wp-json/wp/v2/posts?slug=$sq&_fields=id,tags');
+  final posts = await _apiGet('posts?slug=$sq&_fields=id,tags');
   for (final p in posts) {
-    if (p.$('id').value<num>() == null) continue;
-    final tagIds = [
-      for (final t in p.$('tags')) t.value<num>()?.toInt(),
-    ].whereType<int>().toList();
+    if (p.$('id').value<int>() == null) continue;
+    final tagIds = p.$('tags').value<List<int>>() ?? [];
     final tagId = await _seriesTag(tagIds);
-    if (tagId == null) throw StateError('no series tag');
-    return _toChapters(await _apiGet(
-        '$_base/wp-json/wp/v2/posts?tags=$tagId&per_page=100&_fields=id,link,title'));
+    if (tagId == null) throw const FormatException('no series tag');
+    return _toChapters(await _apiGet('posts?tags=$tagId&per_page=100&_fields=id,link,title'));
   }
-  final tags = await _apiGet('$_base/wp-json/wp/v2/tags?slug=$sq&_fields=id');
+  final tags = await _apiGet('tags?slug=$sq&_fields=id');
   for (final t in tags) {
-    final tagId = t.$('id').value<num>()?.toInt();
+    final tagId = t.$('id').value<int>();
     if (tagId == null) continue;
-    return _toChapters(await _apiGet(
-        '$_base/wp-json/wp/v2/posts?tags=$tagId&per_page=100&_fields=id,link,title'));
+    return _toChapters(await _apiGet('posts?tags=$tagId&per_page=100&_fields=id,link,title'));
   }
-  throw StateError('not found');
+  throw FormatException('series not found', pageUrl);
 }
 
 /// Chapter page images via the theme's AJAX endpoint.
@@ -473,33 +377,93 @@ Future<List<String>> chapterImages(int postId) async {
   final seen = <String>{};
   var index = 0;
   for (var round = 0; round < 12; round++) {
-    final decoded = await _postForm('$_base/wp-admin/admin-ajax.php', {
-      'action': 'z_do_ajax',
-      '_action': 'decode_images',
-      'p': '$postId',
-      'img_index': '$index',
-      'content': '',
-      'nonce': 'x',
-    });
+    final decoded = await Http.post(
+      '$_base/wp-admin/admin-ajax.php',
+      body: {
+        'action': 'z_do_ajax',
+        '_action': 'decode_images',
+        'p': '$postId',
+        'img_index': '$index',
+        'content': '',
+        'nonce': 'x',
+      },
+    ).json();
     final mes = decoded.$('mes').value<String>() ?? '';
     if (mes.isNotEmpty) {
       for (final img in Html.parse(mes, baseUrl: '$_base/').$('img')) {
-        final src = img.attr('src') ??
-            img.attr('data-src') ??
-            img.attr('data-original') ??
-            img.attr('data-lazy-src');
+        final src = img.attr('src') ?? img.attr('data-src') ?? img.attr('data-original') ?? img.attr('data-lazy-src');
         if (src == null || src.isEmpty || src.startsWith('data:')) continue;
         if (seen.add(src)) out.add(src);
       }
     }
-    final going = decoded.$('going').value<num>()?.toInt() ?? 0;
-    final next = decoded.$('img_index').value<num>()?.toInt() ?? index + 1;
+    final going = decoded.$('going').value<int>() ?? 0;
+    final next = decoded.$('img_index').value<int>() ?? index + 1;
     if (going != 1 || next <= index) break;
     index = next;
-    final waitMs = decoded.$('next_timeout').value<num>()?.toInt() ?? 1000;
+    final waitMs = decoded.$('next_timeout').value<int>() ?? 1000;
     await Future<void>.delayed(Duration(milliseconds: waitMs.clamp(0, 5000)));
   }
   return out;
+}
+
+/// File extension for a downloaded chapter image.
+///
+/// The image host answers `application/octet-stream` and its URLs carry no
+/// extension, so `Response.name()` is a bare id (`kbipl910tmb8`). Sniff the
+/// magic bytes, falling back to the content-type and then `.jpg` (what the
+/// host serves), so pages land as `001.jpg`, `002.jpg`, … and open in any
+/// viewer.
+String _imgExt(List<int> bytes, Response res) {
+  if (bytes.length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+    return '.jpg';
+  }
+  if (bytes.length >= 8 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4E &&
+      bytes[3] == 0x47 &&
+      bytes[4] == 0x0D &&
+      bytes[5] == 0x0A &&
+      bytes[6] == 0x1A &&
+      bytes[7] == 0x0A) {
+    return '.png';
+  }
+  if (bytes.length >= 6 &&
+      bytes[0] == 0x47 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x38 &&
+      (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+      bytes[5] == 0x61) {
+    return '.gif';
+  }
+  if (bytes.length >= 12 &&
+      bytes[0] == 0x52 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x46 &&
+      bytes[8] == 0x57 &&
+      bytes[9] == 0x45 &&
+      bytes[10] == 0x42 &&
+      bytes[11] == 0x50) {
+    return '.webp';
+  }
+  if (bytes.length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D) {
+    return '.bmp';
+  }
+  switch (res.header('content-type')?.split(';').first.trim().toLowerCase()) {
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/png':
+      return '.png';
+    case 'image/gif':
+      return '.gif';
+    case 'image/webp':
+      return '.webp';
+    case 'image/bmp':
+      return '.bmp';
+  }
+  return '.jpg';
 }
 
 String _safe(String s) {

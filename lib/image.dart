@@ -6,17 +6,21 @@
 /// await (avatar.resize(width: 64).encode(ImageFormat.png) > Fs.file('icon.png'));
 /// ```
 ///
-/// Public surface is exactly: [Image], [ImageFormat].
+/// Public surface is exactly: [Image], [ImageFormat], [RegionPicture].
 /// - `Image.decode()` decodes bytes, `Reader.image()` reads a stream.
 /// - [Image] supports `width` `height` `resize` `crop` `encode`.
+/// - `region.picture(image)` draws it in a `Tui` (here, so `tui` doesn't
+///   load the codecs).
 /// CPU-bound batches go through [Pool]. Everything else is private.
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
 import 'core.dart';
+import 'src/tui.dart' show Region, drawPicture;
 export 'core.dart';
 
 /// Encodable image formats. WebP decodes but the engine cannot encode it,
@@ -35,7 +39,10 @@ final class Image {
   static Image decode(List<int> bytes) {
     img.Image? decoded;
     try {
-      decoded = img.decodeImage(Uint8List.fromList(bytes));
+      // frame: 0 keeps GIF to its first frame (an animated GIF otherwise
+      // decodes every frame and re-encodes as animated).
+      final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+      decoded = img.decodeImage(raw, frame: 0);
     } catch (e) {
       throw FormatException('unknown image format: $e');
     }
@@ -52,22 +59,42 @@ final class Image {
   int height() => _inner.height;
 
   /// A resized copy. Keeps the aspect ratio when only one side is given,
-  /// sets the exact size when both are. Neither is an [ArgumentError].
+  /// sets the exact size when both are. Neither, or a non-positive size,
+  /// is an [ArgumentError].
   Image resize({int? width, int? height}) {
     if (width == null && height == null) {
       throw ArgumentError('resize needs a width, a height, or both');
     }
-    return Image._(
-      img.copyResize(_inner, width: width, height: height),
-    );
+    if ((width != null && width < 1) || (height != null && height < 1)) {
+      throw ArgumentError.value(
+        width ?? height,
+        width != null ? 'width' : 'height',
+        'must be >= 1',
+      );
+    }
+    final res = img.copyResize(_inner, width: width, height: height);
+    if (res.width < 1 || res.height < 1) {
+      return Image._(img.copyResize(
+        _inner,
+        width: width ?? math.max(1, (height! * (_inner.width / _inner.height)).round()),
+        height: height ?? math.max(1, (width! * (_inner.height / _inner.width)).round()),
+      ));
+    }
+    return Image._(res);
   }
 
-  /// A cut-out copy. A region leaving the image is a [RangeError].
+  /// A cut-out copy. A bad size is an [ArgumentError]; a region leaving
+  /// the image is a [RangeError].
   Image crop(int x, int y, int width, int height) {
+    if (width < 1 || height < 1) {
+      throw ArgumentError.value(
+        '${width}x$height',
+        'width/height',
+        'must be >= 1',
+      );
+    }
     if (x < 0 ||
         y < 0 ||
-        width <= 0 ||
-        height <= 0 ||
         x + width > _inner.width ||
         y + height > _inner.height) {
       throw RangeError(
@@ -82,9 +109,13 @@ final class Image {
 
   /// A [Reader] of the encoded image, encoded when read. Store it with
   /// `> Fs.file(…)`, hash it, or upload it with `body:`. [quality] applies
-  /// to JPEG.
-  Reader encode(ImageFormat format, {int quality = 90}) =>
-      _Encoded(this, format, quality: quality);
+  /// to JPEG (1–100, else [ArgumentError]).
+  Reader encode(ImageFormat format, {int quality = 90}) {
+    if (quality < 1 || quality > 100) {
+      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+    }
+    return _Encoded(this, format, quality: quality);
+  }
 }
 
 /// Bytes → a value.
@@ -105,8 +136,12 @@ extension ImageFuture on Future<Image> {
       (await this).resize(width: width, height: height);
   Future<Image> crop(int x, int y, int width, int height) async =>
       (await this).crop(x, y, width, height);
-  Reader encode(ImageFormat format, {int quality = 90}) =>
-      _FutureEncoded(this, format, quality: quality);
+  Reader encode(ImageFormat format, {int quality = 90}) {
+    if (quality < 1 || quality > 100) {
+      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+    }
+    return _FutureEncoded(this, format, quality: quality);
+  }
 }
 
 final class _Encoded with Reader {
@@ -117,7 +152,9 @@ final class _Encoded with Reader {
   final int quality;
 
   @override
-  Stream<List<int>> stream() => Stream.value(_encode(_image, _format, quality));
+  Stream<List<int>> stream() async* {
+    yield _encode(_image, _format, quality);
+  }
 }
 
 final class _FutureEncoded with Reader {
@@ -139,7 +176,7 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
     case ImageFormat.png:
       return img.encodePng(inner);
     case ImageFormat.jpg:
-      return img.encodeJpg(inner, quality: quality.clamp(1, 100));
+      return img.encodeJpg(inner, quality: quality);
     case ImageFormat.gif:
       return img.encodeGif(inner);
     case ImageFormat.bmp:
@@ -147,6 +184,30 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
     case ImageFormat.tiff:
       return img.encodeTiff(inner);
     case ImageFormat.ico:
+      if (inner.width > 256 || inner.height > 256) {
+        throw ArgumentError.value(
+          '${inner.width}x${inner.height}',
+          'image',
+          '.ico supports at most 256x256',
+        );
+      }
       return img.encodeIco(inner);
+  }
+}
+
+/// Draws an [Image] in a `Tui` region.
+extension RegionPicture on Region {
+  /// The rest of the region as half-block cells (`▀`), scaled down to fit
+  /// with the aspect kept. Returns the receiver.
+  Region picture(Image image) {
+    final inner = image._inner;
+    return drawPicture(this, inner.width, inner.height, (x, y) {
+      final p = inner.getPixel(x, y);
+      return (
+        (p.rNormalized * 255).round().clamp(0, 255),
+        (p.gNormalized * 255).round().clamp(0, 255),
+        (p.bNormalized * 255).round().clamp(0, 255),
+      );
+    });
   }
 }

@@ -94,6 +94,18 @@ void main() {
       expect(_Mem('y') > h, throwsStateError);
       expect(_Mem('y').pipe(h).bytes(), throwsStateError);
     });
+
+    test(
+        'F6: a writer that fails before reading poisons the pipe hasher too',
+        () async {
+      final h = Hash.sha256();
+      await expectLater(
+        _Mem('hello') | h > _ThrowBeforeRead(),
+        throwsA(isA<ArgumentError>()),
+      );
+      // Not the empty-input digest: the run never delivered the bytes.
+      expect(() => h.hex(), throwsStateError);
+    });
   });
 }
 
@@ -109,5 +121,14 @@ final class _Boom with Reader {
   Stream<List<int>> stream() async* {
     yield utf8.encode('part');
     throw StateError('reader blew up mid-write');
+  }
+}
+
+/// Fails before ever listening to the input stream (a missing parent, an
+/// unwritable target): the pipe must still poison its stages.
+final class _ThrowBeforeRead implements Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async {
+    throw ArgumentError('cannot open target');
   }
 }

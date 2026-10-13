@@ -11,6 +11,8 @@
 /// Public surface is exactly: [Console], [Bar].
 /// - `Console.ask/confirm/choose/spin/bar()` prompt or show progress.
 /// - [Bar] supports `tick` (plus [Pipe]/[Closeable]).
+/// Key decoding, broadcast stdin and terminal modes are shared with `tui`
+/// through `src/terminal.dart` (imported relatively, never exported).
 /// Everything else is private.
 library;
 
@@ -20,6 +22,8 @@ import 'dart:io' as io;
 
 import 'core.dart';
 export 'core.dart';
+
+import 'src/terminal.dart' as term;
 
 /// Entry point: prompts and progress, all on stderr.
 abstract final class Console {
@@ -39,35 +43,55 @@ abstract final class Console {
   static bool get _animated =>
       io.stderr.hasTerminal && io.Platform.environment['NO_COLOR'] == null;
 
-  /// Read one line. With [secret], echo is turned off (passwords).
-  /// A closed stdin throws [io.StdinException].
-  static Future<String> ask(String question, {bool secret = false}) async {
-    io.stderr.writeln(question);
-    if (secret) {
-      try {
-        io.stdin.echoMode = false;
-      } catch (_) {}
-    }
-    String? line;
+  static int _columns() {
     try {
-      line = io.stdin.readLineSync(
-        encoding: utf8,
-        retainNewlines: false,
-      );
-    } finally {
-      if (secret) {
-        try {
-          io.stdin.echoMode = true;
-        } catch (_) {}
-        io.stderr.writeln();
-      }
-    }
-    if (line == null) throw const io.StdinException('stdin is closed');
-    return line;
+      final cols = io.stderr.terminalColumns;
+      if (cols > 0) return cols;
+    } catch (_) {}
+    return 80;
   }
 
-  /// Yes/no. Enter means no. Asks again on anything else.
+  static int _lines() {
+    try {
+      final rows = io.stderr.terminalLines;
+      if (rows > 0) return rows;
+    } catch (_) {}
+    return 24;
+  }
+
+  /// Read one line. With [secret], echo is turned off (passwords).
+  /// Asynchronous: timers, downloads and bars keep running while one waits.
+  /// A closed stdin throws [io.StdinException]. Ctrl-C restores the
+  /// terminal and exits with 130.
+  static Future<String> ask(String question, {bool secret = false}) async {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptAsk(question, secret: secret);
+    io.stderr.writeln(question);
+    final modes = term.captureModes();
+    final sigs = _trapSignals(modes);
+    try {
+      if (secret) {
+        try {
+          io.stdin.echoMode = false;
+        } catch (_) {}
+      }
+      return await _readLine(secret: secret);
+    } finally {
+      for (final s in sigs) {
+        try {
+          await s.cancel();
+        } catch (_) {}
+      }
+      term.restoreModes(modes);
+      if (secret) io.stderr.writeln();
+    }
+  }
+
+  /// Yes/no. Enter means no. Asks again on anything else. While a
+  /// state-driven [Tui.run] is active, shows as a popup.
   static Future<bool> confirm(String question) async {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptConfirm(question);
     for (;;) {
       final answer =
           (await ask('$question [y/n]')).trim().toLowerCase();
@@ -76,8 +100,11 @@ abstract final class Console {
     }
   }
 
-  /// Pick one of [choices]. Arrow keys + Enter on a terminal; piped, a
-  /// numbered list and a number. Empty [choices] is an [ArgumentError].
+  /// Pick one of [choices]. Arrow keys + Enter on a terminal (scrolling when
+  /// the choices outnumber the rows); piped, a numbered list and a number.
+  /// Escape accepts the current selection. Empty [choices] is an
+  /// [ArgumentError]. While a state-driven [Tui.run] is active, shows as a
+  /// popup (Escape cancels with [StdinException]).
   static Future<String> choose(
     String question,
     List<String> choices,
@@ -85,6 +112,8 @@ abstract final class Console {
     if (choices.isEmpty) {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.promptChoose(question, choices);
     if (!io.stdin.hasTerminal || !io.stderr.hasTerminal) {
       io.stderr.writeln(question);
       for (var i = 0; i < choices.length; i++) {
@@ -102,53 +131,253 @@ abstract final class Console {
   }
 
   /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
-  /// or `✗ label` and a rethrow.
+  /// or `✗ label` and a rethrow. The live line always fits the width.
+  /// While a state-driven [Tui.run] is active, draws in its status row
+  /// instead (several at once).
   static Future<T> spin<T>(String label, Future<T> Function() work) {
-    final live = _Spinner(label);
-    _claim(live);
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) {
+      final id = bridge.spinStarted(label);
+      Future<T> fut;
+      try {
+        fut = work();
+      } catch (e, st) {
+        bridge.spinEnded(id, false);
+        return Future.error(e, st);
+      }
+      return fut.then((v) {
+        bridge.spinEnded(id, true);
+        return v;
+      }, onError: (Object e, StackTrace st) {
+        bridge.spinEnded(id, false);
+        throw e;
+      });
+    }
+    final _Live live = _Spinner(label);
+    try {
+      _claim(live);
+    } catch (_) {
+      rethrow;
+    }
+    String fit(String prefix, String text) {
+      final cols = _columns();
+      final line = '$prefix $text';
+      if (term.displayWidth(line) <= cols) return line;
+      final room = cols - term.displayWidth(prefix) - 1;
+      if (room <= 0) return prefix;
+      return '$prefix ${term.truncateWidth(text, room)}';
+    }
+
     Future<T> fut;
     try {
       fut = work();
     } catch (e, st) {
-      _release(live);
+      live._free();
       io.stderr.writeln('✗ $label');
       return Future.error(e, st);
     }
     if (!_animated) {
       return fut.then((v) {
-        _release(live);
+        live._free();
         io.stderr.writeln('✓ $label');
         return v;
       }, onError: (Object e, StackTrace st) {
-        _release(live);
+        live._free();
         io.stderr.writeln('✗ $label');
         throw e;
       });
     }
     var i = 0;
     const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    StreamSubscription<io.ProcessSignal>? winch;
+    try {
+      winch = io.ProcessSignal.sigwinch.watch().listen((_) {});
+    } catch (_) {
+      winch = null;
+    }
     final timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      io.stderr.write('\r${frames[i % frames.length]} $label');
+      io.stderr.write('\r${fit(frames[i % frames.length], label)}\x1b[K');
       i++;
     });
-    return fut.then((v) {
+    Future<void> cancelWinch() async {
+      try {
+        await winch?.cancel();
+      } catch (_) {}
+    }
+
+    return fut.then((v) async {
       timer.cancel();
-      _release(live);
-      io.stderr.writeln('\r✓ $label');
+      await cancelWinch();
+      live._free();
+      io.stderr.writeln('\r${fit('✓', label)}\x1b[K');
       return v;
-    }, onError: (Object e, StackTrace st) {
+    }, onError: (Object e, StackTrace st) async {
       timer.cancel();
-      _release(live);
-      io.stderr.writeln('\r✗ $label');
+      await cancelWinch();
+      live._free();
+      io.stderr.writeln('\r${fit('✗', label)}\x1b[K');
       throw e;
     });
   }
 
-  /// A progress bar over [total] items or bytes. A [total] of 0 means unknown.
-  static Bar bar(int total, {String? label}) {
+  /// A progress bar over [total] items or bytes (`null` or 0 means unknown).
+  /// As a [Pipe] it counts bytes; with [tick] it counts items. While a
+  /// state-driven [Tui.run] is active, draws in its status row instead
+  /// (several at once).
+  static Bar bar(int? total, {String? label}) {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) {
+      return Bar._bridged(bridge, bridge.barStarted(total, label), total,
+          label: label);
+    }
     final bar = Bar._(total, label: label);
+    // Claim before the first draw, so a second bar throws before it can
+    // draw over the live line.
     _claim(bar);
+    try {
+      bar._render();
+    } catch (_) {
+      _release(bar);
+      rethrow;
+    }
     return bar;
+  }
+
+  /// Trap signals for a prompt: restore the terminal modes, then exit.
+  /// SIGINT exits 130; SIGTERM/SIGHUP restore then exit 143/129.
+  /// Returns the subscriptions (cancel them when the prompt ends). While a
+  /// SIGINT listener exists Dart does not terminate on SIGINT by itself.
+  static List<StreamSubscription<io.ProcessSignal>> _trapSignals(
+    term.TermModes modes,
+  ) {
+    final subs = <StreamSubscription<io.ProcessSignal>>[];
+    void trap(io.ProcessSignal signal, int code) {
+      try {
+        subs.add(signal.watch().listen((_) {
+          term.restoreModes(modes);
+          io.exit(code);
+        }));
+      } catch (_) {}
+    }
+
+    trap(io.ProcessSignal.sigint, 130);
+    trap(io.ProcessSignal.sigterm, 143);
+    try {
+      // SIGHUP may not exist on all platforms.
+      subs.add(io.ProcessSignal.sighup.watch().listen((_) {
+        term.restoreModes(modes);
+        io.exit(129);
+      }));
+    } catch (_) {}
+    return subs;
+  }
+
+  /// Leftover bytes after a `\n` in one `_readLine` chunk, for the next call.
+  /// Piped `2\n3\n` in one chunk must not lose `3`.
+  static List<int>? _linePushback;
+
+  /// One cooked line from the shared broadcast stdin, without blocking the
+  /// event loop. Handles `\n` and `\r`; in secret mode backspace edits by
+  /// grapheme (not byte, so multibyte passwords survive).
+  static Future<String> _readLine({required bool secret}) {
+    final result = Completer<String>();
+    final buf = <int>[...? _linePushback];
+    _linePushback = null;
+    // A pushback that already holds a full line resolves immediately.
+    final pushNewline = buf.indexWhere((b) => b == 0x0a || b == 0x0d);
+    late final StreamSubscription<List<int>> sub;
+    void finish([List<int>? rest]) {
+      if (rest != null && rest.isNotEmpty) _linePushback = rest;
+      sub.cancel().then((_) {
+        if (!result.isCompleted) {
+          result.complete(utf8.decode(buf, allowMalformed: true));
+        }
+      }, onError: (_) {
+        if (!result.isCompleted) {
+          result.complete(utf8.decode(buf, allowMalformed: true));
+        }
+      });
+    }
+
+    // Check the pushback first: it may already contain a newline.
+    if (pushNewline >= 0) {
+      final line = buf.sublist(0, pushNewline);
+      final rest = buf.sublist(pushNewline + 1);
+      buf
+        ..clear()
+        ..addAll(line);
+      // Defer to let sub be assigned (finish cancels sub).
+      sub = term.sharedStdin().listen((_) {}, onDone: () {});
+      finish(rest);
+      return result.future;
+    }
+
+    sub = term.sharedStdin().listen(
+      (chunk) {
+        var i = 0;
+        while (i < chunk.length) {
+          final b = chunk[i];
+          if (b == 0x0a || b == 0x0d) {
+            finish(chunk.sublist(i + 1));
+            return;
+          }
+          if (secret && (b == 0x7f || b == 0x08)) {
+            _backspaceGrapheme(buf);
+            i++;
+            continue;
+          }
+          buf.add(b);
+          i++;
+        }
+      },
+      onError: (Object e) {
+        if (!result.isCompleted) {
+          result.completeError(
+            e is io.IOException
+                ? e
+                : const io.StdinException('stdin is closed'),
+          );
+        }
+      },
+      onDone: () {
+        if (!result.isCompleted) {
+          // EOF with a partial line still yields it; a truly empty stdin
+          // is closed.
+          if (buf.isEmpty) {
+            result.completeError(const io.StdinException('stdin is closed'));
+          } else {
+            result.complete(utf8.decode(buf, allowMalformed: true));
+          }
+        }
+      },
+      cancelOnError: false,
+    );
+    return result.future;
+  }
+
+  /// Remove one grapheme (base char plus combining marks/ZWJ) from [buf].
+  static void _backspaceGrapheme(List<int> buf) {
+    if (buf.isEmpty) return;
+    final text = utf8.decode(buf, allowMalformed: true);
+    final runes = text.runes.toList();
+    var end = runes.length;
+    // Drop trailing zero-width marks with their base? No: backspace deletes
+    // one user-perceived char: the last base plus its trailing marks, or a
+    // lone mark if that's all that's left. Walk back over zero-width runes,
+    // then one more base rune.
+    while (end > 0 && term.isZeroWidth(runes[end - 1])) {
+      end--;
+    }
+    if (end > 0) end--;
+    // If we stopped on a base, keep any zero-width marks before it? No:
+    // those belong to an earlier base, keep them. Just cut at end.
+    // But a dangling ZWJ sequence (man+ZWJ+woman -> backspace leaves ZWJ)?
+    // Cutting one grapheme as defined above leaves no dangling ZWJ for the
+    // common cases; full grapheme-cluster segmentation is overkill here.
+    final kept = String.fromCharCodes(runes.sublist(0, end));
+    buf
+      ..clear()
+      ..addAll(utf8.encode(kept));
   }
 
   static Future<String> _chooseInteractive(
@@ -156,105 +385,285 @@ abstract final class Console {
     List<String> choices,
   ) async {
     var selected = 0;
-    final stdin = io.stdin;
-    final oldEcho = stdin.echoMode;
-    final oldLine = stdin.lineMode;
+    final modes = term.captureModes();
+    term.setRawModes();
+    final sigs = _trapSignals(modes);
+    StreamSubscription<List<int>>? sub;
+    final pending = <int>[];
+    var painted = 0;
+    var stdinDone = false;
     try {
-      stdin.echoMode = false;
-      stdin.lineMode = false;
       io.stderr.writeln(question);
-      while (true) {
-        for (var i = 0; i < choices.length; i++) {
-          io.stderr.writeln(
-            '${i == selected ? '❯' : ' '} ${choices[i]}',
-          );
-        }
-        final byte = stdin.readByteSync();
-        if (byte < 0) {
+      sub = term.sharedStdin().listen(
+        pending.addAll,
+        onError: (_) {},
+        onDone: () => stdinDone = true,
+        cancelOnError: false,
+      );
+      for (;;) {
+        painted = _paintChoices(choices, selected, painted);
+        final key = await _nextKey(pending, () => stdinDone);
+        if (key == null) {
           throw const io.StdinException('stdin is closed');
         }
-        if (byte == 27) {
-          // Escape sequence: arrows are ESC [ A/B.
-          if (stdin.readByteSync() == 91) {
-            final dir = stdin.readByteSync();
-            if (dir == 65) {
-              selected = (selected - 1 + choices.length) % choices.length;
-            } else if (dir == 66) {
-              selected = (selected + 1) % choices.length;
-            }
-          }
-        } else if (byte == 10 || byte == 13) {
-          return choices[selected];
+        switch (key) {
+          case 'up':
+            selected = (selected - 1 + choices.length) % choices.length;
+          case 'down':
+            selected = (selected + 1) % choices.length;
+          case 'wheelup':
+            selected = (selected - 1 + choices.length) % choices.length;
+          case 'wheeldown':
+            selected = (selected + 1) % choices.length;
+          case 'home':
+            selected = 0;
+          case 'end':
+            selected = choices.length - 1;
+          case 'enter' || 'escape':
+            io.stderr.writeln();
+            return choices[selected];
+          default:
+            // Typed text and anything else: ignore while choosing.
+            break;
         }
-        // Repaint: move up one line per choice.
-        io.stderr.write('\x1b[${choices.length}A');
       }
     } finally {
       try {
-        stdin.echoMode = oldEcho;
+        await sub?.cancel();
       } catch (_) {}
-      try {
-        stdin.lineMode = oldLine;
-      } catch (_) {}
+      for (final s in sigs) {
+        try {
+          await s.cancel();
+        } catch (_) {}
+      }
+      term.restoreModes(modes);
+    }
+  }
+
+  /// Paint the scrolling window around [selected]; each choice cut to fit.
+  /// Returns the rows painted (for the next repaint's move-up).
+  static int _paintChoices(
+    List<String> choices,
+    int selected,
+    int painted,
+  ) {
+    final cols = _columns();
+    final rows = _lines() - 2;
+    final visible = rows.clamp(1, choices.length);
+    var start = selected - visible ~/ 2;
+    if (start < 0) start = 0;
+    if (start + visible > choices.length) start = choices.length - visible;
+    if (painted > 0) io.stderr.write('\x1b[${painted}A');
+    final width = cols - 2 > 0 ? cols - 2 : 0;
+    var n = 0;
+    for (var r = 0; r < visible; r++) {
+      final choice = term.truncateWidth(choices[start + r], width);
+      io.stderr.writeln(
+        '${start + r == selected ? '❯' : ' '}${choice.isEmpty ? '' : ' $choice'}\x1b[K',
+      );
+      n++;
+    }
+    return n;
+  }
+
+  /// The next decoded key name, waiting for bytes as needed. A lone ESC
+  /// that gains no sequel within 150 ms counts as `escape` (it is not held
+  /// forever, and it never swallows the next key). `null` when stdin closed
+  /// with nothing left to decode.
+  static Future<String?> _nextKey(
+    List<int> pending,
+    bool Function() stdinDone,
+  ) async {
+    Timer? quiet;
+    for (;;) {
+      if (pending.isNotEmpty) {
+        final bytes = List<int>.of(pending);
+        final parsed = term.decodeKeys(bytes);
+        final rest = bytes.sublist(parsed.consumed);
+        pending
+          ..clear()
+          ..addAll(rest);
+        for (final event in parsed.events) {
+          switch (event) {
+            case term.TermKey(:final name):
+              quiet?.cancel();
+              return name;
+            case term.TermType():
+              // Typed or pasted text: ignore while choosing.
+              break;
+            case term.TermClick():
+              // Clicks are for the TUI; ignore while choosing.
+              break;
+            case term.TermHover():
+              // Hover motion is for the TUI; ignore while choosing.
+              break;
+            case term.TermFocus():
+              // Focus reports are for the TUI; ignore while choosing.
+              break;
+          }
+        }
+        // Incomplete trailing sequence (or a lone ESC): wait briefly; a
+        // real lone Escape resolves on the quiet timer.
+        if (pending.isNotEmpty && pending[0] == 0x1b) {
+          quiet?.cancel();
+          final done = Completer<String?>();
+          quiet = Timer(const Duration(milliseconds: 150), () {
+            pending.clear();
+            if (!done.isCompleted) done.complete('escape');
+          });
+          // Either more bytes arrive (outer loop re-pumps first), the
+          // timer fires, or stdin closes mid-sequence.
+          while (!done.isCompleted) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            if (done.isCompleted) break;
+            if (stdinDone()) {
+              final q = quiet;
+              quiet = null;
+              q?.cancel();
+              pending.clear();
+              return null;
+            }
+            if (pending.length > 1) break;
+          }
+          if (done.isCompleted) {
+            quiet = null;
+            return await done.future;
+          }
+          final q = quiet;
+          quiet = null;
+          q?.cancel();
+          continue;
+        }
+      }
+      if (stdinDone()) {
+        quiet?.cancel();
+        return null;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     }
   }
 }
 
 abstract final class _Live {
-  void release();
+  void _free();
+}
+
+/// Format a byte count as humans read it: `0 B`, `200 KB`, `12.1 MB`.
+String _fmtSize(num bytes) {
+  if (bytes < 1024) return '${bytes.round()} B';
+  if (bytes < 1024 * 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
 }
 
 /// A progress bar: a [Pipe] counting the bytes that pass, [Closeable] at end.
+///
+/// A bar used in a pipe counts bytes and shows sizes and a rate
+/// (`12.1/40 MB  1.2 MB/s`); used with [tick], it counts items
+/// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
+/// count and a rate with no bar, so `Console.bar(res.size())` just works.
 final class Bar extends _Live implements Pipe, Closeable {
-  Bar._(this._total, {this._label}) {
-    _render();
-  }
+  Bar._(this._total, {this._label})
+      : _bridge = null,
+        _bridgeId = null;
 
-  final int _total;
+  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
+
+  final int? _total;
   final String? _label;
+  final term.TuiBridge? _bridge;
+  final Object? _bridgeId;
   var _done = 0;
   var _closed = false;
+  var _piped = false;
   var _lastDraw = 0;
+  var _cols = 0;
+  StreamSubscription<io.ProcessSignal>? _sigwinch;
   final _start = DateTime.now();
 
   /// Add [count] (1 by default), stopping at the total. Returns this bar.
   Bar tick([int count = 1]) {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return this;
+      _done += count;
+      final total = _total;
+      if (total != null && total > 0 && _done > total) _done = total;
+      bridge.barTick(id, count);
+      return this;
+    }
     if (_closed) return this;
     _done += count;
-    if (_total > 0 && _done > _total) _done = _total;
-    _render(force: false);
+    final total = _total;
+    if (total != null && total > 0 && _done > total) _done = total;
+    _render();
     return this;
   }
 
   /// Print the final line. Call it in `finally`.
   @override
   Future<void> close() async {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return;
+      _closed = true;
+      bridge.barEnded(id, true);
+      _free();
+      return;
+    }
     if (_closed) return;
     _closed = true;
+    try {
+      await _sigwinch?.cancel();
+    } catch (_) {}
+    _sigwinch = null;
     if (Console._animated) {
       _render(force: true);
       io.stderr.writeln();
     } else {
       final label = _label == null ? '' : '$_label ';
-      if (_total > 0) {
-        io.stderr.writeln('$label$_done/$_total');
-      } else if (_label != null) {
-        io.stderr.writeln('$label$_done');
+      final total = _total;
+      final secs = DateTime.now().difference(_start).inMilliseconds / 1000;
+      if (_piped) {
+        final rate = secs > 0 ? _done / secs : 0.0;
+        if (total != null && total > 0) {
+          io.stderr.writeln(
+              '$label${_fmtSize(_done)}/${_fmtSize(total)}  ${_fmtRate(rate)}');
+        } else {
+          io.stderr.writeln('$label${_fmtSize(_done)}  ${_fmtRate(rate)}');
+        }
+      } else if (total != null && total > 0) {
+        io.stderr.writeln('$label$_done/$total');
       } else {
-        io.stderr.writeln('$_done');
+        final rate = secs > 0 ? _done / secs : 0.0;
+        io.stderr.writeln('$label$_done  ${_fmtCount(rate)}/s');
       }
     }
-    release();
+    _free();
   }
 
   @override
-  void release() => Console._release(this);
+  void _free() => Console._release(this);
 
   @override
   Stream<List<int>> transform(Stream<List<int>> input) async* {
     // async* (not a hand-rolled controller) so the stream's backpressure
     // survives: a slow writer pauses this loop at yield, keeping memory at
     // a few chunks whatever the size of the data.
+    // A pipeline that fails before this pipe is ever listened to still
+    // releases the line: core's writer-error path listens-then-cancels the
+    // stream, which starts this generator and tears it down, running the
+    // finally below.
+    _piped = true;
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) bridge.barMode(id, true);
     var ok = false;
     try {
       await for (final chunk in input) {
@@ -274,34 +683,158 @@ final class Bar extends _Live implements Pipe, Closeable {
   }
 
   Future<void> _fail() async {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return;
+      _closed = true;
+      bridge.barEnded(id, false);
+      Console._release(this);
+      return;
+    }
     if (_closed) return;
     _closed = true;
-    io.stderr.writeln('\n✗ ${_label ?? ''}'.trimRight());
+    try {
+      await _sigwinch?.cancel();
+    } catch (_) {}
+    _sigwinch = null;
+    if (Console._animated) {
+      io.stderr.writeln('${'\r✗ ${_label ?? ''}'.trimRight()}\x1b[K');
+    } else {
+      io.stderr.writeln('✗ ${_label ?? ''}'.trimRight());
+    }
     Console._release(this);
   }
 
-  void _render({bool force = true}) {
+  void _render({bool force = false}) {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastDraw < 80) return;
     _lastDraw = now;
-    final label = _label == null ? '' : '$_label ';
     if (!Console._animated) return;
-    if (_total <= 0) {
-      final secs = DateTime.now().difference(_start).inMilliseconds / 1000;
-      final rate = secs > 0 ? _done / secs : 0.0;
-      io.stderr.write('\r$label$_done ${_fmtRate(rate)}');
-      return;
+    _sigwinch ??= _watchWinch();
+    // Re-read the width on every redraw (throttled to 80 ms): resizes fit
+    // immediately, and SIGWINCH forces a redraw past the throttle.
+    _cols = Console._columns();
+    final label = _label == null ? '' : '$_label ';
+    final line = _piped ? _byteLine(_cols) : _itemLine(_cols, label);
+    io.stderr.write('\r$line\x1b[K');
+  }
+
+  StreamSubscription<io.ProcessSignal>? _watchWinch() {
+    try {
+      return io.ProcessSignal.sigwinch.watch().listen((_) {
+        _lastDraw = 0;
+        _render();
+      });
+    } catch (_) {
+      return null;
     }
-    const width = 20;
-    final frac = (_done / _total).clamp(0.0, 1.0);
-    final filled = (frac * width).round();
-    final bar =
-        '█' * filled + '░' * (width - filled);
+  }
+
+  String _byteLine(int cols) {
+    final label = _label == null ? '' : '$_label ';
+    final total = _total;
     final secs = DateTime.now().difference(_start).inMilliseconds / 1000;
     final rate = secs > 0 ? _done / secs : 0.0;
-    io.stderr.write(
-      '\r$label$bar  $_done/$_total  ${_fmtRate(rate)}',
-    );
+    final counts = total != null && total > 0
+        ? '${_fmtSize(_done)}/${_fmtSize(total)}'
+        : _fmtSize(_done);
+    var width = 20;
+    while (width > 10) {
+      final line = '$label${_bar(width)}  $counts  ${_fmtRate(rate)}';
+      if (term.displayWidth(line) <= cols || total == null || total <= 0) {
+        break;
+      }
+      width--;
+    }
+    if (total != null && total > 0) {
+      var line = '$label${_bar(width)}  $counts  ${_fmtRate(rate)}';
+      if (term.displayWidth(line) > cols) {
+        final room = cols -
+            term.displayWidth(
+              '${_bar(width)}  $counts  ${_fmtRate(rate)}',
+            ) -
+            1;
+        if (room <= 0) {
+          line = '${_bar(width)}  $counts  ${_fmtRate(rate)}';
+          if (term.displayWidth(line) > cols) {
+            // Even the bar alone doesn't fit: drop to count+rate.
+            line = '$counts  ${_fmtRate(rate)}';
+          }
+        } else {
+          line =
+              '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  ${_fmtRate(rate)}';
+        }
+      }
+      return line;
+    }
+    // Unknown total: count and rate, no bar.
+    var line = '$label$counts  ${_fmtRate(rate)}';
+    if (term.displayWidth(line) > cols) {
+      final room =
+          cols - term.displayWidth('$counts  ${_fmtRate(rate)}') - 1;
+      if (room <= 0) {
+        line = '$counts  ${_fmtRate(rate)}';
+      } else {
+        line = '${term.truncateWidth(label.trimRight(), room)} $counts  ${_fmtRate(rate)}';
+      }
+    }
+    return line;
+  }
+
+  String _itemLine(int cols, String label) {
+    final total = _total;
+    final secs = DateTime.now().difference(_start).inMilliseconds / 1000;
+    final rate = secs > 0 ? _done / secs : 0.0;
+    final counts =
+        total != null && total > 0 ? '$_done/$total' : '$_done';
+    final rateText = '${_fmtCount(rate)}/s';
+    var width = 20;
+    while (width > 10) {
+      final line = '$label${_bar(width)}  $counts  $rateText';
+      if (term.displayWidth(line) <= cols || total == null || total <= 0) {
+        break;
+      }
+      width--;
+    }
+    if (total != null && total > 0) {
+      var line = '$label${_bar(width)}  $counts  $rateText';
+      if (term.displayWidth(line) > cols) {
+        final room =
+            cols - term.displayWidth('${_bar(width)}  $counts  $rateText') - 1;
+        if (room <= 0) {
+          line = '${_bar(width)}  $counts  $rateText';
+          if (term.displayWidth(line) > cols) line = '$counts  $rateText';
+        } else {
+          line =
+              '${term.truncateWidth(label.trimRight(), room)} ${_bar(width)}  $counts  $rateText';
+        }
+      }
+      return line;
+    }
+    var line = '$label$counts  $rateText';
+    if (term.displayWidth(line) > cols) {
+      final room = cols - term.displayWidth('$counts  $rateText') - 1;
+      if (room <= 0) {
+        line = '$counts  $rateText';
+      } else {
+        line =
+            '${term.truncateWidth(label.trimRight(), room)} $counts  $rateText';
+      }
+    }
+    return line;
+  }
+
+  String _bar(int width) {
+    final total = _total;
+    final frac = total == null || total <= 0
+        ? 0.0
+        : (_done / total).clamp(0.0, 1.0);
+    final cells = frac * width;
+    final full = cells.floor();
+    final half = cells - full >= 0.5 && full < width;
+    const on = '━', mid = '╸', off = '─';
+    return '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
   }
 
   static String _fmtRate(double bytesPerSec) {
@@ -311,6 +844,11 @@ final class Bar extends _Live implements Pipe, Closeable {
     }
     return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
   }
+
+  static String _fmtCount(double perSec) {
+    if (perSec < 100) return perSec.toStringAsFixed(1);
+    return perSec.toStringAsFixed(0);
+  }
 }
 
 final class _Spinner extends _Live {
@@ -319,5 +857,5 @@ final class _Spinner extends _Live {
   final String label;
 
   @override
-  void release() => Console._release(this);
+  void _free() => Console._release(this);
 }
