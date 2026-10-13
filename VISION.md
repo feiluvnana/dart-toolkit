@@ -562,7 +562,8 @@ final class Region {
   - **Widgets take the app's state and return the new state** (as in Dear ImGui), and react to
     keys only while drawn:
     - `button(label)` → `bool`.
-    - `list(items, selected)` → the selected index. It handles `up` `down` `pageup` `pagedown`
+    - `list(items, selected)` → the selected index. It scrolls by the least needed, and every
+      press in a frame counts. It handles `up` `down` `pageup` `pagedown`
       `home` `end`, the wheel and clicks, and draws the rows that fit with `selected` in view and
       highlighted.
     - `input(value)` → the edited text. It handles `typed()`, `backspace` (by grapheme) and paste,
@@ -571,9 +572,14 @@ final class Region {
   - `run` enters raw mode, the alternate screen and mouse reporting, and turns autowrap and
     bracketed paste on and off.
   - It restores the previous terminal state when the app returns or throws, on Ctrl-C (which is
-    `pressed('ctrl+c')` while running), and on SIGTERM/SIGHUP.
-  - A resize repaints everything, row by row, on the next frame.
-  - `run` can be called again, and prompts work before and after it.
+    `pressed('ctrl+c')` while running), on SIGTERM/SIGHUP, and on an uncaught error in work the
+    app started without awaiting (rethrown from `run`).
+  - A resize, or a gap of more than 500 ms between frames (such as resuming after Ctrl-Z),
+    repaints every cell. Frames use synchronized output, so nothing tears.
+  - `run` can be called again, and prompts work before and after it. Nothing is left listening
+    to the terminal afterwards, so the script exits when `main` ends. On POSIX, input is read
+    through a child `cat /dev/tty` that can be restarted, since `dart:io` stdin can be listened
+    to only once and keeps the process alive.
   - It throws `StdoutException` when stdout is not a terminal.
 
 ```dart

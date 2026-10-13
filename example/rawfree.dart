@@ -9,15 +9,17 @@
 /// `ctrl+o` open in browser · `esc` quit.
 /// Keys (chapters view): ↑↓ move · enter download chapter ·
 /// `o` open series in browser · `b`/`esc` back.
+/// `ctrl+c` quits from anywhere; while a download runs, quitting asks for a
+/// second press.
 ///
-/// Downloads go to `downloads/<series>/<chapter>/`. Network failures show a
-/// one-line status and the app keeps running.
+/// Downloads go to `downloads/<series>/<chapter>/` as `001.jpg`, `002.jpg`,
+/// … Network failures show a one-line status and the app keeps running.
 ///
 /// Immediate mode: async work (search, chapters, downloads) mutates this
 /// state from `.then` callbacks, and the next frame shows it.
 library;
 
-import 'dart:io' show stderr;
+import 'dart:io' show StdoutException, exit, stderr;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
@@ -41,10 +43,14 @@ typedef Chapter = ({String title, String url, int postId});
 
 Future<void> main(List<String> argv) async {
   try {
-    await Tui.run((screen) => _app(screen));
-  } catch (e) {
-    stderr.writeln('tui needs a terminal: $e');
+    await Tui.run(_app);
+  } on StdoutException {
+    stderr.writeln('rawfree needs a terminal');
+    exit(1);
   }
+  // Searches and downloads still in flight would keep the process alive
+  // after the screen is gone; quitting means quitting.
+  exit(0);
 }
 
 Future<void> _app(Screen screen) async {
@@ -74,6 +80,7 @@ final class _State {
   var dlTotal = 0;
 
   var quit = false;
+  var quitAsked = false;
 
   void draw(Screen s, Region r) {
     final [head, body, line, foot] = r.rows([1, 0, 1, 3]);
@@ -91,7 +98,7 @@ final class _State {
       msg,
       color: statusErr ? 203 : (msg.startsWith('✓') ? 78 : 240),
     );
-    if (s.pressed('ctrl+c')) quit = true;
+    if (s.pressed('ctrl+c')) _quit();
     if (series case final open?) {
       if (chapters.isEmpty) {
         body.write(loadingCh ? '  loading chapters…' : '  no chapters',
@@ -105,7 +112,7 @@ final class _State {
       if (s.pressed('enter') && chapters.isNotEmpty) {
         _download(chapters[csel]);
       }
-      if (s.pressed('o')) Shell.open(open['url']!);
+      if (s.pressed('o')) _browse(open['url']!);
       if (s.pressed('b') || s.pressed('escape')) series = null;
     } else {
       query = foot.box('search').input(query);
@@ -120,11 +127,29 @@ final class _State {
       } else if (s.pressed('enter') && hits.isNotEmpty) {
         _openSeries(hits[sel]);
       }
-      if (s.pressed('ctrl+o') && hits.isNotEmpty) {
-        Shell.open(hits[sel]['url']!);
-      }
-      if (s.pressed('escape')) quit = true;
+      if (s.pressed('ctrl+o') && hits.isNotEmpty) _browse(hits[sel]['url']!);
+      if (s.pressed('escape')) _quit();
     }
+  }
+
+  void _quit() {
+    if (downloading != null && !quitAsked) {
+      quitAsked = true;
+      statusErr = true;
+      status = '$downloading is still downloading · press again to quit';
+      return;
+    }
+    quit = true;
+  }
+
+  void _browse(String url) {
+    Shell.open(url).then((_) {
+      statusErr = false;
+      status = 'opened in browser';
+    }).catchError((Object e) {
+      statusErr = true;
+      status = '✗ ${_short(e)}';
+    });
   }
 
   void _search() {
@@ -170,29 +195,43 @@ final class _State {
       return;
     }
     downloading = c.title;
+    quitAsked = false;
+    // Read now: the user may go back to the search before the images load.
+    final dir = 'downloads/${_safe(series?['title'] ?? 'manga')}/${_safe(c.title)}';
     dlDone = 0;
     dlTotal = 0;
     statusErr = false;
     () async {
       try {
         final imgs = await chapterImages(c.postId);
+        if (imgs.isEmpty) {
+          statusErr = true;
+          status = '✗ ${c.title}: no images found';
+          downloading = null;
+          return;
+        }
         dlTotal = imgs.length;
-        final dir = 'downloads/${_safe(series?['title'] ?? 'manga')}/${_safe(c.title)}';
         var failed = 0;
         for (final (i, u) in imgs.indexed) {
           dlDone = i + 1;
           final img = await Http.get(u,
               headers: {..._headers, 'referer': '$_base/'}, retries: 2);
-          // An expired signed URL serves a <1 KB stub (or a 404 page,
-          // which the pipe refuses to save).
-          final stub = img.size() != null && img.size()! < 1024;
-          if (!img.ok() || stub) {
+          if (!img.ok()) {
             failed++;
             await img.close();
             continue;
           }
-          await (img >
-              Fs.dir(dir).file('${'${i + 1}'.padLeft(3, '0')}_${img.name()}'));
+          final data = await img.bytes();
+          // An expired signed URL serves a <1 KB stub.
+          if (data.length < 1024) {
+            failed++;
+            continue;
+          }
+          // Numbered pages: the host answers `application/octet-stream`
+          // and its URLs carry no extension, so `img.name()` is a bare id.
+          final name =
+              '${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, img)}';
+          await Fs.dir(dir).file(name).write(data);
         }
         status = '✓ ${c.title} ($dlTotal img) → $dir'
             '${failed > 0 ? ' · $failed failed, retry the chapter' : ''}';
@@ -220,8 +259,19 @@ Future<Json> _apiGet(String path) async {
 
 String _titleOf(Json item) {
   final rendered = item.$('title.rendered').value<String>();
-  if (rendered != null) return Html.parse(rendered).text();
-  return Html.parse(item.$('title').value<String>() ?? '').text();
+  if (rendered != null) return _htmlText(rendered);
+  return _htmlText(item.$('title').value<String>() ?? '');
+}
+
+/// Strip tags / decode entities from a WP title or tag name.
+///
+/// WP `title.rendered` may hold entities or inline tags, while tag `name`s
+/// are usually bare text with no tags at all. `Html.parse` only keeps
+/// element nodes, so bare text parses to zero elements and `.text()` reads
+/// `''`. Wrapping in a `<div>` keeps both cases as element content.
+String _htmlText(String html) {
+  if (html.trim().isEmpty) return '';
+  return Html.parse('<div>$html</div>').text();
 }
 
 /// Series first, then chapters.
@@ -240,7 +290,7 @@ Future<List<Hit>> searchManga(String query, {int limit = 30}) async {
       await _apiGet('tags?search=$q&per_page=$limit');
   for (final t in tags) {
     if (out.length >= limit) break;
-    add(Html.parse(t.$('name').value<String>() ?? '').text(),
+    add(_htmlText(t.$('name').value<String>() ?? ''),
         t.$('link').value<String>());
   }
   final posts = await _apiGet(
@@ -340,6 +390,69 @@ Future<List<String>> chapterImages(int postId) async {
     await Future<void>.delayed(Duration(milliseconds: waitMs.clamp(0, 5000)));
   }
   return out;
+}
+
+/// File extension for a downloaded chapter image.
+///
+/// The image host answers `application/octet-stream` and its URLs carry no
+/// extension, so `Response.name()` is a bare id (`kbipl910tmb8`). Sniff the
+/// magic bytes, falling back to the content-type and then `.jpg` (what the
+/// host serves), so pages land as `001.jpg`, `002.jpg`, … and open in any
+/// viewer.
+String _imgExt(List<int> bytes, Response res) {
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xFF &&
+      bytes[1] == 0xD8 &&
+      bytes[2] == 0xFF) {
+    return '.jpg';
+  }
+  if (bytes.length >= 8 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4E &&
+      bytes[3] == 0x47 &&
+      bytes[4] == 0x0D &&
+      bytes[5] == 0x0A &&
+      bytes[6] == 0x1A &&
+      bytes[7] == 0x0A) {
+    return '.png';
+  }
+  if (bytes.length >= 6 &&
+      bytes[0] == 0x47 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x38 &&
+      (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+      bytes[5] == 0x61) {
+    return '.gif';
+  }
+  if (bytes.length >= 12 &&
+      bytes[0] == 0x52 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x46 &&
+      bytes[8] == 0x57 &&
+      bytes[9] == 0x45 &&
+      bytes[10] == 0x42 &&
+      bytes[11] == 0x50) {
+    return '.webp';
+  }
+  if (bytes.length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D) {
+    return '.bmp';
+  }
+  switch (res.header('content-type')?.split(';').first.trim().toLowerCase()) {
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/png':
+      return '.png';
+    case 'image/gif':
+      return '.gif';
+    case 'image/webp':
+      return '.webp';
+    case 'image/bmp':
+      return '.bmp';
+  }
+  return '.jpg';
 }
 
 String _safe(String s) {

@@ -39,6 +39,7 @@ def main():
     out = b''
     start = time.time()
     pending = list(inputs)
+    exited = False
     # Total budget: 25s.
     try:
         while time.time() - start < 25:
@@ -63,6 +64,8 @@ def main():
                 out += chunk
             # Check child exit (non-blocking).
             done, _ = os.waitpid(pid, os.WNOHANG)
+            if done == pid:
+                exited = True
             if done == pid and not pending:
                 # Drain briefly, then stop.
                 time.sleep(0.3)
@@ -79,14 +82,27 @@ def main():
                     out += chunk
                 break
     finally:
+        # EOF on the pty usually means the child is exiting: give it a moment.
+        deadline = time.time() + 2
+        while not exited and time.time() < deadline:
+            try:
+                exited = os.waitpid(pid, os.WNOHANG)[0] == pid
+            except ChildProcessError:
+                exited = True
+            if not exited:
+                time.sleep(0.05)
+        if not exited:
+            # The pty closing below sends SIGHUP, which would hide a hang.
+            sys.stderr.write('child did not exit on its own\n')
         try:
             os.close(fd)
         except OSError:
             pass
-        try:
-            os.waitpid(pid, 0)
-        except (OSError, ChildProcessError):
-            pass
+        if not exited:
+            try:
+                os.waitpid(pid, 0)
+            except (OSError, ChildProcessError):
+                pass
     sys.stdout.buffer.write(out)
 
 if __name__ == '__main__':

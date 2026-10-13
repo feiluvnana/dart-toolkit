@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/src/terminal.dart' as term;
+import 'package:dart_toolkit/src/tui.dart' show testInput, testScreen;
 import 'package:dart_toolkit/tui.dart';
 import 'package:test/test.dart';
 
@@ -203,19 +204,201 @@ void main() {
   });
 
   group('cell widths (unit)', () {
+    int w(String ch) => term.cellWidth(ch.runes.first);
+
     test('wide CJK and emoji take two cells', () {
-      expect(cellWidth('日'.runes.single), 2);
-      expect(cellWidth('a'.runes.single), 1);
-      expect(cellWidth('✅'.runes.single), 2);
-      expect(cellWidth('←'.runes.single), 1);
+      expect(w('日'), 2);
+      expect(w('a'), 1);
+      expect(w('✅'), 2);
+      expect(w('😀'), 2);
+      expect(w('⭐'), 2);
+    });
+
+    test('symbols terminals draw narrow stay one cell', () {
+      // Regression: the whole U+2600–27BF / U+2B00 blocks were counted wide,
+      // shifting every row that used ✻ ❯ ✓ ✗.
+      for (final ch in ['✻', '❯', '✓', '✗', '★', '⚠', '←', '⬆', '…', '│', '█']) {
+        expect(w(ch), 1, reason: ch);
+      }
     });
 
     test('combining marks, ZWJ and variation selectors are zero-width', () {
-      expect(isZeroWidth(0x0301), isTrue);
-      expect(isZeroWidth(0x200d), isTrue);
-      expect(isZeroWidth(0xfe0f), isTrue);
-      expect(isZeroWidth(0x1f3fb), isTrue);
-      expect(isZeroWidth('a'.runes.single), isFalse);
+      expect(term.isZeroWidth(0x0301), isTrue);
+      expect(term.isZeroWidth(0x200d), isTrue);
+      expect(term.isZeroWidth(0xfe0f), isTrue);
+      expect(term.isZeroWidth(0x1f3fb), isTrue);
+      expect(term.isZeroWidth('a'.runes.single), isFalse);
+    });
+  });
+
+  group('painter (in-memory terminal)', () {
+    test('a partial change redraws in place (no cursor drift)', () async {
+      // Regression: unchanged cells advanced the tracked cursor, so
+      // "changed, unchanged, changed" drew the third cell one column left.
+      final t = _Term(10, 2);
+      final s = testScreen(t.feed, 10, 2);
+      await s.frame((r) => r.write('abcdef'));
+      await s.frame((r) => r.write('aXcdYf'));
+      expect(t.row(0), 'aXcdYf    ');
+      await s.frame((r) => r.write('count = 9'));
+      await s.frame((r) => r.write('count = 10'));
+      expect(t.row(0), 'count = 10');
+    });
+
+    test('wide chars take two cells with no extra space', () async {
+      final t = _Term(12, 2);
+      final s = testScreen(t.feed, 12, 2);
+      await s.frame((r) => r.write('日本語abc').write('✻ rawfree'));
+      expect(t.row(0), '日本語abc   ');
+      expect(t.row(1), '✻ rawfree   ');
+      await s.frame((r) => r.write('日x語abc').write('❯ beta'));
+      expect(t.row(0), '日x語abc    ');
+      expect(t.row(1), '❯ beta      ');
+    });
+
+    test('a width the terminal disagrees on damages only its own cell',
+        () async {
+      // The terminal draws ✻ two cells wide; we think one. The next cell is
+      // addressed explicitly, so "rawfree" still lands where it belongs.
+      final t = _Term(12, 1, wide: {'✻'});
+      final s = testScreen(t.feed, 12, 1);
+      await s.frame((r) => r.write('✻ rawfree'));
+      expect(t.row(0).substring(2), 'rawfree   ');
+    });
+
+    test('combining marks join their base (Vietnamese NFD)', () async {
+      final t = _Term(10, 1);
+      final s = testScreen(t.feed, 10, 1);
+      const nfd = 'Nguyễn';
+      await s.frame((r) => r.write(nfd));
+      expect(t.cells(0).take(7).toList(),
+          ['N', 'g', 'u', 'y', 'ễ', 'n', ' ']);
+    });
+
+    test('a style never leaks into the next cell', () async {
+      final t = _Term(6, 2);
+      final s = testScreen(t.feed, 6, 2);
+      await s.frame((r) => r.write('ab', bold: true, color: 1).write('cd', color: 2));
+      expect(t.styleAt(0, 0), {'bold', 'fg1'});
+      expect(t.styleAt(0, 1), {'fg2'});
+      expect(t.styleAt(2, 0), isEmpty);
+    });
+
+    test('a resize repaints every cell at the new size', () async {
+      var size = (20, 4);
+      final t = _Term(20, 4);
+      final s = testScreen(t.feed, 0, 0, size: () => size);
+      await s.frame((r) => r.write('wide screen text'));
+      size = (8, 2);
+      t.resize(8, 2); // a fresh terminal: anything we skip stays blank
+      await s.frame((r) => r.write('narrow').write('row two'));
+      expect(t.row(0), 'narrow  ');
+      expect(t.row(1), 'row two ');
+    });
+
+    test('control characters never reach the terminal raw', () async {
+      final out = StringBuffer();
+      final s = testScreen(out.write, 20, 3);
+      await s.frame((r) => r.write('a\tb\x01c\x1b[31mred\x1b[0m\rz'));
+      final raw = out.toString().replaceAll(RegExp(r'\x1b\[[0-9;?]*[A-Za-z]'), '');
+      expect(raw.codeUnits.where((c) => c < 0x20), isEmpty);
+      expect(raw, contains('a       b�cred�z'));
+    });
+
+    test('nothing changed writes nothing', () async {
+      final out = StringBuffer();
+      final s = testScreen(out.write, 10, 2);
+      await s.frame((r) => r.write('same'));
+      final first = out.length;
+      await s.frame((r) => r.write('same'));
+      expect(out.length, first);
+    });
+  });
+
+  group('input (in-memory)', () {
+    test('input stays readable after frame returns; letters are pressed',
+        () async {
+      final s = testScreen((_) {}, 10, 2);
+      testInput(s, utf8.encode('q'));
+      await s.frame((r) {});
+      expect(s.pressed('q'), isTrue);
+      expect(s.typed(), 'q');
+      await s.frame((r) {});
+      expect(s.pressed('q'), isFalse);
+    });
+
+    test('presses in one frame all count, in order', () async {
+      final s = testScreen((_) {}, 20, 6);
+      var sel = 0;
+      var text = '';
+      testInput(s, utf8.encode('\x1b[B\x1b[Bab\x7fc'));
+      await s.frame((r) {
+        final [a, b] = r.rows([1, 0]);
+        text = a.input(text);
+        sel = b.list(['0', '1', '2', '3'], sel);
+      });
+      expect(sel, 2);
+      expect(text, 'ac');
+    });
+
+    test('a lone ESC waits briefly, then is escape', () async {
+      final s = testScreen((_) {}, 10, 2);
+      testInput(s, [0x1b]);
+      await s.frame((r) {});
+      expect(s.pressed('escape'), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await s.frame((r) {});
+      expect(s.pressed('escape'), isTrue);
+    });
+
+    test('a sequence split across reads is one key, not escape', () async {
+      final s = testScreen((_) {}, 10, 2);
+      testInput(s, [0x1b]);
+      await s.frame((r) {});
+      testInput(s, utf8.encode('[A'));
+      await s.frame((r) {});
+      expect(s.pressed('up'), isTrue);
+      expect(s.pressed('escape'), isFalse);
+      expect(s.typed(), isEmpty);
+    });
+
+    test('a pasted newline becomes a space in input()', () async {
+      final out = StringBuffer();
+      final s = testScreen(out.write, 20, 2);
+      var v = '';
+      testInput(s, utf8.encode('\x1b[200~one\ntwo\x1b[201~'));
+      await s.frame((r) => v = r.input(v));
+      expect(v, 'one two');
+      expect(s.pressed('enter'), isFalse);
+    });
+
+    test('list scrolls by the least needed and clicks pick what was shown',
+        () async {
+      final s = testScreen((_) {}, 10, 3);
+      final items = [for (var i = 0; i < 10; i++) 'item $i'];
+      var sel = 0;
+      for (var i = 0; i < 3; i++) {
+        testInput(s, utf8.encode('\x1b[B'));
+        await s.frame((r) => sel = r.list(items, sel));
+      }
+      expect(sel, 3); // rows show items 1..3, not a page jump to 3..5
+      testInput(s, utf8.encode('\x1b[<0;1;1M')); // click the top row
+      await s.frame((r) => sel = r.list(items, sel));
+      expect(sel, 1);
+    });
+
+    test('a button below the region edge is not drawn and cannot fire',
+        () async {
+      final out = StringBuffer();
+      final s = testScreen(out.write, 20, 2);
+      var fired = <bool>[];
+      testInput(s, utf8.encode('\r'));
+      await s.frame((r) {
+        final [top] = r.rows([1]);
+        fired = [top.button('one'), top.button('two')];
+      });
+      expect(fired, [true, false]);
+      expect(out.toString(), isNot(contains('two')));
     });
   });
 
@@ -283,7 +466,7 @@ void main() {
       expect(lines.where((l) => l.endsWith('escape')).length, 1);
     }, timeout: const Timeout(Duration(seconds: 60)));
 
-    test('pty: CJK rows address per row, autowrap off, leave restores',
+    test('pty: CJK rows render in place, autowrap off, leave restores',
         () async {
       final (_, termBytes) = await _pty(
         mode: 'cjk',
@@ -293,11 +476,9 @@ void main() {
       );
       final out = utf8.decode(termBytes, allowMalformed: true);
       expect(out, contains('\x1b[?7l'));
-      expect(out, contains('\x1b[1;1H'));
-      expect(out, contains('\x1b[2;1H'));
-      // Row 1 is exactly 30 cells: 日 本 語abc + 19 spaces (no 3-col blowup).
-      final row1 = out.split('\x1b[1;1H')[1].split('\x1b[2;1H')[0];
-      expect(row1, '日 本 語abc${' ' * 19}');
+      final t = _Term(30, 10)..feed(out.substring(0, out.indexOf('\x1b[?1049l')));
+      expect(t.row(0), '日 本 語abc${' ' * 19}');
+      expect(t.row(1), 'plain row two${' ' * 17}');
       expect(out, contains('\x1b[?7h'));
       expect(out, contains('\x1b[?1049l'));
     }, timeout: const Timeout(Duration(seconds: 60)));
@@ -396,6 +577,10 @@ Future<(String, List<int>)> _pty({
   if (res.exitCode != 0) {
     fail('pty driver failed: ${res.stderr}');
   }
+  // Regression: a stdin listener kept every app alive after Tui.run.
+  if ('${res.stderr}'.contains('did not exit')) {
+    fail('the probe did not exit after Tui.run returned');
+  }
   var logText = '';
   try {
     logText = await log.readAsString();
@@ -459,5 +644,87 @@ Future<List<int>> _ptySigint() async {
     try {
       await out.delete();
     } catch (_) {}
+  }
+}
+
+/// A tiny VT100 for assertions: CUP, SGR, `?` modes, chars with widths
+/// from the same table as the engine unless [wide] says otherwise.
+final class _Term {
+  _Term(this.w, this.h, {this.wide = const {}}) : _cells = _blank(w, h);
+
+  int w;
+  int h;
+  final Set<String> wide;
+  List<List<(String, Set<String>)>> _cells;
+  var _x = 0;
+  var _y = 0;
+  var _style = <String>{};
+
+  static List<List<(String, Set<String>)>> _blank(int w, int h) =>
+      List.generate(h, (_) => List.filled(w, (' ', const <String>{})));
+
+  void resize(int nw, int nh) {
+    w = nw;
+    h = nh;
+    _cells = _blank(w, h);
+    _x = _y = 0;
+  }
+
+  String row(int y) => _cells[y].map((c) => c.$1).join();
+  List<String> cells(int y) => _cells[y].map((c) => c.$1).toList();
+  Set<String> styleAt(int x, int y) => _cells[y][x].$2;
+
+  void feed(String s) {
+    final runes = s.runes.toList();
+    var i = 0;
+    while (i < runes.length) {
+      final r = runes[i];
+      if (r == 0x1b && i + 1 < runes.length && runes[i + 1] == 0x5b) {
+        var j = i + 2;
+        while (j < runes.length && (runes[j] < 0x40 || runes[j] > 0x7e)) {
+          j++;
+        }
+        final params = String.fromCharCodes(runes.sublist(i + 2, j));
+        final fin = String.fromCharCode(runes[j]);
+        if (fin == 'H' && !params.startsWith('?')) {
+          final p = params.isEmpty ? ['1', '1'] : params.split(';');
+          _y = int.parse(p[0]) - 1;
+          _x = int.parse(p[1]) - 1;
+        } else if (fin == 'm') {
+          final codes = params.split(';').map(int.tryParse).toList();
+          for (var k = 0; k < codes.length; k++) {
+            final code = codes[k];
+            if (code == null || code == 0) _style = {};
+            if (code == 1) _style = {..._style, 'bold'};
+            if (code == 7) _style = {..._style, 'inverse'};
+            if (code == 38 && k + 2 < codes.length) {
+              _style = {..._style, 'fg${codes[k + 2]}'};
+              k += 2;
+            }
+          }
+        } else if (fin == 'J') {
+          _cells = _blank(w, h);
+        }
+        i = j + 1;
+        continue;
+      }
+      i++;
+      if (r < 0x20) {
+        fail('raw control ${r.toRadixString(16)} reached the terminal');
+      }
+      final ch = String.fromCharCode(r);
+      if (term.isZeroWidth(r)) {
+        final px = (_x - 1).clamp(0, w - 1);
+        _cells[_y][px] = ('${_cells[_y][px].$1}$ch', _cells[_y][px].$2);
+        continue;
+      }
+      final cw = wide.contains(ch) ? 2 : term.cellWidth(r);
+      if (_y < 0 || _y >= h) continue;
+      final x = _x.clamp(0, w - 1);
+      _cells[_y][x] = (ch, _style);
+      if (cw == 2 && x + 1 < w) _cells[_y][x + 1] = ('', _style);
+      // Autowrap is off: the cursor sticks at the last column.
+      _x = x + cw >= w ? w - 1 : x + cw;
+    }
   }
 }

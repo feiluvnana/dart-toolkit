@@ -1,444 +1,518 @@
-# REPORT — v2 review (2026-10-13)
+# REPORT.md — bugs and perf vs VISION.md v2
 
-Scope: `lib/` on branch `v2` (with the uncommitted cli/chrome changes), against `VISION.md`, plus
-`example/rawfree.dart` as the reference real-world caller.
+Scope: `lib/` vs `VISION.md` §§1–7. Verified by code read + `dart run probe_bug.dart`
+(`ab` vs `a\nb`, `pre` trimmed, `without('.x')` kept, `$('+1')==2`,
+`-2^63.0==null`, `Map<String,List<bool>>==null`).
+Severity: **C**ritical (wrong result / data loss / leak / hang), **M**edium, **L**ow.
+`file:line` is the fix site.
 
-Legend: **✔ verified** = reproduced by running code (TUI checks ran in a real pty driven by a
-script); **read** = found by reading the code, not run. Severity: **H** breaks a documented use;
-**M** wrong in a real case; **L** edge case or polish.
+## 0. Top fixes first (highest value)
 
-## 0. Summary: fix in this order
+1. `lib/html.dart:205` `text()` drops block/`br` boundaries — scraped text joins (`ab`).
+2. `lib/html.dart:223` `text()` `trim()` kills `<pre>` — violates keeps-whitespace.
+3. `lib/scrape.dart:131` `Visit.text()` UTF-8-only, loses `Response` charset — CJK mojibake.
+4. `lib/http.dart:309` `Response.close()` unbounded `drain()` — hangs on stalled body.
+5. `lib/http.dart:694` redirect `location` case-sensitive — missed redirects.
+6. `lib/archive.dart:182` `_moveInto` deletes on type collision — violates never-deleting merge.
+7. `lib/archive.dart:503` `gunzip` buffers all — OOMs, violates §6 streaming.
+8. `lib/console.dart:526` `Bar` throttle dead (`force=true` default) — every `tick()` syscalls.
+9. `lib/fs.dart:117,504` `copy` kind-blind + lexical `_checkSource` — symlink bypass, dest-symlink overwrite outside tree.
+10. `lib/chrome.dart:170,45` `close()` flag-before-await + no signal handler — orphan Chromium/profile.
+11. `lib/tui.dart` immediate mode makes the app own the loop, key polling and widget state — replace with the state-driven API (§15), then overhaul rawfree on it (§15.7).
 
-1. **Data loss and hangs:** F1/F2 (`unpack` deletes the target), F5 (the pool keeps scripts
-   alive), S1 (a crawl hangs on failure), H1/H2 (http hangs or keeps the process alive), F3
-   (truncated gzip accepted).
-2. **TUI:** R1–R3 (resize garbage: per-row repaint, wide chars, control chars), I1–I4 (input
-   cleared too early, letters not `pressed`, `^C` kills the process, unknown keys = `escape`), L1
-   (a second `run` throws). rawfree needs all of these.
-3. **Wrong results:** M1/M2 (html loses `<body>` and table rows), B1/B2 (download crash,
-   `waitIdle` too early), C1–C5 (cli typing, `required`, `--help`), F6–F10 (pipe and fs edge
-   cases), K1/K2 (console width, a stuck live line).
-4. **API decisions** (all applied in the new VISION.md):
-   - verbosity (§7): tui `width`/`height`/`list`/`input`; http `ok`/`size`/`name`, `json:`, `retries:`,
-     form `body:`, only 2xx bodies pipe; html `text()` like innerText, first match; json `*` paths
-     and `value<List<T>>`; shell `Shell.open`, `text()` without the trailing newline;
-   - cli: sealed `Def<T>`, typed by `T` (no `Opt<bool>`, no `Arg(many:)`);
-   - navigation `timeout:`;
-   - `chrome`/`scrape` re-export `html`.
-5. **Charset:** in-house WHATWG CJK decoders; `charset` and `enough_convert` both fail (§8).
-6. **Tests:** every fix keeps a regression test (VISION §6). tui and console get pseudo-terminal
-   tests, and cli gets the untested paths listed in C15.
+## 1. core (`lib/core.dart`)
 
----
+- [BUG-C] `core.dart:48` `to()`: `final s = stream()` outside `try`. Sync `transform` throw (poisoned `Hasher`, `hash.dart:114`) leaks source stream/handle. Move inside `try`.
+- [BUG-M] `core.dart:49` null-writer path `await for (s)` has no writer-error cancel path; sync-factory throw never poisons pipes.
+- [BUG-L] `core.dart:67` second-`listen().cancel()` assumes single-subscription. Broadcast `Reader.stream()` would run pipeline twice.
+- [PERF-L] `core.dart:124` `_FutureReader.stream` `yield*` per chunk + `_PipedReader` nesting = extra microtasks on 10 GB pipe. Spec §6: mirror costs one `await`. `to()` avoids it, `bytes()/pipe()` don't.
 
-## 1. tui — why resize "breaks everything"
+## 2. hash (`lib/hash.dart`)
 
-### 1.1 Rendering
+- [BUG-C] `hash.dart:91` no concurrent guard. Two `r>h` / `r|h` before `_done` interleave `_in.add` → wrong digest, `hex()` succeeds. Need sync `_running` flag.
+- [SPEC] `hash.dart:113` `transform` throws sync, `consume` throws async. Fragile; relies on `Reader.pipe` deferring to `stream()`.
+- OK: `_tee:123` poisons on input-error + downstream-cancel, `hex:79` idempotent, `add-after-hex:50` `StateError`.
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                                                                                       | Where                         | Status                              |
-| --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------- |
-| R1  | H   | **The full repaint (every resize, and the first frame) streams the whole grid as one run and relies on autowrap.** It never moves the cursor to the start of each row. So one cell whose width on screen differs from what we assumed shifts every row after it, and the screen turns to garbage. The diff path repositions only at gaps, so the damage stays local until the next resize. That is why it looks fine until you resize. | `_paintFull` tui.dart:228     | ✔ (`日 本 語abc` overflows the row) |
-| R2  | H   | **Wide characters are painted as two cells *plus* a space.** `write` stores a `''` continuation cell after a CJK char, and both paint paths emit `' '` for it, so each wide char takes 3 columns. The diff path also advances `cx` by 1 for a wide char, so cursor tracking drifts. rawfree shows Japanese titles, so it hits this on every resize.        | tui.dart:200, :239            | ✔                                   |
-| R3  | H   | **Control characters are written raw.** `'\t'`, `'\r'`, `ESC` and other bytes in the text (scraped titles, error messages, coloured strings) go straight to the terminal and move its cursor. Any `\n` after the first is silently dropped.                                                                                        | `Region.write` tui.dart:268   | ✔ (`x\ty` emitted with a raw TAB)   |
-| R4  | M   | **`_cellWidth` is incomplete.** Emoji (U+1F300–1FAFF, many in U+2600–27BF such as `✅`), combining marks (U+0300–036F; Vietnamese in NFD), ZWJ and variation selectors (U+FE0F) all count as 1, so they feed R1. A wide char cut at the right edge is dropped, but the other half of a wide char that gets overwritten is left behind.        | tui.dart:442                  | read                                |
-| R5  | M   | **Style leaks between cells.** `_style` emits only the attributes that are set and never resets first. Going from `bold+color` to `color`-only keeps bold, and going from `color` to `bold`-only keeps the colour.                                                                                                                                      | `_style` tui.dart:243         | read                                |
-| R6  | L   | `_paint` reads `grid[0]` and throws `RangeError` when the height is 0 (some terminals report 0 rows during a drag-resize).                                                                                                                                                                                                                        | tui.dart:186                  | read                                |
-| R7  | L   | Writing the bottom-right cell with autowrap on is fragile: on some terminals the wrap that is pending after it scrolls the screen. Autowrap is never turned off.                                                                                                                                                           | `_enter`                      | read                                |
+## 3. pool (`lib/pool.dart`)
 
-**Fix (one coherent change to the painter):**
+- [BUG-M] `pool.dart:125` `onResult?.call(r)` inside job `try`. Caller `bar.tick()` throw stops new jobs, reported as `items[i]` failure.
+- [BUG-M] `pool.dart:279` `_sendableError` substring match (`send`+`message`, `isolate`, …). False-negative (`sent`), false-positive (job `throw 'isolate failed'`). Masks real errors, leaks engine wording (§1r13).
+- [BUG-M] `pool.dart:256` sync `start()` throw not mapped; async path maps. Raw engine error leaks.
+- [SPEC-M] `pool.dart:196` `close()` idempotence relies on `workerManager.dispose()` idempotent. Should guard/swallow itself (§1r12).
+- [PERF-L] `pool.dart:70` `run/map` `_active++` then `await _ensureInit()`. `close()` in gap still boots then disposes — wasted isolates.
+- [SPEC-L] `pool.dart:62` boot/dispose infra errors leak unwrapped (§1r13, §5).
 
-1. In `_enter` write `\x1b[?7l` (autowrap off) and in `_leave` write `\x1b[?7h`. The terminal can
-   then never wrap or scroll whatever the widths are (fixes R7, and limits R1 to a single row).
-2. `_paintFull`: write `\x1b[${y+1};1H` before each row instead of relying on wrap.
-3. Give `_Cell` a `width` (0 = continuation). Both paint paths **skip** continuation cells and
-   advance `cx` by the cell's width; the diff path compares the lead cell and repaints it whenever
-   either half changed.
-4. `Region.write`:
-   - split the text on `\n` and write each line on the next row;
-   - expand `\t` to spaces up to the next multiple of 4 or 8;
-   - replace other C0/C1 controls and `DEL` with `�`;
-   - when a wide char does not fit in the last column, write `' '`;
-   - when a cell overwrites half of an existing wide char, blank the other half.
-5. Width: iterate grapheme clusters with `package:characters` (a Dart-team pub engine, which
-   VISION §10 allows) and use a real wcwidth table: emoji ranges = 2; Mn/Me/ZWJ/VS = 0, attached
-   to the previous cell's string.
-6. `_style(c)` always starts from a reset: `\x1b[0;1;38;5;${n}m` / `\x1b[0m`.
-7. `if (grid.isEmpty) return;` at the top of `_paint`, and clamp `_width`/`_height` to ≥ 1.
+## 4. http (`lib/http.dart`)
 
-### 1.2 Input
+- [BUG-C] `http.dart:309` `close()`: `await _resp.stream.drain()` no timeout. Stalled `/stall` hangs `close()`; spec: drop. Need cancel + timeout.
+- [BUG-M] `http.dart:694` `resp.headers['location']` lowercase only. `Location` missed → 301 returned as final. Rest of file is case-insensitive (`header()`, `_hasHeader`, `_headerValue`).
+- [BUG-M] `http.dart:699` too-many-redirects `drain()` no timeout — hangs forever, no `TimeoutException`/retry.
+- [BUG-L] `http.dart:709` redirect `drain().timeout(limit, onTimeout(){})` swallows timeout, background drain holds socket, blocks reuse.
+- [BUG-L] `http.dart:725` streamed-body redirect throw does not drain; relies on outer `client.close()`.
+- [BUG-L] `http.dart:238` `bytes()` returns mutable cached `List` identity; `Stream.value(cached)` same. Caller mutates cache.
+- [SPEC-L] `http.dart:780,322` timeout message `${limit.inSeconds}s` reports `0s` for 300 ms. Render full `limit`.
+- [SPEC-L] `http.dart:561` `Http.get('notaurl')` parses as relative `Uri`, retried as network error. Should upfront `ArgumentError` unless http/https absolute.
+- [SPEC-L] `lib/json.dart:348` `json()` annotates `(HTTP 200)` on 2xx; spec: only error page.
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                                                                     | Where                  | Status                                                    |
-| --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------- |
-| I1  | H   | **`pressed()`/`typed()` are always empty outside `build`.** `frame()` clears input *after* painting, so the documented loop `while (!screen.pressed('escape')) await screen.frame(…)` never exits. The same goes for the VISION §7.12 example's `typed()`/`backspace` handling and every `Future<Screen>` mirror (`screen.frame(…).pressed('q')`). | `frame` tui.dart:108   | ✔ (keys logged inside build only, never after `frame`)   |
-| I2  | H   | **`pressed('a')` is never true.** Printable keys only go to `typed()`, so `pressed('q')`, `pressed('o')` and `pressed('b')` are dead. rawfree's chapter view (`o` = browser, `b` = back) does nothing.                                                                                                                        | `_poll`/`_parse`       | ✔                                                         |
-| I3  | H   | **`^C` kills the process and leaves the terminal broken** (alternate screen, hidden cursor, mouse reporting, no echo). `lineMode = false` clears only `ICANON`, not `ISIG`, and nothing listens for SIGINT. The docs promise "`^C` is just `pressed('ctrl+c')`".                                                                            | `_enter`               | ✔ (child died by SIGINT, no `?1049l` in output)           |
-| I4  | H   | **Unknown sequences become `'escape'`, which quits most apps.** Seen with Shift+Tab (`CSI Z`), `ESC O H`/`ESC O F` (Home/End in many terminals), modified keys (`CSI 3;5~`), focus events and anything else unrecognised.                                                                                                         | `_csiName`, SS3 branch | ✔ (Shift+Tab, `ESC O H`, `CSI 3;5~` → `escape`)           |
-| I5  | M   | **Insert (`CSI 2~`) is mapped to `'enter'`**, so it presses the focused button.                                                                                                                                                                                                                                                 | tui.dart:532           | ✔                                                         |
-| I6  | M   | Modifiers are dropped: `CSI 1;5A` reads as `up`, so `ctrl+up` and `shift+left` are impossible. `ctrl+@`, `ctrl+\` and the like become `ctrl+\``, `ctrl+|` and similar.                                                                                                                                                          | `_csiName`, `_parse`   | read                                                      |
-| I7  | L   | `ESC` followed by any byte is `alt+<byte>`: `ESC ESC` gives `alt+\x1b`, and `ESC` + a UTF-8 lead byte gives mojibake. A lone `ESC [` (Alt+[) waits for the next key, then turns into a bogus CSI.                                                                                                                                   | `_parse`               | read                                                      |
-| I8  | L   | Pasted text containing `\r` fires `enter` (and so the focused button) once per line. Bracketed paste is not enabled.                                                                                                                                                                                                                | `_parse`               | read                                                      |
-| I9  | L   | Mouse: any button counts as a click (right and middle too), the wheel is dropped, and malformed SGR (`ESC[<M`) throws `RangeError` on `parts[1]`.                                                                                                                                                                         | `_parse`               | read                                                      |
+## 5. scrape (`lib/scrape.dart`)
 
-**Fix:**
+- [BUG-C] `scrape.dart:131` `Visit with Reader` only `stream()=>Stream.value(_body)`. `text()` UTF-8-only, discards `content-type`. Spec §4.14: decoded like `Response.text()`. CJK pages mojibake; `html()/json()` inherit.
+- [SPEC-M] `scrape.dart:84` `Visit` missing `name()` (+`size()/ok()`). Spec §4.14 + §3 table. `v.name()` → `NoSuchMethod`.
+- [BUG-M] `scrape.dart:114` `follow()` `_crawl.normalize` `FormatException` escapes → `_fail()` ends run. One bad `href=":bad"` kills crawl; should skip like non-http. Start URLs correctly fail.
+- [SPEC-M] `scrape.dart:401,358` exhausted 5xx/429 `throw StateError('HTTP $status')`. §5: status never caller bug; should be `HttpException`. Hides from `on HttpException`.
+- [BUG-L] `scrape.dart:404` error uses pre-redirect `task.url`, not `res.url()`. `http` pipe error uses final URL.
+- [PERF-M] `scrape.dart:377` `_backoff: 1<<attempt` uncapped vs `http.dart:636` cap 10. `retries:30` → ~34 yr `Duration`.
+- [PERF-L] `scrape.dart:278` `_drain` unconditional 50 ms + `247` 20 ms busy-poll. Every run pays ~50–70 ms; workers wake 50×/s when idle. Use completer/signal.
 
-- I1: drop the three trailing `clear()` calls in `frame()`; `_poll()` already clears at its start.
-  The input then lasts from the start of frame N until the start of frame N+1, which is what
-  "pressed since the last frame" means.
-- I2: in `_poll`, for each `_Type`, add every rune to `_pressed` as well (`'a'`, `'A'`, `'1'`; give
-  the space bar the name `'space'`).
-- I3: in `_enter`, `_sigint = io.ProcessSignal.sigint.watch().listen((_) => _signals.add('ctrl+c'))`
-  and merge `_signals` into `_pressed` in `_poll`. While a listener exists, Dart does not
-  terminate on SIGINT. Also watch `sigterm` (and `sighup`): restore the terminal, then
-  `io.exit(143)`. Cancel all of them in `_leave`.
-- I4/I5/I6: `_csiName` returns `String?`, and `null` emits no event. Split the params on `;`, and
-  map modifier `m` (2 = shift, 3 = alt, 5 = ctrl, combinations) to a prefix (`'ctrl+up'`,
-  `'shift+tab'`). Add `Z` → `shift+tab`, `2~` → `insert`, and SS3 `A-D/H/F` → arrows/home/end.
-  Ignore `CSI I`/`CSI O` (focus events).
-- Shift+Tab moves focus backwards.
-- I8: enable bracketed paste (`\x1b[?2004h`) and deliver the pasted block as `typed()` only.
-- I9: count only `btn & 3 == 0` (left button); report the wheel as `'wheelup'`/`'wheeldown'`
-  keys; guard `parts.length < 3`.
+## 6. html (`lib/html.dart`)
 
-### 1.3 Lifecycle
+- [BUG-C] `html.dart:205` `walk()` only recurses, never emits space/`\n` for block/`br`. `<div><p>a</p><p>b</p></div>` → `ab` want `a\nb`; `<div>a<br>b</div>` → `ab`.
+- [BUG-C] `html.dart:223` unconditional `trim()` strips `<pre>`. `<pre>  x  </pre>` → `x` want `  x  `.
+- [BUG-M] `html.dart:157` `Element.without()` only `clone.querySelectorAll` (descendants), no `matches(clone)`. Self match kept, unlike `Elements.without:93`.
+- [BUG-M] `html.dart:87` `Elements.without()` per-item clone+keep, no dedupe. Overlapping roots (`div,p`) duplicate shared subtree.
+- [BUG-M] `html.dart:244` `parent()`: `Element._(p)` assumes `Element`. Parent `Document/Fragment` throws; should `p is dom.Element ? Element._ : null`.
+- [SPEC-L] `html.dart:286,102` `Elements.$/without` `on FormatException {rethrow}` leaks engine message without `invalid selector '<s>'` wrapper. `Element.without:162` wraps. Latent (current bad selectors throw via `_parseSelector`).
+- [PERF-L] `html.dart:87` N clones + N `querySelectorAll`, not one O(n) clone as documented.
 
-| #   | Sev | Problem                                                                                                                                                                                                       | Where           | Status                                               |
-| --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------- |
-| L1  | H   | **A second `Tui.run` in the same process throws** `Bad state: Stream has already been listened to`, because `io.stdin` is single-subscription and `_leave` cancels it. Any menu → TUI → menu flow breaks. | `_enter`        | ✔                                                    |
-| L2  | L   | `_leave` forces `echoMode`/`lineMode` to `true` instead of restoring the previous values (`Console.choose` already saves them). It never restores autowrap (once R7 is fixed) or bracketed paste.            | `_leave`        | read                                                 |
-| L3  | L   | Nothing redraws on resize while the app is awaiting something other than `frame()`. The SIGWINCH handler only nulls `_last`.                                                                                 | `_enter`        | read                                                 |
-| L4  | L   | Always renders at 60 fps, allocating a new W×H grid each frame, even when idle.                                                                                                                                | `frame`         | read                                                 |
+## 7. json (`lib/json.dart`)
 
-**Fix:** one module-private `final _stdin = io.stdin.asBroadcastStream();`, created lazily and
-reused by every `Tui.run` (its subscription is never cancelled; pausing is fine). Save and restore
-the old `echoMode`/`lineMode`. Reuse two grids, swapped each frame and cleared with `fillRange`,
-instead of `List.generate`.
+- [SPEC-M] `json.dart:52` path `split('.')`, `*` always wildcard. No escaping. `{"a.b":1}. $('a.b')==2` (shadows key), `{"*":5}.$('*')==[5]`.
+- [BUG-M] `json.dart:129` `int.tryParse(seg)` accepts `+1,01," 1"`. `$('+1')==2`.
+- [BUG-M] `json.dart:78,194` `abs()<2^63` excludes valid `-2^63`. `-9223372036854775808.0.value<int>()==null`.
+- [SPEC-M] `json.dart:237` `value<List<T>>/value<Map<String,T>>` hard-coded shapes only. `Map<String,List<bool>>`, `List<Map<String,bool>>`, `Map<String,Map<String,bool>>` → `null` though §4.4 says check each element.
+- [PERF-M] `json.dart:60` `Map []` = `values.elementAt(i)` O(n), not O(1). Indexed object loop O(n²).
 
-### 1.4 Layout and widgets (`Region`)
+## 8. image (`lib/image.dart`)
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                                                                         | Status |
-| --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| W1  | H   | **`button` ignores the region's height.** It draws at `_y + _cursor` even when that is past `_h`, so on a small terminal buttons spill into the sibling region below or onto a border. It still registers for Tab focus and Enter (an invisible button can fire). Its click area is the full label even when the label is clipped. | read   |
-| W2  | M   | **`Region` has no `width()`/`height()`.** Apps can't size lists, centre, truncate with `…` or react to resize. rawfree hard-codes `s.height() - 5` and `cols([11, 0])` and must update them by hand whenever the layout changes.                                                                                      | read   |
-| W3  | M   | **`box()` ignores the cursor.** It always borders the whole region, even after `write`s, and doesn't advance the parent's cursor. `rows`/`cols` split "below the cursor", so the three are inconsistent.                                                                                                                       | read   |
-| W4  | M   | A box title with wide chars doesn't set continuation cells (R2 again), and the title can overwrite the `┐` corner.                                                                                                                                                                                                                 | read   |
-| W5  | L   | A focused button is shown only in **bold**, which is barely visible in many themes. Focus is by index, so a conditionally drawn button moves focus to its neighbour.                                                                                                                                                              | read   |
-| W6  | L   | Negative sizes in `rows`/`cols` are silently treated as `0` (flex).                                                                                                                                                                                                                                                              | read   |
+- [BUG-M] `image.dart:76` `crop` `width<=0||height<=0` → `RangeError`. §5: bad size = `ArgumentError`, outside = `RangeError`.
+- [SPEC-M] `image.dart:130` `_Encoded.stream()=>Stream.value(_encode(...))` evaluates sync at `stream()`, throws sync not as stream error. Breaks `to()/pipe` cleanup. `_FutureEncoded:141` correctly defers via `async*`.
+- [SPEC-L] `image.dart:152` `quality.clamp(1,100)` silently clamps; should be `ArgumentError`.
+- [PERF-L] `image.dart:40` `Uint8List.fromList(bytes)` copies even when already `Uint8List`.
+- OK: `decode` unknown → `FormatException`, EXIF `bakeOrientation:47`, GIF `frame:0`, `resize` aspect math, `encode` lazy (throws at `bytes()`, `.ico>256` `ArgumentError`).
 
-**Fix:**
+## 9. fs (`lib/fs.dart`)
 
-- W1: in `button`, `if (_cursor >= _h) { _cursor++; return false; }` before registering. Clip the
-  click width to `min(text.length, _w)`.
-- W2: add `int width()` and `int height()` to `Region`, the same names as on `Screen` (VISION §5:
-  the same idea, the same name), and use them in rawfree.
-- W3: `box` covers the part of the region below the cursor and then sets `_cursor = _h`, matching
-  `rows`/`cols`.
-- W5: draw the focused button in inverse video (`\x1b[7m`). Add an `inverse` flag to `_Cell`; this
-  needs no new public API.
-- W6: `ArgumentError` on a negative size.
-- Tests: §1 rule 1 requires a test for every listed member. Today only the not-a-terminal throw is
-  tested. Expose the pure parts for tests via `@visibleForTesting`, or test through a fake
-  `Stdout`/byte source injected privately:
-  - the parser (`_parse` with byte fixtures: split UTF-8, split CSI, lone ESC, SGR mouse);
-  - layout (`Region` on an off-screen grid);
-  - the painter (diff output for wide chars, styles and resize).
+- [BUG-C] `fs.dart:106,287,404` `delete()` no kind check. `File.delete` on dir → `EISDIR` not no-op; `Link.delete` (`unlink`) deletes regular file.
+- [BUG-C] `fs.dart:117,126` `copy/move` only `_checkSource!=notFound`. Symlink source copies target as file; dest symlink truncates target outside tree instead of replacing link.
+- [SPEC-C] `fs.dart:151` `append` in-place `writeAsBytes(append)`, not temp+rename atomic. Partial on crash; spec: atomic + old content kept.
+- [BUG-M] `fs.dart:181` `_atomicWrite`: `openWrite()` no `O_EXCL` (racy tmp name), `rename:219` then `_chmod:222` (umask window; chmod tmp first), broken-link fallback replaces link with file undocumented, rename breaks hardlinks undocumented.
+- [BUG-M] `fs.dart:270` sorts `a.path()` not `name()`. Recursive diverges (`a/z.txt<b.txt` vs `z.txt>b.txt`).
+- [BUG-M] `fs.dart:256` `Dir.list` on symlink-to-dir lists target though `exists()==false`. `followLinks:false` only stops interior descent.
+- [BUG-M] `fs.dart:298` `Dir.copy(file)` creates empty `to` dir then throws — violates throws-before-writes.
+- [BUG-M] `fs.dart:587` `_copyDir`: link dest `EEXIST` no retry (files overwrite), file-onto-symlink follows, file-onto-dir half-copies then throws.
+- [BUG-M] `fs.dart:504` `_checkSource` `normalize(absolute)` lexical only, no `resolveSymbolicLinks`. `link->real` + `to=real/sub` passes → self-copy. No kind check.
+- [BUG-M] `fs.dart:499` `_isExdev==18` POSIX only. Windows cross-device (`17/null`) never copy-then-deletes.
+- [BUG-L] `fs.dart:574` `_strip` `"C:\\"` → `"C:"` (different). Root handling `/`-only.
+- [PERF-M] `fs.dart:521,547` `_chmod/_setDirMtime` fork `chmod/touch` per file/dir. Large tree O(n) processes; batch or native binding.
+- [BUG-L] `fs.dart:547` `touch -t/-d @secs` truncates to seconds; sub-second lost though spec keeps timestamps.
 
----
+## 10. shell (`lib/shell.dart`)
 
-## 2. What `example/rawfree.dart` says the library is missing
+- [BUG-M] `shell.dart:286` `_isEpipe` `toString().contains('broken pipe/epipe')` on any error. Upstream `StateError('broken pipe test')` misclassified as early-close, `inputError` swallowed.
+- [BUG-M] `shell.dart:228,244` `kill()` = `SIGTERM`; ignoring child survives 2 s timeouts; `stdinDone` await in `finally` unbounded — teardown can hang. Need `SIGKILL` on cancel path.
+- [BUG-M] `shell.dart:89` `open` unawaited drains, never awaits/checks `exitCode`. Zombie + `xdg-open` failure invisible.
+- [PERF-L] `shell.dart:197` `stderrBuf BytesBuilder` unbounded (spec requires full stderr, but GB stderr OOMs; needs cap).
+- OK: `text():147` strips one `\n`/`\r\n` only, `bytes()/>` verbatim.
 
-rawfree is the only real caller, and it routes around the library in several places. Each line
-below is a workaround in the example and the library change that removes it.
+## 11. archive (`lib/archive.dart`)
 
-| rawfree today                                                                                                                                                   | Cause                                         | Change                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `s.pressed('o')` and `s.pressed('b')` never fire. The comment "plain `o` would also fire while typing, so browser is ctrl+o"                                        | I2                                            | Fix I2. The app already picks by view, so both views work.                                                                                                                                                                                                                |
-| Japanese titles break the screen on resize                                                                                                                       | R1/R2                                         | Fix the painter (§1.1).                                                                                                                                                                                                                                                       |
-| `final visible = (s.height() - 5)…` plus about 20 lines of hand-written `sel`/`scroll` clamping, twice                                                              | W2; no list widget                            | **Decided:** `Region.height()` and `Region.list(List<String> items, int selected)`, which draws the rows that fit, keeps `selected` in view and highlights it. It deletes `_drawList` and both scroll loops (≈30 lines) for one member.                          |
-| `head`/`tail` with a hard-coded `cols([11, 0])`; the comment "split rows first: cols() consumes its region's cursor"                                             | W2                                            | `Region.width()` lets the app size the columns; the cursor rule stays, but is documented once in the library doc.                                                                                                                                            |
-| Manual `dlDone/dlTotal` text instead of a bar                                                                                                                    | no progress drawing in a Region               | **Not added:** `Region.bar` would delete only ~2 lines at the call site. Keep the text.                                                                                                                                              |
-| `if (res.status() < 200 \|\| res.status() >= 300) { await res.close(); throw … }`, three times                                                                     | no success test on `Response`                 | `bool ok()` on `Response` (2xx). An ok-or-throw verb would break rule 11, so a reading is the fit.                                                                                                                                                                  |
-| `_postForm`: a hand-written redirect loop and a form encoding done with `Uri(queryParameters:).query` plus a manual content-type                                              | `dart:io` follows only 303 for POST           | **Decided:** follow 301/302/303 after a POST as a GET (browser behaviour); 307/308 resend an in-memory body. `body:` accepts a `Map<String, String>` as a URL-encoded form and sets the content-type.                                         |
-| `_headers` copied into every call (`{..._headers, 'referer': …}`)                                                                                               | no shared defaults                            | **Not added:** a global default would be shared mutable state for three lines of savings.                                                                                                                                                                 |
-| `_unescape`: 40 lines of hand-written HTML entity decoding of JSON fields                                                                                        | no entity decoding outside a parsed document  | **Example change only:** `Html.parse(s).text()` already decodes entities.                                                                                                                                  |
-| `_browse`: platform `open`/`xdg-open`/`start` switch                                                                                                             | no "open with default app"                    | **Decided:** `Shell.open(String target)` (URL or path), which deletes 12 lines in every script that wants it.                                                                                                                                                                             |
-| `_safe`: sanitising file names                                                                                                                                   | none                                          | Keep it in the example (a niche need), or `Fs.safe(name)` if a second caller appears.                                                                                                                                                                                         |
-| Downloads one image at a time with `await res.bytes()` then `Fs.file(…).write(bytes)`                                                                          | example style                                 | `await (res > Fs.file(path))` streams. `Pool` can run 4 at a time. The `<1 KB = expired stub` check can use `content-length`.                                                                                                                                              |
-| `p.$('id').value<num>()?.toInt()` everywhere                                                                                                                     | unneeded: `value<int>()` works on `3` ✔       | The example should use `value<int>()`. Library bug ✔: `value<double>()` on `3` gives `null`, and `value<int>()` on `3.0` gives `null`. Convert integral `num`s in `value<T>` for `int` and `double`.                                                               |
-| State changed from `.then()` callbacks; the frame loop re-renders at 60 fps to pick it up                                                                      | immediate mode                                | Fine as designed. Document the pattern (async work mutates state, and the next frame shows it) in the tui library doc.                                                                                                                                                              |
+- [BUG-C] `archive.dart:182` `_moveInto` on type collision deletes dest (`Directory.delete(recursive:true)` / `File.delete`). Archive file over existing dir `rm -rf`s it. Spec + test only disjoint; should throw/merge.
+- [BUG-M] `archive.dart:125` `f.isSymbolicLink` misses zip symlink as regular file with `S_IFLNK` mode; tar hardlink `typeflag 1` unchecked → extracts as file.
+- [BUG-M] `archive.dart:69` pack `prefix=_dir+sep` not normalized. `site//, ./site, site/./sub/..` → wrong top-level in archive.
+- [BUG-M] `archive.dart:342` `_looksLikeTar: bytes.isEmpty=>true`. Zero-byte unpack creates target, succeeds; should be `unknown format`.
+- [BUG-M] `archive.dart:393` `_verifyGzip` last-8-bytes single-member check. Concatenated gzip (valid) false `FormatException`. `length<18` assumes single member.
+- [BUG-L] `archive.dart:145,321` check `replaceAll('\\','/')` vs extract `split('/')` only — inconsistent layout on Windows.
+- [BUG-L] `archive.dart:287` `PK` path no `try`/empty check; truncated zip raw `ArchiveException` or empty archive → empty dir, unlike fallback path.
+- [BUG-L] `archive.dart:239` `_copyTree` drops links (no link branch), used cross-device. `fs._copyDir` handles links.
+- [PERF-C] `archive.dart:503` `_gunzipChecked` buffers all input + all output, yields one chunk. 10 GB `gunzip>file` OOMs; doc says streaming `Pipe`. Compress path streams via `io.gzip.encoder`.
+- [PERF-M] `archive.dart:393` `_verifyGzip(io.gzip.decode)` + `GZipDecoder.decodeBytes` decompress twice, hold twice.
+- [PERF-L] `archive.dart:106` `tgz` holds tar+gz+model (3×) + `readAsBytes` per file.
 
----
+## 12. chrome (`lib/chrome.dart`)
 
-## 3. cli
+- [BUG-C] `chrome.dart:170` `close()` `_closed=true` before `await _browser.close()`. Throw → second `close()` no-ops, process leaks.
+- [BUG-M] `chrome.dart:113,543` `_known/_wrappers` never pruned. `open` failure leaves wrapper; `Page.close()` never removes. Unbounded retain + stale subs.
+- [SPEC-C] `chrome.dart:45` no SIGINT/SIGTERM/Ctrl-C handler, only puppeteer temp-dir hook. Crash without `close()` orphans Chromium + profile. Violates never-leaves-Chromium + §1r12.
+- [SPEC-M] `chrome.dart:143` `headers` only `setExtraHTTPHeaders`; `user-agent` never `setUserAgent` → `navigator.userAgent` unchanged.
+- [BUG-M] `chrome.dart:202` `_detach` only `cancel()`s sub, never `setRequestInterception(false)`. Page keeps interception with no handler → future requests hang. Retains old `block` on `goto`.
+- [PERF-L] `chrome.dart:146` `block:[]` still enables interception → CDP round-trip per request. Skip when empty.
+- [SPEC-L] `chrome.dart:203` `block` lowercased, no validation. `'images'` typo silently loads all; should be `ArgumentError`.
+- [BUG-M] `chrome.dart:247` `waitIdle` `+1 request / -1 finished|failed` misses aborted/blocked/`data:`/WS-SSE → `_inflight>0` forever → always 30 s timeout.
+- [BUG-M] `chrome.dart:573` `_attached/_visible` `catch=>TimeoutException`. Invalid selector waits 30 s not fast `FormatException` (§5).
+- [BUG-M] `chrome.dart:332` TOCTOU: `_actionable` then fresh `click/focus/type/select`. Hide/disable in gap throws raw engine error, not `TimeoutException`.
+- [BUG-M] `chrome.dart:344` `fill` sets `el.value=""` on any element, no-ops `contenteditable`, double `focus()`, raw `querySelector` `SyntaxError` unmapped.
+- [BUG-M] `chrome.dart:420` `select` ignores `List<String>` return; missing option silent.
+- [BUG-C] `chrome.dart:429` `upload` deletes staging `tmp` in `finally` right after `uploadFile`. Browser reads at submit → staged non-`File` readers broken. Non-empty path never dispatches `input/change` (only empty-array does).
+- [SPEC-M] `chrome.dart:676` `_key` missing `insert, shift/control/alt/meta, wheelup/wheeldown` from §4.12 shared names. `press('insert')` → `ArgumentError` though valid.
+- [BUG-M] `chrome.dart:514` concurrent `download()` `onDownloadWillBegin.first` unfiltered → both resolve to same event, one file lost. Needs guid/URL filter.
+- [BUG-M] `chrome.dart:523` only `completed` awaited; `cancelled/error` waits full 30 s not fast throw.
+- [PERF-M] `chrome.dart:514,523,661` triple `limit` (willBegin+progress+stable → 90 s for 30 s timeout) + `_stableFile` two 100 ms polls after CDP `completed` (+100 ms/download).
+- [BUG-L] `chrome.dart:324` `cookies()` `${name}=${value}` no encoding of `;/= /space`; `data:/about:blank` `url()` may throw unmapped.
+- OK: `screenshot/pdf:779` lazy (`_ShotReader` captures on read, re-readable fresh bytes) — correct per captured-when-read.
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                                                                                             | Where                    | Status |
-| --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------ |
-| C1  | H   | A parent `Multi` given before the subcommand reaches the child as a raw `List<Object?>`. `--tag a go`, then `List<String> t = ctx(tag)` throws a `TypeError` and the run exits 1.                                                                                                                                                                                          | cli.dart:630-635         | ✔      |
-| C2  | H   | The same `putIfAbsent` merge loses the parent's `Multi` values: `--tag a go --tag b` gives `[b]`, not `[a, b]`.                                                                                                                                                                                                                                                       | cli.dart:630-635         | ✔      |
-| C3  | H   | A required parent `Opt` or `Arg` is never checked. Dispatching to a subcommand returns before binding and validation, so `Opt('token', required: true)` on the root and `app go` give exit 0 with `ctx(token) == null`.                                                                                                                                                  | cli.dart:622-637         | ✔      |
-| C4  | H   | `Multi<T>` or `Arg(many: true)` with `parse:` is stored as `List<Object?>`, never `List<T>`, whether the option is given or absent. `List<Color> c = ctx(col)` throws a `TypeError`.                                                                                                                                                                                   | cli.dart:317, 334, 364   | ✔      |
-| C5  | H   | Declaring any `short: 'h'` removes the built-in `--help` (`app --help` gives "Unknown option", exit 64).                                                                                                                                                                                                                                          | cli.dart:592             | ✔      |
-| C6  | L   | `argv[0] == 'help'` always means help, even when the command takes an `Arg` (a query of `help` can't be passed). `help <cmd>` works only at the root (`app remote help add` → unknown command). `help <unknown>` prints the root usage and exits 0, with no suggestion.                                                                                       | cli.dart:157, 554, 638   | ✔      |
-| C7  | L   | The "Run … --help" hint stops at the first `-` token: `app -v go --n x` suggests `app --help` instead of `app go --help`.                                                                                                                                                                                                                              | cli.dart:189-200         | ✔      |
-| C8  | L   | Messages end with `?.` (`Did you mean "--url"?.`). Suggestions include `Arg` names, which can't be used as `--x`. `-vh` reports "Unknown option -h".                                                                                                                                                                                                                | cli.dart:582-591, 642, 670, 706 | ✔ |
-| C9  | L   | `Multi(required: true, or: […])` is accepted, while `Opt`/`Arg` reject the same combination. `--wait -5` is accepted but `--wait -5s` is rejected.                                                                                                                                                                                                                         | cli.dart:59, 477         | ✔      |
-| C10 | L   | Any error from a handler, including programmer errors, becomes one line and exit 1 with no stack trace. A `TypeError` is just `Instance of 'TypeError'`.                                                                                                                                                                                            | cli.dart:183-185         | ✔      |
-| C11 | api | `T call<T>(Object def)` and `values: List<Object>` are untyped: `T` comes from the call site, not the definition (so the doc's "typed by its declaration" is false), and `ctx(top).anything()` compiles.                                                                                                                                      | cli.dart:148, 214        | ✔      |
-| C12 | api | The surface leaks: the public `Handler` typedef, and public fields on every definition and on `Command` (`name`, `help`, `short`, `or`, `parse`, `values`, `commands`, `handler`, `aliases`…). This breaks rules 1 and 5. `Bar.release()` in console is the same problem.                                                                                        | cli.dart:32-54, 146, 248 | ✔      |
-| C13 | api | There are two ways to declare a yes/no option: `Flag` and `Opt<bool>` (also `Multi<bool>`/`Arg<bool>`).                                                                                                                                                                                                                                                  | cli.dart:26, 39          | read   |
-| C14 | api | Subcommand names skip `_checkName`, and a child can redeclare an ancestor's `--name` or `-v` with a different meaning.                                                                                                                                                                                                                                            | cli.dart:136-143         | read   |
-| C15 | gap | `usage()` doesn't list `-h, --help`. No tests for `Ctx.rest`/`usage`, `--`, grouped shorts, `-5` as a positional, Duration/DateTime/Uri values, suggestions, `--[no-]` or ancestor options. C1–C5 all sit in untested paths.                                                                                                                                         | cli.dart:913; tests      | read   |
+## 13. cli (`lib/cli.dart`, 1131 lines)
 
-**Fix:**
+- [BUG-M] `cli.dart:932` short `-n=` strips `=` → absent. `-n= NEXT` → `NEXT`, `-n=` at end → needs-value; long `--n=` → `""`.
+- [BUG-M] `cli.dart:848,911` `--help=x` ignores `inline` → help; `-h=x` → `Unknown option -=`. `--opt --help` consumes `--help` as value, never helps.
+- [BUG-M] `cli.dart:985` required checks before `help`. `Opt required + --help` → 64 not 0. `help <cmd>` bypasses — inconsistent.
+- [BUG-M] `cli.dart:818` parent `Arg` + subcommand name: dispatch wins, `Arg` never binds (`[go]` → `Missing argument`, not `arg=go`).
+- [BUG-M] `cli.dart:819` command named `help` unreachable (`token=='help'` precedes `_findSub`); leaf `help` positional (handler runs, not help).
+- [BUG-M] `cli.dart:225` `Ctx(Multi)` returns stored list alias; `ctx(tag).add()` mutates cache. `rest()` copies.
+- [BUG-M] `cli.dart:622` `_parseDuration` rejects `+5s,1H,1h 30m` (lower-only, no `+`/inner-space).
+- [SPEC-M] `cli.dart:598` `Uri` requires `hasScheme`. Relative `/foo` → 64 though `Uri.parse` accepts.
+- [SPEC-M] `cli.dart:919,553` unknown short never suggests; `_closest` prefix `0` over-generous, single-char typo never suggests.
+- [BUG-L] `cli.dart:961` `Multi` merge errors always `--name` even for `-t`.
+- [SPEC-L] `cli.dart:397,411` one-line rule only generic `Exception`. `FormatException/UsageException` raw multi-line prints two lines.
+- OK: handler `UsageException→64`, `Exception→1`, `Error` propagates.
 
-- C4: `Arg(many:)` is removed (`ctx.rest()` already gives the positional tail), so only `Multi` needs a list.
-- C1/C2/C4: give the `Def` types a typed `List<T> _empty()` / `List<T> _cast(List<Object?>)`
-  helper (`List<T>.of(xs.cast<T>())`). Call it for every list value: parsed, absent (the default),
-  and inherited.
-- C2/C3: don't merge with `putIfAbsent`. Bind and validate the parent's definitions first: the
-  parent's values, plus a `Multi` concatenated with the child's occurrences. Only then dispatch.
-  Required checks run at every level.
-- C5: `--help` is always reserved. Reject a user `--help`, and keep `-h` as help unless the user
-  declares `short: 'h'`; in that case only `-h` changes meaning.
-- C6: `help` is a command only when the current command has subcommands and the token sits in the
-  command position. Recurse `help a b c` down the tree. An unknown name gives exit 64 plus "Did
-  you mean".
-- C7: walk the tokens with the same parser to find the deepest command reached.
-- C8: build the message as `'Did you mean "$x"?'` with no trailing `.`. Suggest only `Opt`, `Flag`
-  and `Multi` names. Treat `h` inside a short group as help when it is reserved.
-- C9: reject `required` together with `or` on `Multi`. Parse negative durations through one path.
-- C10: catch only `UsageException` (exit 64) and any `Exception` (one line, exit 1). Let `Error`
-  propagate with its stack trace.
-- C11: add `sealed class Def<T>` as the base of `Flag`/`Opt<T>`/`Multi<T>`/`Arg<T>`, with
-  `T call<T>(Def<T> def)` and `List<Def<Object?>> values`. This also lets the three eight-type
-  ladders (307-375, 517-543, 828-903) become one virtual method per class.
-- C12: make the fields private and the classes `final`, so nothing leaks beyond the constructors.
-- C11, as decided in VISION §4.10: `Opt<T>`/`Arg<T>` read as `T` itself. A nullable `T` (`Opt<String?>`) can be absent; a non-nullable `T` needs `or` or `required`, checked with `null is T` at construction.
-- C13: drop `Opt<bool>` (assert at construction), so `Flag` is the one way.
-- C14: run `_checkName` on command names. Throw an `ArgumentError` when a child redeclares an
-  ancestor's long name or short.
+## 14. console / terminal
 
-## 4. console
+`lib/console.dart`, `lib/src/terminal.dart` (tui-only bugs moved to §15.6):
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                                     | Where                      | Status |
-| --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------ |
-| K1  | H   | **No terminal width handling** (the same family as the TUI resize problem). `terminalColumns` is never read, nothing is truncated, there is no `\x1b[K`, and resizes are ignored. A line wider than the terminal wraps, so every `\r` redraw stacks a new line. A shorter redraw leaves the end of the previous one on screen. `choose` breaks when a choice wraps or there are more choices than rows. | console.dart:130, 190, 283-303 | ✔ (truncation and clearing missing) |
-| K2  | H   | A bar claims the single live line when it is built, but releases it only inside `transform`. If the pipe fails before the bar is listened to (for example, the target file can't open), every later `bar`/`spin` in the process throws `StateError`.                                                                         | console.dart:149, 254      | ✔      |
-| K3  | M   | Ctrl-C during `ask(secret: true)` or `choose` leaves echo and line mode off in the user's shell.                                                                                                                                                                                                         | console.dart:48, 163       | ✔      |
-| K4  | M   | `ask`/`choose` block the event loop (`readLineSync`/`readByteSync` behind a `Future`). A concurrent bar, download or `Pool` freezes while the prompt waits.                                                                                                                                                  | console.dart:53, 172       | ✔      |
-| K5  | L   | A second bar draws over the live line *before* `_claim` throws.                                                                                                                                                                                                                                       | console.dart:149, 209      | ✔      |
-| K6  | L   | In `choose`, a lone Escape blocks and then swallows the next key, and `ESC O A/B` arrows are ignored.                                                                                                                                                                                                     | console.dart:176-179       | ✔      |
-| K7  | L   | `_fail` prints `\n✗` (a blank line when there is no terminal) while `spin` prints `\r✗`.                                                                                                                                                                                                                   | console.dart:276-281       | ✔      |
-| K8  | api | The rate always says `B/s` and counts are raw: an item bar shows `1/10  10 B/s`, and a byte bar shows `204801`, not `200 KB`.                                                                                                                                                                       | console.dart:292-307       | ✔      |
-| K9  | api | `Bar.release()` is public. It frees the line without printing the final state.                                                                                                                                                                                                                    | console.dart:203, 251      | ✔      |
-| K10 | gap | No pseudo-terminal tests (§11). `ask`, `confirm`, interactive `choose`, the non-terminal fallback, `NO_COLOR`, throttling and the ✓/✗ output are untested; those tests would have caught K1–K7.                                                                                                                 | test/console_test.dart     | read   |
+- [BUG-C] `terminal.dart:48` `onDone` never forwarded. `_input` never closes → `ask` `onDone:233`, `choose stdinDone:260` never fire; EOF without `\n` hangs not `StdinException`.
+- [BUG-M] `console.dart:211` `_readLine` `return` after first `\n/\r` drops rest of chunk. Piped `2\n3\n` loses next line.
+- [BUG-M] `console.dart:217` secret backspace `buf.removeLast()` byte-level; multibyte password corrupts.
+- [BUG-C] `console.dart:526,439` throttle dead: `_render({force=true})`, `tick()` → `_render()` true, `if(!force...)` never taken. Every `tick()` writes stderr. `Pool.map(10k,tick)` = 10k syscalls.
+- [BUG-M] `console.dart:148` `spin` no `truncateWidth`/`_columns`/SIGWINCH — long label overflows; only `\x1b[K` not fit.
+- [SPEC-M] `console.dart:460` non-animated `close()` prints `done/total` no rate; spec null-total shows count+rate.
+- [BUG-M] `console.dart:518` `_fail()` `writeln('\r✗ …')` no `\x1b[K`; longer bar tail remains.
+- [BUG-M] `console.dart:167` `bar()` `_claim` then `_render()` throw leaks `_live` — all later bars `StateError`.
+- [BUG-M] `console.dart:179` prompts trap only `SIGINT`; no `SIGTERM/SIGHUP` → kill in `ask(secret)` leaves terminal raw/no-echo.
+- [BUG-M] `console.dart:372` `_nextKey` `stdinDone` inside ESC-quiet returns `escape` not `null`; `choose` accepts instead of `StdinException`.
+- [BUG-M] `terminal.dart:126,168` `ascii.decode` on mouse SGR/CSI params throws on `>=0x80`; should `allowMalformed`/ignore per unknown-sequences-ignored.
+- [BUG-M] `terminal.dart:132` drag (`32`) `btn&3==0` as left press; spec drag not clicks. Mask `32`.
+- [BUG-L] `terminal.dart:36` `_startInput` fallback creates `_ttySub` on stale session (check only in `try` success) — leaks stdin listener keeping process alive.
+- [BUG-L] `console.dart:569,582` `room<=0` tiny width still `>cols`; violates always-fits for `cols<~15`.
 
-**Fix:**
+## 15. tui — new API: state-driven (replaces VISION §4.12)
 
-- K1: on every redraw, read `io.stderr.terminalColumns`. Fit the line to it (shrink the bar from 20
-  down to 10 cells, then cut the label with `…`) and end it with `\x1b[K`. Cache the width and
-  refresh it on SIGWINCH. In `choose`, cut each choice to `width - 2` and show at most
-  `terminalLines - 2` choices in a scrolling window around the selection.
-- K2: claim the line lazily, on the first `transform`/`tick`. Also release it from a `Finalizer`
-  or a `Pipe` error path, so a failed pipe can't hold it.
-- K3: inside prompts, listen to `ProcessSignal.sigint`. Restore the modes, then `io.exit(130)`.
-  Share one "restore terminal" helper with tui (§1.2, I3).
-- K4: read through the same shared broadcast stdin as tui (§1.3, L1), asynchronously. That fixes
-  the freeze and lets prompts and TUI run in one process.
-- K5: `_claim` before the first draw.
-- K6: decode keys with the tui parser (one key decoder in the package, not two).
-- K7: write `\r✗` on a terminal and `✗` with no prefix otherwise.
-- K8: format byte counts as human-readable sizes, and show `/s` only when the bar measures bytes.
-  **Decided (no new option):** a bar used in a pipe counts bytes,
-  and `tick()` counts items.
-- K9: make `release()` private.
+### 15.1 Why
 
-## 5. fs · shell · archive · hash · image · json · pool
+Immediate mode leaves the whole app to the caller. In `example/rawfree.dart`, about 170 lines of
+UI code do jobs the library should do:
 
-All 107 existing tests for these modules pass. Every finding below was reproduced with a scratch
-script unless it is marked "read".
+| The app does today                                                                 | The library does instead (§15.2)                       |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| the frame loop and a `quit` flag (`while (!st.quit) await screen.frame(…)`)        | `Tui.run(state, screen)` owns the loop                 |
+| polls `s.pressed(…)` in the middle of drawing; ordering bugs between keys and widgets | `keys:` map, routed by focus                           |
+| stores widget state by hand (`sel = list(items, sel)`, `query = input(query)`, `csel`) | `Pick<T>` / `Field` live in the state object           |
+| switches views by nulling fields (`series = null`)                                  | a state object per view, `app.go(next)`                |
+| writes the key-help header that repeats the key handling                            | the status row shows the labels from `keys:`           |
+| writes `.catchError((e) { statusErr = true; status = '✗ …'; })` four times          | an exception from a handler goes to the status row     |
+| draws its own spinner/progress text (`searching…`, `↓ ch 3/40`)                     | `Console.spin` / `Console.bar` draw in the status row  |
+| writes "press again to quit" logic                                                  | `Console.confirm` shows as a popup                     |
+| maps items to labels (`[for (final h in hits) h['title'] ?? '']`)                   | `list(pick, (h) => h.title)`                           |
 
-| #   | Sev | Problem                                                                                                                                                                                                                                                                               | Where                       | Fix                                                                                                                                                                                                                                         |
-| --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | **H, data loss** | **`unpack(dir)` deletes the existing target recursively before moving the temp folder in.** Files already in `vendor/` are lost. `Http.get(u) > Archive.unpack('.')` empties the current folder and then fails (`Deletion failed, path='.'`).                                                    | archive.dart:124-127        | Never delete the target. Extract into the temp folder (keeping the all-members-checked-first rule), then move each top-level member into `dir` (rename, or copy when renaming fails), creating `dir` if it is missing. Regression test: unpack into a folder that already has a file, and into `.`. |
-| F2  | H   | `unpack('out/')` names its temp folder `out/.tmpN`, which sits inside the target, so it deletes itself, fails, and loses `out/`.                                                                                                                                                                  | archive.dart:106            | Normalise with `p.normalize` and create the temp folder next to the target: `p.join(p.dirname(d), '.${p.basename(d)}.tmp…')`.                                                                                                                                                       |
-| F3  | H   | `gunzip()` on truncated data succeeds silently: half of a 2.4 MB `.gz` gave a 1.19 MB file and no error, so a cut-off download is saved as good data.                                                                                                                                          | archive.dart:194-213        | Check that the gzip trailer (CRC32 + ISIZE) is present and matches; otherwise fail the run with `FormatException`.                                                                                                                                                              |
-| F4  | H   | `Shell.filter` fails when the child exits early: `… \| Shell.filter(['head','-n','1']) > f` throws `SocketException: Broken pipe`.                                                                                                                                                                 | shell.dart:151-163, 182     | Treat EPIPE on the child's stdin as "the child is done reading": stop feeding it and cancel the upstream. The exit code decides success.                                                                                                                                              |
-| F5  | H   | **After any `Pool.run`/`map`, the script never exits** unless `Pool.close()` is called (the engine keeps `RawReceivePort`s open). The §7.9 example hangs.                                                                                                                                             | pool.dart (worker_manager)  | Count the active jobs and close the engine when the count reaches 0 (re-init lazily), or `keepIsolateAlive: false` (`Isolate.spawn` with ports `.unsendable`/unref'd). If the engine can't, use an in-house `Isolate.run` pool (VISION §10 allows the swap).                                           |
-| F6  | M   | If the writer fails before it reads (for example, the parent folder is missing), the pipe never runs. A hasher in the pipe isn't poisoned, so `hex()` returns the empty-input digest `e3b0…`. `Reader.to` doesn't cancel the upstream, which leaks an http connection.                                                     | core.dart:47-56, hash.dart  | In `Reader.to`/`Pipe`: on a writer error, cancel the source subscription and send the error to every stage (`hash._fail`, `bar._release`). Each stage gets a private `_abort(Object e)`.                                                                                                     |
-| F7  | M   | The atomic write (`write`, `> file`) drops the old file's mode (a `755` script came back as `644`) and replaces a symlink with a regular file.                                                                                                                                                     | fs.dart:174-197             | Resolve symlinks first (`resolveSymbolicLinks`) and write the real target. After the rename, `chmod` the temp file to the old file's mode.                                                                                                                                                     |
-| F8  | M   | `Dir.move` falls back to copy-then-delete on *any* error. Moving into a non-empty folder silently merges, overwrites, then deletes the source.                                                                                                                                                  | fs.dart:272-282             | Fall back only on `EXDEV` (`osError.errorCode == 18`). Otherwise rethrow.                                                                                                                                                                                                          |
-| F9  | M   | `Dir.copy('a' → 'a/sub')` recurses into itself (448 junk entries, then ENAMETOOLONG). `copy`/`move` of a missing source creates an empty destination, then throws.                                                                                                                                     | fs.dart:266, 434-452        | First check that the source exists. Reject a destination inside the source (`p.isWithin`).                                                                                                                                                                                      |
-| F10 | M   | `Link.resolve()` returns a handle at the link's own path, not the target's, so `exists()` is `false` and `delete()` removes the link. `Link.create` deletes and then creates (not atomic), and over a regular file it says "Cannot delete link".                                                                                 | fs.dart:293-314             | `resolve()` = `resolveSymbolicLinks()`, then build the handle for that path. `create` makes a temp link next to the target, then renames it over the target.                                                                                                                                                                   |
-| F11 | M   | `Pool.close()` with a job running makes that job's future hang forever. Two concurrent first calls both `init()`, so the engine prints a warning to stdout. With 1 CPU there are 0 workers and every job hangs (read).                                                                                           | pool.dart:26-31, 62, 102    | Memoise the init `Future`. On `close()`, complete every in-flight job with a `StateError('pool closed')`. Use `max(1, numberOfProcessors - 1)` workers and the same number as the `map` limit.                                                                                                                             |
-| F12 | L   | Shell: stderr is cancelled when stdout ends, so late stderr is missing from the exception. The rewrapped `ProcessException` drops `errorCode`.                                                                                                                                                       | shell.dart:46-50, 137, 180  | Drain stderr until the process exits. Pass `errorCode` through.                                                                                                                                                                                                                 |
-| F13 | L   | Archive: an empty `tar` can't be unpacked ("unknown format"). Gzip data that isn't a tar is parsed as a garbage tar with a misleading message. Modes are ignored, so executables lose `+x`. `pack` silently drops symlinks.                                                                                                    | archive.dart:59, 119, 145, 160 | Detect the tar header (`ustar` at offset 257, or an all-zero end block) and treat an empty tar as empty. Apply `f.mode & 0x1ff` with `chmod` on unpack (POSIX). Document the link policy: `pack` refuses links with `FormatException`, the same as `unpack`.                                                                              |
-| F14 | L   | Image: a GIF keeps every frame (VISION: first frame only), so `encode(.png)` writes an animated PNG. ICO above 256 px throws a bare engine `Exception`. `resize(width: -5)` gives a `RangeError`, and `width: 0` is accepted.                                                                                         | image.dart:38, 56-63, 149   | Decode with `frame: 0` (or take `.frames.first`). Reject an `.ico` above 256 px with `ArgumentError`. Reject width/height < 1 with `ArgumentError`.                                                                                                                                     |
-| F15 | L   | Json: `encode` deep-copies on every call and turns `{1:2}` into `{"1":2}` (where `dart:convert` throws). `[i]`/`length`/iteration rebuild the whole list, so an indexed loop is O(n²) (read). `value<double>()` on `3` gives `null` (§2).                                                                                    | json.dart:64-96             | Wrap lazily, keeping the raw `List` and wrapping per access. `encode` passes raw values through `toEncodable`. Number coercion in `value<T>`.                                                                                                                                  |
-| F16 | api | `Dir.copy` keeps neither the mode nor the mtime of folders (VISION says it keeps both). `Output` can be streamed twice (VISION §2: a one-shot reader throws `StateError`). `pool.dart` doesn't `export 'core.dart'`. The sendability probe deep-copies every job (twice the cost for image bytes, read).                            | fs, shell:105, pool         | Set the folder mtime after its contents are copied. **Decided:** `Output` is replayable (it is in memory), and VISION now says so. Add the export. Drop the probe and let `Isolate` report the error.                                                     |
+It keeps every widget the old (master) Tui had: `box`, `text`, `spinner`, `bar`, `list`, `split`,
+`button`, `field`, `tabs`, `table`, `popup`, `markdown`, `picture`, with colours and styles, but in
+v2 syntax: positional inputs, named options, typed colours, and widget state as objects.
 
-## 6. chrome · scrape · html · http
-
-The existing tests for these modules all pass (Chromium launches in about 1 s). Each finding was
-reproduced with a scratch script unless it is marked "read".
-
-| #   | Sev | Problem                                                                                                                                                                                                                       | Where                     | Fix                                                                                                                                                                                                       |
-| --- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| S1  | H   | **A crawl hangs forever on a failure with no `onError`** while URLs are still queued: the workers exit, but `_drain` waits for `_hasWork`.                                                                                     | scrape.dart:244, 274      | On `_failure`: clear the queue, wait for the visits in flight, then close the stream with the error. Regression: a handler that `follow`s two URLs then throws, with `limit: 1`.                                 |
-| S2  | H   | `follow` accepts any scheme. A `mailto:`, `tel:`, `javascript:` or `data:` link fails the crawl (`No host specified`), and with S1 it hangs.                                                                                     | scrape.dart:216-227       | In `normalize`, keep only `http`/`https` and silently drop the rest.                                                                                                                                    |
-| S3  | H   | Browser path: a 5xx or 429 `continue`s without closing the tab (one 503 URL with `retries: 2` leaked 3 tabs). A tab fetched after a failure or cancel is never closed.                                                          | scrape.dart:307, 342      | Open each tab inside one `try/finally` that always closes it. Do the cancel/failure check inside it.                                                                                                       |
-| S4  | M   | A Chrome navigation failure is a bare `Exception('net::ERR_…')`, so it isn't retried. `browser.open(url).timeout()` leaves a late tab open (read).                                                                                 | scrape.dart:380, 401      | Rethrow as `SocketException` naming the URL, and retry it. Use `open(url, timeout:)` (C5).                                                                                                           |
-| H1  | H   | **`Http.put(u, body: reader)` hangs forever** when the server never reads the body: the header timeout fires, but `await streaming` waits on an open client.                                                                       | http.dart:301-306         | On timeout, close the client first, then cancel the body stream. Never `await` the body-sending future after a failure.                                                                                   |
-| H2  | H   | **`await Http.get(u).status()` keeps the process alive.** The `Future<Response>` mirrors `status()`/`header()`/`url()` drop the response, so nobody can close it.                                                             | http.dart:248-252         | The mirror reads the value and then `close()`s the response: a response reached only through a mirror can never be read later. VISION §4.2 now says so.                                                 |
-| H3  | M   | Redirects: a POST 302/307 is returned instead of followed. `url()` resolves the last `Location` against the first URL rather than the previous hop, so `html()` and `follow` get the wrong base.                                  | http.dart:119, `_send`    | Follow redirects by hand in `_send` (`followRedirects = false`, up to 10 hops), keeping the current URL. Apply the method rules in VISION §4.2.                                                   |
-| H4  | M   | package:http's `ClientException` leaks (for example, "Connection closed before full header"). It is not an `IOException`, so scrape doesn't retry it.                                                                               | http.dart:292, 325        | Map `ClientException` → `HttpException(message, uri:)` at the boundary.                                                                                                                                       |
-| H5  | M   | `text()` knows only utf-8, latin1 and ascii, so EUC-KR, Shift_JIS and GBK pages are garbled. `<meta charset>` is ignored. `Visit.text()`/`html()` always use UTF-8 (read).                                                                         | http.dart:220, scrape:131 | In-house WHATWG decoders (see §8: no pub package passes). Without a header, sniff `<meta charset>` in the first 1 KB. `Visit` reuses `Response`'s decoder. |
-| H6  | L   | A `String` body without `content-type` gets the engine's `text/plain; charset=utf-8`. `Http.defaultTimeout` is public.                                                                                                            | http.dart:30, 313         | Keep the default, and VISION now documents it. Make `defaultTimeout` private.                                                                                                                                                 |
-| M1  | H   | **`Html.parse` drops `<html>`, `<head>` and `<body>`.** `doc.$('body')` is empty for every `Http.get().html()`, `Page.html()` and `Visit.html()`.                                                                              | html.dart:29              | Parse a full document when the input starts (after whitespace) with `<!doctype` or `<html`, and a fragment otherwise.                                                                                    |
-| M2  | H   | `Elements.without` serialises and re-parses each item, so table parts vanish (`$('tr').without('.x')` → 0).                                                                                                                        | html.dart:73-94           | Clone the nodes, as `Element.without` already does.                                                                                                                                                               |
-| M3  | L   | `$` on a top-level element wraps it in a `<div>` (so `'div p'` matches a lone `<p>`). `Elements` from `Element.$` exclude the element itself (`$('div, span').$('div.o')` → 0).                                                  | html.dart:160, 211        | Match the element itself with the engine's `matches`, without wrapping. Use one query path for both cases.                                                                                                            |
-| M4  | L   | `attr` doesn't trim before resolving (`" /path "` → `%20/path%20`). Only `href` and `src` are resolved, so the lazy-image `data-src` stays relative.                                                                       | html.dart:197             | Trim URL attributes. Resolve `href`, `src`, `data-src`, `poster` and `action`.                                                                                                                                       |
-| B1  | H   | **`download()` on a missing selector crashes the script** with an unhandled `TimeoutException` from `willBegin`, created before `_actionable`.                                                                                         | chrome.dart:366-371       | Wait for `_actionable` first, then create `willBegin`, and attach `.catchError` until it is awaited.                                                                                                       |
-| B2  | H   | **`waitIdle` returns while requests are still in flight** (with a 3 s XHR it returned at 670 ms).                                                                                                                          | chrome.dart:332-343       | Count in-flight requests (`request` +1; `requestfinished`/`requestfailed` −1). Idle means 0 in flight for 500 ms.                                                                                       |
-| B3  | M   | `press('Enter')` types "Enter" and `press('esc')` types "esc"; `press('+')` throws.                                                                                                                                       | chrome.dart:248-257       | Use the shared key-name table (VISION §4.12). A single printable character is typed; any other unknown name is an `ArgumentError`.                                                                                   |
-| B4  | M   | `upload` waits for visibility, but most file inputs are `display:none`, so it times out.                                                                                                                                                | chrome.dart:292           | `upload` waits for *attached* only.                                                                                                                                                                 |
-| B5  | L   | `fill('#q', '')` leaves the old value. `eval<double>('1.0')` gives `null`, and `eval<List<String>>` is always `null`.                                                                                                           | chrome.dart:203, 227      | Always clear before typing. Route `eval` results through the `Json.value<T>` coercion and document `List<Object?>`/`Map<String, Object?>`.                                                             |
-| B6  | L   | `scroll(selector)` doesn't auto-wait and throws `StateError`. `open`/`goto`/`back`/`reload` have no `timeout:`.                                                                                                                  | chrome.dart:80, 173, 316  | `scroll` waits like the other actions (`TimeoutException`). Add `{Duration? timeout}` to the navigation calls; VISION §4.3 has it.                                                                                   |
-| B7  | L   | Leaks and races (read): every `pages()` call builds wrappers with 5 subscriptions that are never cancelled (dialogs dismissed twice); `onDialog` isn't cancelled in `close()`; `abort()`/`continueRequest()` aren't awaited; `setDownloadBehavior` is browser-wide, so two concurrent downloads clash. | chrome.dart:105-155, 365  | Cache one `Page` wrapper per target in an `Expando`. Cancel the subscriptions in `close()`. Await and `catchError` the interception calls. Give each `download` its own folder, keyed by the `guid` of `willBegin`. |
-| B8  | L   | Chromium downloads into `<project>/.dart_tool/puppeteer` (359 MB per project), not the user cache.                                                                                                                                      | chrome.dart:41-48         | `downloadChrome(cachePath: <user cache>/dart_toolkit/chrome)`.                                                                                                                                             |
-| B9  | api | The library doc says `cookieHeader`, the code says `cookies()`. `chrome` and `scrape` don't re-export `html`, so `page.html().$('a')` needs a second import.                                                                         | chrome.dart:15, 28; scrape:30 | Keep `cookies()` (VISION decided). `export 'html.dart'` from both.                                                                                                                                        |
-
-## 7. Verbosity: every module, measured at the call site
-
-Sections 1–6 are bugs. This section checks the API against its own bar: an addition must delete
-more at the call site than it adds to the surface. The yardsticks are rawfree, the VISION
-examples, and the patterns every script repeats. All decisions below are already in VISION.md.
-
-### 7.1 What changes
-
-| #   | Module  | Call site today                                                                                                     | After                                                                       | Surface cost                  |
-| --- | ------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------- |
-| V1  | tui     | about 75 lines: key handling, `_drawList`, scroll loops, `sel`/`scroll` clamps, a hand-drawn `'> $query▌'`, rune backspace | `query = box.input(query);` `sel = body.list(titles, sel);`               | +`input`; `list` returns `int` |
-| V2  | tui     | `s.height() - 5` and `cols([11, 0])` hard-coded                                                                     | `r.height()`, `r.width()`                                                   | +2, the same names as `Screen` |
-| V3  | http    | `if (res.status() < 200 \|\| res.status() >= 300) { await res.close(); throw … }` ×3                              | `if (!res.ok()) …`                                                          | +`ok`                         |
-| V4  | http    | `body: Json.encode(x), headers: {'content-type': 'application/json'}`                                               | `json: x`                                                                   | +1 named param (as in Python `requests`) |
-| V5  | http    | `_postForm`: 30 lines of redirect loop, form encoding and headers                                                  | `Http.post(u, body: {'a': 'b'})`                                            | none (a new `body:` type)     |
-| V6  | http    | `int.parse(res.header('content-length') ?? '0')`                                                                    | `res.size()` (`int?`); `Console.bar(res.size())` accepts `null`             | +`size`, the same name as `File` |
-| V7  | http    | `Uri.parse(u).pathSegments.lastOrNull ?? 'img'`, `Fs.file(img.url()).name()`                                        | `res.name()` / `visit.name()`: the content-disposition filename, else the last URL segment | +`name`, the same name as `Download`/`Entry` |
-| V8  | http    | `final r = await Http.get(u); if (!r.ok()) …; await (r > f);`, needed because the one-liner saves 404 pages     | `await (Http.get(u) > f)`: piping a non-2xx body throws `HttpException`     | none (a behaviour change)     |
-| V9  | http    | hand-written retry loops in downloaders (scrape already has `retries:`)                                            | `Http.get(u, retries: 2)`; scrape delegates to it                           | +1 named param, reused        |
-| V10 | html    | `.text().trim()` on nearly every scrape. `Elements.text()` concatenates every match (`$('.price').text()` → `"$1$2$3"`) | `text()` is innerText-like (collapsed and trimmed). On `Elements` it reads the **first** match, like `attr()` | none                          |
-| V11 | html    | 40-line `_unescape`                                                                                                 | `Html.parse(s).text()`                                                      | none (works today)            |
-| V12 | json    | `p.$('id').value<num>()?.toInt()`                                                                                   | `value<int>()` (integral numbers read as both `int` and `double`)           | none                          |
-| V13 | json    | `[for (final t in p.$('tags')) t.value<int>()].whereType<int>().toList()`                                           | `p.$('tags').value<List<int>>()`                                            | none                          |
-| V14 | json    | `[for (final u in j.$('data.users')) u.$('name').value<String>() ?? '?']`                                          | `j.$('data.users.*.name').value<List<String?>>()`                           | none (a `*` path segment)     |
-| V15 | shell   | `(await Shell.run(['git', 'rev-parse', 'HEAD']).text()).trim()`                                                    | `await Shell.run([...]).text()`: one trailing newline dropped, as in `$(…)` and execa | none                          |
-| V16 | shell   | `_browse`: 12-line platform switch                                                                                  | `Shell.open(url)`                                                           | +`open`                       |
-| V17 | chrome  | `import 'package:dart_toolkit/html.dart'` next to chrome/scrape, just to call `$` on `page.html()`              | `chrome` and `scrape` re-export `html`                                      | none                          |
-| V18 | chrome  | `eval<List<String>>` always `null`, so a `List<dynamic>` gets cast by hand                                        | `eval<T>` reads with the `Json.value<T>` rules                              | none                          |
-| V19 | cli     | `Opt<String>('out', …)` read as `String?`, then `!` at every use                                                   | `Opt<String>(…, or: 'out')` reads as `String`; `Opt<String?>` as `String?` | none                          |
-
-The surface grows by 7 members (`input`, `width`, `height`, `ok`, `size`, `name`, `open`) and 2
-named parameters (`json`, `retries`), all reusing names that already exist elsewhere (§3 of
-VISION). Everything else is behaviour.
-
-### 7.2 Proof: rawfree after the changes
-
-The TUI and data layer of `example/rawfree.dart` (514 lines today) shrink to roughly this:
+### 15.2 Surface
 
 ```dart
-Future<void> main() => Tui.run((screen) async {
-  final app = App();
-  while (!app.quit) await screen.frame((r) => app.draw(screen, r));
-});
+abstract final class Tui {
+  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color accent = .orange});
+}
+final class App<S> {
+  S state();
+  void go(S state);              // switch state; the next redraw calls screen(state, app)
+  void say(String message);      // status row, until the next say or error
+  void quit();                   // run() returns state()
+}
+final class Screen {
+  Screen(void Function(Region r) draw, {String? title, Map<String, Bind> keys = const {}});
+}
+typedef Bind = (String label, FutureOr<void> Function() action);
 
-final class App {
-  var query = '', searched = '', hits = <Hit>[], sel = 0;
-  Hit? series;
-  var chapters = <Chapter>[], csel = 0, status = 'type a manga title, press enter', quit = false;
-
-  void draw(Screen s, Region r) {
-    final [head, body, line, foot] = r.rows([1, 0, 1, 3]);
-    head.write(series == null ? '✻ rawfree · ↑↓ enter · ctrl+o browser · esc quit'
-                              : '✻ rawfree · enter download · o browser · b back', color: 208);
-    line.write(status, color: 240);
-    if (s.pressed('ctrl+c')) quit = true;
-    if (series case final open?) {
-      csel = body.list([for (final c in chapters) c.title], csel);
-      foot.box(open.title).write('enter downloads the chapter', color: 240);
-      if (s.pressed('enter') && chapters.isNotEmpty) download(chapters[csel]);
-      if (s.pressed('o')) Shell.open(open.url);
-      if (s.pressed('b') || s.pressed('escape')) series = null;
-    } else {
-      query = foot.box('search').input(query);
-      sel = body.list([for (final h in hits) h.title], sel);
-      if (s.pressed('enter') && query != searched) search();
-      else if (s.pressed('enter') && hits.isNotEmpty) openSeries(hits[sel]);
-      if (s.pressed('ctrl+o') && hits.isNotEmpty) Shell.open(hits[sel].url);
-      if (s.pressed('escape')) quit = true;
-    }
-  }
-  // search / openSeries / download: the same async bodies, each ~10 lines shorter (below)
+final class Pick<T> {                       // a list's items and selection
+  Pick([List<T> items = const []]);
+  List<T> items();  int index();  T? selected();          // null when empty
+  Pick<T> set(List<T> items);                             // keeps the selected item if still there, else 0
+  Pick<T> select(int index);                              // clamped
+}
+final class Field {                         // an input's text and cursor
+  Field([String text = '']);
+  String text();  Field set(String text);                 // cursor to the end
 }
 
-Future<Json> api(String path) => Http.get('$base/wp-json/wp/v2/$path', headers: headers, retries: 2).json();
-String title(Json p) => Html.parse(p.$('title.rendered').value<String>() ?? '').text();   // was _unescape + _titleOf
-final tags = p.$('tags').value<List<int>>() ?? [];                                         // was a for + whereType
-final decoded = await Http.post('$base/wp-admin/admin-ajax.php', body: fields).json();    // was _postForm (30 lines)
-for (final (i, u) in images.indexed) {                                                     // was 25 lines
-  final img = await Http.get(u, headers: {...headers, 'referer': '$base/'}, retries: 2);
-  if (img.ok()) await (img > Fs.dir(dir).file('${'${i + 1}'.padLeft(3, '0')}_${img.name()}'));
-  else { failed++; await img.close(); }
+final class Region {
+  int width();  int height();
+  // text
+  Region write(String text, {Color? color, Color? background, Set<Style> style = const {}});
+  Region markdown(String source);
+  // layout: each returns the new area
+  Region box(String title);
+  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
+  Region tabs<T>(Pick<T> tabs, String Function(T tab) label);   // the area below the tab row
+  Region popup(String title, {int width = 40, int height = 10});
+  // widgets: each returns the receiver
+  Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''});
+  Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
+  Region input(Field field, {String hint = ''});
+  Region button(String label, FutureOr<void> Function() action);
+  Region bar(int done, int? total, {String? label});
+  Region spin(String label);
+  Region picture(Image image);
+}
+
+final class Color {
+  static const Color black, red, green, yellow, blue, magenta, cyan, white, gray, orange;
+  const factory Color.index(int index);            // 0–255, else ArgumentError
+  const factory Color.rgb(int r, int g, int b);
+}
+enum Style { bold, dim, italic, underline, reverse }
+```
+
+Public surface is exactly: `Tui`, `App`, `Screen`, `Bind`, `Pick`, `Field`, `Region`, `Color`,
+`Style`. `Screen.frame`, `pressed`, `typed`, and the `ScreenFuture` mirror go away.
+
+### 15.3 Rules
+
+- **The state is the app's own value**, usually a sealed class with one subclass per view, so
+  `screen` is an exhaustive `switch`. Going back is `app.go(previous)`. The previous object still
+  holds its `Pick`/`Field`, so the query, the selection and the focus come back as they were.
+- **`screen` runs on every redraw** and only describes the screen. It never blocks, and widgets
+  never return state.
+- **Redraws are event-driven.** A redraw happens after each input event, after each handler
+  call and when its future settles, and on `go`, `say` and resize. It also runs at most every
+  80 ms while a handler future is pending or a spinner or bar is visible. An idle app uses no
+  CPU. Only changed cells are written.
+- **Keys.** `keys` maps a key name (VISION key names; alternatives are separated by spaces:
+  `'b escape'`) to `(label, action)`. A key goes to the first of these that takes it:
+  1. an open popup;
+  2. the focused widget;
+  3. `Tab`/`Shift+Tab` to move the focus, unless `keys` binds them;
+  4. the `keys` map;
+  5. any other drawn widget that uses the key, drawn order first (so `↑↓` reach the only list
+     while the input has focus);
+  6. unbound `ctrl+c`, which quits.
+- **Widget keys:**
+  - `list`/`table`: `up` `down` `pageup` `pagedown` `home` `end`, the wheel (the list under the
+    pointer), and a click (selects and focuses).
+  - `input`: printable keys, paste, `backspace`/`delete` (by grapheme), `left` `right` `home`
+    `end`.
+  - `tabs`: `left` `right` when focused, and a click.
+  - `button`: `enter`/`space` when focused, and a left click.
+- **Focus** is the widget's `Pick`/`Field` object (a button's is its label), not a frame index,
+  so it survives redraws and state switches. When the focused widget isn't drawn, the first
+  focusable one is focused. A focused list's selection uses the accent; unfocused, it is dim
+  reversed. A focused input shows the hardware cursor.
+- **Handlers** may be sync or async, and every press runs one, even while an earlier run is
+  pending (a download doesn't block adding the next one); the app guards where it must. An `Exception` from a handler shows as
+  `✗ <first line>` in red in the status row, and the app keeps running. An `Error` (a bug) ends
+  `run` and is rethrown, the same rule as `cli`.
+- **Rows.** `title` is the top row, in the accent. The status row is always the bottom row. On
+  the left it shows the error, the `say` message, or the running spinners and bars. On the right
+  it shows the key help (`enter search · ctrl+o browser · esc quit`), with `escape` shown as
+  `esc` and an empty label hidden. When the row is too narrow, the help is cut first.
+- **Console inside the Tui.** While `run` is active, `Console.spin` and `Console.bar` draw in the
+  status row instead of stderr, and several can run at once. `Console.ask`/`confirm`/`choose`
+  open a modal popup over the screen. `Escape` there is EOF: it throws `StdinException`, and a
+  handler that ends with it shows nothing. This adds no new progress or prompt names.
+- **Drawing.** `write` wraps at the region edge, `\n` breaks a line, `\t` expands, controls show
+  as `�`, and text that runs past the last row ends with `…`. `popup` is drawn last, centered.
+  `rows`/`cols`: a size above 0 is fixed, and 0 shares what is left. `bar` lays out like
+  `Console.bar`. `picture` draws half-block cells and scales down to fit.
+- **Colours.** They are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR`
+  drops colours and keeps styles. `LANG=C`/no UTF-8 switches boxes, bars and spinners to ASCII.
+- **Terminal life**, Ctrl-Z, resize repaint, synchronized output, restart, and `StdoutException`
+  stay as in VISION §4.12. A second `Tui.run` while one is active throws `StateError`.
+- **After `quit`**, `run` returns without waiting for pending handlers (futures can't be
+  cancelled). rawfree keeps its `exit(0)`.
+
+### 15.4 rawfree straight port (UI part: ~80 lines instead of ~170; the overhaul is §15.7)
+
+```dart
+typedef Hit = ({String title, String url});
+sealed class Page {}
+final class Search extends Page { final query = Field(); final hits = Pick<Hit>(); var searched = ''; }
+final class Series extends Page {
+  Series(this.back, this.hit);
+  final Search back;  final Hit hit;  final chapters = Pick<Chapter>();
+}
+var _downloads = 0;
+
+Future<void> main() async {
+  try {
+    await Tui.run<Page>(Search(), _screen);
+  } on StdoutException {
+    stderr.writeln('rawfree needs a terminal');
+    exit(1);
+  }
+  exit(0);
+}
+
+Screen _screen(Page page, App<Page> app) => switch (page) {
+  Search s => Screen(title: '✻ rawfree', (r) {
+      final [body, foot] = r.rows([0, 3]);
+      body.list(s.hits, (h) => h.title, empty: 'type a manga title, press enter');
+      foot.box('search').input(s.query);
+    }, keys: {
+      'enter': s.query.text().trim() != s.searched ? ('search', () => _search(s)) : ('open', () => _open(s, app)),
+      'ctrl+o': ('browser', () => _browse(s.hits.selected()?.url, app)),
+      'escape': ('quit', () => _quit(app)),
+    }),
+  Series c => Screen(title: '✻ ${c.hit.title}',
+      (r) => r.list(c.chapters, (ch) => ch.title, empty: 'no chapters'),
+      keys: {
+        'enter': ('download', () => _download(c, app)),
+        'o': ('browser', () => _browse(c.hit.url, app)),
+        'b escape': ('back', () => app.go(c.back)),
+      }),
+};
+
+Future<void> _search(Search s) async {
+  s.searched = s.query.text().trim();
+  s.hits.set(await Console.spin('searching', () => searchManga(s.searched)));
+}
+
+Future<void> _open(Search s, App<Page> app) async {
+  if (s.hits.selected() case final hit?) {
+    final page = Series(s, hit);
+    app.go(page);
+    page.chapters.set(await Console.spin('loading chapters', () => resolveChapters(hit.url)));
+  }
+}
+
+Future<void> _browse(String? url, App<Page> app) async {
+  if (url == null) return;
+  await Shell.open(url);
+  app.say('opened in browser');
+}
+
+Future<void> _quit(App<Page> app) async {
+  if (_downloads == 0 || await Console.confirm('A download is running. Quit?')) app.quit();
+}
+
+Future<void> _download(Series c, App<Page> app) async {
+  final ch = c.chapters.selected();
+  if (ch == null) return;
+  final dir = Fs.dir('downloads/${_safe(c.hit.title)}/${_safe(ch.title)}');
+  final imgs = await Console.spin('finding pages', () => chapterImages(ch.postId));
+  if (imgs.isEmpty) throw Exception('${ch.title}: no images found');
+  final bar = Console.bar(imgs.length, label: '↓ ${ch.title}');
+  var failed = 0;
+  _downloads++;
+  try {
+    for (final (i, u) in imgs.indexed) {
+      final img = await Http.get(u, headers: {..._headers, 'referer': '$_base/'}, retries: 2);
+      final data = img.ok() ? await img.bytes() : const <int>[];
+      if (data.length < 1024) {
+        failed++;                                    // error page or expired-URL stub
+      } else {
+        await dir.file('${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, img)}').write(data);
+      }
+      bar.tick();
+    }
+  } finally {
+    _downloads--;
+    await bar.close();
+  }
+  app.say('✓ ${ch.title} → ${dir.path()}${failed > 0 ? ' · $failed failed, retry the chapter' : ''}');
 }
 ```
 
-Estimate: about 514 lines down to about 260. The whole TUI view drops from about 150 lines to
-about 25. All of `_unescape`, `_postForm`, `_apiGet`, `_browse` and `_drawList`, plus both
-scroll loops, go away.
+The `_apiGet` and `resolveChapters` throws change from `StateError` to `Exception`/`HttpException`,
+so they show in the status row instead of ending the run.
 
-### 7.3 Checked and left alone
+### 15.5 Decisions taken (no backward compat)
 
-| Pattern                                                         | Why it stays                                                                                                                                                            |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| cli: each `Def` named three times (variable, `'name'`, `values:`) | The variable is the typed key, and the string is the user-facing flag. Without codegen or reflection, nothing shorter keeps `ctx(def)` typed.                                |
-| chrome: `final b = await Chrome.launch(); try … finally b.close()` | A `Chrome.run((b) async {…})` would be a second way in. Instead, `close` is guaranteed on Ctrl-C and errors (B7). The `finally` is one line.                                         |
-| http: the same `headers:` map repeated                          | A global default would be shared mutable state, to save one identifier per call.                                                                                       |
-| `await (a \| p > w)` parentheses                                | Dart's precedence. The method form (`a.pipe(p).to(w)`) needs none.                                                                                                       |
-| pool + bar: `final bar = …; Pool.map(…, onResult: (_) => bar.tick()); bar.close()` | Three lines for two independent tools that compose. Merging them would couple the modules.                                                                       |
-| fs: `list(recursive: true).whereType<File>().where(…)`          | Dart's own `Iterable` says it. Globbing stays out (VISION §7).                                                                                                           |
-| `Output.ok()`                                                   | `exitCode() == 0` is already short, unlike the two-sided 2xx range.                                                                                                     |
-| `Region.bar`, `Http.download`, `Elements.texts()`               | Each saves at most one line (`write('$d/$t')`, `Http.get(u) > f`, `.map((e) => e.text())`).                                                                                |
+- `keys:` is rebuilt with the screen, so collection `if` makes bindings (and the help) depend on
+  the state: `if (tab == .add) 'enter': ('add', …)`.
+- `tabs` takes a `Pick<T>` plus a label like `list`, so an enum `Pick(Tab.values)` makes the
+  tab `switch` typed.
+- `go` instead of handlers returning the next state: one way to switch, from sync and async
+  code alike, and every handler stays an arrow.
+- Progress and prompts reuse `Console`, with no `app.spin`/`app.bar`/`app.confirm`. This adds
+  zero names and keeps one vocabulary, and a `Console.bar` is still a `Pipe`
+  (`res | Console.bar(res.size()) > file` works inside the Tui).
+- Widget state lives in objects (`Pick`, `Field`). Drawing is still a function of the state on
+  every redraw, so VISION §7 "retained TUI widgets" stays out: there's no widget tree.
+- `picture(Image)` makes `tui` import `image`. A/B the startup with and without it
+  back to back. If it costs anything, `picture` moves to `image.dart` as a
+  `Region` extension.
+- VISION §4.12, the §3 table row (`tui`) and §7 get rewritten from this section when it's
+  implemented. `test/tui_test.dart` and `test/tui_pty/` get rewritten against it, and
+  `example/rawfree.dart` becomes the §15.7 download manager.
 
-## 8. Charset engine: checked, not adopted
+### 15.6 Old `src/tui.dart` bugs vs the new API
 
-| Encoding                  | `charset` 2.0.1                           | `enough_convert` 1.7.0 |
-| ------------------------- | ----------------------------------------- | ---------------------- |
-| EUC-KR / CP949            | ✗ **wrong text** (`B0 A1` → `뎰`, should be `가`; encoding gives no bytes) | not supported |
-| Shift_JIS, EUC-JP         | ✓                                         | not supported          |
-| GBK (and the GBK range of GB18030) | ✓                                | ✓                      |
-| Big5                      | not supported                             | ✓                      |
-| KOI8-R / windows-1251     | not supported / ✓                         | ✓                      |
-| Malformed input           | Shift_JIS **throws** `FormatException` (rule 7 wants `�`) | `allowInvalid: true` |
-| Chunked (streaming) decode | ✗ `UnsupportedError`                     | not tested             |
-| Speed                     | 2.1 MiB of Shift_JIS in 36 ms (UTF-8: 9 ms) | not measured         |
-| Maintenance, licence      | last published 2023-06; Apache-2.0        | 2026-09-30; MPL-2.0; SDK ≥ 3.11 |
+- Gone with the redesign:
+  - `:501` the input edits while undrawn: a `Field` only edits when routed to.
+  - `:269,148` the focus jumps: focus is object identity.
+  - `:470` two lists scroll on one key: keys are routed by focus.
+  - `:282` the 60 fps full scan: redraws are event-driven.
+- Still to fix in the new code (each gets a regression test):
+  - [BUG-M] `:234` a split `ESC [` resolves to `alt+[` after 30 ms; hold it up to 1000 ms for
+    the CSI to complete.
+  - [BUG-L] `:385` `write('a\n')` draws a trailing empty row.
+  - [BUG-L] `:526` backspace leaves a dangling `ZWJ` (`1F468 200D 1F469` → `200D`); use
+    grapheme clusters.
+  - [SPEC-M] `:20` a concurrent `Tui.run` must throw `StateError`.
+  - [PERF-L] `_leave` cancels sequentially; use `Future.wait`.
 
-Fixtures were generated with Python's codecs (`scratchpad/cs/`). Only GBK-range characters were
-tested for GB18030, not its 4-byte sequences.
+### 15.7 Plan: rawfree overhaul (the example that proves §15)
 
-**Verdict:**
-- Don't adopt `charset`. It is the only package with Japanese and Korean, its Korean (the VISION
-  scrape example's language) is broken, and it is unmaintained.
-- Don't adopt `enough_convert` either: it lacks Japanese and Korean, so we would need both
-  packages and still miss EUC-KR.
+§15.4 is only the straight port. The finished `example/rawfree.dart` is a download manager that
+uses every part of §15. Any workaround it needs is a gap in §15, fixed in the library and not in
+the example.
 
-**Decision:** an in-house decoder in `http` that follows the WHATWG Encoding Standard's decoder
-algorithms (the ones browsers use) for EUC-KR, Shift_JIS, EUC-JP, GBK/GB18030 and Big5.
-- **Data:** the index tables from encoding.spec.whatwg.org, checked in as one compact `const`
-  string per encoding. This is data, not codegen; check the index files' licence when importing
-  them. Each table is parsed on first use, so there is no startup cost.
-- **Size:** about 80 k code points in total, a few hundred KB of source.
-- **Behaviour:** malformed bytes become `�`, and the decoder works chunk by chunk so it streams.
-- **Tests:** Python-generated fixtures per encoding, including 4-byte GB18030 and CP949
-  extensions.
-- **Scope:** `windows-125x`/`KOI8`, if ever needed, are 128-entry tables in the same file.
-- **Swap:** the decoder is behind `Response.text()`, so it can be swapped later.
+**Features:**
+
+| Feature             | Behaviour                                                                                                                                                                          | Uses                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Views               | `Search` → `Series` (chapters) → back; `Queue` from any view on `ctrl+d`, and back returns where you were                                                                          | sealed states, `app.go`, `title:`                     |
+| Download queue      | `enter` on a chapter queues it and never refuses; `a` queues every chapter not yet on disk; a chapter already queued or downloaded isn't queued again                                | `Pick<Job>`, an in-app worker                         |
+| Worker              | one chapter at a time, 4 pages in parallel; it starts when the queue gets a job and idles when the queue is empty                                                                  | plain `Future`s, no `Pool` (isolates are overkill)    |
+| Progress            | the status row shows the live `Console.bar` (`↓ ch.12 ━━━╸── 14/40 pages  1.8 MB/s`) and `⇣ 2/5 chapters`; the `Queue` view has a table (chapter · status · pages) and a `bar` for the active job | `Console.bar` in the Tui, `table`, `Region.bar`       |
+| On disk             | chapters already in `downloads/<series>/<chapter>/` show `✓` in the chapter list and are skipped                                                                                   | `Fs.dir(…).exists()` when the chapters load           |
+| Failures            | a page that fails (non-2xx, or a <1 KB stub) counts as failed, the job ends `failed (n)`, and `r` in `Queue` re-queues only the missing pages                                       | `Job.missing`, the status row `✗`                     |
+| Queue editing       | `delete` removes a queued job (the active one can't be cancelled, since futures can't be); `c` clears the finished jobs                                                            | collection-`if` `keys:`                               |
+| Quit                | `escape`/`ctrl+c` quits at once when the queue is empty, and otherwise asks `N downloads left. Quit?`                                                                              | `Console.confirm` popup                               |
+| Errors              | `_apiGet`/`resolveChapters` throw `HttpException`/`FormatException`, never `StateError`, so they show in the status row                                                            | handler `Exception` rule                              |
+
+**Model:**
+
+```dart
+enum JobStatus { queued, active, done, failed }
+final class Job {
+  Job(this.series, this.chapter);
+  final Hit series;  final Chapter chapter;
+  var status = JobStatus.queued, done = 0, total = 0;
+  final missing = <int>[];                 // page indexes to (re)fetch
+}
+final queue = Pick<Job>();                 // shared by every view
+```
+
+**Steps.** Each step ends green before the next starts.
+
+1. **Library.** Implement §15.2/§15.3 in `lib/src/tui.dart`, and the Console-in-Tui routing in
+   `console.dart` through a session hook in `terminal.dart`. Fix the §15.6 carry-overs.
+2. **Tests.** Write a pty test per member and rule in `test/tui_test.dart` and `test/tui_pty/`:
+   key routing order, focus surviving `go`, `keys:` help, a handler `Exception` going to the
+   status row, `Console.bar`/`confirm` inside `run`, idle without redraws, and a second `run`
+   throwing `StateError`.
+3. **rawfree.** Rewrite it as above. The UI part's target is ≤ 150 lines with the queue (today
+   it's ~170 lines without one), and the API part stays as it is apart from the exception types.
+4. **Verify by running.** Drive rawfree in a pty (`test/tui_pty/drive.py`): search, open a
+   series, queue 3 chapters with `a`, watch the status row and the `Queue` table advance, kill
+   the network for one page, check `failed (1)` and that `r` refetches only that page, and check
+   that quitting with jobs left asks first. Check the result by screen state, and the files in
+   `downloads/`.
+5. **Docs.** Rewrite VISION §4.12, its §3 row and §7 from §15; update the README/CHANGELOG
+   table row; delete §15.1–§15.6 here once they're done.
+
+## 16. Charset (`lib/src/charset.dart`, 2559 lines)
+
+- [PERF-M] `charset.dart:65,215` `sublist` + `[...tail,...chunk]` per `add()` O(n²) streaming; `IncrementalDecoder` not chunk-friendly as advertised.
+- [PERF-M] `charset.dart:438` `GB18030 queue.insert(i-1)` shifts tail per error byte — error-heavy CJK quadratic. Use index pushback.
+- OK: `content-type → meta → UTF-8`, unknown → UTF-8, bad bytes `�`, Latin-1/CJK coverage; single-shot `decode` tolerable.
+
+## 17. Perf summary (violates §6 constant-memory / throughput)
+
+1. `gunzip` buffers all + double-decompress — OOM on large (archive).
+2. `Bar` throttle dead — O(ticks) syscalls (console).
+3. `chmod/touch` fork per entry — O(n) processes (fs/archive).
+4. Charset per-chunk copies + `insert` — O(n²) (charset).
+5. Scrape 20 ms poll + 50 ms drain; chrome `waitIdle` 50 ms poll, download +100 ms; tui full-screen 60 fps scan (gone with §15).
+6. `tgz` 3× hold; `stderrBuf` unbounded; `Map []` O(n²); `_FutureReader` per-chunk hop; `image` copy.

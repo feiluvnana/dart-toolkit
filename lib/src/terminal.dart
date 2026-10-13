@@ -12,11 +12,57 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
-/// One broadcast stdin for the process, created lazily and never closed by
-/// us. Every `Tui.run` (and every prompt) listens and cancels only its own
-/// subscription, so a second `run` in one process works (pausing is fine).
-Stream<List<int>> sharedStdin() => _shared ??= io.stdin.asBroadcastStream();
-Stream<List<int>>? _shared;
+/// Terminal input for `Tui.run` and the prompts, as a broadcast stream that
+/// can be listened to again after every listener has cancelled — and that
+/// lets the process exit once nobody listens.
+///
+/// `dart:io` allows one listener on stdin per process, and that listener
+/// keeps the process alive even when paused. So on a POSIX terminal the
+/// bytes come from a child `cat -u /dev/tty`, started on the first listen
+/// and killed on the last cancel. The child ignores SIGINT, so Ctrl-C still
+/// reaches us (as a key, or as the prompt's exit). Piped stdin, Windows, or
+/// a missing `cat` fall back to stdin itself, which ends at EOF.
+Stream<List<int>> sharedStdin() => _input.stream;
+
+final _input = StreamController<List<int>>.broadcast(
+  onListen: _startInput,
+  onCancel: _stopInput,
+);
+io.Process? _tty;
+StreamSubscription<List<int>>? _ttySub;
+Stream<List<int>>? _stdinFallback;
+var _session = 0;
+
+Future<void> _startInput() async {
+  final session = ++_session;
+  if (!io.Platform.isWindows && io.stdin.hasTerminal) {
+    try {
+      final tty = await io.Process.start(
+          '/bin/sh', ['-c', 'trap "" INT; exec cat -u /dev/tty']);
+      unawaited(tty.stderr.drain<void>());
+      if (session != _session) {
+        tty.kill(); // cancelled (and maybe restarted) while starting
+        return;
+      }
+      _tty = tty;
+      _ttySub = tty.stdout.listen(_input.add, onError: _input.addError);
+      return;
+    } catch (_) {
+      // No sh/cat or no /dev/tty: fall through to stdin itself.
+    }
+  }
+  _ttySub = (_stdinFallback ??= io.stdin.asBroadcastStream())
+      .listen(_input.add, onError: _input.addError);
+}
+
+Future<void> _stopInput() async {
+  _session++;
+  final sub = _ttySub;
+  _ttySub = null;
+  _tty?.kill();
+  _tty = null;
+  await sub?.cancel();
+}
 
 /// A decoded input event.
 sealed class TermEvent {}
@@ -433,11 +479,12 @@ bool isZeroWidth(int rune) =>
 /// Cells taken by [rune] on screen: 2 for wide CJK and emoji, else 1
 /// (zero-width runes are answered by [isZeroWidth], not here).
 int cellWidth(int rune) {
-  // Emoji blocks that terminals render wide (all above U+1100, so they
-  // cannot live in the fast path below).
-  if (rune >= 0x2600 && rune <= 0x27bf) return 2;
-  if (rune >= 0x2b00 && rune <= 0x2bff) return 2;
   if (rune < 0x1100) return 1;
+  // Symbols (U+2000–2BFF) are narrow — `✓ ✗ ✻ ❯ ★ ⚠ ←` — except the ones
+  // with emoji presentation, which terminals draw two cells wide.
+  if (rune >= 0x2000 && rune <= 0x2bff) {
+    return _wideSymbols.contains(rune) ? 2 : 1;
+  }
   if (rune <= 0x115f) return 2;
   if (rune == 0x2329 || rune == 0x232a) return 2;
   if (rune >= 0x2e80 && rune <= 0xa4cf && rune != 0x303f) return 2;
@@ -447,7 +494,7 @@ int cellWidth(int rune) {
   if (rune >= 0xfe30 && rune <= 0xfe4f) return 2;
   if (rune >= 0xff00 && rune <= 0xff60) return 2;
   if (rune >= 0xffe0 && rune <= 0xffe6) return 2;
-  if (rune >= 0x1f000 && rune <= 0x1faff) return 2;
+  if (rune >= 0x1f000 && rune <= 0x1faff) return _wideEmoji(rune) ? 2 : 1;
   if (rune >= 0x20000 && rune <= 0x3fffd) return 2;
   return 1;
 }
@@ -482,3 +529,28 @@ String truncateWidth(String text, int width) {
   buf.write('…');
   return buf.toString();
 }
+
+/// BMP symbols with Emoji_Presentation (Unicode 15): drawn two cells wide.
+const _wideSymbols = {
+  0x231a, 0x231b, 0x2329, 0x232a, 0x23e9, 0x23ea, 0x23eb, 0x23ec, 0x23f0, 0x23f3, //
+  0x25fd, 0x25fe, 0x2614, 0x2615, 0x2648, 0x2649, 0x264a, 0x264b,
+  0x264c, 0x264d, 0x264e, 0x264f, 0x2650, 0x2651, 0x2652, 0x2653,
+  0x267f, 0x2693, 0x26a1, 0x26aa, 0x26ab, 0x26bd, 0x26be, 0x26c4,
+  0x26c5, 0x26ce, 0x26d4, 0x26ea, 0x26f2, 0x26f3, 0x26f5, 0x26fa,
+  0x26fd, 0x2705, 0x270a, 0x270b, 0x2728, 0x274c, 0x274e, 0x2753,
+  0x2754, 0x2755, 0x2757, 0x2795, 0x2796, 0x2797, 0x27b0, 0x27bf,
+  0x2b1b, 0x2b1c, 0x2b50, 0x2b55,
+};
+
+/// U+1F000–1FAFF: the emoji blocks are wide; enclosed alphanumerics,
+/// ornaments, alchemy and arrows are narrow.
+bool _wideEmoji(int rune) =>
+    rune == 0x1f004 ||
+    rune == 0x1f0cf ||
+    rune == 0x1f18e ||
+    (rune >= 0x1f191 && rune <= 0x1f19a) ||
+    (rune >= 0x1f200 && rune <= 0x1f64f) ||
+    (rune >= 0x1f680 && rune <= 0x1f6ff) ||
+    (rune >= 0x1f7e0 && rune <= 0x1f7eb) ||
+    (rune >= 0x1f90c && rune <= 0x1f9ff) ||
+    (rune >= 0x1fa70 && rune <= 0x1faff);
