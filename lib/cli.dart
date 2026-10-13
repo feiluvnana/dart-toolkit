@@ -211,7 +211,7 @@ final class Multi<T> extends Def<List<T>> {
   Type get _valueType => T;
 
   @override
-  Object? _absent() => List<T>.of(_or);
+  Object? _absent() => List<T>.unmodifiable(List<T>.of(_or));
 
   @override
   Object? _parseOne(String raw, String what) =>
@@ -219,17 +219,21 @@ final class Multi<T> extends Def<List<T>> {
 
   @override
   Object? _parseMany(List<String> raws, String what) =>
-      [for (final raw in raws) _readTyped<T>(_name, raw, what, _parse)];
+      List<T>.unmodifiable([for (final raw in raws) _readTyped<T>(_name, raw, what, _parse)]);
 
   @override
   Object? _mergeMany(List<String> parentRaws, Object? childValue) {
     final parent =
         parentRaws.map((raw) => _readTyped<T>(_name, raw, _what, _parse));
     final child = (childValue as List?) ?? const [];
-    return List<T>.of([...parent, ...child.cast<T>()]);
+    return List<T>.unmodifiable(List<T>.of([...parent, ...child.cast<T>()]));
   }
 
-  String get _what => 'option "--$_name"';
+  String get _what {
+    final s = _short;
+    if (s != null) return 'option "--$_name"/"-$s"';
+    return 'option "--$_name"';
+  }
 }
 
 /// A positional argument definition, in declaration order, read back as `T`
@@ -395,7 +399,7 @@ final class Command {
     try {
       parsed = _parseCommand(this, argv, const [], deepest);
     } on FormatException catch (e) {
-      io.stderr.writeln(e.message);
+      io.stderr.writeln(_oneLine(e.message));
       io.stderr.writeln('Run "${deepest.name} --help" for usage.');
       return 64;
     }
@@ -409,7 +413,7 @@ final class Command {
       await Future.sync(() => h(ctx));
       return 0;
     } on UsageException catch (e) {
-      io.stderr.writeln(e.message);
+      io.stderr.writeln(_oneLine(e.message));
       io.stderr.writeln('Run "${parsed.fullName} --help" for usage.');
       return 64;
     } on Exception catch (e) {
@@ -554,14 +558,14 @@ String? _closest(String typed, Iterable<String> candidates) {
   String? best;
   var bestD = 1 << 30;
   for (final c in candidates) {
-    final d = c.startsWith(typed) ? 0 : _levenshtein(typed, c);
+    final d = _levenshtein(typed, c);
     if (d < bestD) {
       best = c;
       bestD = d;
     }
   }
   if (best == null) return null;
-  if (bestD <= max(2, typed.length ~/ 3) && bestD < typed.length) return best;
+  if (bestD <= max(2, typed.length ~/ 3)) return best;
   return null;
 }
 
@@ -614,23 +618,29 @@ Duration? _parseDuration(String raw) {
   var s = raw.trim();
   if (s.isEmpty) return null;
   var negative = false;
-  if (s.startsWith('-')) {
-    negative = true;
-    s = s.substring(1);
+  if (s.startsWith('-') || s.startsWith('+')) {
+    negative = s.startsWith('-');
+    s = s.substring(1).trim();
+    if (s.isEmpty) return null;
   }
+  // Inner spaces allowed: "1h 30m".
+  final compact = s.replaceAll(RegExp(r'\s+'), '');
+  if (compact.isEmpty) return null;
   Duration? parsed;
-  if (RegExp(r'^\d+(\.\d+)?$').hasMatch(s)) {
-    final n = num.tryParse(s);
+  if (RegExp(r'^\d+(\.\d+)?$').hasMatch(compact)) {
+    final n = num.tryParse(compact);
     if (n != null) parsed = Duration(milliseconds: (n * 1000).round());
   } else {
-    final m = RegExp(r'(\d+(?:\.\d+)?)(ms|h|m|s|d)').allMatches(s);
+    final m =
+        RegExp(r'(\d+(?:\.\d+)?)(ms|h|m|s|d)', caseSensitive: false)
+            .allMatches(compact);
     if (m.isNotEmpty) {
       var covered = 0;
       var ms = 0.0;
       for (final x in m) {
         covered += (x.group(0) ?? '').length;
         final n = num.parse(x.group(1) ?? '0');
-        switch (x.group(2)) {
+        switch ((x.group(2) ?? '').toLowerCase()) {
           case 'd':
             ms += n * 86400000;
           case 'h':
@@ -643,7 +653,7 @@ Duration? _parseDuration(String raw) {
             ms += n;
         }
       }
-      if (covered == s.length) parsed = Duration(milliseconds: ms.round());
+      if (covered == compact.length) parsed = Duration(milliseconds: ms.round());
     }
   }
   if (parsed == null) return null;
@@ -740,13 +750,15 @@ _Parsed _mergeParent(
   for (final e in multiRaws.entries) {
     merged[e.key] = e.key._mergeMany(e.value, merged[e.key]);
   }
-  // Required checks run at every level, parent included.
-  for (final v in root._values) {
-    if (v._isRequired && !merged.containsKey(v)) {
-      if (v._isArg) {
-        throw FormatException('Missing argument <${v._name}>.');
+  // Required checks run at every level, parent included (skipped for --help).
+  if (!child.help) {
+    for (final v in root._values) {
+      if (v._isRequired && !merged.containsKey(v)) {
+        if (v._isArg) {
+          throw FormatException('Missing argument <${v._name}>.');
+        }
+        throw FormatException('Missing option --${v._name}.');
       }
-      throw FormatException('Missing option --${v._name}.');
     }
   }
   for (final v in root._values) {
@@ -799,6 +811,31 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
 
   String longWhat(String key) => 'option "--$key"';
 
+  bool isHelpToken(String t) {
+    if (t == '--help' || t.startsWith('--help=')) return true;
+    if (!helpShortTaken) {
+      if (t == '-h' || t.startsWith('-h=')) return true;
+      // Group containing reserved -h (e.g. -vh): help, handled in group loop.
+      // Here (valued-value position) a bare -h group means help.
+      if (t.startsWith('-') &&
+          !t.startsWith('--') &&
+          t.contains('h') &&
+          t.length > 1) {
+        // Only when h is help (reserved) — group loop would set help.
+        // Treat as help, not a value.
+        var onlyHelp = true;
+        for (var k = 1; k < t.length; k++) {
+          if (t[k] != 'h') {
+            onlyHelp = false;
+            break;
+          }
+        }
+        if (onlyHelp) return true;
+      }
+    }
+    return false;
+  }
+
   Iterable<String> suggestPool() sync* {
     for (final entry in byLong.entries) {
       if (!entry.value._isArg) yield entry.key;
@@ -815,8 +852,16 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
     final isLong = token.startsWith('--');
     if (!isLong && !_isShortish(token)) {
       // Positional: subcommand dispatch, help, or an Arg value.
-      if (rest.isEmpty && root._commands.isNotEmpty) {
-        if (token == 'help' && _argDefsOf(root).isEmpty) {
+      // A command named `help` dispatches like any subcommand (not help).
+      final helpSub = _findSub(root._commands, 'help');
+      final isHelpName = token == 'help' && helpSub == null;
+      // Parent Args bind first: while Args are still unbound, a positional
+      // binds to the next Arg instead of dispatching (so `[go]` with Arg(go)
+      // is arg=go, not a dispatch + Missing argument).
+      final argDefs = _argDefsOf(root);
+      final argsUnbound = argDefs.isNotEmpty && rest.length < argDefs.length;
+      if (rest.isEmpty && root._commands.isNotEmpty && !argsUnbound) {
+        if (isHelpName && argDefs.isEmpty) {
           return _helpParsed(root, chain, argv.sublist(i + 1));
         }
         final sub = _findSub(root._commands, token);
@@ -827,7 +872,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           return _mergeParent(root, values, multiRaws, child.withHelp(help));
         }
         // No subcommand named and no Arg defs: unknown command.
-        if (_argDefsOf(root).isEmpty) {
+        if (argDefs.isEmpty) {
           final guess = _closest(token, [
             for (final c in root._commands) ...[c._name, ...c._aliases]
           ]);
@@ -835,6 +880,12 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
             'Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}.',
           );
         }
+      } else if (isHelpName &&
+          rest.isEmpty &&
+          root._commands.isEmpty &&
+          argDefs.isEmpty) {
+        // Leaf `help` shows help, not the handler.
+        return _Parsed(root, chain, values, const [], true);
       }
       rest.add(token);
       i++;
@@ -872,8 +923,11 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         if (inline != null) {
           putMulti(def, inline);
           i++;
-        } else if (i + 1 < argv.length) {
+        } else if (i + 1 < argv.length && !isHelpToken(argv[i + 1])) {
           putMulti(def, argv[i + 1]);
+          i += 2;
+        } else if (i + 1 < argv.length && isHelpToken(argv[i + 1])) {
+          help = true;
           i += 2;
         } else {
           throw FormatException('Option --$key needs a value.');
@@ -883,8 +937,11 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         if (inline != null) {
           putSingle(def, def._parseOne(inline, what));
           i++;
-        } else if (i + 1 < argv.length) {
+        } else if (i + 1 < argv.length && !isHelpToken(argv[i + 1])) {
           putSingle(def, def._parseOne(argv[i + 1], what));
+          i += 2;
+        } else if (i + 1 < argv.length && isHelpToken(argv[i + 1])) {
+          help = true;
           i += 2;
         } else {
           throw FormatException('Option --$key needs a value.');
@@ -910,14 +967,20 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
     }
     for (var k = 1; k < token.length; k++) {
       final c = token[k];
-      // A reserved -h inside a group is help, not "Unknown option -h".
+      // A reserved -h inside a group is help (consume the whole token).
       if (c == 'h' && !helpShortTaken) {
         help = true;
-        continue;
+        break;
       }
       final def = byShort[c];
       if (def == null) {
-        throw FormatException('Unknown option -$c in "-${token.substring(1)}".');
+        final guess = _closest(
+          c,
+          byShort.keys,
+        );
+        throw FormatException(
+          'Unknown option -$c in "-${token.substring(1)}"${guess == null ? '' : '. Did you mean "-$guess"?'}',
+        );
       }
       if (def is Flag) {
         if (k + 1 < token.length && token[k + 1] == '=') {
@@ -929,14 +992,19 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         continue;
       }
       // Valued short consumes the remainder (after one optional '=').
+      // `-n=` means empty string (like `--n=`), not absent.
+      final hadEquals = k + 1 < token.length && token[k + 1] == '=';
       var attached = token.substring(k + 1);
-      if (attached.startsWith('=')) attached = attached.substring(1);
+      if (hadEquals) attached = attached.substring(1);
       final what = 'option "-$c"';
       if (def._isMulti) {
-        if (attached.isNotEmpty) {
+        if (attached.isNotEmpty || hadEquals) {
           putMulti(def, attached);
-        } else if (i + 1 < argv.length) {
+        } else if (i + 1 < argv.length && !isHelpToken(argv[i + 1])) {
           putMulti(def, argv[i + 1]);
+          i++;
+        } else if (i + 1 < argv.length && isHelpToken(argv[i + 1])) {
+          help = true;
           i++;
         } else {
           throw FormatException('Option -$c needs a value.');
@@ -944,10 +1012,13 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         break;
       }
       if (!def._isArg) {
-        if (attached.isNotEmpty) {
+        if (attached.isNotEmpty || hadEquals) {
           putSingle(def, def._parseOne(attached, what));
-        } else if (i + 1 < argv.length) {
+        } else if (i + 1 < argv.length && !isHelpToken(argv[i + 1])) {
           putSingle(def, def._parseOne(argv[i + 1], what));
+          i++;
+        } else if (i + 1 < argv.length && isHelpToken(argv[i + 1])) {
+          help = true;
           i++;
         } else {
           throw FormatException('Option -$c needs a value.');
@@ -961,31 +1032,36 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
   for (final e in multiRaws.entries) {
     values[e.key] = e.key._parseMany(e.value, 'option "--${e.key._name}"');
   }
-  // Bind positionals to Arg defs.
+  // Bind positionals to Arg defs (skipped for --help: help wins over
+  // missing/unexpected).
   final args = _argDefsOf(root);
-  if (args.isNotEmpty) {
-    var at = 0;
-    for (final def in args) {
-      if (at < rest.length) {
-        values[def] = def._parseOne(rest[at++], 'argument <${def._name}>');
-      } else if (def._isRequired) {
-        throw FormatException('Missing argument <${def._name}>.');
-      } else {
-        // Optional and absent: a default reads back; a nullable type reads
-        // null through the missing key.
-        final absent = def._absent();
-        if (absent != null) values[def] = absent;
+  if (!help) {
+    if (args.isNotEmpty) {
+      var at = 0;
+      for (final def in args) {
+        if (at < rest.length) {
+          values[def] = def._parseOne(rest[at++], 'argument <${def._name}>');
+        } else if (def._isRequired) {
+          throw FormatException('Missing argument <${def._name}>.');
+        } else {
+          // Optional and absent: a default reads back; a nullable type reads
+          // null through the missing key.
+          final absent = def._absent();
+          if (absent != null) values[def] = absent;
+        }
       }
+      if (at < rest.length) {
+        throw FormatException('Unexpected argument "${rest[at]}".');
+      }
+      rest.clear();
     }
-    if (at < rest.length) {
-      throw FormatException('Unexpected argument "${rest[at]}".');
-    }
-    rest.clear();
   }
-  // Required valued checks (before the handler runs).
-  for (final v in root._values) {
-    if (!v._isArg && v._isRequired && !values.containsKey(v)) {
-      throw FormatException('Missing option --${v._name}.');
+  // Required valued checks (before the handler runs; skipped for --help).
+  if (!help) {
+    for (final v in root._values) {
+      if (!v._isArg && v._isRequired && !values.containsKey(v)) {
+        throw FormatException('Missing option --${v._name}.');
+      }
     }
   }
   // Fill absent multi defaults so ctx() never misses.
