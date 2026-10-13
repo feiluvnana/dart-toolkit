@@ -905,7 +905,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
       if (def == null) {
         if (key.startsWith('no-') && inline == null) {
           final base = byLong[key.substring(3)];
-          if (base is Flag && base._or) {
+          if (base is Flag) {
             putSingle(base, false);
             i++;
             continue;

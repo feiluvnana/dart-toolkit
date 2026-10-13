@@ -475,6 +475,7 @@ final class _Crawl<T> {
       contentType = res.header('content-type');
       body = await res.bytes();
       finalUrl = res.url();
+      _seen.add(finalUrl);
     } finally {
       // bytes() releases the client by itself; close() is a no-op then.
       await res.close();
@@ -513,8 +514,10 @@ final class _Crawl<T> {
           .timeout(timeout ?? const Duration(seconds: 30));
       final body = utf8.encode(content ?? '');
       final code = (status ?? 0).toInt();
+      final finalUrl = await page.url();
+      _seen.add(finalUrl);
       return _Fetched(
-        Visit._tab(await page.url(), code == 0 ? 200 : code, body, this, page),
+        Visit._tab(finalUrl, code == 0 ? 200 : code, body, this, page),
         code == 0 ? 200 : code,
         null,
       );

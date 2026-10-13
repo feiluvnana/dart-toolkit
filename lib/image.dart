@@ -14,6 +14,7 @@
 /// CPU-bound batches go through [Pool]. Everything else is private.
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -71,9 +72,15 @@ final class Image {
         'must be >= 1',
       );
     }
-    return Image._(
-      img.copyResize(_inner, width: width, height: height),
-    );
+    final res = img.copyResize(_inner, width: width, height: height);
+    if (res.width < 1 || res.height < 1) {
+      return Image._(img.copyResize(
+        _inner,
+        width: width ?? math.max(1, (height! * (_inner.width / _inner.height)).round()),
+        height: height ?? math.max(1, (width! * (_inner.height / _inner.width)).round()),
+      ));
+    }
+    return Image._(res);
   }
 
   /// A cut-out copy. A bad size is an [ArgumentError]; a region leaving
@@ -196,7 +203,11 @@ extension RegionPicture on Region {
     final inner = image._inner;
     return drawPicture(this, inner.width, inner.height, (x, y) {
       final p = inner.getPixel(x, y);
-      return (p.r.toInt(), p.g.toInt(), p.b.toInt());
+      return (
+        (p.rNormalized * 255).round().clamp(0, 255),
+        (p.gNormalized * 255).round().clamp(0, 255),
+        (p.bNormalized * 255).round().clamp(0, 255),
+      );
     });
   }
 }

@@ -84,6 +84,10 @@ final class Hasher implements Writer, Pipe {
     if (_poisoned) {
       throw StateError('hash saw only part of a failed run; hex is stale');
     }
+    if (_running) {
+      throw StateError(
+          'hash is in flight; wait for the stream to finish before calling hex()');
+    }
     if (!_done) {
       _in.close();
       _done = true;

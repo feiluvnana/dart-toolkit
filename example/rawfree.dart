@@ -129,13 +129,7 @@ Screen _screen(Page page, App<Page> app) {
       keys: {
         if (queue.selected()?.status == JobStatus.failed) 'r': ('retry', () => _retry(queue.selected()!, app)),
         if (queue.selected()?.status == JobStatus.queued) 'delete': ('remove', () => _remove(queue.selected()!)),
-        'c': (
-          'clear done',
-          () => queue.set([
-            for (final j in queue.items())
-              if (j.status != JobStatus.done) j,
-          ]),
-        ),
+        'c': ('clear done', () => queue.removeWhere((j) => j.status == JobStatus.done)),
         'b escape': ('back', () => app.go(q.back)),
         ...keys,
       },
@@ -189,7 +183,7 @@ void _enqueue(Series c, List<Chapter> chapters, App<Page> app) {
     for (final ch in chapters)
       if (!c.onDisk.contains(ch.title) && _job(ch) == null) Job(c.hit, ch),
   ];
-  queue.set([...queue.items(), ...add]);
+  queue.addAll(add);
   app.say('queued ${add.length} chapter(s)');
   _work(app);
 }
@@ -199,10 +193,7 @@ void _retry(Job job, App<Page> app) {
   _work(app);
 }
 
-void _remove(Job job) => queue.set([
-  for (final j in queue.items())
-    if (j != job) j,
-]);
+void _remove(Job job) => queue.remove(job);
 
 /// The worker: one chapter at a time, 4 pages in parallel; idles when the
 /// queue has nothing queued.

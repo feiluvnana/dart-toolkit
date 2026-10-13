@@ -830,8 +830,11 @@ final class Bar extends _Live implements Pipe, Closeable {
     final frac = total == null || total <= 0
         ? 0.0
         : (_done / total).clamp(0.0, 1.0);
-    final filled = (frac * width).round().clamp(0, width);
-    return '█' * filled + '░' * (width - filled);
+    final cells = frac * width;
+    final full = cells.floor();
+    final half = cells - full >= 0.5 && full < width;
+    const on = '━', mid = '╸', off = '─';
+    return '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
   }
 
   static String _fmtRate(double bytesPerSec) {

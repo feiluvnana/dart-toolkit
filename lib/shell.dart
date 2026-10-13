@@ -314,17 +314,33 @@ final class _Filter implements Pipe {
   /// an upstream `StateError('broken pipe')` is a real error, not early-close.
   static bool _isEpipe(Object e) {
     if (e is io.SocketException) {
-      if (e.osError?.errorCode == 32) return true;
+      final code = e.osError?.errorCode;
+      if (code == 32 || code == 109) return true;
       final m = e.message.toLowerCase();
-      if (m.contains('broken pipe') || m.contains('epipe')) return true;
+      if (m.contains('broken pipe') ||
+          m.contains('epipe') ||
+          m.contains('pipe has been ended') ||
+          m.contains('pipe is being closed')) {
+        return true;
+      }
       final os = e.osError?.message.toLowerCase() ?? '';
-      if (os.contains('broken pipe') || os.contains('epipe')) return true;
+      if (os.contains('broken pipe') ||
+          os.contains('epipe') ||
+          os.contains('pipe has been ended') ||
+          os.contains('pipe is being closed')) {
+        return true;
+      }
       return false;
     }
     if (e is io.OSError) {
-      if (e.errorCode == 32) return true;
+      if (e.errorCode == 32 || e.errorCode == 109) return true;
       final m = e.message.toLowerCase();
-      if (m.contains('broken pipe') || m.contains('epipe')) return true;
+      if (m.contains('broken pipe') ||
+          m.contains('epipe') ||
+          m.contains('pipe has been ended') ||
+          m.contains('pipe is being closed')) {
+        return true;
+      }
       return false;
     }
     return false;

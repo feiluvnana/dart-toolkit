@@ -138,8 +138,8 @@ final class Json extends Iterable<Json> {
         c = c[seg];
       } else if (c is List) {
         if (!_isIndex(seg)) return null;
-        final i = int.parse(seg);
-        if (i < 0 || i >= c.length) return null;
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= c.length) return null;
         c = c[i];
       } else {
         return null;

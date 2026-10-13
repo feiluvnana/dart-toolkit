@@ -237,6 +237,23 @@ void main() {
       p.select(3);
       expect(p.index(), 0);
     });
+
+    test('add, addAll, remove, removeWhere mutate and preserve selection', () {
+      final p = Pick<String>(['a', 'b']);
+      p.add('c');
+      expect(p.items(), ['a', 'b', 'c']);
+      p.addAll(['d', 'e']);
+      expect(p.items(), ['a', 'b', 'c', 'd', 'e']);
+      p.select(2); // 'c'
+      p.remove('b');
+      expect(p.items(), ['a', 'c', 'd', 'e']);
+      expect(p.selected(), 'c');
+      expect(p.index(), 1);
+      p.removeWhere((x) => x == 'a' || x == 'd');
+      expect(p.items(), ['c', 'e']);
+      expect(p.selected(), 'c');
+      expect(p.index(), 0);
+    });
   });
 
   group('Field', () {
@@ -266,12 +283,18 @@ void main() {
 
   group('Tui.run guard', () {
     test('a second concurrent run throws StateError', () async {
-      // No terminal here, so the first run fails fast with StdoutException
-      // while still holding the active flag for the second call (which
-      // throws synchronously).
-      final first = Tui.run<int>(0, (s, app) => Screen((r) {}));
+      // If stdout is not a terminal, the first run throws StdoutException.
+      // If a terminal is present, quit immediately so the test terminates cleanly.
+      final first = Tui.run<int>(0, (s, app) {
+        app.quit();
+        return Screen((r) {});
+      });
       expect(() => Tui.run<int>(0, (s, app) => Screen((r) {})), throwsStateError);
-      await expectLater(first, throwsA(isA<StdoutException>()));
+      try {
+        await first;
+      } on StdoutException catch (_) {
+        // Expected when run without a terminal.
+      }
     });
   });
 
@@ -1208,6 +1231,24 @@ void main() {
       expect(screen(), contains('/b-/b'));
       await keys(t, '\r');
       expect(f.text(), '/b-/b');
+      t.close();
+    });
+
+    test('onSubmit fires on enter', () async {
+      final f = Field(text: 'submit text');
+      var submitted = false;
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.input(f, onSubmit: () => submitted = true);
+        }),
+        width: 30,
+        height: 5,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('\r'));
+      await t.pump();
+      expect(submitted, isTrue);
       t.close();
     });
   });

@@ -409,7 +409,9 @@ String? csiName(String params, int fin) {
   final semi = params.indexOf(';');
   if (semi != -1) {
     code = params.substring(0, semi);
-    final mod = int.tryParse(params.substring(semi + 1).split(';').first);
+    final modPart =
+        params.substring(semi + 1).split(';').first.split(':').first;
+    final mod = int.tryParse(modPart);
     if (mod != null && mod >= 2 && mod <= 8) {
       final m = mod - 1;
       if (m & 4 != 0) prefix += 'ctrl+';
@@ -480,7 +482,7 @@ int utf8Split(List<int> bytes, int start, int end) {
   while (k >= start && bytes[k] & 0xc0 == 0x80) {
     k--;
   }
-  if (k < start) return start; // all continuation bytes: hold everything
+  if (k < start) return end; // orphaned continuation bytes cannot be completed; consume them
   final lead = bytes[k];
   final want = lead < 0x80
       ? 1

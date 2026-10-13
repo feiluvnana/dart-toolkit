@@ -357,6 +357,10 @@ final class Dir extends Entry {
       // moving into a non-empty folder, permissions) must rethrow instead
       // of silently merging/overwriting and deleting the source.
       if (!_isExdev(e)) rethrow;
+      final destType = await io.FileSystemEntity.type(to, followLinks: false);
+      if (destType != io.FileSystemEntityType.notFound) {
+        throw io.FileSystemException('Destination already exists', to);
+      }
       await _copyDir(_path, to);
       await io.Directory(_path).delete(recursive: true);
     }
@@ -489,8 +493,19 @@ final class Link extends Entry {
   }
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it. Sync members come back as Futures.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it. Sync members come back as Futures.
 /// [Reader]/[Writer]/[Closeable] members come from `Future<Reader>`.
+extension EntryFuture on Future<Entry> {
+  Future<String> path() async => (await this).path();
+  Future<String> name() async => (await this).name();
+  Future<Dir> parent() async => (await this).parent();
+  Future<bool> exists() async => (await this).exists();
+  Future<void> delete() async => (await this).delete();
+  Future<Entry> copy(String to) async => (await this).copy(to);
+  Future<Entry> move(String to) async => (await this).move(to);
+}
+
+/// Future mirrors for [File].
 extension FileFuture on Future<File> {
   Future<String> path() async => (await this).path();
   Future<String> name() async => (await this).name();

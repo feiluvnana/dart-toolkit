@@ -134,5 +134,8 @@ final class _FutureReader with Reader {
   Future<List<int>> bytes() async => (await _future).bytes();
 
   @override
+  Future<String> text() async => (await _future).text();
+
+  @override
   Future<void> to(Writer? writer) => _future.then((r) => r.to(writer));
 }

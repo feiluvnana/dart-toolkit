@@ -129,6 +129,19 @@ final class Pick<T> {
     _index = _items.isEmpty ? 0 : index.clamp(0, _items.length - 1);
     return this;
   }
+
+  /// Add [item] to the end of the list. Returns this.
+  Pick<T> add(T item) => set([..._items, item]);
+
+  /// Add all [items] to the end of the list. Returns this.
+  Pick<T> addAll(Iterable<T> items) => set([..._items, ...items]);
+
+  /// Remove [item] from the list. Returns this.
+  Pick<T> remove(T item) => set([for (final x in _items) if (x != item) x]);
+
+  /// Remove items satisfying [test]. Returns this.
+  Pick<T> removeWhere(bool Function(T item) test) =>
+      set([for (final x in _items) if (!test(x)) x]);
 }
 
 /// An input's text, cursor and history. Lives in the app's state object.
@@ -802,7 +815,8 @@ final class Region {
   Region input(Field field,
       {String hint = '',
       int lines = 1,
-      FutureOr<List<String>> Function(String word)? suggest}) {
+      FutureOr<List<String>> Function(String word)? suggest,
+      FutureOr<void> Function()? onSubmit}) {
     if (lines < 0) {
       throw ArgumentError.value(lines, 'lines', 'must be >= 0');
     }
@@ -815,7 +829,7 @@ final class Region {
     final order = _s._order++;
     _s._drawnFields.add(field);
     _reg(field, _gx, y, _w, math.max(0, math.min(reserve, rem)), order,
-        (ev) => _inputKey(field, ev, lines, suggest));
+        (ev) => _inputKey(field, ev, lines, suggest, onSubmit));
     if (rem <= 0 || _w <= 0) return this;
     final showN = lines == 0 ? need : lines;
     _s._clickBase[field] = y;
@@ -1014,7 +1028,8 @@ final class Region {
   }
 
   bool _inputKey(Field field, _Ev ev, int lines,
-      FutureOr<List<String>> Function(String word)? suggest) {
+      FutureOr<List<String>> Function(String word)? suggest,
+      [FutureOr<void> Function()? onSubmit]) {
     if (ev is _ClickEv) {
       _s._setFocus(field);
       final rows = _fieldRows(field);
@@ -1142,7 +1157,11 @@ final class Region {
             });
           }
         }
-        return false; // enter is never consumed
+        if (onSubmit != null) {
+          _s._invoke(onSubmit);
+          return true;
+        }
+        return false;
       case 'shift+enter':
       case 'alt+enter':
         if (!multi) return false;
@@ -1285,10 +1304,11 @@ final class Region {
       if (term.displayWidth('$lab${'_' * width}  $counts') <= _w) break;
       width--;
     }
-    final filled = (frac * width).round().clamp(0, width);
-    final glyphs = _s._caps.ascii
-        ? ('#' * filled + '-' * (width - filled))
-        : ('█' * filled + '░' * (width - filled));
+    final cells = frac * width;
+    final full = cells.floor();
+    final half = cells - full >= 0.5 && full < width;
+    final (on, mid, off) = _s._caps.ascii ? ('#', '>', '-') : ('━', '╸', '─');
+    final glyphs = '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
     write('$lab$glyphs  $counts');
     return this;
   }

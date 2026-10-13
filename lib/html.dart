@@ -36,10 +36,13 @@ abstract final class Html {
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
   /// absolute.
   static Elements parse(String html, {String? baseUrl}) {
-    final trimmed = html.trimLeft();
-    final head = trimmed.length <= 9
-        ? trimmed.toLowerCase()
-        : trimmed.substring(0, 9).toLowerCase();
+    var s = html.replaceFirst('\uFEFF', '').trimLeft();
+    while (s.startsWith('<!--')) {
+      final end = s.indexOf('-->');
+      if (end < 0) break;
+      s = s.substring(end + 3).trimLeft();
+    }
+    final head = s.length <= 9 ? s.toLowerCase() : s.substring(0, 9).toLowerCase();
     if (head.startsWith('<!doctype') || head.startsWith('<html')) {
       final doc = parser.parse(html);
       return Elements._(
@@ -232,6 +235,9 @@ final class Element {
         }
       } else if (node is dom.Element) {
         final tag = node.localName;
+        if (tag == 'script' || tag == 'style' || tag == 'noscript' || tag == 'template') {
+          return;
+        }
         if (tag == 'br') {
           // A line break even with no surrounding text nodes.
           gap(newline: true);

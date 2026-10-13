@@ -304,9 +304,6 @@ final class Browser implements Closeable {
         final type = req.resourceType?.toJson().toLowerCase();
         if (type != null && blocked.contains(type)) {
           await req.abort();
-          // Aborted requests may never emit finished/failed: balance the
-          // waitIdle count here (guarded, so a later event is a no-op).
-          if (wrap._inflight > 0) wrap._inflight--;
         } else {
           await req.continueRequest();
         }

@@ -217,8 +217,9 @@ final class Response with Reader implements Closeable {
   bytes become `�`. `text()`/`bytes()` cache;
   a piped body can't be read again (`StateError`).
 - `close()` drops an unread body. A body read or piped to the end releases the connection by
-  itself. The `Future<Response>` mirrors (`Http.get(u).status()`) close the response after
-  reading, since nothing else can reach it.
+  itself. The `Future<Response>` mirrors allow inspecting metadata (`status()`, `ok()`, `header()`,
+  `url()`, `size()`, `name()`) without destroying the unread body, closing automatically only when
+  the response is fully consumed or explicitly closed.
 - Engine errors arrive as `SocketException`/`HttpException`/`TimeoutException`. A failed or
   timed-out upload never hangs.
 
@@ -335,7 +336,10 @@ final class Link extends Entry {
 - `switch (await Fs.entry(p))` is exhaustive over `File`/`Dir`/`Link`/`null`.
 - **Writes are atomic.** Content goes to a temp sibling, which is renamed over the target. Writes
   go through symlinks to their target, keep the old file's mode, and create missing parents. A
-  failed run leaves the old content.
+  failed run leaves the old content. `append` uses OS append mode (`O_APPEND`) with an exclusive
+  file lock, guaranteeing concurrent appends never lose data or replace open inodes.
+- Future mirrors (`EntryFuture`, `FileFuture`, `DirFuture`, `LinkFuture`) repeat every member on
+  their respective `Future`s per Rule 4.
 - **`copy`/`move`:**
   - They keep modes and timestamps (folders too) and create parents.
   - `move` renames, and falls back to copy-then-delete only across devices.
@@ -510,8 +514,8 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]); }
   - It redraws at most every 80 ms.
 - **A bar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
   `tick()`, it counts items (`12/40  3.1/s`). A `null` total shows a count and a rate, with no
-  bar, so `Console.bar(res.size())` just works. `close()` prints the final
-  line.
+  bar, so `Console.bar(res.size())` just works. The bar renders as a clean line track (`━━╸──`),
+  matching the `tui` aesthetic. `close()` prints the final line.
 - A bar takes the live line on first use and gives it back when it closes, or when its pipeline
   fails at any point.
 - Without a terminal, or with `NO_COLOR` set, there is no animation: each bar or spinner prints
@@ -538,6 +542,7 @@ typedef Bind = (String label, FutureOr<void> Function() action);
 final class Pick<T> {                          // a list's items and selection
   Pick([List<T> items = const []]);
   List<T> items();  int index();  T? selected();  Pick<T> set(List<T> items);  Pick<T> select(int index);
+  Pick<T> add(T item);  Pick<T> addAll(Iterable<T> items);  Pick<T> remove(T item);  Pick<T> removeWhere(bool Function(T item) test);
 }
 final class Field {                            // an editor's text, cursor and history
   Field({String text = '', List<String> history = const []});
@@ -554,7 +559,7 @@ final class Region {
   Region on(Map<String, Bind> events);
   Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''});
   Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
-  Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest});
+  Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
   Region bar(int done, int? total, {String? label});  Region spin(String label);
 }
@@ -566,6 +571,11 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 
 `image` adds `Region.picture(Image)` (half-block cells), so `tui` doesn't load the codecs.
 
+- **Unified Aesthetic.** `Console` and `Tui` share one uncustomizable, elegant design language:
+  - **Borders:** `Region.box` uses smooth rounded corners `╭ ╮ ╰ ╯` (`\u256D \u256E \u2570 \u256F`). Focused cards have `accent` borders with a `●` focus dot in the title; unfocused cards use `dim` Slate Gray.
+  - **Selection:** `Region.list` and `table` match `Console.choose`: selected rows start with `❯ ` in `accent` Cyan (dim chevron when unfocused) rather than full-width reverse video.
+  - **Bars & Spinners:** Progress bars in `Console.bar` and `Region.bar` are drawn with sleek lines (`━━╸──`: heavy line `━` for filled track in cyan, `╸` for the leading edge, and thin line `─` for the remaining track in dim gray), never blocky bars or solid blocks. Spinners use Braille `⠋..⠏` and finish with `✓` / `✗`.
+  - **Status Line:** Key help uses badges `[key] action` in cyan and dim gray.
 - **State-driven.** The state is the app's own value, usually a sealed class with one subclass per
   view, so `screen` is an exhaustive `switch`. `screen` runs on every redraw, only describes the
   screen and never blocks. Widget state lives in `Pick`/`Field`/`Scroll` objects held by the
@@ -596,9 +606,8 @@ enum Style { bold, dim, italic, underline, strike, reverse }
     by word, `ctrl+u`/`ctrl+k` to the line's start/end; `left` `right` `home` `end` `ctrl+a`
     `ctrl+e`, `alt+`/`ctrl+left`/`right` by word. `lines > 1` grows to that many rows (`0` = no
     cap); `shift+enter`, `alt+enter` or `\` + `enter` insert a newline; `up`/`down` at the first or
-    last line walk the history. `enter` is never consumed, so `keys` decides it. `suggest` opens a
-    popup of matches for the word at the cursor (`up`/`down`, `tab`/`enter` replace, `escape`
-    closes; a stale async answer is dropped).
+    last line walk the history. `onSubmit` handles form submissions; when omitted, unconsumed
+    `enter` bubbles to `keys`. `suggest` opens a popup of matches for the word at the cursor.
   - `on`: a region binding a keyboard key is focusable; `focused()`/`hovered()` draw its state.
 - **Focus** is object identity (the `Pick`/`Field`/`Scroll`, the `on` key set, a button's label),
   so it survives redraws and state switches. When the focused thing isn't drawn, the first

@@ -75,8 +75,8 @@ final class _Packed with Reader {
           try {
             final st = await io.FileStat.stat(e.path);
             af.mode = st.mode & 0x1FF;
-            if (af.mode != 0 && (af.mode & 0x111) == 0) {
-              af.mode |= 0x111;
+            if (af.mode != 0 && (af.mode & 0x49) == 0) {
+              af.mode |= 0x49;
             }
           } catch (_) {}
           archive.addFile(af);
@@ -461,7 +461,7 @@ final _crcTable = (() {
 Future<void> _chmodMember(String path, int mode, {required bool isDir}) async {
   var m = mode & 0x1FF;
   if (m == 0) return;
-  if (isDir) m |= 0x100; // never leave a folder untraversable
+  if (isDir) m |= 0x40; // never leave a folder untraversable: octal 0100 (S_IXUSR)
   await _chmodPath(path, m);
 }
 

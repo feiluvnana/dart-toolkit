@@ -241,7 +241,7 @@ final class Response with Reader implements Closeable {
       throw StateError('response is closed: ${url()}');
     }
     final cached = _cached;
-    if (cached != null) return List<int>.of(cached);
+    if (cached != null) return Uint8List.fromList(cached);
     if (_streaming) {
       throw StateError('body already streaming: ${url()}');
     }
@@ -252,7 +252,7 @@ final class Response with Reader implements Closeable {
         out.add(chunk);
       }
       _cached = out.takeBytes();
-      return List<int>.of(_cached!);
+      return Uint8List.fromList(_cached!);
     } finally {
       _finish();
     }
@@ -271,7 +271,7 @@ final class Response with Reader implements Closeable {
           uri: Uri.tryParse(url()),
         );
       }
-      return Stream.value(List<int>.of(cached));
+      return Stream.value(Uint8List.fromList(cached));
     }
     if (_streaming) {
       throw StateError('body already streaming: ${url()}');
@@ -745,6 +745,9 @@ Future<Response> _attempt(
           uri: currentUri,
         );
       }
+      if (currentUri.hasScheme && next.hasScheme && currentUri.origin != next.origin) {
+        currentHeaders = _stripSensitiveHeaders(currentHeaders);
+      }
       currentUri = next;
     }
   } catch (_) {
@@ -784,6 +787,16 @@ Map<String, String>? _withoutContent(Map<String, String>? headers) {
         key.toLowerCase() == 'content-type' ||
         key.toLowerCase() == 'content-length',
   );
+  return out;
+}
+
+Map<String, String>? _stripSensitiveHeaders(Map<String, String>? headers) {
+  if (headers == null) return null;
+  final out = Map<String, String>.of(headers);
+  out.removeWhere((key, _) {
+    final k = key.toLowerCase();
+    return k == 'authorization' || k == 'cookie' || k == 'proxy-authorization';
+  });
   return out;
 }
 
