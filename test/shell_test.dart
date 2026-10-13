@@ -12,9 +12,13 @@ void main() {
       expect((await out.text()).trim(), 'hi');
     });
 
-    test('text() is verbatim', () async {
+    test('text() drops one trailing newline; bytes() stays verbatim',
+        () async {
       final out = await Shell.run(['printf', 'a\n']);
-      expect(await out.text(), 'a\n');
+      expect(await out.text(), 'a');
+      expect(await out.bytes(), [97, 10]);
+      final crlf = await Shell.run(['printf', 'a\r\n']);
+      expect(await crlf.text(), 'a');
     });
 
     test('a non-zero exit is an Output', () async {

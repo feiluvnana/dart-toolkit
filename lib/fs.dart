@@ -115,18 +115,25 @@ final class File extends Entry with Reader implements Writer {
 
   @override
   Future<File> copy(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     await io.File(_path).copy(to);
+    await _preserveFileMeta(_path, to);
     return File._(to);
   }
 
   @override
   Future<File> move(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     try {
       await io.File(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      // Rename across devices is EXDEV (18); anything else (missing
+      // source, occupied destination, permissions) must surface.
+      if (!_isExdev(e)) rethrow;
       await io.File(_path).copy(to);
+      await _preserveFileMeta(_path, to);
       await io.File(_path).delete();
     }
     return File._(to);
@@ -172,9 +179,31 @@ final class File extends Entry with Reader implements Writer {
   }
 
   Future<void> _atomicWrite(Stream<List<int>> input) async {
-    final dir = p.dirname(_path);
+    // Writes go through symlinks to their real target (F7): resolve first so
+    // a handle pointing at a link updates the target instead of replacing
+    // the link with a regular file. Broken links fall back to the handle
+    // path (rename will replace the link).
+    var target = _path;
+    try {
+      final t =
+          await io.FileSystemEntity.type(_path, followLinks: false);
+      if (t == io.FileSystemEntityType.link) {
+        try {
+          target = await io.Link(_path).resolveSymbolicLinks();
+        } catch (_) {
+          target = _path;
+        }
+      }
+    } catch (_) {}
+    // Remember the old mode so the atomic replace keeps it (755 stays 755).
+    var oldMode = 0;
+    try {
+      final st = await io.FileStat.stat(target);
+      oldMode = st.mode & 0xFFF;
+    } catch (_) {}
+    final dir = p.dirname(target);
     final tmp =
-        '$dir/.${p.basename(_path)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+        '$dir/.${p.basename(target)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
     final tmpFile = io.File(tmp);
     try {
       final sink = tmpFile.openWrite();
@@ -187,7 +216,10 @@ final class File extends Entry with Reader implements Writer {
         } catch (_) {}
         rethrow;
       }
-      await tmpFile.rename(_path);
+      await tmpFile.rename(target);
+      // Keep the old file's mode after the rename (POSIX only,
+      // best-effort elsewhere).
+      if (oldMode != 0) await _chmod(target, oldMode);
     } catch (_) {
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
@@ -264,6 +296,7 @@ final class Dir extends Entry {
 
   @override
   Future<Dir> copy(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     await _copyDir(_path, to);
     return Dir._(to);
@@ -271,10 +304,15 @@ final class Dir extends Entry {
 
   @override
   Future<Dir> move(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     try {
       await io.Directory(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      // Only EXDEV falls back to copy-then-delete. Anything else (e.g.
+      // moving into a non-empty folder, permissions) must rethrow instead
+      // of silently merging/overwriting and deleting the source.
+      if (!_isExdev(e)) rethrow;
       await _copyDir(_path, to);
       await io.Directory(_path).delete(recursive: true);
     }
@@ -290,25 +328,68 @@ final class Link extends Entry {
   Future<String> target() => io.Link(_path).target();
 
   /// Follow the chain to what is finally there, or null when broken.
+  /// Returns a handle AT THE TARGET path (not the link's own path).
   Future<Entry?> resolve() async {
-    final t = await io.FileSystemEntity.type(_path, followLinks: true);
+    String resolved;
+    try {
+      resolved = await io.Link(_path).resolveSymbolicLinks();
+    } catch (_) {
+      return null;
+    }
+    final t =
+        await io.FileSystemEntity.type(resolved, followLinks: false);
     return switch (t) {
-      io.FileSystemEntityType.file => File._(_path),
-      io.FileSystemEntityType.directory => Dir._(_path),
-      io.FileSystemEntityType.link => Link._(_path),
+      io.FileSystemEntityType.file => File._(resolved),
+      io.FileSystemEntityType.directory => Dir._(resolved),
+      io.FileSystemEntityType.link => Link._(resolved),
       _ => null,
     };
   }
 
-  /// Make the link, replacing an existing one atomically. Returns this.
+  /// Make the link, replacing an existing link or file atomically.
+  /// A temp link is created next to the target and renamed over it.
+  /// Returns this.
   Future<Link> create(String target) async {
     await _ensureParent(_path);
-    final link = io.Link(_path);
+    final dir = p.dirname(_path);
+    final tmp =
+        '$dir/.${p.basename(_path)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+    final tmpLink = io.Link(tmp);
+    await tmpLink.create(target, recursive: true);
     try {
-      await link.create(target, recursive: true);
-    } on io.FileSystemException {
-      await link.delete();
-      await link.create(target, recursive: true);
+      try {
+        await tmpLink.rename(_path);
+      } on io.FileSystemException {
+        // POSIX rename replaces a link or file atomically. On platforms
+        // where rename over an existing file fails, remove the destination
+        // (link only: never a folder) and retry once.
+        final dt = await io.FileSystemEntity.type(
+          _path,
+          followLinks: false,
+        );
+        if (dt == io.FileSystemEntityType.directory) {
+          await tmpLink.delete();
+          throw io.FileSystemException(
+            'cannot replace directory with link',
+            _path,
+          );
+        }
+        if (dt != io.FileSystemEntityType.notFound) {
+          try {
+            await io.Link(_path).delete();
+          } catch (_) {
+            await io.File(_path).delete();
+          }
+          await tmpLink.rename(_path);
+        } else {
+          rethrow;
+        }
+      }
+    } catch (_) {
+      try {
+        await tmpLink.delete();
+      } catch (_) {}
+      rethrow;
     }
     return this;
   }
@@ -332,6 +413,7 @@ final class Link extends Entry {
 
   @override
   Future<Link> copy(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     final t = await target();
     final link = io.Link(to);
@@ -346,10 +428,12 @@ final class Link extends Entry {
 
   @override
   Future<Link> move(String to) async {
+    await _checkSource(_path, to);
     await _ensureParent(to);
     try {
       await io.Link(_path).rename(to);
-    } on io.FileSystemException {
+    } on io.FileSystemException catch (e) {
+      if (!_isExdev(e)) rethrow;
       final t = await target();
       await io.Link(to).create(t, recursive: true);
       await io.Link(_path).delete();
@@ -411,6 +495,75 @@ Future<void> _ensureParent(String path) async {
   }
 }
 
+/// True only for cross-device renames.
+bool _isExdev(io.FileSystemException e) => e.osError?.errorCode == 18;
+
+/// Throw before creating anything when the source is missing, and reject a
+/// destination inside (or equal to) the source. Must run before
+/// [_ensureParent] so a missing source never leaves an empty destination.
+Future<void> _checkSource(String from, String to) async {
+  final t = await io.FileSystemEntity.type(from, followLinks: false);
+  if (t == io.FileSystemEntityType.notFound) {
+    throw io.PathNotFoundException(from, const io.OSError());
+  }
+  final nf = p.normalize(p.absolute(from));
+  final nt = p.normalize(p.absolute(to));
+  if (p.equals(nf, nt) || p.isWithin(nf, nt)) {
+    throw ArgumentError.value(
+      to,
+      'to',
+      'destination must not be inside the source ($from)',
+    );
+  }
+}
+
+/// chmod on POSIX, best-effort elsewhere (Windows has no POSIX modes).
+Future<void> _chmod(String path, int mode) async {
+  if (io.Platform.isWindows) return;
+  try {
+    final perms = mode & 0xFFF;
+    final r = await io.Process.run(
+      'chmod',
+      [perms.toRadixString(8), path],
+    );
+    // Ignore launcher/exit failures: best-effort.
+    if (r.exitCode != 0) return;
+  } catch (_) {}
+}
+
+/// Keep the source file's mtime and mode on a copy.
+Future<void> _preserveFileMeta(String from, String to) async {
+  try {
+    final st = await io.FileStat.stat(from);
+    try {
+      await io.File(to).setLastModified(st.modified);
+    } catch (_) {}
+    await _chmod(to, st.mode & 0xFFF);
+  } catch (_) {}
+}
+
+/// Set a folder's mtime (dart:io has no Directory.setLastModified):
+/// `touch` on POSIX, no-op on Windows. Best-effort.
+Future<void> _setDirMtime(String path, DateTime mtime) async {
+  if (io.Platform.isWindows) return;
+  try {
+    final List<String> args;
+    if (io.Platform.isMacOS) {
+      String two(int n) => n.toString().padLeft(2, '0');
+      final t =
+          '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
+      args = ['-t', t, path];
+    } else {
+      args = [
+        '-d',
+        '@${mtime.millisecondsSinceEpoch ~/ 1000}',
+        path,
+      ];
+    }
+    await io.Process.run('touch', args);
+  } catch (_) {}
+}
+
 Future<bool> _missing(io.FileSystemException e) async {
   // Already handled PathNotFoundException; other "not found" OS errors
   // (e.g. delete on a missing dir on some platforms) are also a no-op.
@@ -447,6 +600,14 @@ Future<void> _copyDir(String from, String to) async {
       await _copyDir(e.path, dest);
     } else if (t == io.FileSystemEntityType.file) {
       await io.File(e.path).copy(dest);
+      await _preserveFileMeta(e.path, dest);
     }
   }
+  // Folders keep modes AND mtimes: set the folder mtime after its contents
+  // are copied (writing children bumps it), and chmod to the source mode.
+  try {
+    final st = await io.FileStat.stat(from);
+    await _setDirMtime(to, st.modified);
+    await _chmod(to, st.mode & 0xFFF);
+  } catch (_) {}
 }

@@ -35,7 +35,9 @@ final class Image {
   static Image decode(List<int> bytes) {
     img.Image? decoded;
     try {
-      decoded = img.decodeImage(Uint8List.fromList(bytes));
+      // frame: 0 keeps GIF to its first frame (an animated GIF otherwise
+      // decodes every frame and re-encodes as animated).
+      decoded = img.decodeImage(Uint8List.fromList(bytes), frame: 0);
     } catch (e) {
       throw FormatException('unknown image format: $e');
     }
@@ -52,10 +54,18 @@ final class Image {
   int height() => _inner.height;
 
   /// A resized copy. Keeps the aspect ratio when only one side is given,
-  /// sets the exact size when both are. Neither is an [ArgumentError].
+  /// sets the exact size when both are. Neither, or a non-positive size,
+  /// is an [ArgumentError].
   Image resize({int? width, int? height}) {
     if (width == null && height == null) {
       throw ArgumentError('resize needs a width, a height, or both');
+    }
+    if ((width != null && width < 1) || (height != null && height < 1)) {
+      throw ArgumentError.value(
+        width ?? height,
+        width != null ? 'width' : 'height',
+        'must be >= 1',
+      );
     }
     return Image._(
       img.copyResize(_inner, width: width, height: height),
@@ -147,6 +157,13 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
     case ImageFormat.tiff:
       return img.encodeTiff(inner);
     case ImageFormat.ico:
+      if (inner.width > 256 || inner.height > 256) {
+        throw ArgumentError.value(
+          '${inner.width}x${inner.height}',
+          'image',
+          '.ico supports at most 256x256',
+        );
+      }
       return img.encodeIco(inner);
   }
 }

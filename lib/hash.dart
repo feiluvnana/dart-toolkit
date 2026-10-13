@@ -56,6 +56,15 @@ final class Hasher implements Writer, Pipe {
     }
   }
 
+  /// Poison the hasher: a later [hex]/[add] throws instead of returning a
+  /// partial or empty-input digest. Called when the run failed anywhere,
+  /// including a writer that failed before this stage was read (wired via
+  /// [Reader.to]'s cancel-on-writer-error, which tears down the pipe stream
+  /// and lands in [_tee]'s finally / [consume]'s catch).
+  void _abort(Object e) {
+    _poisoned = true;
+  }
+
   /// Feed more data: a `String` (UTF-8) or a `List<int>`. Returns this.
   /// Anything else is an [ArgumentError]. An [add] after [hex], or after a
   /// failed run through this hasher, is a [StateError].
@@ -90,10 +99,10 @@ final class Hasher implements Writer, Pipe {
       await for (final chunk in input) {
         _in.add(chunk);
       }
-    } catch (_) {
+    } catch (e) {
       // The run failed: the digest is partial, so poison it rather than
       // let a later hex() silently return it.
-      _poisoned = true;
+      _abort(e);
       rethrow;
     }
     _in.close();
@@ -124,9 +133,11 @@ final class Hasher implements Writer, Pipe {
       _done = true;
       ok = true;
     } finally {
-      // Input failure or downstream cancel: the digest is partial, so a
-      // later hex()/add() must throw rather than silently use it.
-      if (!ok) _poisoned = true;
+      // Input failure or downstream cancel (including Reader.to's
+      // cancel-on-writer-error for a writer-first failure): the digest is
+      // partial, so a later hex()/add() must throw rather than silently
+      // use it (or return the empty-input digest when nothing was read).
+      if (!ok) _abort(StateError('pipe did not run to the end'));
     }
   }
 

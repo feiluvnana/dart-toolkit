@@ -52,7 +52,22 @@ abstract mixin class Reader {
       }
       return;
     }
-    await writer.consume(s);
+    try {
+      await writer.consume(s);
+    } catch (e, st) {
+      // The writer failed before or during the read (e.g. a missing parent,
+      // or a throw-before-read test writer). The piped stream may never have
+      // been listened to, which would leave the source (file, http) hanging
+      // and intermediate pipes (Hasher, Bar) unpoisoned. Listening then
+      // cancelling runs any pipe generators so their cancel paths poison or
+      // release, and releases the source. When the writer already listened,
+      // this second listen throws StateError and is ignored: the writer's
+      // own cancel already propagated.
+      try {
+        await s.listen(null, onError: (_) {}).cancel();
+      } catch (_) {}
+      Error.throwWithStackTrace(e, st);
+    }
   }
 
   /// `= to(writer)`.
