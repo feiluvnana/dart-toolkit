@@ -129,8 +129,9 @@ final class Browser implements Closeable {
 
   /// Open a new tab and wait for the load event. Tab setup goes here, before
   /// the first request: [headers] are extra request headers for everything
-  /// the tab loads, [block] aborts requests by resource type (`'image'`,
-  /// `'font'`, `'media'`, `'stylesheet'`), [width]/[height] set the viewport.
+  /// the tab loads (`user-agent` also sets the UA string), [block] aborts
+  /// requests by resource type (`'image'`, `'font'`, `'media'`,
+  /// `'stylesheet'`), [width]/[height] set the viewport.
   /// [timeout] bounds the navigation. Dialogs are always dismissed.
   Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
@@ -140,16 +141,33 @@ final class Browser implements Closeable {
       if (width != null || height != null) {
         await page.setViewport(pp.DeviceViewport(width: width ?? 1280, height: height ?? 1024));
       }
+      String? ua;
+      Map<String, String>? extra;
       if (headers != null) {
-        await page.setExtraHTTPHeaders(headers);
+        extra = Map.of(headers);
+        for (final k in headers.keys.toList()) {
+          if (k.toLowerCase() == 'user-agent') {
+            ua = headers[k];
+            extra.remove(k);
+          }
+        }
+        if (extra.isEmpty) extra = null;
       }
-      if (block != null) {
+      if (ua != null) {
+        try {
+          await page.setUserAgent(ua);
+        } catch (_) {}
+      }
+      if (extra != null) {
+        await page.setExtraHTTPHeaders(extra);
+      }
+      if (block != null && block.isNotEmpty) {
         await _block(page, wrap, block);
       }
       try {
         await page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
       } on TimeoutException {
-        throw TimeoutException('tab never loaded for ${limit.inSeconds}s: $url', limit);
+        throw TimeoutException('tab never loaded for $limit: $url', limit);
       }
     } catch (_) {
       // Don't leak the tab when setup or navigation fails.
@@ -210,8 +228,21 @@ final class Browser implements Closeable {
     return dir.path;
   }
 
+  static const _allowedBlock = {'image', 'font', 'media', 'stylesheet'};
+
   static Future<void> _block(pp.Page page, Page wrap, List<String> block) async {
-    final blocked = {for (final b in block) b.toLowerCase()};
+    final blocked = <String>{};
+    for (final b in block) {
+      final lower = b.toLowerCase();
+      if (!_allowedBlock.contains(lower)) {
+        throw ArgumentError.value(
+          block,
+          'block',
+          'unknown resource type "$b" (image, font, media, stylesheet)',
+        );
+      }
+      blocked.add(lower);
+    }
     await page.setRequestInterception(true);
     wrap._blockSub = page.onRequest.listen((req) async {
       try {
@@ -280,7 +311,7 @@ final class Page implements Closeable {
     try {
       await _page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
     } on TimeoutException {
-      throw TimeoutException('navigation timed out for ${limit.inSeconds}s: $url', limit);
+      throw TimeoutException('navigation timed out for $limit: $url', limit);
     }
     return this;
   }
@@ -291,7 +322,7 @@ final class Page implements Closeable {
     try {
       await _page.goBack(wait: pp.Until.load, timeout: limit).timeout(limit);
     } on TimeoutException {
-      throw TimeoutException('navigation timed out for ${limit.inSeconds}s: ${await url()}', limit);
+      throw TimeoutException('navigation timed out for $limit: ${await url()}', limit);
     }
     return this;
   }
@@ -302,7 +333,7 @@ final class Page implements Closeable {
     try {
       await _page.reload(wait: pp.Until.load, timeout: limit).timeout(limit);
     } on TimeoutException {
-      throw TimeoutException('navigation timed out for ${limit.inSeconds}s: ${await url()}', limit);
+      throw TimeoutException('navigation timed out for $limit: ${await url()}', limit);
     }
     return this;
   }
@@ -335,11 +366,21 @@ final class Page implements Closeable {
   }
 
   /// The `Cookie` header value for the current URL, ready for [Http],
-  /// or `null` when there are no cookies.
+  /// or `null` when there are no cookies. Names/values with `;`, `=`,
+  /// space or `"` are quoted.
   Future<String?> cookies() async {
+    String part(String name, String value) {
+      if (name.contains(RegExp(r'[;=\s"]')) ||
+          value.contains(RegExp(r'[;=\s"]'))) {
+        String q(String s) => '"${s.replaceAll('"', '\\"')}"';
+        return '${q(name)}=${q(value)}';
+      }
+      return '$name=$value';
+    }
+
     final cookies = await _page.cookies(urls: [await url()]);
     if (cookies.isEmpty) return null;
-    return cookies.map((c) => '${c.name}=${c.value}').join('; ');
+    return cookies.map((c) => part(c.name, c.value)).join('; ');
   }
 
   /// Click the first match of [selector], waiting until it is actionable
@@ -375,9 +416,21 @@ final class Page implements Closeable {
 
   /// Send a key or a chord, with the key names shared with `Screen.pressed`
   /// (`'enter'`, `'tab'`, `'down'`, `'ctrl+a'`; a single printable
-  /// character is typed). An unknown name is an [ArgumentError].
+  /// character is typed; `'wheelup'`/`'wheeldown'` scroll). An unknown name
+  /// is an [ArgumentError].
   /// Returns this page.
   Future<Page> press(String key) async {
+    final lower = key.toLowerCase();
+    if (lower == 'wheelup' || lower == 'wheeldown') {
+      final dy = lower == 'wheelup' ? -400 : 400;
+      try {
+        await _page.evaluate<void>(
+          '(dy) => window.scrollBy(0, dy)',
+          args: [dy],
+        );
+      } catch (_) {}
+      return this;
+    }
     if (key == '+') {
       await _page.keyboard.type('+');
       return this;
@@ -431,10 +484,16 @@ final class Page implements Closeable {
   }
 
   /// Pick the `<option>` by its value, waiting until actionable.
-  /// Returns this page.
+  /// Throws [TimeoutException] when the option is missing. Returns this page.
   Future<Page> select(String selector, String value, {Duration? timeout}) async {
     await _actionable(selector, timeout: timeout);
-    await _page.select(selector, [value]);
+    final picked = await _page.select(selector, [value]);
+    if (!picked.contains(value)) {
+      throw TimeoutException(
+        'no option "$value" in $selector',
+        timeout ?? _defaultTimeout,
+      );
+    }
     return this;
   }
 
@@ -509,7 +568,7 @@ final class Page implements Closeable {
         return this;
       }
       if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException('network never idle for ${limit.inSeconds}s: ${await url()}', limit);
+        throw TimeoutException('network never idle for $limit: ${await url()}', limit);
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
@@ -542,7 +601,7 @@ final class Page implements Closeable {
     await _page.devTools.browser.setDownloadBehavior('allow', downloadPath: dir, eventsEnabled: true);
     final willBegin = _page.devTools.browser.onDownloadWillBegin.first.timeout(
       limit,
-      onTimeout: () => throw TimeoutException('no download from $selector for ${limit.inSeconds}s', limit),
+      onTimeout: () => throw TimeoutException('no download from $selector for $limit', limit),
     );
     // Guard the future until it is awaited below: without this, a click
     // that starts no download surfaces an unhandled TimeoutException.
@@ -595,8 +654,16 @@ final class Page implements Closeable {
   /// Cancel the tab's subscriptions without closing the tab (used by
   /// [Browser.close], which tears the whole browser down at once).
   Future<void> _detach() async {
-    await _blockSub?.cancel();
+    final blockSub = _blockSub;
     _blockSub = null;
+    try {
+      await blockSub?.cancel();
+    } catch (_) {}
+    if (blockSub != null) {
+      try {
+        await _page.setRequestInterception(false);
+      } catch (_) {}
+    }
     try {
       await _dialogSub?.cancel();
     } catch (_) {}
@@ -610,32 +677,52 @@ final class Page implements Closeable {
   }
 
   Future<pp.ElementHandle> _attached(String selector, {Duration? timeout}) async {
+    await _checkSelector(selector);
     final limit = timeout ?? _defaultTimeout;
     try {
       final handle = await _page.waitForSelector(selector, timeout: limit).timeout(limit);
       if (handle == null) {
-        throw TimeoutException('no attached $selector for ${limit.inSeconds}s', limit);
+        throw TimeoutException('no attached $selector for $limit', limit);
       }
       return handle;
     } on TimeoutException catch (e) {
-      throw TimeoutException('no attached $selector for ${limit.inSeconds}s ($e)', limit);
+      throw TimeoutException('no attached $selector for $limit ($e)', limit);
     } catch (e) {
-      throw TimeoutException('no attached $selector for ${limit.inSeconds}s ($e)', limit);
+      throw TimeoutException('no attached $selector for $limit ($e)', limit);
     }
   }
 
   Future<pp.ElementHandle> _visible(String selector, {Duration? timeout}) async {
+    await _checkSelector(selector);
     final limit = timeout ?? _defaultTimeout;
     try {
       final handle = await _page.waitForSelector(selector, visible: true, timeout: limit).timeout(limit);
       if (handle == null) {
-        throw TimeoutException('no visible $selector for ${limit.inSeconds}s', limit);
+        throw TimeoutException('no visible $selector for $limit', limit);
       }
       return handle;
     } on TimeoutException catch (e) {
-      throw TimeoutException('no visible $selector for ${limit.inSeconds}s ($e)', limit);
+      throw TimeoutException('no visible $selector for $limit ($e)', limit);
     } catch (e) {
-      throw TimeoutException('no visible $selector for ${limit.inSeconds}s ($e)', limit);
+      throw TimeoutException('no visible $selector for $limit ($e)', limit);
+    }
+  }
+
+  /// Throw [FormatException] fast for a selector the engine rejects;
+  /// otherwise waiting would burn the full timeout.
+  Future<void> _checkSelector(String selector) async {
+    bool ok = true;
+    try {
+      await _page.evaluate<bool>(
+        '(s) => { try { document.querySelector(s); return true; }'
+        ' catch (_) { return false; } }',
+        args: [selector],
+      ).then((v) => ok = v);
+    } catch (_) {
+      ok = true;
+    }
+    if (!ok) {
+      throw FormatException("invalid selector '$selector'");
     }
   }
 
@@ -647,7 +734,7 @@ final class Page implements Closeable {
     Duration remaining() => deadline.difference(DateTime.now());
     var left = remaining();
     if (left <= Duration.zero) {
-      throw TimeoutException('no actionable $selector for ${limit.inSeconds}s', limit);
+      throw TimeoutException('no actionable $selector for $limit', limit);
     }
     await _visible(selector, timeout: left);
     for (;;) {
@@ -659,7 +746,7 @@ final class Page implements Closeable {
       );
       if (enabled) return;
       if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException('no actionable $selector for ${limit.inSeconds}s', limit);
+        throw TimeoutException('no actionable $selector for $limit', limit);
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
@@ -726,6 +813,12 @@ final class Page implements Closeable {
     'pageup' => pp.Key.pageUp,
     'pagedown' => pp.Key.pageDown,
     'delete' => pp.Key.delete,
+    'insert' => pp.Key.insert,
+    'shift' => pp.Key.shift,
+    'control' => pp.Key.control,
+    'ctrl' => pp.Key.control,
+    'alt' => pp.Key.alt,
+    'meta' => pp.Key.meta,
     'f1' => pp.Key.f1,
     'f2' => pp.Key.f2,
     'f3' => pp.Key.f3,
