@@ -7,7 +7,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin].
-/// - [Reader]: `stream` `bytes` `text` `pipe` `|` `to` `>` (+ `origin`, `of`).
+/// - [Reader]: `stream` `bytes` `text` `lines` `pipe` `|` `to` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume`.
 /// - [Pipe]: `transform` `abort`.
 /// - [Closeable]: `close`.
@@ -22,8 +22,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// Typed provenance for a [Reader]: what a response, file, visit or download
-/// knows about itself, without `dynamic` probing.
+/// What a reader knows about its source: URL, status, file name, path.
 ///
 /// Modules never import each other: `html`/`json` read `reader.origin().url()`
 /// for the base URL and `origin().status()` for error-page annotation;
@@ -31,10 +30,10 @@ import 'dart:typed_data';
 /// A plain in-memory reader carries an empty [Origin].
 final class Origin {
   const Origin({String? url, int? status, String? name, String? path})
-      : _url = url,
-        _status = status,
-        _name = name,
-        _path = path;
+    : _url = url,
+      _status = status,
+      _name = name,
+      _path = path;
 
   final String? _url;
   final int? _status;
@@ -59,9 +58,8 @@ abstract mixin class Reader {
   /// Single-subscription chunks; the one member to implement.
   Stream<List<int>> stream();
 
-  /// Typed provenance. Defaults to empty; `Response`, `Visit`, `File` and
-  /// `Download` override it. Replaces `(reader as dynamic).url()` /
-  /// `.status()` / `.path()` / `.name()` probes.
+  /// Where the bytes came from; empty unless the reader overrides it
+  /// (`Response`, `Visit`, `File`, `Download`).
   Origin origin() => const Origin();
 
   /// An in-memory reader over [bytes]. The bytes reach every [Writer] the
@@ -83,12 +81,10 @@ abstract mixin class Reader {
   Stream<String> lines() => stream().transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter());
 
   /// UTF-8, malformed bytes replaced; types may refine (charset).
-  Future<String> text() async =>
-      utf8.decode(await bytes(), allowMalformed: true);
+  Future<String> text() async => utf8.decode(await bytes(), allowMalformed: true);
 
   /// Lazy: nothing flows yet; null → this reader, unchanged.
-  Reader pipe(Pipe? pipe) =>
-      pipe == null ? this : _PipedReader(this, pipe);
+  Reader pipe(Pipe? pipe) => pipe == null ? this : _PipedReader(this, pipe);
 
   /// `= pipe(pipe)`.
   Reader operator |(Pipe? pipe) => this.pipe(pipe);
@@ -170,6 +166,7 @@ Future<void> _closeRoot(Reader reader) async {
 
 /// Somewhere bytes end up: a file, a hash, an unpacked folder.
 abstract interface class Writer {
+  /// Store [input]; complete when the last byte is stored.
   Future<void> consume(Stream<List<int>> input);
 }
 
@@ -178,6 +175,7 @@ abstract interface class Writer {
 /// A mixin class so `with Pipe` keeps the default [abort]; `implements Pipe`
 /// must override it.
 abstract mixin class Pipe {
+  /// The bytes after this stage; lazy until listened.
   Stream<List<int>> transform(Stream<List<int>> input);
 
   /// The run failed: poison the stage (a Hasher refuses `hex`), print
@@ -207,6 +205,7 @@ extension ReaderFuture on Future<Reader> {
       if (r is Closeable) await (r as Closeable).close();
     }
   }
+
   Reader pipe(Pipe? pipe) => _FutureReader(this).pipe(pipe);
   Reader operator |(Pipe? pipe) => _FutureReader(this) | pipe;
   Future<void> to(Writer? writer) async => (await this).to(writer);
@@ -265,9 +264,7 @@ final class _FutureReader with Reader {
 
 /// In-memory bytes behind [Reader.of].
 final class _Memory with Reader {
-  _Memory(List<int> bytes)
-      : _bytes = (bytes is Uint8List ? bytes : Uint8List.fromList(bytes))
-            .asUnmodifiableView();
+  _Memory(List<int> bytes) : _bytes = (bytes is Uint8List ? bytes : Uint8List.fromList(bytes)).asUnmodifiableView();
 
   final Uint8List _bytes;
 
@@ -278,6 +275,5 @@ final class _Memory with Reader {
   Future<List<int>> bytes() async => _bytes;
 
   @override
-  Future<String> text() async =>
-      utf8.decode(_bytes, allowMalformed: true);
+  Future<String> text() async => utf8.decode(_bytes, allowMalformed: true);
 }

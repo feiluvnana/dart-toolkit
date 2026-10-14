@@ -21,8 +21,20 @@ import 'crc32.dart';
 
 /// One member as read.
 final class ZipEntry {
-  ZipEntry._(this.name, this.mode, this._bytes, this._offset, this._method, this._size, this._packed,
-      {required this.encrypted, required this._crc, required this._time, required this._flags, this._aes});
+  ZipEntry._(
+    this.name,
+    this.mode,
+    this._bytes,
+    this._offset,
+    this._method,
+    this._size,
+    this._packed, {
+    required this.encrypted,
+    required this._crc,
+    required this._time,
+    required this._flags,
+    this._aes,
+  });
 
   /// The stored name, `/`-separated; folders end in `/`.
   final String name;
@@ -184,8 +196,22 @@ List<ZipEntry> readZip(Uint8List b) {
     }
     final mode = madeBy == 3 ? external >> 16 & 0xFFFF : 0;
     if (method == 99 && aes == null) _corrupt('AES member without its extra field: $name');
-    out.add(ZipEntry._(name, mode, b, offset, method, size, packed,
-        encrypted: flags & 1 != 0, crc: _u32(b, at + 16), time: _u16(b, at + 12), flags: flags, aes: aes));
+    out.add(
+      ZipEntry._(
+        name,
+        mode,
+        b,
+        offset,
+        method,
+        size,
+        packed,
+        encrypted: flags & 1 != 0,
+        crc: _u32(b, at + 16),
+        time: _u16(b, at + 12),
+        flags: flags,
+        aes: aes,
+      ),
+    );
     at = nameEnd + extraLen + commentLen;
   }
   return out;

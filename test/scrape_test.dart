@@ -21,9 +21,7 @@ void main() {
       final path = request.uri.path;
       if (path == '/') {
         request.response.headers.contentType = ContentType.html;
-        request.response.write(
-          '<a href="/a">a</a><a href="/b">b</a><a href="/a">again</a>',
-        );
+        request.response.write('<a href="/a">a</a><a href="/b">b</a><a href="/a">again</a>');
       } else if (path == '/a') {
         request.response.headers.contentType = ContentType.html;
         request.response.write('<title>A</title><img src="/img.png">');
@@ -83,10 +81,7 @@ void main() {
           w.emit('${w.status()}:${w.url()}');
         });
       }).toList();
-      expect(
-        titles..sort(),
-        ['200:$base/a', '404:$base/b'],
-      );
+      expect(titles..sort(), ['200:$base/a', '404:$base/b']);
     });
 
     test('each URL is visited once', () async {
@@ -106,10 +101,14 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('scrape_redirect');
       try {
         for (var run = 0; run < 2; run++) {
-          final got = await Scrape.crawl<String>(['$base/r1', '$base/r2'],
-              (v) async {
-            v.emit(v.url());
-          }, cache: dir.path, limit: 1).toList();
+          final got = await Scrape.crawl<String>(
+            ['$base/r1', '$base/r2'],
+            (v) async {
+              v.emit(v.url());
+            },
+            cache: dir.path,
+            limit: 1,
+          ).toList();
           expect(got, ['$base/a']);
         }
       } finally {
@@ -128,8 +127,8 @@ void main() {
       final root = await Directory.systemTemp.createTemp('scrape_private');
       addTearDown(() => root.delete(recursive: true));
       final dir = '${root.path}/cache';
-      Future<void> crawl(String token) => Scrape.crawl<String>(['$base/a'], (v) async {},
-          cache: dir, headers: {'authorization': token}).toList();
+      Future<void> crawl(String token) =>
+          Scrape.crawl<String>(['$base/a'], (v) async {}, cache: dir, headers: {'authorization': token}).toList();
       hits.clear();
       await crawl('Bearer A');
       await crawl('Bearer A');
@@ -143,7 +142,9 @@ void main() {
       final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final seen = <String?>[];
       other.listen((r) {
-        seen..add(r.headers.value('authorization'))..add(r.headers.value('accept'));
+        seen
+          ..add(r.headers.value('authorization'))
+          ..add(r.headers.value('accept'));
         r.response.close();
       });
       addTearDown(() => other.close(force: true));
@@ -157,8 +158,12 @@ void main() {
       hits.clear();
       final progress = <(int, int)>[];
       final got = await Scrape.crawl<String>(['$base/'], (v) async {
-        v.follow(['$base/a', '$base/b', 'http://elsewhere.invalid/x'], (w) async => w.emit(w.url()),
-            under: '$base/', skip: (u) => u.endsWith('/b'));
+        v.follow(
+          ['$base/a', '$base/b', 'http://elsewhere.invalid/x'],
+          (w) async => w.emit(w.url()),
+          under: '$base/',
+          skip: (u) => u.endsWith('/b'),
+        );
       }, onProgress: (d, t) => progress.add((d, t))).toList();
       expect(got, ['$base/a']);
       expect(hits.where((h) => h.endsWith('/b')), isEmpty);
@@ -170,11 +175,12 @@ void main() {
       final done = Completer<void>();
       late StreamSubscription<String> sub;
       var n = 0;
-      sub = Scrape.crawl<String>(urls, (v) async {
-        v.emit(await v.text());
-      }, limit: 1).listen((_) {
-        if (++n == 1) sub.pause();
-      }, onDone: done.complete);
+      sub =
+          Scrape.crawl<String>(urls, (v) async {
+            v.emit(await v.text());
+          }, limit: 1).listen((_) {
+            if (++n == 1) sub.pause();
+          }, onDone: done.complete);
       await Future<void>.delayed(const Duration(milliseconds: 500));
       expect(hits.length, lessThan(5));
       sub.resume();
@@ -217,9 +223,7 @@ void main() {
         }
       }
 
-      await Scrape.crawl<void>(['$base/'], handler, limit: 8)
-          .toList()
-          .timeout(const Duration(seconds: 30));
+      await Scrape.crawl<void>(['$base/'], handler, limit: 8).toList().timeout(const Duration(seconds: 30));
       expect(seen, {'$base/', '$base/a', '$base/b', '$base/img.png'});
     });
 
@@ -254,11 +258,7 @@ void main() {
     });
 
     test('retries recover a flaky page', () async {
-      final out = await Scrape.crawl<String>(
-        ['$base/flaky'],
-        (w) async => w.emit(await w.text()),
-        retries: 2,
-      ).toList();
+      final out = await Scrape.crawl<String>(['$base/flaky'], (w) async => w.emit(await w.text()), retries: 2).toList();
       expect(out, ['recovered']);
     });
 
@@ -271,19 +271,14 @@ void main() {
       );
     });
 
-    test('S1: a failure with queued URLs errors instead of hanging',
-        () async {
+    test('S1: a failure with queued URLs errors instead of hanging', () async {
       // limit: 1, the handler queues two URLs then throws: without the
       // queue-clearing fix the workers exit but _drain waits forever.
       await expectLater(
-        Scrape.crawl<String>(
-          ['$base/'],
-          (v) async {
-            v.follow(['$base/a', '$base/b'], (w) async {});
-            throw StateError('handler blew up after queueing');
-          },
-          limit: 1,
-        ).toList().timeout(const Duration(seconds: 30)),
+        Scrape.crawl<String>(['$base/'], (v) async {
+          v.follow(['$base/a', '$base/b'], (w) async {});
+          throw StateError('handler blew up after queueing');
+        }, limit: 1).toList().timeout(const Duration(seconds: 30)),
         throwsStateError,
       );
     });
@@ -291,30 +286,30 @@ void main() {
     test('S2: non-http(s) links are skipped, never visited', () async {
       final seen = <String>[];
       await Scrape.crawl<void>(['$base/'], (v) async {
-        v.follow(
-          ['mailto:a@b.c', 'tel:+1', 'javascript:void(0)', 'data:,x', '$base/a'],
-          (w) async => seen.add(w.url()),
-        );
+        v.follow([
+          'mailto:a@b.c',
+          'tel:+1',
+          'javascript:void(0)',
+          'data:,x',
+          '$base/a',
+        ], (w) async => seen.add(w.url()));
       }).toList();
       expect(seen, ['$base/a']);
     });
 
     test('onError reports and the crawl goes on', () async {
       final errors = <String>[];
-      final out = await Scrape.crawl<String>(
-        ['$base/a', '$base/b'],
-        (w) async {
-          if (w.url().endsWith('/a')) throw StateError('bad a');
-          w.emit('b-ok');
-        },
-        onError: (url, e) => errors.add(url),
-      ).toList();
+      final out = await Scrape.crawl<String>(['$base/a', '$base/b'], (w) async {
+        if (w.url().endsWith('/a')) throw StateError('bad a');
+        w.emit('b-ok');
+      }, onError: (url, e) => errors.add(url)).toList();
       expect(out, ['b-ok']);
       expect(errors, ['$base/a']);
     });
 
     test('cancelling a crawl lets the process exit', () async {
-      final res = await runDart('''
+      final res = await runDart(
+        '''
 import 'package:dart_toolkit/scrape.dart';
 Future<void> main(List<String> args) async {
   final base = args.single;
@@ -324,7 +319,10 @@ Future<void> main(List<String> args) async {
   }).first;
   print(first);
 }
-''', args: [base], timeout: const Duration(seconds: 8));
+''',
+        args: [base],
+        timeout: const Duration(seconds: 8),
+      );
       expect(res.stdout, contains('hit'));
       expect(res.exitCode, 0);
     });
@@ -349,20 +347,17 @@ Future<void> main() async {
     });
 
     test('bad limit is an ArgumentError', () {
-      expect(
-        () => Scrape.crawl<String>([], (v) async {}, limit: 0),
-        throwsArgumentError,
-      );
+      expect(() => Scrape.crawl<String>([], (v) async {}, limit: 0), throwsArgumentError);
     });
 
     test('cache replays a rerun without traffic', () async {
       final dir = await Directory.systemTemp.createTemp('scrape_cache');
       try {
         Future<Stream<String>> crawl() => Future.value(
-              Scrape.crawl<String>(['$base/slow'], (w) async {
-                w.emit(await w.text());
-              }, cache: dir.path),
-            );
+          Scrape.crawl<String>(['$base/slow'], (w) async {
+            w.emit(await w.text());
+          }, cache: dir.path),
+        );
         expect(await (await crawl()).toList(), ['slow-ok']);
         final firstHits = hits.length;
         expect(firstHits, greaterThan(0));

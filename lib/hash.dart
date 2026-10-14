@@ -27,7 +27,8 @@ export 'core.dart';
 /// checks itself at the end of a run: a mismatch fails the pipeline with a
 /// [FormatException] before the writer commits, so
 /// `Http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
-/// never unpacks a bad download.
+/// never unpacks a bad download. It is checked when a run ends (`>`, `|`,
+/// `of`); `hex()` alone does not check.
 abstract final class Hash {
   /// MD5 hasher.
   static Hasher md5({String? expect}) => Hasher._(c.md5, 'md5', expect);
@@ -62,8 +63,8 @@ enum _State {
 /// A hash in progress: a [Writer] you feed, a [Pipe] that passes through.
 final class Hasher implements Writer, Pipe {
   Hasher._(this._hash, this._name, String? expect)
-      : _expect = expect?.trim().toLowerCase(),
-        _capture = _DigestCapture() {
+    : _expect = expect?.trim().toLowerCase(),
+      _capture = _DigestCapture() {
     _in = _hash.startChunkedConversion(_capture);
   }
 
@@ -89,14 +90,12 @@ final class Hasher implements Writer, Pipe {
       case _State.done:
         throw StateError('hash is finished; $action is stale');
       case _State.poisoned:
-        throw StateError(
-            'hash saw only part of a failed run; $action is stale');
+        throw StateError('hash saw only part of a failed run; $action is stale');
     }
   }
 
   /// [Pipe.abort]: poison so a later [hex] throws instead of returning
-  /// a wrong digest. Covers broadcast sources too (the old listen-cancel
-  /// probe skipped them). Wired via [Reader.to]'s abort walk, which
+  /// a wrong digest. Covers broadcast sources too. Wired via [Reader.to]'s abort walk, which
   /// calls [abort] without starting the pipeline, and via [_tee]'s finally /
   /// [consume]'s catch mid-run.
   @override
@@ -106,9 +105,9 @@ final class Hasher implements Writer, Pipe {
 
   /// Feed more text (UTF-8). Returns this. An [add] after [hex], while
   /// a pipeline is running, or after a failed run is a [StateError].
-  Hasher add(String data) {
+  Hasher add(String text) {
     _guard('add');
-    _in.add(utf8.encode(data));
+    _in.add(utf8.encode(text));
     return this;
   }
 

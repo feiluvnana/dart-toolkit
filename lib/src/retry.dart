@@ -52,10 +52,7 @@ bool isRetryable(Object e) {
     final msg = e.message.toLowerCase();
     // TLS failures surface as HttpException on some paths (package:http
     // maps ClientException; cert failures mention tls/cert/handshake).
-    if (msg.contains('tls') ||
-        msg.contains('certificate') ||
-        msg.contains('handshake') ||
-        msg.contains('cert')) {
+    if (msg.contains('tls') || msg.contains('certificate') || msg.contains('handshake') || msg.contains('cert')) {
       return false;
     }
     return true;

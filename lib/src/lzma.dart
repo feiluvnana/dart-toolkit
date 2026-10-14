@@ -181,7 +181,18 @@ final class _Lzma {
   }
 
   void resetState() {
-    for (final probs in [_literal, _isMatch, _isRep, _isRepG0, _isRepG1, _isRepG2, _isRep0Long, _posSlot, _posSpecial, _align]) {
+    for (final probs in [
+      _literal,
+      _isMatch,
+      _isRep,
+      _isRepG0,
+      _isRepG1,
+      _isRepG2,
+      _isRep0Long,
+      _posSlot,
+      _posSpecial,
+      _align,
+    ]) {
       probs.fillRange(0, probs.length, 1024);
     }
     _len.reset();

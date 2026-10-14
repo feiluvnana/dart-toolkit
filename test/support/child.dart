@@ -28,19 +28,24 @@ Future<ProcessResult> runDart(
     workingDirectory: cwd ?? dir.path,
     environment: env,
   );
-  unawaited(() async {
-    for (final (delay, text) in stdin) {
-      await Future<void>.delayed(delay);
-      p.stdin.write(text);
-    }
-    await p.stdin.close();
-  }().catchError((_) {}));
+  unawaited(
+    () async {
+      for (final (delay, text) in stdin) {
+        await Future<void>.delayed(delay);
+        p.stdin.write(text);
+      }
+      await p.stdin.close();
+    }().catchError((_) {}),
+  );
   final out = p.stdout.transform(utf8.decoder).join();
   final err = p.stderr.transform(utf8.decoder).join();
-  final code = await p.exitCode.timeout(timeout, onTimeout: () {
-    p.kill(ProcessSignal.sigkill);
-    return -1;
-  });
+  final code = await p.exitCode.timeout(
+    timeout,
+    onTimeout: () {
+      p.kill(ProcessSignal.sigkill);
+      return -1;
+    },
+  );
   return ProcessResult(p.pid, code, await out, await err);
 }
 

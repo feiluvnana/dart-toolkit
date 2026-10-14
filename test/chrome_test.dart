@@ -49,9 +49,11 @@ void main() {
       } else if (path == '/slow-img') {
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         request.response.headers.contentType = ContentType('image', 'png');
-        request.response.add(base64Decode(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        ));
+        request.response.add(
+          base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+          ),
+        );
       } else if (path == '/trigger') {
         // Starts a slow image 100 ms after load (with a cache-buster so
         // every run really flies it over the network).
@@ -237,14 +239,8 @@ void main() {
       final page = await browser.open(dataUrl(testHtml));
       expect(await page.run<double>('1.0'), 1.0);
       expect(await page.run<int>('1.0'), 1);
-      expect(
-        Json.of(await page.run<dynamic>('["a", "b"]')).asList<String>(),
-        ['a', 'b'],
-      );
-      expect(
-        await page.run<Map<String, Object?>>('({"x": 1})'),
-        {'x': 1},
-      );
+      expect(Json.of(await page.run<dynamic>('["a", "b"]')).asList<String>(), ['a', 'b']);
+      expect(await page.run<Map<String, Object?>>('({"x": 1})'), {'x': 1});
       await page.close();
     });
 
@@ -306,8 +302,7 @@ void main() {
       await page.close();
     });
 
-    test('B3: press names are case-insensitive; chars typed; unknown throws',
-        () async {
+    test('B3: press names are case-insensitive; chars typed; unknown throws', () async {
       final page = await browser.open(dataUrl('<input id="q">'));
       await page.click('#q');
       await page.press('Enter');
@@ -315,10 +310,7 @@ void main() {
       await page.press('esc');
       await page.press('+');
       expect(await page.run<String>("document.querySelector('#q').value"), '+');
-      expect(
-        page.press('frobnicate'),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(page.press('frobnicate'), throwsA(isA<ArgumentError>()));
       await page.close();
     });
 
@@ -348,8 +340,7 @@ void main() {
     });
 
     test('B4: upload works on hidden file inputs', () async {
-      final page = await browser.open(
-          dataUrl('<input type="file" id="f" style="display:none">'));
+      final page = await browser.open(dataUrl('<input type="file" id="f" style="display:none">'));
       final dir = await Directory.systemTemp.createTemp('chrome_up');
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
@@ -369,13 +360,9 @@ void main() {
       await page.close();
     });
 
-    test('B6: scroll on a missing selector times out, not StateError',
-        () async {
+    test('B6: scroll on a missing selector times out, not StateError', () async {
       final page = await browser.open(dataUrl(testHtml));
-      await expectLater(
-        page.scroll('#missing', const Duration(milliseconds: 500)),
-        throwsA(isA<TimeoutException>()),
-      );
+      await expectLater(page.scroll('#missing', const Duration(milliseconds: 500)), throwsA(isA<TimeoutException>()));
       await page.close();
     });
   });
@@ -471,8 +458,7 @@ void main() {
       await page.close();
     });
 
-    test('B1: download on a missing selector throws, never crashes',
-        () async {
+    test('B1: download on a missing selector throws, never crashes', () async {
       final page = await browser.open(dataUrl(testHtml));
       await expectLater(
         page.download('#missing', timeout: const Duration(seconds: 2)),
@@ -482,23 +468,22 @@ void main() {
     });
 
     test('H2: a failed download does not block the next one', () async {
-      final page = await browser.open(dataUrl(
-        '<a id="off" href="$base/file" style="position:fixed;left:-9999px;width:10px;height:10px">x</a>'
-        '<a id="d" href="$base/file">get it</a>',
-      ));
-      await expectLater(
-        page.download('#off', timeout: const Duration(seconds: 3)),
-        throwsA(anything),
+      final page = await browser.open(
+        dataUrl(
+          '<a id="off" href="$base/file" style="position:fixed;left:-9999px;width:10px;height:10px">x</a>'
+          '<a id="d" href="$base/file">get it</a>',
+        ),
       );
+      await expectLater(page.download('#off', timeout: const Duration(seconds: 3)), throwsA(anything));
       final download = await page.download('#d', timeout: const Duration(seconds: 5));
       expect(download.name(), 'hello.txt');
       await page.close();
     });
 
     test('M14: engine failures name the selector and are not reported as timeouts', () async {
-      final page = await browser.open(dataUrl(
-        '<a id="off" style="position:fixed;left:-9999px;width:10px;height:10px">x</a>',
-      ));
+      final page = await browser.open(
+        dataUrl('<a id="off" style="position:fixed;left:-9999px;width:10px;height:10px">x</a>'),
+      );
       await expectLater(
         page.click('#off'),
         throwsA(isA<StateError>().having((e) => e.message, 'message', contains('#off'))),

@@ -8,8 +8,7 @@ void main() {
     test('typed Opt with default, reads and coerces', () async {
       final top = Opt<int>('top', 'N.', short: 'n', or: 10);
       int? seen;
-      final cli = Command('app', 'X.',
-          params: [top], handler: (ctx) => seen = ctx(top));
+      final cli = Command('app', 'X.', params: [top], handler: (ctx) => seen = ctx(top));
       expect(await cli.run([]), 0);
       expect(seen, 10);
       expect(await cli.run(['--top', '3']), 0);
@@ -21,19 +20,21 @@ void main() {
 
     test('T is inferred from or: and parse:', () async {
       final port = Opt('port', 'Port.', short: 'p', or: 8080);
-      final since = Opt('since', 'Start date.',
-          parse: DateTime.parse, or: DateTime(2020));
+      final since = Opt('since', 'Start date.', parse: DateTime.parse, or: DateTime(2020));
       // Static proof: no explicit type arguments above, yet these assign.
       Opt<int> checkPort = port;
       Opt<DateTime> checkSince = since;
       int? seenPort;
       DateTime? seenSince;
-      final cli = Command('app', 'X.',
-          params: [checkPort, checkSince],
-          handler: (ctx) {
-            seenPort = ctx(port);
-            seenSince = ctx(since);
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [checkPort, checkSince],
+        handler: (ctx) {
+          seenPort = ctx(port);
+          seenSince = ctx(since);
+        },
+      );
       expect(await cli.run([]), 0);
       expect(seenPort, 8080);
       expect(seenSince, DateTime(2020));
@@ -47,12 +48,15 @@ void main() {
       final maybe = Opt<String?>('maybe', 'M.');
       String? s;
       String? n;
-      final cli = Command('app', 'X.',
-          params: [out, maybe],
-          handler: (ctx) {
-            s = ctx(out);
-            n = ctx(maybe);
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [out, maybe],
+        handler: (ctx) {
+          s = ctx(out);
+          n = ctx(maybe);
+        },
+      );
       expect(await cli.run([]), 0);
       expect(s, 'd');
       expect(n, isNull);
@@ -76,9 +80,7 @@ void main() {
     test('Flag or:true reads --no-name', () async {
       final color = Flag('color', 'C.', or: true);
       var seen = -1;
-      final cli = Command('app', 'X.',
-          params: [color],
-          handler: (ctx) => seen = ctx(color) ? 1 : 0);
+      final cli = Command('app', 'X.', params: [color], handler: (ctx) => seen = ctx(color) ? 1 : 0);
       expect(await cli.run(['--no-color']), 0);
       expect(seen, 0);
       expect(await cli.run([]), 0);
@@ -94,9 +96,12 @@ void main() {
 
     test('C3: a required parent Opt is checked when dispatching', () async {
       final token = Opt<String>('token', 'T.', required: true);
-      final cli = Command('app', 'X.', params: [token], commands: [
-        Command('go', 'Go.', handler: (_) {}),
-      ]);
+      final cli = Command(
+        'app',
+        'X.',
+        params: [token],
+        commands: [Command('go', 'Go.', handler: (_) {})],
+      );
       expect(await cli.run(['go']), 64);
       expect(await cli.run(['--token', 'x', 'go']), 0);
     });
@@ -104,9 +109,12 @@ void main() {
     test('C1/C2: parent Multi merges typed, before and after', () async {
       final tag = Multi<String>('tag', 'A tag.', short: 't');
       List<String> tags = const [];
-      final cli = Command('app', 'X.', params: [tag], commands: [
-        Command('go', 'Go.', handler: (ctx) => tags = ctx(tag)),
-      ]);
+      final cli = Command(
+        'app',
+        'X.',
+        params: [tag],
+        commands: [Command('go', 'Go.', handler: (ctx) => tags = ctx(tag))],
+      );
       expect(await cli.run(['--tag', 'a', 'go', '--tag', 'b']), 0);
       expect(tags, ['a', 'b']);
     });
@@ -114,8 +122,7 @@ void main() {
     test('C4: Multi with parse: reads as List<T>', () async {
       final col = Multi<Color>('col', 'C.', parse: Color.parse);
       List<Color> seen = const [];
-      final cli = Command('app', 'X.',
-          params: [col], handler: (ctx) => seen = ctx(col));
+      final cli = Command('app', 'X.', params: [col], handler: (ctx) => seen = ctx(col));
       expect(await cli.run(['--col', 'red', '--col', '#00ff00']), 0);
       expect(seen, [Color.red, const Color(0x00ff00)]);
       expect(await cli.run([]), 0);
@@ -137,13 +144,16 @@ void main() {
       var vv = false;
       var nn = -1;
       List<String> tail = const [];
-      final cli = Command('app', 'X.',
-          params: [v, n],
-          handler: (ctx) {
-            vv = ctx(v);
-            nn = ctx(n);
-            tail = ctx.rest();
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [v, n],
+        handler: (ctx) {
+          vv = ctx(v);
+          nn = ctx(n);
+          tail = ctx.rest();
+        },
+      );
       expect(await cli.run(['-vn3']), 0);
       expect((vv, nn), (true, 3));
       expect(await cli.run(['--', '-v']), 0);
@@ -154,12 +164,15 @@ void main() {
       final q = Arg<String?>('q', 'Query.');
       String? seen;
       List<String> tail = const [];
-      final cli = Command('app', 'X.',
-          params: [q],
-          handler: (ctx) {
-            seen = ctx(q);
-            tail = ctx.rest();
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [q],
+        handler: (ctx) {
+          seen = ctx(q);
+          tail = ctx.rest();
+        },
+      );
       expect(await cli.run(['-5']), 0);
       expect(seen, '-5');
       expect(tail, isEmpty);
@@ -172,22 +185,22 @@ void main() {
       Duration? d;
       DateTime? dt;
       Uri? u;
-      final cli = Command('app', 'X.',
-          params: [wait, when, uri],
-          handler: (ctx) {
-            d = ctx(wait);
-            dt = ctx(when);
-            u = ctx(uri);
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [wait, when, uri],
+        handler: (ctx) {
+          d = ctx(wait);
+          dt = ctx(when);
+          u = ctx(uri);
+        },
+      );
       expect(await cli.run(['--wait', '1h30m', '--when', '2026-10-08']), 0);
       expect(d, const Duration(hours: 1, minutes: 30));
       expect(dt, DateTime(2026, 10, 8));
       expect(await cli.run(['--wait', '-5s']), 0);
       expect(d, const Duration(seconds: -5));
-      expect(
-          await cli.run(
-              ['--uri', 'https://example.com/x', '--wait', '90']),
-          0);
+      expect(await cli.run(['--uri', 'https://example.com/x', '--wait', '90']), 0);
       expect(u, Uri.parse('https://example.com/x'));
       expect(d, const Duration(seconds: 90));
       expect(await cli.run(['--wait', 'soon']), 64);
@@ -198,18 +211,19 @@ void main() {
       final verbose = Flag('verbose', 'V.', short: 'v');
       final url = Opt<String>('url', 'U.', or: '');
       final q = Arg<String?>('q', 'Q.');
-      final cli = Command('app', 'X.',
-          params: [verbose, url, q], handler: (_) {});
+      final cli = Command('app', 'X.', params: [verbose, url, q], handler: (_) {});
       expect(await cli.run(['--urlx', 'y']), 64);
       expect(await cli.run(['-vh']), 0);
     });
 
     test('the hint names the deepest command reached', () async {
-      final cli = Command('app', 'X.', commands: [
-        Command('remote', 'R.', commands: [
-          Command('add', 'A.', handler: (_) {}),
-        ]),
-      ]);
+      final cli = Command(
+        'app',
+        'X.',
+        commands: [
+          Command('remote', 'R.', commands: [Command('add', 'A.', handler: (_) {})]),
+        ],
+      );
       expect(await cli.run(['remote', '--bogus']), 64);
     });
   });
@@ -221,11 +235,16 @@ void main() {
       String? s;
       String? d;
       List<String> tail = const [];
-      final cli = Command('cp', 'Copy.', params: [src, dst], handler: (ctx) {
-        s = ctx(src);
-        d = ctx(dst);
-        tail = ctx.rest();
-      });
+      final cli = Command(
+        'cp',
+        'Copy.',
+        params: [src, dst],
+        handler: (ctx) {
+          s = ctx(src);
+          d = ctx(dst);
+          tail = ctx.rest();
+        },
+      );
       expect(await cli.run(['a', 'b']), 0);
       expect(s, 'a');
       expect(d, 'b');
@@ -240,8 +259,7 @@ void main() {
     test('a query of help stays positional when Args exist', () async {
       final q = Arg<String>('q', 'Query.', required: true);
       String? seen;
-      final cli = Command('app', 'X.',
-          params: [q], handler: (ctx) => seen = ctx(q));
+      final cli = Command('app', 'X.', params: [q], handler: (ctx) => seen = ctx(q));
       expect(await cli.run(['help']), 0);
       expect(seen, 'help');
     });
@@ -253,13 +271,23 @@ void main() {
       final file = Arg<String>('file', 'F.', required: true);
       var built = '';
       List<String> tags = const [];
-      final cli = Command('tk', 'Tool.', params: [tag], commands: [
-        Command('build', 'Builds.', aliases: ['b'], params: [file],
+      final cli = Command(
+        'tk',
+        'Tool.',
+        params: [tag],
+        commands: [
+          Command(
+            'build',
+            'Builds.',
+            aliases: ['b'],
+            params: [file],
             handler: (ctx) {
-          built = ctx(file);
-          tags = ctx(tag);
-        }),
-      ]);
+              built = ctx(file);
+              tags = ctx(tag);
+            },
+          ),
+        ],
+      );
       expect(await cli.run(['build', '--tag', 'a', 'f1']), 0);
       expect(built, 'f1');
       expect(tags, ['a']);
@@ -268,32 +296,29 @@ void main() {
     });
 
     test('C6: help works at depth; unknown help names suggest', () async {
-      final cli = Command('tk', 'Tool.', commands: [
-        Command('remote', 'R.', commands: [
-          Command('add', 'A.', handler: (_) {}),
-        ]),
-      ]);
+      final cli = Command(
+        'tk',
+        'Tool.',
+        commands: [
+          Command('remote', 'R.', commands: [Command('add', 'A.', handler: (_) {})]),
+        ],
+      );
       expect(await cli.run(['help', 'remote', 'add']), 0);
       expect(await cli.run(['remote', 'help', 'add']), 0);
       expect(await cli.run(['help', 'rmove']), 64);
     });
 
-    test('--help is 0, unknown command is 64, UsageException is 64',
-        () async {
-      final cli = Command('tk', 'Tool.', commands: [
-        Command('build', 'Builds.', handler: (_) {}),
-      ]);
+    test('--help is 0, unknown command is 64, UsageException is 64', () async {
+      final cli = Command('tk', 'Tool.', commands: [Command('build', 'Builds.', handler: (_) {})]);
       expect(await cli.run(['--help']), 0);
       expect(await cli.run(['help', 'build']), 0);
       expect(await cli.run(['rmove']), 64);
-      final bad = Command('app', 'X.',
-          handler: (_) => throw const UsageException('nope'));
+      final bad = Command('app', 'X.', handler: (_) => throw const UsageException('nope'));
       expect(await bad.run([]), 64);
     });
 
     test('C10: handler Errors propagate with their stack', () async {
-      final cli = Command('app', 'X.',
-          handler: (_) => throw StateError('bug'));
+      final cli = Command('app', 'X.', handler: (_) => throw StateError('bug'));
       var threw = false;
       try {
         await cli.run([]);
@@ -301,31 +326,45 @@ void main() {
         threw = true;
       }
       expect(threw, isTrue);
-      final exc = Command('app', 'X.',
-          handler: (_) => throw FormatException('bad input'));
+      final exc = Command('app', 'X.', handler: (_) => throw FormatException('bad input'));
       expect(await exc.run([]), 1);
     });
 
     test('C14: children cannot redeclare ancestor options', () {
       final tag = Opt<String>('tag', 'T.', or: '');
       expect(
-        () => Command('app', 'X.', params: [tag], commands: [
-          Command('go', 'G.', params: [Opt<String>('tag', 'Other.')]),
-        ]),
+        () => Command(
+          'app',
+          'X.',
+          params: [tag],
+          commands: [
+            Command('go', 'G.', params: [Opt<String>('tag', 'Other.')]),
+          ],
+        ),
         throwsArgumentError,
       );
       final v = Flag('verbose', 'V.', short: 'v');
       expect(
-        () => Command('app', 'X.', params: [v], commands: [
-          Command('go', 'G.', params: [Flag('other', 'O.', short: 'v')]),
-        ]),
+        () => Command(
+          'app',
+          'X.',
+          params: [v],
+          commands: [
+            Command('go', 'G.', params: [Flag('other', 'O.', short: 'v')]),
+          ],
+        ),
         throwsArgumentError,
       );
       // Sharing the identical Def object is fine.
       expect(
-        () => Command('app', 'X.', params: [tag], commands: [
-          Command('go', 'G.', params: [tag], handler: (_) {}),
-        ]),
+        () => Command(
+          'app',
+          'X.',
+          params: [tag],
+          commands: [
+            Command('go', 'G.', params: [tag], handler: (_) {}),
+          ],
+        ),
         returnsNormally,
       );
       expect(() => Command('bad name', 'X.'), throwsArgumentError);
@@ -334,8 +373,7 @@ void main() {
     test('usage lists -h, --help and reads back', () async {
       final top = Opt<int>('top', 'N.', or: 1);
       String? usage;
-      final cli = Command('app', 'X.',
-          params: [top], handler: (ctx) => usage = ctx.usage());
+      final cli = Command('app', 'X.', params: [top], handler: (ctx) => usage = ctx.usage());
       expect(await cli.run([]), 0);
       expect(usage, contains('-h, --help'));
       expect(usage, contains('Usage: app'));
@@ -345,18 +383,16 @@ void main() {
   group('arguments and commands', () {
     test('M3: a command cannot declare both', () {
       expect(
-          () => Command('app', 'X.',
-              params: [Arg<String>('file', 'F.')],
-              commands: [Command('sub', 'S.')]),
-          throwsArgumentError);
+        () => Command('app', 'X.', params: [Arg<String>('file', 'F.')], commands: [Command('sub', 'S.')]),
+        throwsArgumentError,
+      );
     });
   });
 
   group('parse: errors', () {
     test('M5: an Error from parse: propagates, an Exception is usage', () async {
       final bug = Opt<int>('n', 'N.', or: 0, parse: (_) => throw RangeError('bug'));
-      expect(Command('app', 'X.', params: [bug]).run(['--n', '1']),
-          throwsA(isA<RangeError>()));
+      expect(Command('app', 'X.', params: [bug]).run(['--n', '1']), throwsA(isA<RangeError>()));
       final bad = Opt<int>('n', 'N.', or: 0, parse: (_) => throw Exception('no'));
       expect(await Command('app', 'X.', params: [bad]).run(['--n', '1']), 64);
     });
@@ -364,26 +400,32 @@ void main() {
 
   group('messages', () {
     test('a bad value with escapes is quoted inert', () async {
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'dart:io';
 import 'package:dart_toolkit/cli.dart';
 Future<void> main(List<String> a) async {
   exitCode = await Command('app', 'X.', params: [Opt<int>('port', 'P.', or: 1)], handler: (_) {}).run(a);
 }
-''', args: ['--port', '1\x1b]0;PWN\x07']);
+''',
+        args: ['--port', '1\x1b]0;PWN\x07'],
+      );
       expect(r.exitCode, 64);
       expect(r.stderr, contains('1\uFFFD]0;PWN\uFFFD'));
       expect(r.stderr, isNot(contains('\x1b')));
     });
 
     test('Console prompts and log keep colour but drop other escapes', () async {
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/console.dart';
 Future<void> main() async {
   Console.log('\\x1b[32mok\\x1b[0m \\x1b]52;c;SGk=\\x07');
   print(await Console.ask('Q\\x1b]0;T\\x07?'));
 }
-''', stdin: const [(Duration.zero, 'x\n')]);
+''',
+        stdin: const [(Duration.zero, 'x\n')],
+      );
       expect(r.stderr, contains('\x1b[32mok\x1b[0m \uFFFD]52;c;SGk=\uFFFD'));
       expect(r.stderr, contains('Q\uFFFD]0;T\uFFFD?'));
     });
@@ -435,37 +477,40 @@ Future<void> main(List<String> a) async {
       final top = Opt<int>('top', 'N.', or: 1);
       final other = Opt<int?>('other', 'O.');
       var stateErr = false;
-      final cli = Command('app', 'X.',
-          params: [top],
-          handler: (ctx) {
-            try {
-              ctx(other);
-            } on StateError {
-              stateErr = true;
-            }
-          });
+      final cli = Command(
+        'app',
+        'X.',
+        params: [top],
+        handler: (ctx) {
+          try {
+            ctx(other);
+          } on StateError {
+            stateErr = true;
+          }
+        },
+      );
       await cli.run([]);
       expect(stateErr, isTrue);
     });
 
     test('schema validation is ArgumentError', () {
       expect(() => Flag('x', 'X.', short: 'xy'), throwsArgumentError);
+      expect(() => Opt<String>('x', 'X.', required: true, or: 'd'), throwsArgumentError);
       expect(
-          () => Opt<String>('x', 'X.', required: true, or: 'd'),
-          throwsArgumentError);
+        () => Command(
+          'c',
+          'C.',
+          params: [
+            Opt<String>('x', 'X.', or: ''),
+            Opt<String>('x', 'Y.', or: ''),
+          ],
+        ),
+        throwsArgumentError,
+      );
       expect(
-          () => Command('c', 'C.', params: [
-                Opt<String>('x', 'X.', or: ''),
-                Opt<String>('x', 'Y.', or: ''),
-              ]),
-          throwsArgumentError);
-      expect(
-          () => Command('c', 'C.',
-              params: [
-                    Arg<String?>('id', 'I.'),
-                    Arg<String>('req', 'R.', required: true),
-                  ]),
-          throwsArgumentError);
+        () => Command('c', 'C.', params: [Arg<String?>('id', 'I.'), Arg<String>('req', 'R.', required: true)]),
+        throwsArgumentError,
+      );
     });
   });
 }

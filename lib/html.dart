@@ -3,7 +3,7 @@
 /// ```dart
 /// final doc = await Http.get('https://example.com/article').html();
 /// final body = doc.not('script, style, nav').$('article').text();
-/// final next = await Http.get(url).html().$('a.next')[0].attr('href');
+/// final next = await Http.get(url).html().$('a.next').attr('href');
 /// ```
 ///
 /// Public surface is exactly: [Html], [Elements], [Element].
@@ -40,7 +40,7 @@ abstract final class Html {
   /// [base] is the base for relative links: with one, URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
   /// absolute. The base is parsed once per [Elements] and shared with every
-  /// child (1000 links no longer parse it 1000 times). A document's
+  /// child. A document's
   /// `<base href>` overrides it. A fragment with loose top-level text is
   /// wrapped in one `div`, so the text is kept.
   static Elements parse(String html, {String? base}) {
@@ -58,10 +58,10 @@ abstract final class Html {
       final base = declared == null || declared.isEmpty
           ? baseUri
           : baseUri?.resolve(declared) ?? Uri.tryParse(declared);
-      return Elements._(
-        [for (final n in doc.nodes) if (n is dom.Element) Element._(n, base)],
-        base,
-      );
+      return Elements._([
+        for (final n in doc.nodes)
+          if (n is dom.Element) Element._(n, base),
+      ], base);
     }
     final frag = parser.parseFragment(html);
     if (frag.nodes.any((n) => n is dom.Text && n.data.trim().isNotEmpty)) {
@@ -70,10 +70,10 @@ abstract final class Html {
       final root = dom.Element.tag('div')..nodes.addAll(frag.nodes.toList());
       return Elements._([Element._(root, baseUri)], baseUri);
     }
-    return Elements._(
-      [for (final n in frag.nodes) if (n is dom.Element) Element._(n, baseUri)],
-      baseUri,
-    );
+    return Elements._([
+      for (final n in frag.nodes)
+        if (n is dom.Element) Element._(n, baseUri),
+    ], baseUri);
   }
 }
 
@@ -98,16 +98,9 @@ final class Elements extends Iterable<Element> {
   /// Selectors are parsed once and cached (64-entry LRU keyed by the
   /// selector string): scrapes running the same selectors per page are O(1).
   Elements $(String selector) {
-    return Elements._(
-      [
-        for (final el in _queryRoots(
-          [for (final e in _items) e._el],
-          selector,
-        ))
-          Element._(el, _baseUri),
-      ],
-      _baseUri,
-    );
+    return Elements._([
+      for (final el in _queryRoots([for (final e in _items) e._el], selector)) Element._(el, _baseUri),
+    ], _baseUri);
   }
 
   /// Element at [index] (throws [RangeError] if out of bounds).
@@ -132,11 +125,7 @@ final class Elements extends Iterable<Element> {
         out.add(Element._(clone, _baseUri));
       }
     } on FormatException catch (e) {
-      throw FormatException(
-        "invalid selector '$selector': ${e.message}",
-        e.source,
-        e.offset,
-      );
+      throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
     } catch (e) {
       throw FormatException("invalid selector '$selector': $e");
     }
@@ -153,7 +142,7 @@ final class Elements extends Iterable<Element> {
   }
 
   /// Every match's text in document order. Pairs `text`/`texts` like
-  /// `attr`/`attrs`; replaces `.map((e) => e.text()).toList()`.
+  /// `attr`/`attrs`.
   List<String> texts() => [for (final e in _items) e.text()];
 
   /// The first match's attribute, or `null` when nothing matched or the
@@ -188,10 +177,9 @@ final class Element {
   /// without duplicates. The element itself is matched with the engine's
   /// `matches`, so combinators see the real tree.
   Elements $(String selector) {
-    return Elements._(
-      [for (final el in _queryRoots([_el], selector)) Element._(el, _baseUri)],
-      _baseUri,
-    );
+    return Elements._([
+      for (final el in _queryRoots([_el], selector)) Element._(el, _baseUri),
+    ], _baseUri);
   }
 
   /// A copy of this element without every match of [selector] and its
@@ -210,11 +198,7 @@ final class Element {
       }
       evaluator.querySelectorAll(clone, group, found);
     } on FormatException catch (e) {
-      throw FormatException(
-        "invalid selector '$selector': ${e.message}",
-        e.source,
-        e.offset,
-      );
+      throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
     } catch (e) {
       throw FormatException("invalid selector '$selector': $e");
     }
@@ -305,8 +289,7 @@ final class Element {
 
   /// Attribute [name] (case-insensitive) or `null` if absent. URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and, with a
-  /// base URL, resolved to absolute URLs (the base was parsed once per
-  /// [Elements], not per attribute).
+  /// base URL, resolved to absolute URLs.
   String? attr(String name) {
     final raw = _el.attributes[name.toLowerCase()];
     if (raw == null) return null;
@@ -421,11 +404,7 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
       }
     }
   } on FormatException catch (e) {
-    throw FormatException(
-      "invalid selector '$selector': ${e.message}",
-      e.source,
-      e.offset,
-    );
+    throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
   } on StackOverflowError {
     rethrow; // a document nested too deep, not a bad selector
   } catch (e) {
@@ -459,12 +438,11 @@ extension ReaderFutureHtml on Future<Reader> {
   Future<Elements> html() async => (await this).html();
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it.
 extension ElementsFuture on Future<Elements> {
   Future<Elements> $(String selector) async => (await this).$(selector);
   Future<Element> operator [](int index) async => (await this)[index];
-  Future<Elements> not(String selector) async =>
-      (await this).not(selector);
+  Future<Elements> not(String selector) async => (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<List<String>> texts() async => (await this).texts();
   Future<String?> attr(String name) async => (await this).attr(name);
@@ -474,8 +452,7 @@ extension ElementsFuture on Future<Elements> {
 /// Future mirrors for [Element].
 extension ElementFuture on Future<Element> {
   Future<Elements> $(String selector) async => (await this).$(selector);
-  Future<Element> not(String selector) async =>
-      (await this).not(selector);
+  Future<Element> not(String selector) async => (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<Element?> parent() async => (await this).parent();

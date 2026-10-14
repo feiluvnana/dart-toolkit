@@ -10,9 +10,7 @@ import 'package:crypto/crypto.dart' as crypto;
 
 /// An expanded AES key (128, 192 or 256 bits).
 final class Aes {
-  Aes(List<int> key)
-      : assert(key.length == 16 || key.length == 24 || key.length == 32),
-        _rounds = key.length ~/ 4 + 6 {
+  Aes(List<int> key) : assert(key.length == 16 || key.length == 24 || key.length == 32), _rounds = key.length ~/ 4 + 6 {
     _expand(Uint8List.fromList(key));
   }
 
@@ -48,10 +46,7 @@ final class Aes {
         final k = w[(_rounds - r) * 4 + c];
         d[r * 4 + c] = r == 0 || r == _rounds
             ? k
-            : _td0[_sbox[k >> 24]] ^
-                _td1[_sbox[k >> 16 & 0xFF]] ^
-                _td2[_sbox[k >> 8 & 0xFF]] ^
-                _td3[_sbox[k & 0xFF]];
+            : _td0[_sbox[k >> 24]] ^ _td1[_sbox[k >> 16 & 0xFF]] ^ _td2[_sbox[k >> 8 & 0xFF]] ^ _td3[_sbox[k & 0xFF]];
       }
     }
     _dk = d;
@@ -77,10 +72,26 @@ final class Aes {
       i += 4;
     }
     final sb = _sbox;
-    _put(out, outOff, (sb[s0 >> 24] << 24 | sb[s1 >> 16 & 0xFF] << 16 | sb[s2 >> 8 & 0xFF] << 8 | sb[s3 & 0xFF]) ^ k[i]);
-    _put(out, outOff + 4, (sb[s1 >> 24] << 24 | sb[s2 >> 16 & 0xFF] << 16 | sb[s3 >> 8 & 0xFF] << 8 | sb[s0 & 0xFF]) ^ k[i + 1]);
-    _put(out, outOff + 8, (sb[s2 >> 24] << 24 | sb[s3 >> 16 & 0xFF] << 16 | sb[s0 >> 8 & 0xFF] << 8 | sb[s1 & 0xFF]) ^ k[i + 2]);
-    _put(out, outOff + 12, (sb[s3 >> 24] << 24 | sb[s0 >> 16 & 0xFF] << 16 | sb[s1 >> 8 & 0xFF] << 8 | sb[s2 & 0xFF]) ^ k[i + 3]);
+    _put(
+      out,
+      outOff,
+      (sb[s0 >> 24] << 24 | sb[s1 >> 16 & 0xFF] << 16 | sb[s2 >> 8 & 0xFF] << 8 | sb[s3 & 0xFF]) ^ k[i],
+    );
+    _put(
+      out,
+      outOff + 4,
+      (sb[s1 >> 24] << 24 | sb[s2 >> 16 & 0xFF] << 16 | sb[s3 >> 8 & 0xFF] << 8 | sb[s0 & 0xFF]) ^ k[i + 1],
+    );
+    _put(
+      out,
+      outOff + 8,
+      (sb[s2 >> 24] << 24 | sb[s3 >> 16 & 0xFF] << 16 | sb[s0 >> 8 & 0xFF] << 8 | sb[s1 & 0xFF]) ^ k[i + 2],
+    );
+    _put(
+      out,
+      outOff + 12,
+      (sb[s3 >> 24] << 24 | sb[s0 >> 16 & 0xFF] << 16 | sb[s1 >> 8 & 0xFF] << 8 | sb[s2 & 0xFF]) ^ k[i + 3],
+    );
   }
 
   /// Decrypt the 16 bytes at [inOff] of [input] into [out] at [outOff].
@@ -103,10 +114,26 @@ final class Aes {
       i += 4;
     }
     final ib = _inv;
-    _put(out, outOff, (ib[s0 >> 24] << 24 | ib[s3 >> 16 & 0xFF] << 16 | ib[s2 >> 8 & 0xFF] << 8 | ib[s1 & 0xFF]) ^ k[i]);
-    _put(out, outOff + 4, (ib[s1 >> 24] << 24 | ib[s0 >> 16 & 0xFF] << 16 | ib[s3 >> 8 & 0xFF] << 8 | ib[s2 & 0xFF]) ^ k[i + 1]);
-    _put(out, outOff + 8, (ib[s2 >> 24] << 24 | ib[s1 >> 16 & 0xFF] << 16 | ib[s0 >> 8 & 0xFF] << 8 | ib[s3 & 0xFF]) ^ k[i + 2]);
-    _put(out, outOff + 12, (ib[s3 >> 24] << 24 | ib[s2 >> 16 & 0xFF] << 16 | ib[s1 >> 8 & 0xFF] << 8 | ib[s0 & 0xFF]) ^ k[i + 3]);
+    _put(
+      out,
+      outOff,
+      (ib[s0 >> 24] << 24 | ib[s3 >> 16 & 0xFF] << 16 | ib[s2 >> 8 & 0xFF] << 8 | ib[s1 & 0xFF]) ^ k[i],
+    );
+    _put(
+      out,
+      outOff + 4,
+      (ib[s1 >> 24] << 24 | ib[s0 >> 16 & 0xFF] << 16 | ib[s3 >> 8 & 0xFF] << 8 | ib[s2 & 0xFF]) ^ k[i + 1],
+    );
+    _put(
+      out,
+      outOff + 8,
+      (ib[s2 >> 24] << 24 | ib[s1 >> 16 & 0xFF] << 16 | ib[s0 >> 8 & 0xFF] << 8 | ib[s3 & 0xFF]) ^ k[i + 2],
+    );
+    _put(
+      out,
+      outOff + 12,
+      (ib[s3 >> 24] << 24 | ib[s2 >> 16 & 0xFF] << 16 | ib[s1 >> 8 & 0xFF] << 8 | ib[s0 & 0xFF]) ^ k[i + 3],
+    );
   }
 
   /// CBC decryption of [data] (a multiple of 16 bytes) with [iv].

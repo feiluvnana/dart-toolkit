@@ -104,10 +104,7 @@ sealed class Entry {
   Future<Entry> move(String to);
 
   @override
-  bool operator ==(Object other) =>
-      other is Entry &&
-      other.runtimeType == runtimeType &&
-      other._path == _path;
+  bool operator ==(Object other) => other is Entry && other.runtimeType == runtimeType && other._path == _path;
 
   @override
   int get hashCode => Object.hash(runtimeType, _path);
@@ -221,7 +218,7 @@ final class File extends Entry with Reader implements Writer {
   }
 
   Future<void> _atomicWrite(Stream<List<int>> input) async {
-    // Writes go through symlinks to their real target (F7): resolve first so
+    // Writes go through symlinks to their real target: resolve first so
     // a handle pointing at a link updates the target instead of replacing
     // the link with a regular file. Broken links fall back to the handle
     // path (rename will replace the link with a file).
@@ -229,8 +226,7 @@ final class File extends Entry with Reader implements Writer {
     // links keep the old content).
     var target = _path;
     try {
-      final t =
-          await io.FileSystemEntity.type(_path, followLinks: false);
+      final t = await io.FileSystemEntity.type(_path, followLinks: false);
       if (t == io.FileSystemEntityType.link) {
         try {
           target = await io.Link(_path).resolveSymbolicLinks();
@@ -318,10 +314,7 @@ final class Dir extends Entry {
       throw io.FileSystemException('not a directory', _path);
     }
     final out = <Entry>[];
-    await for (final e in io.Directory(_path).list(
-      recursive: recursive,
-      followLinks: false,
-    )) {
+    await for (final e in io.Directory(_path).list(recursive: recursive, followLinks: false)) {
       // With followLinks:false the stream never descends through links,
       // and its runtime type already tells links apart: no extra stat.
       if (e is io.Link) {
@@ -371,8 +364,7 @@ final class Dir extends Entry {
     // only matches the merge semantics for a fresh destination (into an
     // existing tree `cp` would nest instead), so an existing target, a
     // missing `cp`, or Windows falls back to the in-process loop below.
-    if (await io.FileSystemEntity.type(to, followLinks: false) ==
-        io.FileSystemEntityType.notFound) {
+    if (await io.FileSystemEntity.type(to, followLinks: false) == io.FileSystemEntityType.notFound) {
       if (await posix.copyTreeWithCp(_path, to)) return Dir._(to);
     }
     await tree.copyTree(_path, to);
@@ -419,8 +411,7 @@ final class Link extends Entry {
     } catch (_) {
       return null;
     }
-    final t =
-        await io.FileSystemEntity.type(resolved, followLinks: false);
+    final t = await io.FileSystemEntity.type(resolved, followLinks: false);
     return switch (t) {
       io.FileSystemEntityType.file => File._(resolved),
       io.FileSystemEntityType.directory => Dir._(resolved),
@@ -444,16 +435,10 @@ final class Link extends Entry {
         // POSIX rename replaces a link or file atomically. On platforms
         // where rename over an existing file fails, remove the destination
         // (link only: never a folder) and retry once.
-        final dt = await io.FileSystemEntity.type(
-          _path,
-          followLinks: false,
-        );
+        final dt = await io.FileSystemEntity.type(_path, followLinks: false);
         if (dt == io.FileSystemEntityType.directory) {
           await tmpLink.delete();
-          throw io.FileSystemException(
-            'cannot replace directory with link',
-            _path,
-          );
+          throw io.FileSystemException('cannot replace directory with link', _path);
         }
         if (dt != io.FileSystemEntityType.notFound) {
           try {
@@ -554,8 +539,7 @@ extension DirFuture on Future<Dir> {
   Future<Dir> move(String to) async => (await this).move(to);
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
-  Future<List<Entry>> list({bool recursive = false}) async =>
-      (await this).list(recursive: recursive);
+  Future<List<Entry>> list({bool recursive = false}) async => (await this).list(recursive: recursive);
   Future<Dir> create() async => (await this).create();
 }
 
@@ -570,8 +554,7 @@ extension LinkFuture on Future<Link> {
   Future<Link> move(String to) async => (await this).move(to);
   Future<String> target() async => (await this).target();
   Future<Entry?> resolve() async => (await this).resolve();
-  Future<Link> create(String target) async =>
-      (await this).create(target);
+  Future<Link> create(String target) async => (await this).create(target);
 }
 
 Future<void> _ensureParent(String path) async {
@@ -584,8 +567,7 @@ Future<void> _ensureParent(String path) async {
 /// Process-wide FIFO mutex serialising appends. `dart:io` file locks are
 /// `fcntl` locks, which never conflict between opens of one process, so
 /// the OS lock alone cannot stop same-process appends racing on a stale
-/// file offset (verified: the OS lock let 20 concurrent appends through
-/// and 19 lines were lost). The mutex serialises this process; the OS
+/// file offset. The mutex serialises this process; the OS
 /// lock still excludes other processes.
 final _appendMutex = _Mutex();
 
@@ -639,38 +621,24 @@ Future<void> _removeDestLink(String to) async {
 /// before [_ensureParent] so a missing source never leaves an empty
 /// destination. Symlinks are resolved so `link->real` + `to=real/sub` is
 /// still a self-copy.
-Future<void> _checkSource(
-  String from,
-  String to, [
-  io.FileSystemEntityType? expected,
-]) async {
+Future<void> _checkSource(String from, String to, [io.FileSystemEntityType? expected]) async {
   final t = await io.FileSystemEntity.type(from, followLinks: false);
   if (t == io.FileSystemEntityType.notFound) {
     throw io.PathNotFoundException(from, const io.OSError());
   }
   if (expected != null && t != expected) {
-    throw io.FileSystemException(
-      'source is $t, not $expected',
-      from,
-    );
+    throw io.FileSystemException('source is $t, not $expected', from);
   }
   final nf = p.normalize(p.absolute(from));
   final nt = p.normalize(p.absolute(to));
   if (p.equals(nf, nt) || p.isWithin(nf, nt)) {
-    throw ArgumentError.value(
-      to,
-      'to',
-      'destination must not be inside the source ($from)',
-    );
+    throw ArgumentError.value(to, 'to', 'destination must not be inside the source ($from)');
   }
   // Resolve symlinks for a real self-copy check.
   try {
     // A link has no inside: judge it by where it sits, not what it points at.
     final realFrom = expected == io.FileSystemEntityType.link
-        ? p.join(
-            await io.Directory(p.dirname(nf)).resolveSymbolicLinks(),
-            p.basename(nf),
-          )
+        ? p.join(await io.Directory(p.dirname(nf)).resolveSymbolicLinks(), p.basename(nf))
         : await io.File(nf).resolveSymbolicLinks();
     String realTo;
     try {
@@ -682,11 +650,7 @@ Future<void> _checkSource(
       realTo = nt;
     }
     if (p.equals(realFrom, realTo) || p.isWithin(realFrom, realTo)) {
-      throw ArgumentError.value(
-        to,
-        'to',
-        'destination must not be inside the source ($from)',
-      );
+      throw ArgumentError.value(to, 'to', 'destination must not be inside the source ($from)');
     }
   } catch (e) {
     if (e is ArgumentError) rethrow;
@@ -705,13 +669,10 @@ String _strip(String path) {
   if (RegExp(r'^[A-Za-z]:[\\/]?$').hasMatch(path)) return path;
   if (path.length > 1) {
     var end = path.length;
-    while (end > 1 &&
-        (path.codeUnitAt(end - 1) == 0x2f ||
-            path.codeUnitAt(end - 1) == 0x5c)) {
+    while (end > 1 && (path.codeUnitAt(end - 1) == 0x2f || path.codeUnitAt(end - 1) == 0x5c)) {
       end--;
     }
     if (end != path.length) return path.substring(0, end);
   }
   return path;
 }
-

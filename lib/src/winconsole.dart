@@ -25,11 +25,11 @@ typedef _Free = int Function(Pointer<Uint32>);
 
 final class _K32 {
   _K32(DynamicLibrary l)
-      : std = l.lookupFunction<_GetStdC, _GetStd>('GetStdHandle'),
-        get = l.lookupFunction<_GetModeC, _GetMode>('GetConsoleMode'),
-        set = l.lookupFunction<_SetModeC, _SetMode>('SetConsoleMode'),
-        alloc = l.lookupFunction<_AllocC, _Alloc>('LocalAlloc'),
-        free = l.lookupFunction<_FreeC, _Free>('LocalFree');
+    : std = l.lookupFunction<_GetStdC, _GetStd>('GetStdHandle'),
+      get = l.lookupFunction<_GetModeC, _GetMode>('GetConsoleMode'),
+      set = l.lookupFunction<_SetModeC, _SetMode>('SetConsoleMode'),
+      alloc = l.lookupFunction<_AllocC, _Alloc>('LocalAlloc'),
+      free = l.lookupFunction<_FreeC, _Free>('LocalFree');
 
   final _GetStd std;
   final _GetMode get;

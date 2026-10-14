@@ -33,7 +33,10 @@ void main() {
 
   group('Charset', () {
     test('single-byte legacy codecs decode', () {
-      expect(Charset.decode([0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2], contentType: 'text/html; charset=windows-1251'), 'Привет');
+      expect(
+        Charset.decode([0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2], contentType: 'text/html; charset=windows-1251'),
+        'Привет',
+      );
       expect(Charset.decode([0xF0, 0xD2, 0xC9, 0xD7, 0xC5, 0xD4], contentType: 'text/html; charset=koi8-r'), 'Привет');
       expect(Charset.decode([0xB1, 0xE6], contentType: 'text/html; charset=iso-8859-2'), 'ąć');
     });
@@ -165,20 +168,12 @@ void main() {
     });
 
     test('attrs resolves links against the base', () {
-      final based = Html.parse(
-        '<a class="i" href="/x">a</a><a class="i" href="/y">b</a>',
-        base: 'https://e.com/',
-      );
-      expect(based.$('a.i').attrs('href'),
-          ['https://e.com/x', 'https://e.com/y']);
+      final based = Html.parse('<a class="i" href="/x">a</a><a class="i" href="/y">b</a>', base: 'https://e.com/');
+      expect(based.$('a.i').attrs('href'), ['https://e.com/x', 'https://e.com/y']);
     });
 
     test('bad selector is a FormatException naming it', () {
-      expect(() => doc.$('['), throwsA(isA<FormatException>().having(
-        (e) => e.message,
-        'message',
-        contains('['),
-      )));
+      expect(() => doc.$('['), throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('['))));
       expect(() => doc.not('['), throwsA(isA<FormatException>()));
     });
 
@@ -261,9 +256,7 @@ void main() {
 
   group('document parsing (M1)', () {
     test('a full document keeps html/head/body', () {
-      final doc = Html.parse(
-        '<html><head><title>t</title></head><body><p>hi</p></body></html>',
-      );
+      final doc = Html.parse('<html><head><title>t</title></head><body><p>hi</p></body></html>');
       expect(doc.$('body').length, 1);
       expect(doc.$('body').text(), 'hi');
       expect(doc.$('html').length, 1);
@@ -271,16 +264,8 @@ void main() {
     });
 
     test('doctype and case variants parse as documents', () {
-      expect(
-        Html.parse(
-          '<!DOCTYPE html><html><body><p>x</p></body></html>',
-        ).$('body').text(),
-        'x',
-      );
-      expect(
-        Html.parse('  <HTML><BODY><P>y</P></BODY></HTML>').$('body').text(),
-        'y',
-      );
+      expect(Html.parse('<!DOCTYPE html><html><body><p>x</p></body></html>').$('body').text(), 'x');
+      expect(Html.parse('  <HTML><BODY><P>y</P></BODY></HTML>').$('body').text(), 'y');
     });
 
     test('anything else stays a fragment', () {
@@ -293,9 +278,7 @@ void main() {
 
   group('without clones (M2)', () {
     test('table rows survive without', () {
-      final doc = Html.parse(
-        '<table><tr class="x"><td>a</td></tr><tr><td>b</td></tr></table>',
-      );
+      final doc = Html.parse('<table><tr class="x"><td>a</td></tr><tr><td>b</td></tr></table>');
       final kept = doc.$('tr').not('.x');
       expect(kept.length, 1);
       expect(kept.text(), 'b');
@@ -336,24 +319,15 @@ void main() {
 
   group('URL attributes (M4)', () {
     test('attr trims before resolving', () {
-      final doc = Html.parse(
-        '<a href=" /path ">t</a>',
-        base: 'https://e.com/d/',
-      );
+      final doc = Html.parse('<a href=" /path ">t</a>', base: 'https://e.com/d/');
       expect(doc.$('a')[0].attr('href'), 'https://e.com/path');
     });
 
     test('data-src, poster and action resolve too', () {
-      final doc = Html.parse(
-        '<img data-src=" img.png "><video poster=" p.png ">',
-        base: 'https://e.com/d/',
-      );
+      final doc = Html.parse('<img data-src=" img.png "><video poster=" p.png ">', base: 'https://e.com/d/');
       expect(doc.$('img')[0].attr('data-src'), 'https://e.com/d/img.png');
       expect(doc.$('video')[0].attr('poster'), 'https://e.com/d/p.png');
-      final form = Html.parse(
-        '<form action=" /go ">',
-        base: 'https://e.com/d/',
-      );
+      final form = Html.parse('<form action=" /go ">', base: 'https://e.com/d/');
       expect(form.$('form')[0].attr('action'), 'https://e.com/go');
     });
 

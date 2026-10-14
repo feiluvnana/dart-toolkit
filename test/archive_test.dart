@@ -33,8 +33,7 @@ void _resum(List<int> tar, int at) {
   tar[at + 155] = 0x20;
 }
 
-List<int> _tarBody(List<int> body) =>
-    [...body, ...List.filled((512 - body.length % 512) % 512, 0)];
+List<int> _tarBody(List<int> body) => [...body, ...List.filled((512 - body.length % 512) % 512, 0)];
 
 List<int> _pax(Map<String, String> records) {
   final out = <int>[];
@@ -109,10 +108,14 @@ void main() {
       await (Archive.archive(['.'], dir: p('src'), password: 'pw') > Fs.file(p('enc.zip')));
       final raw = await Fs.file(p('enc.zip')).text();
       expect(raw.contains('secret'), isFalse);
-      await expectLater(Fs.file(p('enc.zip')) > Archive.unarchive(p('o1'), password: 'nope'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))));
-      await expectLater(Fs.file(p('enc.zip')) > Archive.unarchive(p('o2')),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))));
+      await expectLater(
+        Fs.file(p('enc.zip')) > Archive.unarchive(p('o1'), password: 'nope'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+      );
+      await expectLater(
+        Fs.file(p('enc.zip')) > Archive.unarchive(p('o2')),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))),
+      );
       expect(await Fs.entry(p('o1/a.txt')), isNull);
       await (Fs.file(p('enc.zip')) > Archive.unarchive(p('o3'), password: 'pw'));
       expect(await Fs.file(p('o3/a.txt')).text(), 'secret ' * 1000);
@@ -129,9 +132,17 @@ void main() {
       expect(r.exitCode, 0, reason: '${r.stderr}');
       expect(await Fs.file(p('x1/a.txt')).text(), 'hello ' * 300);
       for (final strength in ['aes128', 'aes256']) {
-        final made = await Process.run('bsdtar',
-            ['--format', 'zip', '--options', 'zip:encryption=$strength', '--passphrase', 'pw', '-cf', p('$strength.zip'), '.'],
-            workingDirectory: p('src'));
+        final made = await Process.run('bsdtar', [
+          '--format',
+          'zip',
+          '--options',
+          'zip:encryption=$strength',
+          '--passphrase',
+          'pw',
+          '-cf',
+          p('$strength.zip'),
+          '.',
+        ], workingDirectory: p('src'));
         expect(made.exitCode, 0, reason: '${made.stderr}');
         await (Fs.file(p('$strength.zip')) > Archive.unarchive(p('o_$strength'), password: 'pw'));
         expect(await Fs.file(p('o_$strength/d/b.txt')).text(), 'b', reason: strength);
@@ -151,8 +162,15 @@ void main() {
       await Fs.dir(p('out')).create();
       await Process.run('chmod', ['700', p('out')]);
       for (final c in ['lzma2', 'lzma1', 'deflate', 'copy']) {
-        final made = await Process.run('bsdtar', ['--format', '7zip', '--options', '7zip:compression=$c', '-cf', p('$c.7z'), '.'],
-            workingDirectory: p('src'));
+        final made = await Process.run('bsdtar', [
+          '--format',
+          '7zip',
+          '--options',
+          '7zip:compression=$c',
+          '-cf',
+          p('$c.7z'),
+          '.',
+        ], workingDirectory: p('src'));
         expect(made.exitCode, 0, reason: '${made.stderr}');
         await (Fs.file(p('$c.7z')) > Archive.unarchive(p('out/$c')));
         expect(await Fs.file(p('out/$c/a.txt')).text(), 'alpha beta ' * 5000, reason: c);
@@ -181,7 +199,8 @@ void main() {
         expect(r.exitCode, 0, reason: '${r.stderr}');
         expect(await Fs.file(p('o2/a.txt')).text(), 'seven ' * 4000);
       }
-      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenZip, password: 'pw') > Fs.file(p('enc.7z')));
+      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenZip, password: 'pw') >
+          Fs.file(p('enc.7z')));
       final raw = String.fromCharCodes(await Fs.file(p('enc.7z')).bytes());
       expect(raw.contains('a\u0000.\u0000t\u0000x\u0000t'), isFalse); // names are encrypted too
       await expectLater(Fs.file(p('enc.7z')) > Archive.unarchive(p('o3')), throwsFormatException);
@@ -193,8 +212,10 @@ void main() {
     test('7-Zip AES archives (data, and header too) open with their password', () async {
       for (final name in ['7z_aes', '7z_aes_header']) {
         final src = Fs.file('test/fixtures/archives/$name.7z');
-        await expectLater(src > Archive.unarchive(p('bad_$name'), password: 'nope'),
-            throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))));
+        await expectLater(
+          src > Archive.unarchive(p('bad_$name'), password: 'nope'),
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+        );
         await (src > Archive.unarchive(p(name), password: '12345678'));
         expect((await Fs.file(p('$name/bar.txt')).text()).trim(), 'foo', reason: name);
       }
@@ -203,8 +224,10 @@ void main() {
     test('RAR5 (solid, ARM filter, Windows-made) unarchives with every CRC checked', () async {
       final fx = 'test/fixtures/archives';
       await (Fs.file('$fx/rar5_solid.rar') > Archive.unarchive(p('solid')));
-      expect([for (final e in await Fs.dir(p('solid')).list()) e.name()],
-          ['test.bin', 'test1.bin', 'test2.bin', 'test3.bin', 'test4.bin', 'test5.bin', 'test6.bin']);
+      expect(
+        [for (final e in await Fs.dir(p('solid')).list()) e.name()],
+        ['test.bin', 'test1.bin', 'test2.bin', 'test3.bin', 'test4.bin', 'test5.bin', 'test6.bin'],
+      );
       await (Fs.file('$fx/rar5_arm.rar') > Archive.unarchive(p('arm')));
       expect(await Fs.file(p('arm/elf-Linux-ARMv7-ls')).size(), 90808);
       await (Fs.file('$fx/rar5_win32.rar') > Archive.unarchive(p('win')));
@@ -215,15 +238,21 @@ void main() {
 
     test('RAR5 passwords: encrypted names, a wrong password, a member with its own', () async {
       final fx = 'test/fixtures/archives';
-      await expectLater(Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('none')),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))));
-      await expectLater(Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('bad'), password: 'nope'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))));
+      await expectLater(
+        Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('none')),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))),
+      );
+      await expectLater(
+        Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('bad'), password: 'nope'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+      );
       await (Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('names'), password: 'password'));
       expect((await Fs.file(p('names/a.txt')).text()).isNotEmpty, isTrue);
       // d.txt uses 'password2': the whole unarchive fails before writing.
-      await expectLater(Fs.file('$fx/rar5_encrypted.rar') > Archive.unarchive(p('mixed'), password: 'password'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))));
+      await expectLater(
+        Fs.file('$fx/rar5_encrypted.rar') > Archive.unarchive(p('mixed'), password: 'password'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))),
+      );
       expect(await Fs.entry(p('mixed/a.txt')), isNull);
     });
 
@@ -232,16 +261,26 @@ void main() {
       await (Fs.file('$fx/rar4_filter.rar') > Archive.unarchive(p('exe')));
       expect(await Fs.file(p('exe/bsdcat.exe')).size(), 204288);
       for (final name in ['rar4_encrypted_filenames', 'rar4_solid_encrypted']) {
-        await expectLater(Fs.file('$fx/$name.rar') > Archive.unarchive(p('bad_$name'), password: 'nope'),
-            throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))));
+        await expectLater(
+          Fs.file('$fx/$name.rar') > Archive.unarchive(p('bad_$name'), password: 'nope'),
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+        );
         await (Fs.file('$fx/$name.rar') > Archive.unarchive(p(name), password: 'password'));
-        expect([for (final e in await Fs.dir(p(name)).list()) e.name()], ['a.txt', 'b.txt', 'c.txt', 'd.txt'], reason: name);
+        expect(
+          [for (final e in await Fs.dir(p(name)).list()) e.name()],
+          ['a.txt', 'b.txt', 'c.txt', 'd.txt'],
+          reason: name,
+        );
       }
       // d.txt has its own password: unarchive fails before writing anything.
-      await expectLater(Fs.file('$fx/rar4_encrypted.rar') > Archive.unarchive(p('mixed'), password: 'password'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))));
-      await expectLater(Fs.file('$fx/rar4_links.rar') > Archive.unarchive(p('links')),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('link'))));
+      await expectLater(
+        Fs.file('$fx/rar4_encrypted.rar') > Archive.unarchive(p('mixed'), password: 'password'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))),
+      );
+      await expectLater(
+        Fs.file('$fx/rar4_links.rar') > Archive.unarchive(p('links')),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('link'))),
+      );
     });
 
     test('.tar.xz unarchives, with CRC32, CRC64 and SHA-256 checks', () async {
@@ -249,12 +288,15 @@ void main() {
       await Fs.file(p('src/d/b.bin')).write('b');
       for (final check in ['crc32', 'crc64', 'sha256']) {
         final made = await Process.run('python3', [
-          '-I', '-c',
+          '-I',
+          '-c',
           'import tarfile,lzma,io,sys\n'
               'buf=io.BytesIO()\n'
               'with tarfile.open(fileobj=buf,mode="w") as t: t.add(sys.argv[1],arcname=".")\n'
               'open(sys.argv[2],"wb").write(lzma.compress(buf.getvalue(),check=getattr(lzma,"CHECK_"+sys.argv[3].upper())))',
-          p('src'), p('$check.tar.xz'), check,
+          p('src'),
+          p('$check.tar.xz'),
+          check,
         ]);
         if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
         await (Fs.file(p('$check.tar.xz')) > Archive.unarchive(p('o_$check')));
@@ -270,8 +312,15 @@ void main() {
       final text = [for (var i = 0; i < 40000; i++) 'word${i % 977} '].join();
       await Fs.file(p('src/t.txt')).write(text);
       if (await has('bsdtar')) {
-        final made = await Process.run('bsdtar', ['--format', '7zip', '--options', '7zip:compression=ppmd', '-cf', p('p.7z'), 't.txt'],
-            workingDirectory: p('src'));
+        final made = await Process.run('bsdtar', [
+          '--format',
+          '7zip',
+          '--options',
+          '7zip:compression=ppmd',
+          '-cf',
+          p('p.7z'),
+          't.txt',
+        ], workingDirectory: p('src'));
         expect(made.exitCode, 0, reason: '${made.stderr}');
         await (Fs.file(p('p.7z')) > Archive.unarchive(p('o7')));
         expect(await Fs.file(p('o7/t.txt')).text(), text);
@@ -284,7 +333,10 @@ void main() {
     });
 
     test('damaged 7z and RAR input is a FormatException, never a crash', () async {
-      final fx = Directory('test/fixtures/archives').listSync().whereType<io.File>().where((f) => !f.path.endsWith('.md'));
+      final fx = Directory('test/fixtures/archives')
+          .listSync()
+          .whereType<io.File>()
+          .where((f) => !f.path.endsWith('.md'));
       for (final f in fx) {
         final orig = f.readAsBytesSync();
         for (var t = 1; t < 40; t++) {
@@ -292,7 +344,8 @@ void main() {
           final flipped = Uint8List.fromList(orig)..[8 + (orig.length - 9) * t ~/ 40] ^= 0x10;
           for (final input in [cut, flipped]) {
             try {
-              await (Reader.of(input) > Archive.unarchive(p('dmg'), password: f.path.contains('7z') ? '12345678' : 'password'));
+              await (Reader.of(input) >
+                  Archive.unarchive(p('dmg'), password: f.path.contains('7z') ? '12345678' : 'password'));
             } on FormatException {
               // expected
             }
@@ -305,10 +358,15 @@ void main() {
       if (!await has('zip')) markTestSkipped('needs zip');
       await Fs.file(p('src/a.txt')).write('secret');
       await Process.run('zip', ['-q', '-P', 'pw', p('enc.zip'), 'a.txt'], workingDirectory: p('src'));
-      await expectLater(Fs.file(p('enc.zip')) > Archive.unarchive(p('o1x')),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('encrypted'))));
+      await expectLater(
+        Fs.file(p('enc.zip')) > Archive.unarchive(p('o1x')),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('encrypted'))),
+      );
       final bytes = await Fs.file(p('enc.zip')).bytes();
-      await expectLater(Reader.of(bytes.sublist(0, bytes.length - 30)) > Archive.unarchive(p('o2')), throwsFormatException);
+      await expectLater(
+        Reader.of(bytes.sublist(0, bytes.length - 30)) > Archive.unarchive(p('o2')),
+        throwsFormatException,
+      );
     });
   });
 
@@ -317,7 +375,8 @@ void main() {
       await seed();
       await Fs.file(p('README.md')).write('read me');
       for (final format in ArchiveFormat.values) {
-        await (Archive.archive(['site', 'README.md'], dir: tmp.path, format: format) > Archive.unarchive(p('out_${format.name}')));
+        await (Archive.archive(['site', 'README.md'], dir: tmp.path, format: format) >
+            Archive.unarchive(p('out_${format.name}')));
         expect(await Fs.file(p('out_${format.name}/site/a/b.txt')).text(), 'bee', reason: format.name);
         expect(await Fs.file(p('out_${format.name}/README.md')).text(), 'read me', reason: format.name);
       }
@@ -373,26 +432,19 @@ void main() {
       // Corrupt the member name by hand: rewrite the zip is overkill;
       // instead feed garbage and expect a FormatException.
       await (Reader.of([1, 2, 3, 4]) > Fs.file(p('bad.zip')));
-      expect(
-        Fs.file(p('bad.zip')) > Archive.unarchive(p('out')),
-        throwsFormatException,
-      );
+      expect(Fs.file(p('bad.zip')) > Archive.unarchive(p('out')), throwsFormatException);
     });
 
     test('a failed run leaves no half-unpacked tree', () async {
       await (Reader.of([1, 2, 3, 4]) > Fs.file(p('bad.zip')));
-      await expectLater(
-        Fs.file(p('bad.zip')) > Archive.unarchive(p('out')),
-        throwsFormatException,
-      );
+      await expectLater(Fs.file(p('bad.zip')) > Archive.unarchive(p('out')), throwsFormatException);
       expect(await Fs.entry(p('out')), isNull);
     });
 
     test('F1: unpacking merges, never deletes the target', () async {
       await seed();
       await Fs.file(p('vendor/precious.txt')).write('do not lose');
-      await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.zip) >
-          Archive.unarchive(p('vendor')));
+      await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.zip) > Archive.unarchive(p('vendor')));
       expect(await Fs.file(p('vendor/precious.txt')).text(), 'do not lose');
       expect(await Fs.file(p('vendor/index.html')).text(), '<h1>hi</h1>');
     });
@@ -400,21 +452,22 @@ void main() {
     test('F1: unpacking into . keeps the working tree', () async {
       await seed();
       await Fs.file(p('work/keep.txt')).write('keep me');
-      await runInDir(p('work'), "import 'package:dart_toolkit/archive.dart';",
-          "await (Archive.archive(['.'], dir: '../site', format: ArchiveFormat.zip) > Archive.unarchive('.'));");
+      await runInDir(
+        p('work'),
+        "import 'package:dart_toolkit/archive.dart';",
+        "await (Archive.archive(['.'], dir: '../site', format: ArchiveFormat.zip) > Archive.unarchive('.'));",
+      );
       expect(await Fs.file(p('work/keep.txt')).text(), 'keep me');
       expect(await Fs.file(p('work/index.html')).text(), '<h1>hi</h1>');
     });
 
     test('F2: a trailing-slash target unpacks beside itself', () async {
       await seed();
-      await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.zip) >
-          Archive.unarchive('${p('out')}/'));
+      await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.zip) > Archive.unarchive('${p('out')}/'));
       expect(await Fs.file(p('out/a/b.txt')).text(), 'bee');
     });
 
-    test('F13: an empty folder packs and unpacks in every format',
-        () async {
+    test('F13: an empty folder packs and unpacks in every format', () async {
       await Fs.dir(p('empty')).create();
       for (final format in ArchiveFormat.values) {
         await (Archive.archive(['.'], dir: p('empty'), format: format) > Fs.file(p('e.bin')));
@@ -429,11 +482,7 @@ void main() {
       await (Fs.file(p('plain.txt')) | Archive.gzip() > Fs.file(p('t.gz')));
       await expectLater(
         Fs.file(p('t.gz')) > Archive.unarchive(p('out')),
-        throwsA(isA<FormatException>().having(
-          (e) => e.message,
-          'message',
-          contains('not a tar'),
-        )),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('not a tar'))),
       );
     });
 
@@ -454,19 +503,18 @@ void main() {
       expect(await Fs.file(p('out/a/b.txt')).text(), 'bee');
       final tgz = await Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tgz).bytes();
       // The gzip trailer cut off: the tar inside is whole, the stream is not.
-      await expectLater(Reader.of(tgz.sublist(0, tgz.length - 8)) > Archive.unarchive(p('trunc')), throwsFormatException);
+      await expectLater(
+        Reader.of(tgz.sublist(0, tgz.length - 8)) > Archive.unarchive(p('trunc')),
+        throwsFormatException,
+      );
       expect(await Fs.entry(p('trunc')), isNull);
     });
 
-    test('H8: unpack cancels its source when the archive is corrupt',
-        () async {
+    test('H8: unpack cancels its source when the archive is corrupt', () async {
       var cancelled = false;
       final c = StreamController<List<int>>(onCancel: () => cancelled = true);
       c.add(List.filled(1024, 7));
-      await expectLater(
-        Archive.unarchive(p('out')).consume(c.stream),
-        throwsFormatException,
-      );
+      await expectLater(Archive.unarchive(p('out')).consume(c.stream), throwsFormatException);
       expect(cancelled, isTrue);
     });
 
@@ -560,8 +608,10 @@ void main() {
 
     test('NFC and NFD spellings of one name fail where the filesystem folds them', () async {
       const nfc = 'caf\u00e9.txt', nfd = 'cafe\u0301.txt';
-      List<int> member(String name, String body) =>
-          [..._tarBlock(String.fromCharCodes(utf8.encode(name)), body.length, 0x30), ..._tarBody(body.codeUnits)];
+      List<int> member(String name, String body) => [
+        ..._tarBlock(String.fromCharCodes(utf8.encode(name)), body.length, 0x30),
+        ..._tarBody(body.codeUnits),
+      ];
       final tar = [...member(nfc, 'nfc'), ...member(nfd, 'nfd'), ...List.filled(1024, 0)];
       final probe = Directory(p('probe'))..createSync();
       io.File('${probe.path}/$nfc').writeAsStringSync('x');
@@ -597,24 +647,19 @@ void main() {
       ];
       await expectLater(
         Archive.unarchive(p('out')).consume(Stream.value(tar)),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message', contains('sparse'))),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('sparse'))),
       );
       expect(await Fs.entry(p('out')), isNull);
     });
 
-    test('H10: tar header of a file over 8 GiB carries the true size',
-        () async {
+    test('H10: tar header of a file over 8 GiB carries the true size', () async {
       final size = (8 << 30) + 5;
       final raf = await io.File(p('huge.bin')).open(mode: FileMode.write);
       await raf.truncate(size);
       await raf.close();
       await Directory(p('one')).create();
       await io.File(p('huge.bin')).rename(p('one/huge.bin'));
-      final header = (await Archive.archive(['.'], dir: p('one'), format: ArchiveFormat.tar)
-              .stream()
-              .first)
-          .toList();
+      final header = (await Archive.archive(['.'], dir: p('one'), format: ArchiveFormat.tar).stream().first).toList();
       expect(header[124] & 0x80, isNot(0));
       var got = 0;
       for (var i = 125; i < 136; i++) {
@@ -623,8 +668,7 @@ void main() {
       expect(got, size);
     });
 
-    test('H10: tar pack streams files and round-trips a multi-chunk file',
-        () async {
+    test('H10: tar pack streams files and round-trips a multi-chunk file', () async {
       final data = List.generate(300000, (i) => i % 251);
       await io.File(p('site/big.bin')).create(recursive: true);
       await io.File(p('site/big.bin')).writeAsBytes(data);
@@ -635,11 +679,14 @@ void main() {
 
     test('H7: tar unpack streams a member in constant memory', () async {
       await Directory(p('work')).create();
-      await runInDir(p('work'), """
+      await runInDir(
+        p('work'),
+        """
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:dart_toolkit/archive.dart';
-""", r'''
+""",
+        r'''
 const total = 100 << 20;
 final chunk = Uint8List(64 << 10);
 final head = List<int>.filled(512, 0)
@@ -663,7 +710,8 @@ final before = ProcessInfo.maxRss;
 await Archive.unarchive('out').consume(tar());
 if (File('out/big.bin').lengthSync() != total) throw 'size';
 if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss - before}';
-''');
+''',
+      );
     });
 
     test('H7: tar unpack handles tiny input chunks', () async {
@@ -681,63 +729,29 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('M29: non-portable member names are refused on every OS', () async {
-      for (final name in [
-        'a:b',
-        'CON',
-        'aux.txt',
-        'dir/NUL.log',
-        'x.',
-        'dir./f',
-        'x ',
-        'a<b',
-        'q?',
-        '.. ',
-      ]) {
-        final tar = [
-          ..._tarBlock(name, 1, 0x30),
-          ..._tarBody('x'.codeUnits),
-          ...List.filled(1024, 0),
-        ];
-        await expectLater(
-          Archive.unarchive(p('out')).consume(Stream.value(tar)),
-          throwsFormatException,
-          reason: name,
-        );
+      for (final name in ['a:b', 'CON', 'aux.txt', 'dir/NUL.log', 'x.', 'dir./f', 'x ', 'a<b', 'q?', '.. ']) {
+        final tar = [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits), ...List.filled(1024, 0)];
+        await expectLater(Archive.unarchive(p('out')).consume(Stream.value(tar)), throwsFormatException, reason: name);
         expect(await Fs.entry(p('out')), isNull, reason: name);
       }
     });
 
     test('M29: members that differ only in case are refused', () async {
-      List<int> member(String name) => [
-            ..._tarBlock(name, 1, 0x30),
-            ..._tarBody('x'.codeUnits),
-          ];
-      final tar = [
-        ...member('A.txt'),
-        ...member('a.txt'),
-        ...List.filled(1024, 0),
-      ];
+      List<int> member(String name) => [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits)];
+      final tar = [...member('A.txt'), ...member('a.txt'), ...List.filled(1024, 0)];
       await expectLater(
         Archive.unarchive(p('out')).consume(Stream.value(tar)),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message', contains('case'))),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('case'))),
       );
-      final dirClash = [
-        ..._tarBlock('Dir/', 0, 0x35),
-        ...member('dir/x.txt'),
-        ...List.filled(1024, 0),
-      ];
-      await expectLater(
-        Archive.unarchive(p('out')).consume(Stream.value(dirClash)),
-        throwsFormatException,
-      );
+      final dirClash = [..._tarBlock('Dir/', 0, 0x35), ...member('dir/x.txt'), ...List.filled(1024, 0)];
+      await expectLater(Archive.unarchive(p('out')).consume(Stream.value(dirClash)), throwsFormatException);
     });
 
     test('M29: ordinary names and a repeated member still unpack', () async {
       List<int> member(String name, String body) => [
-            ..._tarBlock(name, body.length, 0x30),
-            ..._tarBody(body.codeUnits),
-          ];
+        ..._tarBlock(name, body.length, 0x30),
+        ..._tarBody(body.codeUnits),
+      ];
       final tar = [
         ...member('.hidden', 'h'),
         ...member('a.b/c-d_e.txt', 'one'),
@@ -755,22 +769,20 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       final names = <String>[];
       for (var i = 0; i + 512 <= tar.length; i += 512) {
         if (tar[i] == 0) break;
-        names.add(String.fromCharCodes(tar.sublist(i, i + 100))
-            .replaceAll('\x00', ''));
-        final size = int.parse(
-            String.fromCharCodes(tar.sublist(i + 124, i + 135)),
-            radix: 8);
+        names.add(String.fromCharCodes(tar.sublist(i, i + 100)).replaceAll('\x00', ''));
+        final size = int.parse(String.fromCharCodes(tar.sublist(i + 124, i + 135)), radix: 8);
         i += (size + 511) ~/ 512 * 512;
       }
       expect(names, ['a/', 'a/b', 'a-b']);
     });
 
     test('L12: one-byte and empty input are a FormatException', () async {
-      for (final bytes in [<int>[], [0x50], [0x1f]]) {
-        await expectLater(
-          Archive.unarchive(p('out')).consume(Stream.value(bytes)),
-          throwsFormatException,
-        );
+      for (final bytes in [
+        <int>[],
+        [0x50],
+        [0x1f],
+      ]) {
+        await expectLater(Archive.unarchive(p('out')).consume(Stream.value(bytes)), throwsFormatException);
       }
     });
 
@@ -788,16 +800,9 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     for (final mode in ['write', 'unpack']) {
       test('M6: Ctrl-C during $mode leaves no temp siblings', () async {
         if (Platform.isWindows) markTestSkipped('needs a POSIX SIGINT');
-        final proc = await Process.start(
-          Platform.resolvedExecutable,
-          ['test/signal_probe/probe.dart', mode, tmp.path],
-        );
-        final lines = proc.stdout
-            .transform(const SystemEncoding().decoder)
-            .transform(const LineSplitter());
-        await lines.firstWhere((l) => l.trim() == 'ready').timeout(
-              const Duration(seconds: 60),
-            );
+        final proc = await Process.start(Platform.resolvedExecutable, ['test/signal_probe/probe.dart', mode, tmp.path]);
+        final lines = proc.stdout.transform(const SystemEncoding().decoder).transform(const LineSplitter());
+        await lines.firstWhere((l) => l.trim() == 'ready').timeout(const Duration(seconds: 60));
         proc.kill(ProcessSignal.sigint);
         expect(await proc.exitCode.timeout(const Duration(seconds: 20)), 130);
         expect(await tmp.list().toList(), isEmpty);
@@ -816,26 +821,18 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
 
     test('bad gzip data fails with a FormatException', () async {
       await (Reader.of([1, 2, 3]) > Fs.file(p('nope.gz')));
-      expect(
-        Fs.file(p('nope.gz')) | Archive.gunzip() > Fs.file(p('o.txt')),
-        throwsFormatException,
-      );
+      expect(Fs.file(p('nope.gz')) | Archive.gunzip() > Fs.file(p('o.txt')), throwsFormatException);
     });
 
     test('F3: truncated gzip fails instead of saving partial data', () async {
       await Fs.file(p('big.txt')).write('x' * 100000);
       await (Fs.file(p('big.txt')) | Archive.gzip() > Fs.file(p('big.gz')));
       final full = await Fs.file(p('big.gz')).bytes();
-      await (Reader.of(full.sublist(0, full.length ~/ 2)) >
-          Fs.file(p('half.gz')));
-      await expectLater(
-        Fs.file(p('half.gz')) | Archive.gunzip() > Fs.file(p('o.txt')),
-        throwsFormatException,
-      );
+      await (Reader.of(full.sublist(0, full.length ~/ 2)) > Fs.file(p('half.gz')));
+      await expectLater(Fs.file(p('half.gz')) | Archive.gunzip() > Fs.file(p('o.txt')), throwsFormatException);
     });
 
-    test('M7: gunzip works on tiny chunks and still catches corruption',
-        () async {
+    test('M7: gunzip works on tiny chunks and still catches corruption', () async {
       final plain = List.generate(50000, (i) => i * 7 % 256);
       final gz = gzip.encode(plain);
       Stream<List<int>> bits(List<int> b) async* {
@@ -847,10 +844,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       final out = await Archive.gunzip().transform(bits(gz)).expand((c) => c).toList();
       expect(out, plain);
       final bad = List<int>.of(gz)..[gz.length - 9] ^= 0xff; // flips CRC input
-      await expectLater(
-        Archive.gunzip().transform(bits(bad)).drain<void>(),
-        throwsFormatException,
-      );
+      await expectLater(Archive.gunzip().transform(bits(bad)).drain<void>(), throwsFormatException);
       await expectLater(
         Archive.gunzip().transform(bits(gz.sublist(0, gz.length - 5))).drain<void>(),
         throwsFormatException,

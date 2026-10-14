@@ -17,7 +17,13 @@ void main() {
     });
 
     test('bytes reads everything', () async {
-      expect(await _Chunks([[1], [2, 3]]).bytes(), [1, 2, 3]);
+      expect(
+        await _Chunks([
+          [1],
+          [2, 3],
+        ]).bytes(),
+        [1, 2, 3],
+      );
     });
 
     test('text decodes UTF-8, malformed replaced', () async {
@@ -78,39 +84,32 @@ void main() {
     });
 
     test('an error anywhere fails the whole run', () async {
-      expect(
-        _Mem([1]) | _Boom() > _Sink(),
-        throwsA(isA<StateError>()),
-      );
+      expect(_Mem([1]) | _Boom() > _Sink(), throwsA(isA<StateError>()));
     });
 
-    test('a writer that throws mid-run cancels the reader and rethrows',
-        () async {
+    test('a writer that throws mid-run cancels the reader and rethrows', () async {
       final reader = _CancelReader();
-      await expectLater(
-        reader | null > _BoomWriter(),
-        throwsStateError,
-      );
+      await expectLater(reader | null > _BoomWriter(), throwsStateError);
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(reader.cancelled, isTrue);
     });
 
     test('a pipe that throws mid-run fails the run', () async {
-      expect(
-        _Mem([1]) | _Boom() > null,
-        throwsStateError,
-      );
+      expect(_Mem([1]) | _Boom() > null, throwsStateError);
     });
 
     test('backpressure: writer pauses reader', () async {
       var maxInflight = 0;
       var inflight = 0;
-      final slow = _SlowWriter(() {
-        inflight++;
-        if (inflight > maxInflight) maxInflight = inflight;
-      }, () {
-        inflight--;
-      });
+      final slow = _SlowWriter(
+        () {
+          inflight++;
+          if (inflight > maxInflight) maxInflight = inflight;
+        },
+        () {
+          inflight--;
+        },
+      );
       await (_Many(50) > slow);
       expect(maxInflight, lessThanOrEqualTo(2));
     });

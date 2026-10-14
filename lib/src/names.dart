@@ -10,17 +10,20 @@ import 'dart:convert';
 /// or a leading `.`/`-` (a dotfile, an option) gets a `_` prefix, and the
 /// result is at most 255 UTF-8 bytes. Empty when nothing usable is left.
 String safeName(String name) {
-  var s = name
-      .replaceAll(RegExp(r'[\\/<>:"|?*\x00-\x1f\x7f]'), '_')
-      .trim()
-      .replaceAll(RegExp(r'[. ]+$'), '');
+  var s = name.replaceAll(RegExp(r'[\\/<>:"|?*\x00-\x1f\x7f]'), '_').trim().replaceAll(RegExp(r'[. ]+$'), '');
   if (s.isEmpty) return '';
   if (_reserved.hasMatch(s) || s.startsWith('.') || s.startsWith('-')) s = '_$s';
   if (utf8.encode(s).length > 255) {
     final out = StringBuffer();
     var bytes = 0;
     for (final r in s.runes) {
-      final n = r < 0x80 ? 1 : r < 0x800 ? 2 : r < 0x10000 ? 3 : 4;
+      final n = r < 0x80
+          ? 1
+          : r < 0x800
+          ? 2
+          : r < 0x10000
+          ? 3
+          : 4;
       if (bytes + n > 255) break;
       bytes += n;
       out.writeCharCode(r);

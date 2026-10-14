@@ -10,32 +10,22 @@ import 'support/child.dart';
 void main() {
   group('Console.choose', () {
     test('empty items is an ArgumentError', () {
-      expect(
-        Console.choose('Pick', <String>[], label: (s) => s),
-        throwsArgumentError,
-      );
+      expect(Console.choose('Pick', <String>[], label: (s) => s), throwsArgumentError);
     });
 
-    test('an unknown keys binding is an ArgumentError, before any prompt',
-        () {
-      expect(
-        Console.choose('Pick', ['a', 'b'],
-            label: (s) => s, keys: {'notakey-xyz': 'a'}),
-        throwsArgumentError,
-      );
+    test('an unknown keys binding is an ArgumentError, before any prompt', () {
+      expect(Console.choose('Pick', ['a', 'b'], label: (s) => s, keys: {'notakey-xyz': 'a'}), throwsArgumentError);
     });
 
     test('an initial that is not an item is an ArgumentError', () {
-      expect(
-        Console.choose('Pick', ['a', 'b'], label: (s) => s, or: 'z'),
-        throwsArgumentError,
-      );
+      expect(Console.choose('Pick', ['a', 'b'], label: (s) => s, or: 'z'), throwsArgumentError);
     });
   });
 
   group('piped stdin', () {
     test('a line that arrives between prompts is kept', () async {
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/console.dart';
 Future<void> main() async {
   final a = await Console.ask('first?');
@@ -43,7 +33,9 @@ Future<void> main() async {
   final b = await Console.ask('second?');
   print('a=\$a b=\$b');
 }
-''', stdin: const [(Duration.zero, 'one\n'), (Duration(milliseconds: 200), 'two\n')]);
+''',
+        stdin: const [(Duration.zero, 'one\n'), (Duration(milliseconds: 200), 'two\n')],
+      );
       expect(r.stdout, contains('a=one b=two'));
       expect(r.exitCode, 0);
     });
@@ -55,10 +47,7 @@ Future<void> main() async {
     });
 
     test('rethrows the work error', () async {
-      expect(
-        Console.spin<void>('Work', Future.error(StateError('bad'))),
-        throwsStateError,
-      );
+      expect(Console.spin<void>('Work', Future.error(StateError('bad'))), throwsStateError);
     });
   });
 
@@ -88,8 +77,7 @@ Future<void> main() async {
       await bar.close();
     });
 
-    test('L3: counts past the total are kept, negative ticks ignored',
-        () async {
+    test('L3: counts past the total are kept, negative ticks ignored', () async {
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
@@ -131,13 +119,9 @@ Future<void> main() async {
       await bar.close();
     });
 
-    test('K2: a pipeline that fails before the bar runs frees the line',
-        () async {
+    test('K2: a pipeline that fails before the bar runs frees the line', () async {
       final bar = Console.bar(5, label: 'stuck?');
-      await expectLater(
-        _Mem('hello') | bar > _ThrowBeforeRead(),
-        throwsA(isA<ArgumentError>()),
-      );
+      await expectLater(_Mem('hello') | bar > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
       // The line must be free: the next bar builds without StateError.
       final next = Console.bar(1, label: 'free');
       await next.close();
@@ -174,10 +158,7 @@ Future<void> main() async {
 
     test('a failed run prints and rethrows', () async {
       final bar = Console.bar(5);
-      await expectLater(
-        _Mem('x') | bar | _Boom() > null,
-        throwsStateError,
-      );
+      await expectLater(_Mem('x') | bar | _Boom() > null, throwsStateError);
     });
 
     test('works in a download pipeline', () async {

@@ -22,8 +22,7 @@
 /// Public surface is exactly: [Tui], [App], [Screen], [Binding],
 /// [Pick], [Field], [Scroll], [Region], [Color], [Style],
 /// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
-/// (method carriers from the `src/tui/` split: importing this library
-/// applies them to [Region] automatically, never reference them by name).
+/// (applied to [Region] on import).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
 ///   the screen for a state and never blocks.
 /// - [App] supports `state` `go` `status` `quit` (notifications and the
@@ -34,20 +33,10 @@
 /// - While `run` is active, `Console.spin`/`bar` draw in the
 ///   status row and `Console.ask`/`confirm`/`choose` open a popup
 ///   and `Console.log` goes to the status row.
+///
+/// {@canonicalFor terminal.Color}
 library;
 
 export 'src/tui.dart'
-    show
-        Tui,
-        App,
-        Screen,
-        Binding,
-        Pick,
-        Field,
-        Scroll,
-        Region,
-        RegionWidgets,
-        RegionMarkdown,
-        RegionDiff,
-        Style;
+    show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, RegionDiff, Style;
 export 'src/terminal.dart' show Color;

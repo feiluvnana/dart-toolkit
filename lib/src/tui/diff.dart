@@ -2,31 +2,29 @@
 part of '../tui.dart';
 
 extension RegionDiff on Region {
-    /// A line diff: unified hunks with 3 context lines, gutter line numbers,
-    /// `-`/`+` rows on red/green backgrounds, changed words of paired lines
-    /// brighter.
-    Region diff(String before, String after) {
-      final hit = _diffMemo;
-      final rows = hit != null && hit.$1 == before && hit.$2 == after
-          ? hit.$3
-          : (_diffMemo = (before, after,
-                  _diffHunks(before.split('\n'), after.split('\n'))))
-              .$3;
-      for (final line in rows) {
-        if (_cursor >= _h) {
-          _cursor++;
-          continue;
-        }
-        var col = _gx;
-        for (final seg in line) {
-          col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text,
-              _s._diffStyle(seg), null);
-        }
+  /// A line diff: unified hunks with 3 context lines, gutter line numbers,
+  /// `-`/`+` rows on red/green backgrounds, changed words of paired lines
+  /// brighter.
+  Region diff(String before, String after) {
+    final hit = _diffMemo;
+    final rows = hit != null && hit.$1 == before && hit.$2 == after
+        ? hit.$3
+        : (_diffMemo = (before, after, _diffHunks(before.split('\n'), after.split('\n')))).$3;
+    for (final line in rows) {
+      if (_cursor >= _h) {
         _cursor++;
+        continue;
       }
-      return this;
+      var col = _gx;
+      for (final seg in line) {
+        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._diffStyle(seg), null);
+      }
+      _cursor++;
     }
+    return this;
+  }
 }
+
 (String, String, List<List<_DiffSeg>>)? _diffMemo;
 
 final class _DiffSeg {
@@ -52,7 +50,11 @@ List<List<_DiffSeg>> _diffHunks(List<String> a, List<String> b) {
   var ai = 0, bi = 0; // line numbers consumed
   void flush() {
     if (hunk.isNotEmpty) {
-      if (hunks.isNotEmpty) hunks.add([[_DiffSeg('…', null, null, {})]]);
+      if (hunks.isNotEmpty) {
+        hunks.add([
+          [_DiffSeg('…', null, null, {})],
+        ]);
+      }
       hunks.add(hunk);
       hunk = [];
     }
@@ -95,8 +97,7 @@ List<List<_DiffSeg>> _diffHunks(List<String> a, List<String> b) {
     final ca0 = math.max(0, a0 - 3);
     final cb0 = math.max(0, b0 - 3);
     for (var t = 0; t < a0 - ca0; t++) {
-      hunk.add(
-          _diffRow(' ', ca0 + t + 1, cb0 + t + 1, a[ca0 + t], const {}));
+      hunk.add(_diffRow(' ', ca0 + t + 1, cb0 + t + 1, a[ca0 + t], const {}));
     }
     for (var g = 0; g < group.length; g++) {
       final (ba0, a1, bb0, b1) = group[g];
@@ -107,12 +108,10 @@ List<List<_DiffSeg>> _diffHunks(List<String> a, List<String> b) {
           da++;
           db++;
         } else if (da < a1) {
-          hunk.add(_diffRow('-', da + 1, null, a[da],
-              const {Style.bold}, del: true));
+          hunk.add(_diffRow('-', da + 1, null, a[da], const {Style.bold}, del: true));
           da++;
         } else {
-          hunk.add(_diffRow('+', null, db + 1, b[db],
-              const {Style.bold}, del: false));
+          hunk.add(_diffRow('+', null, db + 1, b[db], const {Style.bold}, del: false));
           db++;
         }
       }
@@ -135,8 +134,7 @@ List<int> _myers(List<String> a, List<String> b) {
   while (p < a.length && p < b.length && a[p] == b[p]) {
     p++;
   }
-  while (s < a.length - p && s < b.length - p &&
-      a[a.length - 1 - s] == b[b.length - 1 - s]) {
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] == b[b.length - 1 - s]) {
     s++;
   }
   return [
@@ -160,9 +158,7 @@ List<int> _myersCore(List<String> a, List<String> b) {
   for (var d = 0; d <= max; d++) {
     trace.add(Int32List.sublistView(v, off - d - 1, off + d + 2).sublist(0));
     for (var k = -d; k <= d; k += 2) {
-      var x = (k == -d || (k != d && v[off + k - 1] < v[off + k + 1]))
-          ? v[off + k + 1]
-          : v[off + k - 1] + 1;
+      var x = (k == -d || (k != d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
       var y = x - k;
       while (x < n && y < m && a[x] == b[y]) {
         x++;
@@ -205,20 +201,18 @@ List<int> _myersCore(List<String> a, List<String> b) {
 
 final _delBg = Color.index(52), _addBg = Color.index(22);
 
-List<_DiffSeg> _diffRow(String mark, int? aNo, int? bNo, String text,
-    Set<Style> extra, {bool? del}) {
-  final gutter =
-      '${(aNo?.toString() ?? '').padLeft(4)} ${(bNo?.toString() ?? '').padLeft(4)} $mark ';
+List<_DiffSeg> _diffRow(String mark, int? aNo, int? bNo, String text, Set<Style> extra, {bool? del}) {
+  final gutter = '${(aNo?.toString() ?? '').padLeft(4)} ${(bNo?.toString() ?? '').padLeft(4)} $mark ';
   final fg = del == null
       ? null
       : del
-          ? Color.red
-          : Color.green;
+      ? Color.red
+      : Color.green;
   final bg = del == null
       ? null
       : del
-          ? _delBg
-          : _addBg;
+      ? _delBg
+      : _addBg;
   return [
     _DiffSeg(gutter, fg, null, {...extra}),
     _DiffSeg(text, fg, bg, extra),
@@ -226,8 +220,7 @@ List<_DiffSeg> _diffRow(String mark, int? aNo, int? bNo, String text,
 }
 
 /// A `-`/`+` pair with changed words brighter.
-List<List<_DiffSeg>> _diffPair(
-    String aText, int aNo, String bText, int bNo) {
+List<List<_DiffSeg>> _diffPair(String aText, int aNo, String bText, int bNo) {
   final aw = aText.split(' ');
   final bw = bText.split(' ');
   final ops = _myers(aw, bw);
@@ -236,31 +229,25 @@ List<List<_DiffSeg>> _diffPair(
   final bSegs = <_DiffSeg>[];
   for (final op in ops) {
     if (op == 0) {
-      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg,
-          const {Style.bold}));
-      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg,
-          const {Style.bold}));
+      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg, const {Style.bold}));
+      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg, const {Style.bold}));
       ai++;
       bi++;
     } else if (op < 0) {
-      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg,
-          const {Style.bold, Style.reverse}));
+      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg, const {Style.bold, Style.reverse}));
       ai++;
     } else {
-      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg,
-          const {Style.bold, Style.reverse}));
+      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg, const {Style.bold, Style.reverse}));
       bi++;
     }
   }
-  List<_DiffSeg> row(
-      String mark, int? aN, int? bN, List<_DiffSeg> segs, Color fg) {
-    final gutter =
-        '${(aN?.toString() ?? '').padLeft(4)} ${(bN?.toString() ?? '').padLeft(4)} $mark ';
-    return [_DiffSeg(gutter, fg, null, const {Style.bold}), ...segs];
+  List<_DiffSeg> row(String mark, int? aN, int? bN, List<_DiffSeg> segs, Color fg) {
+    final gutter = '${(aN?.toString() ?? '').padLeft(4)} ${(bN?.toString() ?? '').padLeft(4)} $mark ';
+    return [
+      _DiffSeg(gutter, fg, null, const {Style.bold}),
+      ...segs,
+    ];
   }
 
-  return [
-    row('-', aNo, null, aSegs, Color.red),
-    row('+', null, bNo, bSegs, Color.green),
-  ];
+  return [row('-', aNo, null, aSegs, Color.red), row('+', null, bNo, bSegs, Color.green)];
 }

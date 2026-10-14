@@ -18,7 +18,14 @@ part 'rar4.dart';
 
 /// RAR5 `Rar!\x1A\x07\x01\x00` or RAR4 `Rar!\x1A\x07\x00`.
 bool isRar(List<int> b) =>
-    b.length >= 7 && b[0] == 0x52 && b[1] == 0x61 && b[2] == 0x72 && b[3] == 0x21 && b[4] == 0x1A && b[5] == 0x07 && b[6] <= 1;
+    b.length >= 7 &&
+    b[0] == 0x52 &&
+    b[1] == 0x61 &&
+    b[2] == 0x72 &&
+    b[3] == 0x21 &&
+    b[4] == 0x1A &&
+    b[5] == 0x07 &&
+    b[6] <= 1;
 
 /// One member as read.
 final class RarEntry {
@@ -142,7 +149,9 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
       var got = crc32(data);
       if (tweaked && k != null) got = k.tweakCrc(got);
       if (got != crc) {
-        throw FormatException(k == null ? 'corrupt archive: RAR CRC of $name' : 'wrong password or corrupt archive: $name');
+        throw FormatException(
+          k == null ? 'corrupt archive: RAR CRC of $name' : 'wrong password or corrupt archive: $name',
+        );
       }
     }
     return data;
@@ -291,7 +300,10 @@ final class _Key {
 
   /// The CRC as stored under a MAC: HMAC-SHA256 of the CRC, folded.
   int tweakCrc(int crc) {
-    final d = crypto.Hmac(crypto.sha256, _hashKey).convert([crc & 0xFF, crc >> 8 & 0xFF, crc >> 16 & 0xFF, crc >> 24 & 0xFF]).bytes;
+    final d = crypto.Hmac(
+      crypto.sha256,
+      _hashKey,
+    ).convert([crc & 0xFF, crc >> 8 & 0xFF, crc >> 16 & 0xFF, crc >> 24 & 0xFF]).bytes;
     var out = 0;
     for (var i = 0; i < 32; i++) {
       out ^= d[i] << ((i & 3) * 8);

@@ -4,9 +4,8 @@
 /// `'space'`; `'enter'` `'tab'` `'shift+tab'` `'backspace'` `'escape'`
 /// `'insert'` `'delete'`; `'up'` `'down'` `'left'` `'right'` `'home'` `'end'`
 /// `'pageup'` `'pagedown'`, `'f1'`…`'f12'`; `ctrl+`/`alt+`/`shift+` prefixes.
-/// `Page.press` used to accept `esc`, `cmd`, `control`, `meta`, which
-/// `Screen(keys:)` never produces. Those are now aliases that canonicalize
-/// (or [ArgumentError]s when truly unknown) so one name works everywhere.
+/// Aliases (`esc`, `cmd`, `control`, `meta`) canonicalize; an unknown name
+/// is an [ArgumentError], so one name works everywhere.
 /// Decoding (CSI/SS3) stays in `terminal.dart`; this file owns names.
 library;
 
@@ -88,10 +87,7 @@ String canonicalize(String key) {
     final c = _aliases[m];
     if (c == 'ctrl' || c == 'alt' || c == 'shift' || c == 'meta') {
       mods.add(c!);
-    } else if (m == 'ctrl' ||
-        m == 'alt' ||
-        m == 'shift' ||
-        m == 'meta') {
+    } else if (m == 'ctrl' || m == 'alt' || m == 'shift' || m == 'meta') {
       mods.add(m);
     } else {
       throw ArgumentError.value(key, 'key', 'unknown modifier: ${parts[i]}');
@@ -133,8 +129,7 @@ String _one(String name, String whole) {
 }
 
 /// Split a binding like `'b escape'` into its alternatives.
-List<String> splitBinding(String binding) =>
-    binding.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+List<String> splitBinding(String binding) => binding.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
 
 /// True when [keyName] (already canonical, e.g. from the decoder) matches
 /// [binding] (`'b escape'`, `'ctrl+c'`). Alternatives are canonicalized

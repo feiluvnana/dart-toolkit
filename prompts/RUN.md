@@ -45,3 +45,16 @@
 - Bugs fixed: `Http.hold()` as a script's first call kept it alive 15 s (every crawl; my stage-6 regression); tgz unarchive stopped at the tar marker (truncated .tar.gz extracted, hashes upstream incomplete); `retries:` + `Body.stream` silently one try.
 - Added: `Hash.sha256(expect:)` + `Hasher.of`, `Shell.run(onLine:)`, `follow(under:, skip:)`, `crawl(onProgress:)`, `path(from:)` (always `/`).
 - Deferred: `Console.table`, `Pool.map(onError:)`, a missing JSON file reading as null, hash mismatch naming its subject, `Bar` wiring for `onProgress`; not doable: `Json.encode` of records; kept: `exitCode` set by the caller.
+
+## 9. DOCS (dart doc refs..doc comments, 6 commits)
+- `dart doc` 7 → 2 warnings (both harmless canonicalization notes); README for pub.dev (tour compiled by `dart analyze`), CHANGELOG for 0.0.4.
+- A 3-way audit compiled every VISION and library-doc snippet: 4 did not compile (`json:` on post, a `Reader` as `body:`, `from:` for `dir:`, `const Color.index`); all fixed.
+- VISION synced: `Body`, `Origin`, `Json.of`, `texts`, `pixel`, the http engine (`dart:io`), import graph, tables and the named-parameter list; doc comments state rules (history notes and issue ids removed), and missing docs were added.
+- Code: `Hasher.add(text)`. `Page.scroll(selector, timeout)` stays positional (Dart has no optional-positional + named mix).
+- Deferred: `Color.code`/`rgb` are public fields (rule 2), `TabHost`/`Pixels` unexported in public signatures.
+
+## 10. RELEASE (pubspec..format, 3 commits)
+- `dart pub publish --dry-run`: 0 warnings; pana 150/160 (the 10 lost: no example/, which the user removed).
+- pubspec: a 148-char description, repository, topics, platforms linux/macos/windows (dart:io, no web); dependencies already at their latest, and `pub downgrade` analyzes clean.
+- `.pubignore`: the archive is lib + README/CHANGELOG/VISION/ARCHITECTURE/LICENSE (660 → 403 KB); one `dart format` pass at width 120.
+- Version stays 0.0.4 (the CHANGELOG section); not published. Manual steps: `dart pub publish`, tag `v0.0.4`, GitHub release notes from CHANGELOG, optionally a verified publisher.

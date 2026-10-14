@@ -1,6 +1,6 @@
 /// Crawling: a queue, workers, retries, a cache, typed records out.
-/// Composes `http`, `html` and `chrome` from this package plus an in-house
-/// queue (about 200 lines).
+/// Composes `http` and `html` plus an in-house queue; `browser:` drives a
+/// chrome `Browser` without importing `chrome`.
 ///
 /// ```dart
 /// final albums = await Scrape.crawl<Album>(starts, listing,
@@ -29,8 +29,7 @@ import 'hash.dart';
 import 'html.dart';
 import 'http.dart';
 
-// Direct dependency on core (Origin/Reader) even though chrome.dart
-// re-exports it.
+// Direct dependency on core (Origin/Reader).
 // ignore: unnecessary_import
 import 'core.dart';
 
@@ -78,8 +77,7 @@ abstract final class Scrape {
     void Function(int done, int total)? onProgress,
   }) {
     if (limit < 1) {
-      throw ArgumentError.value(
-          limit, 'limit', 'must be at least 1');
+      throw ArgumentError.value(limit, 'limit', 'must be at least 1');
     }
     if (retries < 0) {
       throw ArgumentError.value(retries, 'retries', 'must not be negative');
@@ -114,17 +112,11 @@ abstract final class Scrape {
 /// taken at fetch, parsed once. Reads return unmodifiable views of the one
 /// in-memory body: O(1), no copy per read.
 final class Visit<T> with Reader {
-  Visit._http(this._url, this._status, this._body, this._crawl,
-      this._contentType, this._disposition)
-      : _dom = null;
+  Visit._http(this._url, this._status, this._body, this._crawl, this._contentType, this._disposition) : _dom = null;
 
-  Visit._tab(this._url, this._status, this._body, this._crawl, this._dom)
-      : _contentType = null,
-        _disposition = null;
+  Visit._tab(this._url, this._status, this._body, this._crawl, this._dom) : _contentType = null, _disposition = null;
 
-  Visit._cached(this._url, this._status, this._body, this._crawl,
-      this._contentType, this._disposition)
-      : _dom = null;
+  Visit._cached(this._url, this._status, this._body, this._crawl, this._contentType, this._disposition) : _dom = null;
 
   final String _url;
   final int _status;
@@ -155,10 +147,8 @@ final class Visit<T> with Reader {
 
   /// A file name for the body: the `content-disposition` filename
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
-  /// URL's last segment, else `'download'`. Same rules as `Response`
-  /// (shared `src/origin.dart`).
-  String name() =>
-      names.fileName(url: _url, contentDisposition: _disposition);
+  /// URL's last segment, else `'download'`. Same rules as `Response.name`.
+  String name() => names.fileName(url: _url, contentDisposition: _disposition);
 
   @override
   Origin origin() => Origin(url: _url, status: _status, name: name());
@@ -203,8 +193,7 @@ final class Visit<T> with Reader {
   Future<List<int>> bytes() async => _body.asUnmodifiableView();
 
   @override
-  Future<String> text() async =>
-      charset.Charset.decode(_body, contentType: _contentType);
+  Future<String> text() async => charset.Charset.decode(_body, contentType: _contentType);
 
   /// This page as [Elements]: the rendered DOM snapshot with a browser,
   /// parsed once per visit, else the body parsed with the final URL as the
@@ -338,17 +327,13 @@ final class _Crawl<T> {
   Object? _failure;
   StackTrace? _failureStack;
 
-  void start(
-    Iterable<String> urls,
-    Future<void> Function(Visit<T> visit) handler,
-  ) {
+  void start(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler) {
     _clock.start();
     if (browser == null) {
       // One shared client for the whole crawl; released at drain.
       _hold = Http.hold();
     } else {
-      _tabs = _TabPool(browser!,
-          limit, headers: headers, timeout: timeout);
+      _tabs = _TabPool(browser!, limit, headers: headers, timeout: timeout);
     }
     try {
       for (final u in urls) {
@@ -532,8 +517,7 @@ final class _Crawl<T> {
     Visit<T> visit;
     TabView? page;
     if (hit != null) {
-      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this,
-          hit.contentType, hit.disposition);
+      visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this, hit.contentType, hit.disposition);
     } else {
       if (delay != null) await _polite(uri.host);
       final fetched = await _fetch(task.url);
@@ -545,9 +529,7 @@ final class _Crawl<T> {
     // to a URL already visited, is dropped; its tab still goes back.
     // Dedupe as enqueue does: a Location may carry a #fragment.
     final landed = Uri.parse(visit.url()).removeFragment().toString();
-    if (_cancelled ||
-        _failure != null ||
-        (landed != task.url && !_seen.add(landed))) {
+    if (_cancelled || _failure != null || (landed != task.url && !_seen.add(landed))) {
       if (page != null) _tabs?.release(page);
       return;
     }
@@ -616,7 +598,10 @@ final class _Crawl<T> {
   Map<String, String>? _headersFor(String url) {
     final h = headers;
     if (h == null || _home.contains(names.originOf(Uri.parse(url)))) return h;
-    return {for (final e in h.entries) if (!names.isSecretHeader(e.key)) e.key: e.value};
+    return {
+      for (final e in h.entries)
+        if (!names.isSecretHeader(e.key)) e.key: e.value,
+    };
   }
 
   Future<_Fetched<T>> _fetchHttp(String url) async {
@@ -624,13 +609,14 @@ final class _Crawl<T> {
     // exhausted 5xx/429 still comes back as a response and fails the visit
     // here, like any other failure.
     final res = await abort.withAbort(
-        _abort, () => Http.get(url, headers: _headersFor(url), timeout: timeout, retries: retries));
+      _abort,
+      () => Http.get(url, headers: _headersFor(url), timeout: timeout, retries: retries),
+    );
     final status = res.status();
     if (status == 429 || status >= 500) {
       final finalUrl = res.url();
       await res.close();
-      throw io.HttpException('HTTP $status: ${names.redact(finalUrl)}',
-          uri: Uri.tryParse(names.redact(finalUrl)));
+      throw io.HttpException('HTTP $status: ${names.redact(finalUrl)}', uri: Uri.tryParse(names.redact(finalUrl)));
     }
     List<int> rawBody;
     String? contentType;
@@ -645,8 +631,7 @@ final class _Crawl<T> {
       // bytes() releases the client by itself; close() is a no-op then.
       await res.close();
     }
-    final body =
-        rawBody is Uint8List ? rawBody : Uint8List.fromList(rawBody);
+    final body = rawBody is Uint8List ? rawBody : Uint8List.fromList(rawBody);
     return _Fetched(
       Visit._http(finalUrl, status, body, this, contentType, disposition),
       status,
@@ -675,9 +660,7 @@ final class _Crawl<T> {
       // One DOM serialize per visit: this snapshot feeds both the body and
       // Visit.html() (which used to serialize a second time via content).
       final status = await page
-          .run<num>(
-            'performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0',
-          )
+          .run<num>('performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0')
           .timeout(timeout ?? const Duration(seconds: 30));
       final content = await page
           .run<String>('document.documentElement.outerHTML')
@@ -686,8 +669,7 @@ final class _Crawl<T> {
       final code = (status ?? 0).toInt();
       final finalUrl = await page.url();
       return _Fetched(
-        Visit._tab(finalUrl, code == 0 ? 200 : code, utf8.encode(dom), this,
-            dom),
+        Visit._tab(finalUrl, code == 0 ? 200 : code, utf8.encode(dom), this, dom),
         code == 0 ? 200 : code,
         null,
         page,
@@ -727,8 +709,7 @@ final class _Crawl<T> {
       final key = _cacheKey(url);
       final metaFile = Fs.file('$dir/$key.json');
       if (!await metaFile.exists()) return null;
-      final meta =
-          jsonDecode(await metaFile.text()) as Map<String, dynamic>;
+      final meta = jsonDecode(await metaFile.text()) as Map<String, dynamic>;
       final bodyFile = Fs.file('$dir/$key.body');
       if (!await bodyFile.exists()) return null;
       final raw = await bodyFile.bytes();
@@ -775,8 +756,7 @@ final class _Fetched<T> {
 }
 
 final class _Hit {
-  _Hit(this.finalUrl, this.status, this.body, this.contentType,
-      this.disposition);
+  _Hit(this.finalUrl, this.status, this.body, this.contentType, this.disposition);
 
   final String finalUrl;
   final int status;

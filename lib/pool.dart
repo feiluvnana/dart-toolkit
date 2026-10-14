@@ -37,8 +37,7 @@ abstract final class Pool {
     FutureOr<R> Function(T item) job, {
     int? limit,
     void Function(R result)? onResult,
-  }) =>
-      _lanes(items, (item, _) async => job(item), limit ?? 4, limit, onResult);
+  }) => _lanes(items, (item, _) async => job(item), limit ?? 4, limit, onResult);
 
   /// Run [job] once per item on worker isolates, results in input order.
   /// [limit] caps the jobs in flight (the core count by default).
@@ -55,15 +54,20 @@ abstract final class Pool {
     FutureOr<R> Function(T item) job, {
     int? limit,
     void Function(R result)? onResult,
-  }) =>
-      _lanes(items, (item, i) async {
-        try {
-          return await Isolate.run(() => job(item));
-        } on ArgumentError catch (e) {
-          // Isolate.run rejects what cannot cross: name the item.
-          throw ArgumentError.value(item, 'items[$i]', 'cannot be sent to a worker isolate (${e.message})');
-        }
-      }, limit ?? io.Platform.numberOfProcessors, limit, onResult);
+  }) => _lanes(
+    items,
+    (item, i) async {
+      try {
+        return await Isolate.run(() => job(item));
+      } on ArgumentError catch (e) {
+        // Isolate.run rejects what cannot cross: name the item.
+        throw ArgumentError.value(item, 'items[$i]', 'cannot be sent to a worker isolate (${e.message})');
+      }
+    },
+    limit ?? io.Platform.numberOfProcessors,
+    limit,
+    onResult,
+  );
 
   /// [width] lanes over [items]; one isolate, so the shared `next++` needs
   /// no lock (it runs synchronously between awaits).

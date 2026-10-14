@@ -235,8 +235,7 @@ extension on _Session<dynamic> {
       fieldRow = lines.length;
       lines.add(('❯ ${p.shown}', 0));
       if (p.error != null) {
-        lines.add(('  ${p.error}', _pack(accent == null ? null : Color.red, null,
-            accent == null ? {Style.bold} : {})));
+        lines.add(('  ${p.error}', _pack(accent == null ? null : Color.red, null, accent == null ? {Style.bold} : {})));
       }
     }
     final contentW = lines.fold<int>(0, (m, l) => math.max(m, term.displayWidth(l.$1)));

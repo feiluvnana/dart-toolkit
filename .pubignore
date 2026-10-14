@@ -1,0 +1,14 @@
+# .gitignore (a .pubignore replaces it)
+.dart_tool/
+.packages
+build/
+coverage/
+# repo-only
+/.claude/
+/prompts/
+/projects/
+/tool/
+/test/
+/PLAN.md
+/PROPOSAL.md
+/DOGFOOD.md

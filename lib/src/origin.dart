@@ -1,8 +1,7 @@
 /// File-name rules shared by `http`, `scrape` and `chrome`.
 ///
 /// One home for `content-disposition` parsing and URL-tail fallback, so
-/// `Response.fileName()` and `Visit.fileName()` agree (VISION: "as on
-/// Response") and `chrome` upload staging strips paths the same way.
+/// `Response.name()`, `Visit.name()` and `chrome` upload staging strips paths the same way.
 /// Facades never branch on the rules themselves; they call [fileName].
 library;
 
@@ -18,8 +17,7 @@ String fileName({required String url, String? contentDisposition}) {
   final fromHeader = dispositionName(contentDisposition);
   if (fromHeader != null) return fromHeader;
   final uri = Uri.tryParse(url);
-  final segments =
-      uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
+  final segments = uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
   if (segments.isNotEmpty) {
     final last = segments.last;
     String decoded;
@@ -38,15 +36,11 @@ String fileName({required String url, String? contentDisposition}) {
 /// `filename*=` (RFC 6266/8187) wins over `filename=`; paths are stripped.
 String? dispositionName(String? header) {
   if (header == null) return null;
-  final star = RegExp(
-    r'''filename\*\s*=\s*([^;]+)''',
-    caseSensitive: false,
-  ).firstMatch(header);
+  final star = RegExp(r'''filename\*\s*=\s*([^;]+)''', caseSensitive: false).firstMatch(header);
   if (star != null) {
     var value = star.group(1)!.trim();
     if (value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'")))) {
+        ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
       value = value.substring(1, value.length - 1);
     }
     String decoded;
@@ -69,9 +63,7 @@ String? dispositionName(String? header) {
   ).firstMatch(header);
   if (plain != null) {
     // `filename=` cannot match inside `filename*=` (the `*` breaks it).
-    final name = stripPath(
-      (plain.group(1) ?? plain.group(2) ?? plain.group(3) ?? '').trim(),
-    );
+    final name = stripPath((plain.group(1) ?? plain.group(2) ?? plain.group(3) ?? '').trim());
     if (name.isNotEmpty) return name;
   }
   return null;
@@ -110,11 +102,11 @@ List<int> percentDecode(String s) {
 /// would also take `+1` and `-1`).
 int? _hexByte(String s, int i) {
   int digit(int c) => switch (c) {
-        >= 0x30 && <= 0x39 => c - 0x30,
-        >= 0x41 && <= 0x46 => c - 0x37,
-        >= 0x61 && <= 0x66 => c - 0x57,
-        _ => -1,
-      };
+    >= 0x30 && <= 0x39 => c - 0x30,
+    >= 0x41 && <= 0x46 => c - 0x37,
+    >= 0x61 && <= 0x66 => c - 0x57,
+    _ => -1,
+  };
   final hi = digit(s.codeUnitAt(i)), lo = digit(s.codeUnitAt(i + 1));
   return hi < 0 || lo < 0 ? null : hi << 4 | lo;
 }
@@ -161,18 +153,24 @@ String redact(Object url) {
   if (uri == null) return '$url';
   var out = uri.userInfo.isEmpty ? uri : uri.replace(userInfo: '');
   if (uri.hasQuery && _secretParam.hasMatch(uri.query)) {
-    final masked = uri.query.split('&').map((pair) {
-      final eq = pair.indexOf('=');
-      if (eq < 0 || !_secretKey.hasMatch(pair.substring(0, eq))) return pair;
-      return '${pair.substring(0, eq)}=***';
-    }).join('&');
+    final masked = uri.query
+        .split('&')
+        .map((pair) {
+          final eq = pair.indexOf('=');
+          if (eq < 0 || !_secretKey.hasMatch(pair.substring(0, eq))) return pair;
+          return '${pair.substring(0, eq)}=***';
+        })
+        .join('&');
     out = out.replace(query: masked);
   }
   return out.toString();
 }
 
 final _secretKey = RegExp(r'(token|key|secret|passw|pwd|auth|sig|session|code|credential)', caseSensitive: false);
-final _secretParam = RegExp(r'(?:^|&)[^=&]*(token|key|secret|passw|pwd|auth|sig|session|code|credential)[^=&]*=', caseSensitive: false);
+final _secretParam = RegExp(
+  r'(?:^|&)[^=&]*(token|key|secret|passw|pwd|auth|sig|session|code|credential)[^=&]*=',
+  caseSensitive: false,
+);
 
 /// True for a request header that carries credentials: the standard ones
 /// and any custom one named like a secret (`X-Api-Key`, `Private-Token`).

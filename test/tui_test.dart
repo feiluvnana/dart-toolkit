@@ -536,11 +536,15 @@ void main() {
         return o;
       }
 
-      bool colour(String o) => RegExp('\x1b\\[([0-9;]*)m').allMatches(o).any((m) => m
-          .group(1)!
-          .split(';')
-          .map((p) => int.tryParse(p) ?? 0)
-          .any((n) => (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n == 38 || n == 48));
+      bool colour(String o) => RegExp('\x1b\\[([0-9;]*)m')
+          .allMatches(o)
+          .any(
+            (m) => m
+                .group(1)!
+                .split(';')
+                .map((p) => int.tryParse(p) ?? 0)
+                .any((n) => (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n == 38 || n == 48),
+          );
       expect(colour(await out()), isFalse);
       expect(colour(await out(accent: Color.orange)), isTrue);
     });
@@ -864,15 +868,8 @@ void main() {
     test('a failing spin shows ✗ label', () async {
       final t = testSession<int>(
         0,
-        (s, app) => Screen(
-          (r) {},
-          keys: {
-            'a': (
-              '',
-              () => Console.spin('loading', Future<void>.error(Exception('down'))),
-            ),
-          },
-        ),
+        (s, app) =>
+            Screen((r) {}, keys: {'a': ('', () => Console.spin('loading', Future<void>.error(Exception('down'))))}),
         width: 40,
         height: 3,
       );
@@ -1093,12 +1090,15 @@ void main() {
       final log = <String>[];
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {
-          'esc': ('', () => log.add('esc')),
-          'pgup': ('', () => log.add('pgup')),
-          'del x': ('', () => log.add('del')),
-          'Ctrl+A': ('', () => log.add('ctrl+a')),
-        }),
+        (s, app) => Screen(
+          (r) {},
+          keys: {
+            'esc': ('', () => log.add('esc')),
+            'pgup': ('', () => log.add('pgup')),
+            'del x': ('', () => log.add('del')),
+            'Ctrl+A': ('', () => log.add('ctrl+a')),
+          },
+        ),
       );
       await t.pump();
       for (final raw in ['\x1b\x1b', '\x1b[5~', '\x1b[3~', '\x01']) {
@@ -1115,14 +1115,17 @@ void main() {
       final picks = <String>[];
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {
-          'c': (
-            '',
-            () async {
-              picks.add((await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i']))!);
-            },
-          ),
-        }),
+        (s, app) => Screen(
+          (r) {},
+          keys: {
+            'c': (
+              '',
+              () async {
+                picks.add((await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i']))!);
+              },
+            ),
+          },
+        ),
         width: 40,
         height: height,
       );
@@ -1180,18 +1183,21 @@ void main() {
         0,
         (s, a) {
           app = a;
-          return Screen((r) {}, keys: {
-            'e': (
-              '',
-              () async {
-                try {
-                  log.add('ask=${await Console.ask('name?')}');
-                } finally {
-                  log.add('finally');
-                }
-              },
-            ),
-          });
+          return Screen(
+            (r) {},
+            keys: {
+              'e': (
+                '',
+                () async {
+                  try {
+                    log.add('ask=${await Console.ask('name?')}');
+                  } finally {
+                    log.add('finally');
+                  }
+                },
+              ),
+            },
+          );
         },
         width: 50,
         height: 10,
@@ -1210,15 +1216,18 @@ void main() {
       var reached = false;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {
-          'e': (
-            '',
-            () async {
-              await Console.ask('cancel me');
-              reached = true;
-            },
-          ),
-        }),
+        (s, app) => Screen(
+          (r) {},
+          keys: {
+            'e': (
+              '',
+              () async {
+                await Console.ask('cancel me');
+                reached = true;
+              },
+            ),
+          },
+        ),
         width: 50,
         height: 10,
       );
@@ -1794,26 +1803,23 @@ void main() {
 
     test('diff: merged hunks keep unchanged lines as context', () async {
       final t = testSession<int>(
-          0, (s, app) => Screen((r) => r.diff('x\ns\ns\ny', 'X\ns\ns\nY')),
-          width: 40, height: 12);
+        0,
+        (s, app) => Screen((r) => r.diff('x\ns\ns\ny', 'X\ns\ns\nY')),
+        width: 40,
+        height: 12,
+      );
       await t.pump();
-      expect([for (var i = 0; i < 7; i++) t.row(i)], [
-        '   1      - x',
-        '        1 + X',
-        '   2    2   s',
-        '   3    3   s',
-        '   4      - y',
-        '        4 + Y',
-        '',
-      ]);
+      expect(
+        [for (var i = 0; i < 7; i++) t.row(i)],
+        ['   1      - x', '        1 + X', '   2    2   s', '   3    3   s', '   4      - y', '        4 + Y', ''],
+      );
       t.close();
     });
 
     test('diff: large texts are fast and memoized', () async {
       final a = [for (var i = 0; i < 4000; i++) 'a$i'].join('\n');
       final b = [for (var i = 0; i < 4000; i++) 'b$i'].join('\n');
-      final t = testSession<int>(0, (s, app) => Screen((r) => r.diff(a, b)),
-          width: 40, height: 12);
+      final t = testSession<int>(0, (s, app) => Screen((r) => r.diff(a, b)), width: 40, height: 12);
       final sw = Stopwatch()..start();
       await t.pump();
       await t.pump();
@@ -1903,7 +1909,12 @@ void main() {
     }
 
     test('inline code does not highlight the space before it', () async {
-      final (t, term) = await paint(() => (r) => r.markdown('run `dart test` now'), w: 30, h: 4);
+      final (t, term) = await paint(
+        () =>
+            (r) => r.markdown('run `dart test` now'),
+        w: 30,
+        h: 4,
+      );
       expect(term.row(0).trimRight(), 'run dart test now');
       expect(term.styleAt(3, 0), isNot(contains('inverse')));
       expect(term.styleAt(4, 0), contains('inverse'));
@@ -2213,7 +2224,6 @@ void main() {
       expect(narrow.row(1).trimRight(), 'a        x   1');
       narrow.close();
     });
-
   });
 
   group('App (in-memory)', () {
@@ -2282,5 +2292,4 @@ void main() {
       t.close();
     });
   });
-
 }

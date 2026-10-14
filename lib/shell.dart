@@ -81,7 +81,7 @@ abstract final class Shell {
         final lines = onLine == null
             ? null
             : const Utf8Decoder(allowMalformed: true)
-                .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
+                  .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
         await for (final chunk in src) {
           buf.add(chunk);
           tee?.add(chunk);
@@ -141,11 +141,7 @@ abstract final class Shell {
   /// stderr is collected; a non-zero exit fails the run with a
   /// [io.ProcessException] carrying the code and stderr. [env] overlays the
   /// parent environment; a null value unsets the variable for the child.
-  static Pipe filter(
-    List<String> command, {
-    String? dir,
-    Map<String, String?>? env,
-  }) {
+  static Pipe filter(List<String> command, {String? dir, Map<String, String?>? env}) {
     _checkCommand(command);
     return _Filter(command, dir: dir, env: env);
   }
@@ -185,12 +181,7 @@ abstract final class Shell {
           e.errorCode,
         );
       }
-      throw io.ProcessException(
-        cmd[0],
-        cmd.sublist(1),
-        'cannot open $target: ${e.message}',
-        e.errorCode,
-      );
+      throw io.ProcessException(cmd[0], cmd.sublist(1), 'cannot open $target: ${e.message}', e.errorCode);
     }
     try {
       await proc.stdin.close();
@@ -231,9 +222,12 @@ abstract final class Shell {
     await errSub.cancel();
     if (exited && code != 0) {
       final err = utf8.decode(errBuf.takeBytes(), allowMalformed: true);
-      throw io.ProcessException(cmd[0], cmd.sublist(1),
-          'cannot open $target: exit $code${err.isEmpty ? '' : ' $err'}',
-          code);
+      throw io.ProcessException(
+        cmd[0],
+        cmd.sublist(1),
+        'cannot open $target: exit $code${err.isEmpty ? '' : ' $err'}',
+        code,
+      );
     }
   }
 
@@ -249,7 +243,6 @@ abstract final class Shell {
       throw ArgumentError.value(command, 'command', 'must not be empty');
     }
   }
-
 }
 
 /// A finished program: a [Reader] of stdout.
@@ -290,7 +283,7 @@ final class Output with Reader {
   Future<List<int>> bytes() async => _out.asUnmodifiableView();
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it.
 extension OutputFuture on Future<Output> {
   Future<int> code() async => (await this).code();
   Future<bool> ok() async => (await this).ok();
@@ -342,7 +335,7 @@ final class _Filter implements Pipe {
     // but GBs would OOM; beyond the cap the middle is dropped.
     final stderrBuf = BytesBuilder(copy: false);
     var stderrCapped = false;
-    // Drain stderr until the process exits (F12): cancelling when stdout
+    // Drain stderr until the process exits: cancelling when stdout
     // ends would drop late stderr from the exception.
     final stderrDone = () async {
       try {

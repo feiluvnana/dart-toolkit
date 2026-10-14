@@ -25,11 +25,23 @@ void main() {
       final log = File('${Directory.systemTemp.path}/tui-piped-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
       final res = await Process.run('python3', [
-        '$root/test/tui_pty/drive.py', '--size', '10', '40',
-        '--feed', '0.5', 'a', '--feed', '0.8', r'\x1b',
-        '--', '/bin/sh', '-c',
+        '$root/test/tui_pty/drive.py',
+        '--size',
+        '10',
+        '40',
+        '--feed',
+        '0.5',
+        'a',
+        '--feed',
+        '0.8',
+        r'\x1b',
+        '--',
+        '/bin/sh',
+        '-c',
         'echo hi | "\$0" "\$1" "\$2" keys; stty -a',
-        Platform.resolvedExecutable, '$root/test/tui_pty/probe.dart', log.path,
+        Platform.resolvedExecutable,
+        '$root/test/tui_pty/probe.dart',
+        log.path,
       ], workingDirectory: root);
       expect('${res.stderr}', contains('exit=0'));
       expect((await log.readAsString()).trim().split('\n'), ['a', 'escape']);
@@ -171,7 +183,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
   });
 }
-
 
 /// Run the probe helper under a real pty; return (log text, terminal bytes).
 /// Skips (not fails) where a pty is unavailable: Windows, or no python3.

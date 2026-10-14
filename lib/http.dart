@@ -36,7 +36,7 @@ import 'src/retry.dart' as retry;
 /// ```dart
 /// await Http.post('$api/items', body: .json(item));
 /// await Http.post('$base/ajax', body: .form({'action': 'decode'}));
-/// await Http.put(uploadUrl, body: .stream(Archive.archive(['.'], from: 'site', format: .zip)));
+/// await Http.put(uploadUrl, body: .stream(Archive.archive(['.'], dir: 'site', format: .zip)));
 /// ```
 sealed class Body {
   const Body._();
@@ -97,8 +97,7 @@ final class _StreamBody extends Body {
 ///   (secure + `insecure`), counted by responses (and requests) in flight.
 ///   When the count reaches 0, `close()` runs after a 100 ms grace, so a
 ///   sequential `for … await (get > file)` loop keeps one connection (no
-///   handshake per file) while a finished script exits within 100 ms. Picked over
-///   (a) no reuse and (b) a 1 s `idleTimeout` delaying exit, by A/B.
+///   handshake per file) while a finished script exits within 100 ms.
 ///   [Http.hold] keeps the client open for a whole crawl.
 /// - Redirects are followed for every verb, up to 10 hops: 301/302/303 after
 ///   a POST become a GET (the body is dropped); 307/308 keep the method and
@@ -132,7 +131,7 @@ abstract final class Http {
   /// Hold the shared client open across many requests that are further
   /// apart than the 100 ms idle grace (a crawl with `delay:`). While the
   /// hold is open, the idle close is suppressed; closing the
-  /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
+  /// hold releases it. `Scrape.crawl` holds one for its lifetime.
   static Closeable hold() {
     // Build the pools first: one created after the count rises would start
     // with this hold already counted and then count it again.
@@ -158,7 +157,8 @@ abstract final class Http {
     }
   }
 
-  /// GET [url] with optional [headers], [timeout], [retries] and [insecure].
+  /// GET [url]. [query] values are encoded (a null drops the key);
+  /// `check: true` throws on a non-2xx status.
   static Future<Response> get(
     String url, {
     Map<String, String?>? query,
@@ -167,19 +167,18 @@ abstract final class Http {
     int retries = 2,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'GET',
-        url,
-        query: query,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'GET',
+    url,
+    query: query,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
-  /// HEAD [url] with optional [headers], [timeout], [retries] and [insecure].
+  /// HEAD [url]; options as on [get].
   static Future<Response> head(
     String url, {
     Map<String, String?>? query,
@@ -188,20 +187,18 @@ abstract final class Http {
     int retries = 2,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'HEAD',
-        url,
-        query: query,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'HEAD',
+    url,
+    query: query,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
-  /// DELETE [url] with optional [headers], [timeout], [retries] and
-  /// [insecure].
+  /// DELETE [url]; options as on [get], no retries by default.
   static Future<Response> delete(
     String url, {
     Map<String, String?>? query,
@@ -210,20 +207,18 @@ abstract final class Http {
     int retries = 0,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'DELETE',
-        url,
-        query: query,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'DELETE',
+    url,
+    query: query,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
-  /// OPTIONS [url] with optional [headers], [timeout], [retries] and
-  /// [insecure].
+  /// OPTIONS [url]; options as on [get], no retries by default.
   static Future<Response> options(
     String url, {
     Map<String, String?>? query,
@@ -232,19 +227,19 @@ abstract final class Http {
     int retries = 0,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'OPTIONS',
-        url,
-        query: query,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'OPTIONS',
+    url,
+    query: query,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
-  /// POST [url] with a [Body] (`body: .json(item)`).
+  /// POST [url] with a [Body] (`body: .json(item)`); options as on [get],
+  /// no retries by default.
   static Future<Response> post(
     String url, {
     Map<String, String?>? query,
@@ -254,18 +249,17 @@ abstract final class Http {
     int retries = 0,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'POST',
-        url,
-        query: query,
-        body: body,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'POST',
+    url,
+    query: query,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
   /// PUT [url] with a [Body] (same as [post]).
   static Future<Response> put(
@@ -277,18 +271,17 @@ abstract final class Http {
     int retries = 0,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'PUT',
-        url,
-        query: query,
-        body: body,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'PUT',
+    url,
+    query: query,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 
   /// PATCH [url] with a [Body] (same as [post]).
   static Future<Response> patch(
@@ -300,18 +293,17 @@ abstract final class Http {
     int retries = 0,
     List<String> insecure = const [],
     bool check = false,
-  }) =>
-      _send(
-        'PATCH',
-        url,
-        query: query,
-        body: body,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        insecure: insecure,
-        check: check,
-      );
+  }) => _send(
+    'PATCH',
+    url,
+    query: query,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    retries: retries,
+    insecure: insecure,
+    check: check,
+  );
 }
 
 /// Keeps the shared client open ([Http.hold]). Close to release; idempotent.
@@ -344,6 +336,7 @@ final class _ClientPool {
     final h = host.toLowerCase();
     return _trusted.any((t) => h == t || h.endsWith('.$t'));
   }
+
   HttpClient? _client;
   var _active = 0;
   int _holds;
@@ -473,9 +466,7 @@ _ClientPool _poolFor(List<String> insecure) {
 ///   one. A body read or piped to the end releases the connection by itself
 ///   (back to the pool). The `Future<Response>`
 ///   mirrors (`Http.get(u).status()`) close the response after reading:
-///   a response reached only through a mirror can never be read later. (This
-///   keeps the code; VISION §4.2 still says mirrors leave the body readable
-///   and needs the fix, not the code.)
+///   a response reached only through a mirror can never be read later.
 final class Response with Reader implements Closeable {
   Response._(this._resp, this._pool, this._timeout, this._url, {this._head = false});
 
@@ -564,6 +555,7 @@ final class Response with Reader implements Closeable {
       _finish();
     }
   }
+
   var _streaming = false;
   var _closed = false;
   var _done = false;
@@ -602,32 +594,20 @@ final class Response with Reader implements Closeable {
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
   /// URL's last segment, else `'download'`. Shared with scrape/chrome via
   /// `src/origin.dart`.
-  String name() => names.fileName(
-        url: _url,
-        contentDisposition: header('content-disposition'),
-      );
+  String name() => names.fileName(url: _url, contentDisposition: header('content-disposition'));
 
-  /// Typed provenance: replaces `(reader as dynamic).url()`/`.status()`/
-  /// `.name()` probes in `html`/`json`/`chrome`.
+  /// Where the body came from: final URL, status and file name.
   @override
-  Origin origin() => Origin(
-        url: _url,
-        status: _resp.statusCode,
-        name: name(),
-      );
+  Origin origin() => Origin(url: _url, status: _resp.statusCode, name: name());
 
   /// The body as text (see the class doc for the charset rules). Reads into
   /// memory and caches, so calling again (or [bytes]) is free. Works on any
   /// status.
   @override
-  Future<String> text() async => charset.Charset.decode(
-        await bytes(),
-        contentType: header('content-type'),
-      );
+  Future<String> text() async => charset.Charset.decode(await bytes(), contentType: header('content-type'));
 
   /// The body as bytes, cached like [text]. Works on any status. Returns an
-  /// unmodifiable view of the cache: O(1), no copy (returning
-  /// `Uint8List.fromList` each call peaks at 2x the body).
+  /// unmodifiable view of the cache: O(1), no copy.
   @override
   Future<List<int>> bytes() async {
     if (_closed) {
@@ -667,10 +647,7 @@ final class Response with Reader implements Closeable {
     final cached = _cached;
     if (cached != null) {
       if (!ok()) {
-        throw HttpException(
-          'HTTP ${status()}: ${names.redact(url())}',
-          uri: Uri.tryParse(names.redact(url())),
-        );
+        throw HttpException('HTTP ${status()}: ${names.redact(url())}', uri: Uri.tryParse(names.redact(url())));
       }
       return Stream.value(cached.asUnmodifiableView());
     }
@@ -689,10 +666,7 @@ final class Response with Reader implements Closeable {
       // Drop the body (releasing the pool count) and fail loudly; readings
       // still work only when the body was never piped.
       unawaited(close());
-      throw HttpException(
-        'HTTP ${status()}: ${names.redact(url())}',
-        uri: Uri.tryParse(names.redact(url())),
-      );
+      throw HttpException('HTTP ${status()}: ${names.redact(url())}', uri: Uri.tryParse(names.redact(url())));
     }
     _streaming = true;
     // async* so a downstream failure (a writer that throws mid-run, a pipe
@@ -771,8 +745,7 @@ final class Response with Reader implements Closeable {
       }
     } catch (_) {}
     await _abandon();
-    final text = charset.Charset.decode(out.takeBytes(),
-        contentType: header('content-type'));
+    final text = charset.Charset.decode(out.takeBytes(), contentType: header('content-type'));
     final flat = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     return flat.length > 200 ? '${flat.substring(0, 200)}...' : flat;
   }
@@ -796,16 +769,11 @@ final class Response with Reader implements Closeable {
   }
 
   Stream<List<int>> _bodyStream() => _resp.timeout(
-        _timeout,
-        onTimeout: (sink) {
-          sink.addError(
-            TimeoutException(
-              'body stalled for $_timeout: ${names.redact(_url)}',
-              _timeout,
-            ),
-          );
-        },
-      );
+    _timeout,
+    onTimeout: (sink) {
+      sink.addError(TimeoutException('body stalled for $_timeout: ${names.redact(_url)}', _timeout));
+    },
+  );
 
   void _finish() {
     _done = true;
@@ -819,7 +787,7 @@ final class Response with Reader implements Closeable {
   }
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it.
 ///
 /// Each mirror closes the response after reading: a response reached only
 /// through a mirror can never be read later.
@@ -893,9 +861,9 @@ final class _Retryable {
     _TextBody() => (bytes: utf8.encode(b._text), contentType: 'text/plain; charset=utf-8'),
     _BytesBody() => (bytes: b._bytes, contentType: null),
     _FormBody() => (
-        bytes: utf8.encode(Uri(queryParameters: b._fields).query),
-        contentType: 'application/x-www-form-urlencoded',
-      ),
+      bytes: utf8.encode(Uri(queryParameters: b._fields).query),
+      contentType: 'application/x-www-form-urlencoded',
+    ),
     _JsonBody() => (bytes: utf8.encode(jsonEncode(b._value)), contentType: 'application/json'),
     _StreamBody() => throw StateError('streamed body is not in-memory: $b'),
   };
@@ -921,7 +889,11 @@ Future<Response> _send(
   if (retries > 0 && body is _StreamBody) {
     // A streamed body is read once; silently sending one attempt would
     // hide the caller's request for retries.
-    throw ArgumentError.value(retries, 'retries', 'a Body.stream cannot be resent: use Body.bytes(await reader.bytes()) to retry');
+    throw ArgumentError.value(
+      retries,
+      'retries',
+      'a Body.stream cannot be resent: use Body.bytes(await reader.bytes()) to retry',
+    );
   }
   late final Uri first;
   try {
@@ -930,11 +902,7 @@ Future<Response> _send(
     throw ArgumentError.value(url, 'url', 'invalid URL: $e');
   }
   if (first.scheme != 'http' && first.scheme != 'https') {
-    throw ArgumentError.value(
-      url,
-      'url',
-      'must be an absolute http(s) URL',
-    );
+    throw ArgumentError.value(url, 'url', 'must be an absolute http(s) URL');
   }
   // Retries are opt-in (0 by default), so a caller who asks for them on a
   // POST gets them; only a streamed body, already spent, cannot be resent.
@@ -953,9 +921,7 @@ Future<Response> _send(
     retryAfter = null;
     try {
       final res = await _attempt(method, first, body, headers, limit, pool);
-      if (resendable &&
-          (res.status() == 429 || res.status() >= 500) &&
-          attempt < retries) {
+      if (resendable && (res.status() == 429 || res.status() >= 500) && attempt < retries) {
         retryAfter = retry.parseRetryAfter(res.header('retry-after'));
         // Force-close the socket; don't drain the error body.
         await res._abandon();
@@ -972,10 +938,7 @@ Future<Response> _send(
       res._prefetch();
       return res;
     } on _Retryable catch (e) {
-      if (aborted() ||
-          !resendable ||
-          attempt >= retries ||
-          !retry.isRetryable(e.cause)) {
+      if (aborted() || !resendable || attempt >= retries || !retry.isRetryable(e.cause)) {
         throw _naming(e.cause, method, first);
       }
       attempt++;
@@ -990,7 +953,8 @@ Future<Response> _send(
 final _jar = _Jar();
 
 final class _Jar {
-  final _cookies = <String, ({String domain, bool hostOnly, String path, String value, bool secure, DateTime? expires})>{};
+  final _cookies =
+      <String, ({String domain, bool hostOnly, String path, String value, bool secure, DateTime? expires})>{};
 
   void store(Uri url, HttpClientResponse resp) {
     List<Cookie> cookies;
@@ -1019,7 +983,14 @@ final class _Jar {
         _cookies.remove(key);
         continue;
       }
-      _cookies[key] = (domain: domain, hostOnly: hostOnly, path: path, value: '${c.name}=${c.value}', secure: c.secure, expires: expires);
+      _cookies[key] = (
+        domain: domain,
+        hostOnly: hostOnly,
+        path: path,
+        value: '${c.name}=${c.value}',
+        secure: c.secure,
+        expires: expires,
+      );
     }
   }
 
@@ -1087,14 +1058,7 @@ Future<Response> _attempt(
     for (var hop = 0; ; hop++) {
       HttpClientResponse resp;
       try {
-        resp = await _singleSend(
-          client,
-          currentMethod,
-          currentUri,
-          currentBody,
-          currentHeaders,
-          limit,
-        );
+        resp = await _singleSend(client, currentMethod, currentUri, currentBody, currentHeaders, limit);
       } on TimeoutException catch (e) {
         throw _Retryable(e);
       } on HttpException catch (e) {
@@ -1136,8 +1100,10 @@ Future<Response> _attempt(
       final parsed = Uri.tryParse(location);
       final next = parsed == null ? null : currentUri.resolveUri(parsed);
       if (next == null || (next.scheme != 'http' && next.scheme != 'https') || next.host.isEmpty) {
-        throw HttpException('redirect to an unsupported URL "${names.redact(location)}": ${names.redact(currentUri)}',
-            uri: Uri.parse(names.redact(currentUri)));
+        throw HttpException(
+          'redirect to an unsupported URL "${names.redact(location)}": ${names.redact(currentUri)}',
+          uri: Uri.parse(names.redact(currentUri)),
+        );
       }
       final code = resp.statusCode;
       if ((code == 301 || code == 302) && currentMethod == 'POST') {
@@ -1159,9 +1125,7 @@ Future<Response> _attempt(
           uri: Uri.parse(names.redact(currentUri)),
         );
       }
-      if (currentUri.scheme != next.scheme ||
-          currentUri.host != next.host ||
-          currentUri.port != next.port) {
+      if (currentUri.scheme != next.scheme || currentUri.host != next.host || currentUri.port != next.port) {
         currentHeaders = _stripSensitiveHeaders(currentHeaders);
       }
       currentUri = next;
@@ -1172,12 +1136,7 @@ Future<Response> _attempt(
   }
 }
 
-bool _isRedirect(int status) =>
-    status == 301 ||
-    status == 302 ||
-    status == 303 ||
-    status == 307 ||
-    status == 308;
+bool _isRedirect(int status) => status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 
 /// The `location` header, case-insensitively (servers send `Location`).
 /// O(1): the engine already lowercases keys.
@@ -1198,11 +1157,7 @@ bool _hasHeader(Map<String, String> headers, String name) {
 Map<String, String>? _withoutContent(Map<String, String>? headers) {
   if (headers == null) return null;
   final out = Map<String, String>.of(headers);
-  out.removeWhere(
-    (key, _) =>
-        key.toLowerCase() == 'content-type' ||
-        key.toLowerCase() == 'content-length',
-  );
+  out.removeWhere((key, _) => key.toLowerCase() == 'content-type' || key.toLowerCase() == 'content-length');
   return out;
 }
 
@@ -1226,11 +1181,15 @@ Future<HttpClientResponse> _singleSend(
   Map<String, String>? headers,
   Duration limit,
 ) async {
-  TimeoutException headerTimeout() =>
-      TimeoutException('no headers for $limit: ${names.redact(uri)}', limit);
-  final req = await client.openUrl(method, uri).timeout(limit, onTimeout: () {
-    throw headerTimeout();
-  });
+  TimeoutException headerTimeout() => TimeoutException('no headers for $limit: ${names.redact(uri)}', limit);
+  final req = await client
+      .openUrl(method, uri)
+      .timeout(
+        limit,
+        onTimeout: () {
+          throw headerTimeout();
+        },
+      );
   req.followRedirects = false;
   // A scoped abort (a cancelled crawl) fails this request and its body.
   final signal = abort.currentAbort();
@@ -1263,11 +1222,7 @@ Future<HttpClientResponse> _singleSend(
       if (contentLength != null) {
         final n = int.tryParse(contentLength.trim());
         if (n == null || n < 0) {
-          throw ArgumentError.value(
-            contentLength,
-            'headers[content-length]',
-            'must be a non-negative integer',
-          );
+          throw ArgumentError.value(contentLength, 'headers[content-length]', 'must be a non-negative integer');
         }
         req.contentLength = n;
       } else {
@@ -1283,9 +1238,12 @@ Future<HttpClientResponse> _singleSend(
         rethrow;
       }
       try {
-        return await req.close().timeout(limit, onTimeout: () {
-          throw headerTimeout();
-        });
+        return await req.close().timeout(
+          limit,
+          onTimeout: () {
+            throw headerTimeout();
+          },
+        );
       } catch (_) {
         try {
           req.abort();
@@ -1296,9 +1254,12 @@ Future<HttpClientResponse> _singleSend(
     if (b == null) {
       req.contentLength = 0;
       try {
-        return await req.close().timeout(limit, onTimeout: () {
-          throw headerTimeout();
-        });
+        return await req.close().timeout(
+          limit,
+          onTimeout: () {
+            throw headerTimeout();
+          },
+        );
       } catch (_) {
         try {
           req.abort();
@@ -1316,9 +1277,12 @@ Future<HttpClientResponse> _singleSend(
     }
     try {
       await _upload(req, _slices(encoded.bytes), limit, uri);
-      return await req.close().timeout(limit, onTimeout: () {
-        throw headerTimeout();
-      });
+      return await req.close().timeout(
+        limit,
+        onTimeout: () {
+          throw headerTimeout();
+        },
+      );
     } catch (_) {
       try {
         req.abort();
@@ -1342,15 +1306,19 @@ Future<void> _upload(HttpClientRequest req, Stream<List<int>> body, Duration lim
   void arm() {
     watchdog?.cancel();
     watchdog = Timer(limit, () {
-      if (!stalled.isCompleted) stalled.completeError(TimeoutException('upload stalled for $limit: ${names.redact(uri)}', limit));
+      if (!stalled.isCompleted) {
+        stalled.completeError(TimeoutException('upload stalled for $limit: ${names.redact(uri)}', limit));
+      }
     });
   }
 
   arm();
-  final sending = req.addStream(body.map((chunk) {
-    arm();
-    return chunk;
-  }));
+  final sending = req.addStream(
+    body.map((chunk) {
+      arm();
+      return chunk;
+    }),
+  );
   sending.ignore();
   try {
     await Future.any([sending, stalled.future]);

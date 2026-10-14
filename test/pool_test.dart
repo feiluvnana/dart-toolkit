@@ -27,7 +27,6 @@ int quarterSecond(int x) {
 }
 
 void main() {
-
   group('Pool.runAll', () {
     test('maps in input order', () async {
       expect(await Pool.runAll([1, 2, 3], doubleIt), [2, 4, 6]);

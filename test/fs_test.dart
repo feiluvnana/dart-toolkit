@@ -115,30 +115,19 @@ void main() {
       expect(await Fs.entry(p('dst/lnk')), isA<Link>());
     });
 
-    test('F8: move into a non-empty folder throws and keeps the source',
-        () async {
+    test('F8: move into a non-empty folder throws and keeps the source', () async {
       await Fs.file(p('src/a.txt')).write('a');
       await Fs.file(p('dst/b.txt')).write('b');
-      await expectLater(
-        Fs.dir(p('src')).move(p('dst')),
-        throwsA(isA<FileSystemException>()),
-      );
+      await expectLater(Fs.dir(p('src')).move(p('dst')), throwsA(isA<FileSystemException>()));
       expect(await Fs.file(p('src/a.txt')).exists(), isTrue);
       expect(await Fs.file(p('dst/b.txt')).text(), 'b');
     });
 
-    test('F9: copy into itself and missing sources fail before writing',
-        () async {
+    test('F9: copy into itself and missing sources fail before writing', () async {
       await Fs.file(p('src/a.txt')).write('a');
-      await expectLater(
-        Fs.dir(p('src')).copy(p('src/sub')),
-        throwsArgumentError,
-      );
+      await expectLater(Fs.dir(p('src')).copy(p('src/sub')), throwsArgumentError);
       expect(await Fs.entry(p('src/sub')), isNull);
-      await expectLater(
-        Fs.file(p('missing.txt')).copy(p('dst.txt')),
-        throwsA(isA<FileSystemException>()),
-      );
+      await expectLater(Fs.file(p('missing.txt')).copy(p('dst.txt')), throwsA(isA<FileSystemException>()));
       expect(await Fs.entry(p('dst.txt')), isNull);
     });
 
@@ -212,10 +201,7 @@ void main() {
       await Fs.dir(p('src')).copy(p('dst'));
       final srcStat = await Directory(p('src')).stat();
       final dstStat = await Directory(p('dst')).stat();
-      expect(
-        dstStat.modified.millisecondsSinceEpoch ~/ 1000,
-        srcStat.modified.millisecondsSinceEpoch ~/ 1000,
-      );
+      expect(dstStat.modified.millisecondsSinceEpoch ~/ 1000, srcStat.modified.millisecondsSinceEpoch ~/ 1000);
       expect(dstStat.mode & 0xfff, srcStat.mode & 0xfff);
     });
   });
@@ -271,10 +257,7 @@ void main() {
       await f.write('OLD');
       await expectLater(_Boom() > f, throwsStateError);
       expect(await f.text(), 'OLD');
-      final leftovers = await Directory(tmp.path)
-          .list()
-          .where((e) => e.path.contains('.tmp'))
-          .toList();
+      final leftovers = await Directory(tmp.path).list().where((e) => e.path.contains('.tmp')).toList();
       expect(leftovers, isEmpty);
     });
 
@@ -331,9 +314,7 @@ void main() {
       await Fs.file(p('b.txt')).write('b');
       await Fs.file(p('a.txt')).write('a');
       await Fs.dir(p('sub')).create();
-      final names = [
-        for (final e in await Fs.dir(tmp.path).list()) e.name(),
-      ];
+      final names = [for (final e in await Fs.dir(tmp.path).list()) e.name()];
       expect(names, ['a.txt', 'b.txt', 'sub']);
     });
 
@@ -341,10 +322,7 @@ void main() {
       await Fs.file(p('o/a/b')).write('1');
       await Fs.file(p('o/a-b')).write('2');
       await Fs.file(p('o/a.c')).write('3');
-      final names = [
-        for (final e in await Fs.dir(p('o')).list(recursive: true))
-          e.path().substring(p('o').length + 1),
-      ];
+      final names = [for (final e in await Fs.dir(p('o')).list(recursive: true)) e.path().substring(p('o').length + 1)];
       expect(names, ['a', 'a/b', 'a-b', 'a.c']);
     });
 
@@ -377,10 +355,13 @@ void main() {
       await Fs.file(p('w/-f')).write('x');
       await Fs.dir(p('w/-d')).create();
       await Fs.file(p('w/s/a')).write('a');
-      await runInDir(p('w'), '''
+      await runInDir(
+        p('w'),
+        '''
 import 'dart:io';
 import 'package:dart_toolkit/src/posix.dart' as posix;
-void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
+void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
+        '''
   await posix.chmod('-f', 493);
   await posix.chmodBatched({493: ['-d']});
   await posix.setDirMtime('-d', DateTime(2001, 2, 3, 4, 5, 6));
@@ -388,7 +369,8 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
   check((await FileStat.stat('-d')).mode & 0x1ff == 493, 'chmod -d');
   check((await FileStat.stat('-d')).modified.year == 2001, 'mtime -d');
   check(await posix.copyTreeWithCp('s', '-t'), 'cp');
-  check(FileSystemEntity.isFileSync('-t/a'), 'cp -t/a');''');
+  check(FileSystemEntity.isFileSync('-t/a'), 'cp -t/a');''',
+      );
     });
   });
 
@@ -409,8 +391,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       expect(await Fs.link(p('lnk')).target(), p('b.txt'));
     });
 
-    test('F10: resolve returns a handle at the target; create over a file',
-        () async {
+    test('F10: resolve returns a handle at the target; create over a file', () async {
       await Fs.file(p('real.txt')).write('r');
       await Fs.link(p('lnk')).create(p('real.txt'));
       final resolved = await Fs.link(p('lnk')).resolve();
@@ -436,8 +417,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       expect(await Fs.link(p('proj/sub/up2')).target(), p('proj'));
     });
 
-    test('L11: copy replaces an existing file or link at the destination',
-        () async {
+    test('L11: copy replaces an existing file or link at the destination', () async {
       await Fs.file(p('real.txt')).write('r');
       await Fs.link(p('l1')).create(p('real.txt'));
       await Fs.file(p('plain.txt')).write('x');

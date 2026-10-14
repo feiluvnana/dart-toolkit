@@ -15,8 +15,7 @@ void main() {
       expect((await out.text()).trim(), 'hi');
     });
 
-    test('text() drops one trailing newline; bytes() stays verbatim',
-        () async {
+    test('text() drops one trailing newline; bytes() stays verbatim', () async {
       final out = await Shell.run(['printf', 'a\n']);
       expect(await out.text(), 'a');
       expect(await out.bytes(), [97, 10]);
@@ -36,8 +35,7 @@ void main() {
     });
 
     test('env overlays the parent; null unsets', () async {
-      final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'],
-          dir: '/tmp', env: {'MARK': 'here'});
+      final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'], dir: '/tmp', env: {'MARK': 'here'});
       expect(await out.text(), contains('/tmp'));
       expect(await out.text(), contains('here'));
     });
@@ -51,20 +49,22 @@ void main() {
     });
 
     test('check: a non-zero exit throws with the code and stderr', () async {
-      await expectLater(Shell.run(['sh', '-c', 'echo bad >&2; exit 4'], check: true),
-          throwsA(isA<ProcessException>()
+      await expectLater(
+        Shell.run(['sh', '-c', 'echo bad >&2; exit 4'], check: true),
+        throwsA(
+          isA<ProcessException>()
               .having((e) => e.errorCode, 'code', 4)
-              .having((e) => e.message, 'message', contains('bad'))));
+              .having((e) => e.message, 'message', contains('bad')),
+        ),
+      );
       expect(await Shell.run(['echo', 'ok'], check: true).text(), 'ok');
     });
 
     test('a null env value unsets the variable', () async {
       // HOME is set in any real parent; null must hide it from the child.
-      final unset = await Shell.run(['sh', '-c', 'echo "[\$HOME]"'],
-          env: {'HOME': null});
+      final unset = await Shell.run(['sh', '-c', 'echo "[\$HOME]"'], env: {'HOME': null});
       expect(await unset.text(), '[]');
-      final kept = await Shell.run(['sh', '-c', 'echo "[\$MARK]"'],
-          env: {'MARK': 'here'});
+      final kept = await Shell.run(['sh', '-c', 'echo "[\$MARK]"'], env: {'MARK': 'here'});
       expect(await kept.text(), '[here]');
     });
 
@@ -91,10 +91,13 @@ Future<void> main() async {
         await Fs.file('${bin.path}/$name').write('#!/bin/sh\nprintf "%s|" "\$@" > "${bin.path}/argv"\n');
         await Process.run('chmod', ['755', '${bin.path}/$name']);
       }
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
-''', env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'});
+''',
+        env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
+      );
       expect(r.exitCode, 0, reason: '${r.stderr}');
       expect(await Fs.file('${bin.path}/argv').text(), './-a/System/Applications/Calculator.app|');
     });
@@ -108,10 +111,14 @@ Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
         await Process.run('chmod', ['755', '${bin.path}/$name']);
       }
       final sw = Stopwatch()..start();
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() => Shell.open('https://example.com');
-''', env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'}, timeout: const Duration(seconds: 15));
+''',
+        env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
+        timeout: const Duration(seconds: 15),
+      );
       expect(r.exitCode, 0, reason: '${r.stderr}');
       expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
     });
@@ -126,8 +133,10 @@ Future<void> main() async {
   await Shell.run(['sh', '-c', r'echo \$\$; exec sleep 20'], live: true);
 }
 ''');
-      final p = await Process.start(Platform.resolvedExecutable,
-          ['--packages=${Directory.current.path}/.dart_tool/package_config.json', '${dir.path}/main.dart']);
+      final p = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        '${dir.path}/main.dart',
+      ]);
       final first = await p.stdout.transform(const SystemEncoding().decoder).first;
       final child = first.trim();
       p.kill(); // SIGTERM to the script we spawned
@@ -143,17 +152,11 @@ Future<void> main() async {
       final b = await out.bytes();
       expect(a, [97, 98, 99]);
       expect(b, [97, 98, 99]);
-      expect(
-        () => a.add(0),
-        throwsUnsupportedError,
-      );
+      expect(() => a.add(0), throwsUnsupportedError);
     });
 
     test('a program that cannot start throws ProcessException', () async {
-      expect(
-        Shell.run(['dart-toolkit-no-such-program-xyz']),
-        throwsA(isA<ProcessException>()),
-      );
+      expect(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isA<ProcessException>()));
     });
 
     test('Output is a Reader: json() works', () async {
@@ -179,19 +182,12 @@ Future<void> main() async {
     test('non-zero exit fails the run with a ProcessException', () async {
       expect(
         _Mem('x') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null,
-        throwsA(isA<ProcessException>().having(
-          (e) => e.message,
-          'message',
-          contains('2'),
-        )),
+        throwsA(isA<ProcessException>().having((e) => e.message, 'message', contains('2'))),
       );
     });
 
     test('an upstream error is rethrown, not masked', () async {
-      expect(
-        _Boom() | Shell.filter(['cat']) > null,
-        throwsStateError,
-      );
+      expect(_Boom() | Shell.filter(['cat']) > null, throwsStateError);
     });
 
     test('empty command is an ArgumentError', () {
@@ -203,9 +199,7 @@ Future<void> main() async {
       final lines = List.generate(10000, (i) => 'line $i').join('\n');
       final tmp = await Directory.systemTemp.createTemp('shell_f4');
       try {
-        await (_Mem(lines) |
-                Shell.filter(['head', '-n', '1']) >
-            Fs.file('${tmp.path}/one.txt'));
+        await (_Mem(lines) | Shell.filter(['head', '-n', '1']) > Fs.file('${tmp.path}/one.txt'));
         final first = await Fs.file('${tmp.path}/one.txt').text();
         expect(first.trim(), 'line 0');
       } finally {
@@ -215,18 +209,10 @@ Future<void> main() async {
 
     test('F12: late stderr survives into the exception', () async {
       await expectLater(
-        _Mem('x') |
-            Shell.filter([
-              'sh',
-              '-c',
-              'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2',
-            ]) >
-                null,
-        throwsA(isA<ProcessException>().having(
-          (e) => e.message,
-          'message',
-          allOf(contains('2'), contains('late-stderr')),
-        )),
+        _Mem('x') | Shell.filter(['sh', '-c', 'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2']) > null,
+        throwsA(
+          isA<ProcessException>().having((e) => e.message, 'message', allOf(contains('2'), contains('late-stderr'))),
+        ),
       );
     });
   });

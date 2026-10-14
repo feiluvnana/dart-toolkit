@@ -95,10 +95,7 @@ Future<void> _copyFile(String from, String to) async {
 /// Throw before any writes when a source file would land on a dest dir
 /// (or vice versa). Links are replaced, so they never collide.
 Future<void> _checkDirCollisions(String from, String to) async {
-  await for (final e in io.Directory(from).list(
-    recursive: true,
-    followLinks: false,
-  )) {
+  await for (final e in io.Directory(from).list(recursive: true, followLinks: false)) {
     final rel = p.relative(e.path, from: from);
     final dest = p.join(to, rel);
     final st = await io.FileSystemEntity.type(e.path, followLinks: false);
@@ -112,8 +109,7 @@ Future<void> _checkDirCollisions(String from, String to) async {
     final srcIsDir = st == io.FileSystemEntityType.directory;
     final destIsDir = dt == io.FileSystemEntityType.directory;
     // Links are replaced, not collided.
-    if (st == io.FileSystemEntityType.link ||
-        dt == io.FileSystemEntityType.link) {
+    if (st == io.FileSystemEntityType.link || dt == io.FileSystemEntityType.link) {
       continue;
     }
     if (srcIsDir != destIsDir) {

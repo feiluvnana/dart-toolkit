@@ -12,9 +12,8 @@
 /// - [Image] supports `width` `height` `pixel` `resize` `crop` `encode`.
 /// - `region.picture(image)` draws it in a `Tui` (neither module loads the
 ///   other).
-/// Small images convert inline. Above [_isolatePixels] (decode reads the
-/// size from the header) the work goes through [Isolate.run] — whose result comes back
-/// through [Isolate.exit] without a copy — so a large photo never freezes
+/// Small images convert inline. Above 1 M pixels (decode reads the size
+/// from the header) the work runs on a worker isolate, so a large photo never freezes
 /// the event loop under a `Console` spinner or a `Tui` frame.
 /// CPU-bound batches go through Pool.runAll (see pool.dart).
 /// Everything else is private.
@@ -141,48 +140,34 @@ final class Image implements Pixels {
       throw ArgumentError('resize needs a width, a height, or both');
     }
     if ((width != null && width < 1) || (height != null && height < 1)) {
-      throw ArgumentError.value(
-        width ?? height,
-        width != null ? 'width' : 'height',
-        'must be >= 1',
-      );
+      throw ArgumentError.value(width ?? height, width != null ? 'width' : 'height', 'must be >= 1');
     }
-    final targetWidth =
-        width ?? (height! * _inner.width / _inner.height).round();
-    final targetHeight =
-        height ?? (width! * _inner.height / _inner.width).round();
-    final shrinking =
-        targetWidth * targetHeight < _inner.width * _inner.height;
-    return Image._(img.copyResize(_inner,
+    final targetWidth = width ?? (height! * _inner.width / _inner.height).round();
+    final targetHeight = height ?? (width! * _inner.height / _inner.width).round();
+    final shrinking = targetWidth * targetHeight < _inner.width * _inner.height;
+    return Image._(
+      img.copyResize(
+        _inner,
         width: width,
         height: height,
-        interpolation: shrinking
-            ? img.Interpolation.average
-            : img.Interpolation.cubic));
+        interpolation: shrinking ? img.Interpolation.average : img.Interpolation.cubic,
+      ),
+    );
   }
 
   /// A cut-out copy. A bad size is an [ArgumentError]; a region leaving
   /// the image is a [RangeError].
   Image crop(int x, int y, int width, int height) {
     if (width < 1 || height < 1) {
-      throw ArgumentError.value(
-        '${width}x$height',
-        'width/height',
-        'must be >= 1',
-      );
+      throw ArgumentError.value('${width}x$height', 'width/height', 'must be >= 1');
     }
-    if (x < 0 ||
-        y < 0 ||
-        x + width > _inner.width ||
-        y + height > _inner.height) {
+    if (x < 0 || y < 0 || x + width > _inner.width || y + height > _inner.height) {
       throw RangeError(
         'crop ($x,$y ${width}x$height) leaves '
         '${_inner.width}x${_inner.height}',
       );
     }
-    return Image._(
-      img.copyCrop(_inner, x: x, y: y, width: width, height: height),
-    );
+    return Image._(img.copyCrop(_inner, x: x, y: y, width: width, height: height));
   }
 
   /// A [Reader] of the encoded image, encoded when read (lazily: nothing
@@ -262,16 +247,14 @@ extension ReaderFutureImage on Future<Reader> {
   Future<Image> image() async => (await this).image();
 }
 
-/// Future mirrors (rule 6). The extension name is import-only; never reference it.
+/// Future mirrors (rule 4). The extension name is import-only; never reference it.
 extension ImageFuture on Future<Image> {
   Future<int> width() async => (await this).width();
   Future<int> height() async => (await this).height();
 
   /// Resize; large images resize on a worker isolate.
-  Future<Image> resize({int? width, int? height}) async =>
-      _resizeAsync(await this, width: width, height: height);
-  Future<Image> crop(int x, int y, int width, int height) async =>
-      (await this).crop(x, y, width, height);
+  Future<Image> resize({int? width, int? height}) async => _resizeAsync(await this, width: width, height: height);
+  Future<Image> crop(int x, int y, int width, int height) async => (await this).crop(x, y, width, height);
   Reader encode(ImageFormat format, {int quality = 90}) {
     if (quality < 1 || quality > 100) {
       throw ArgumentError.value(quality, 'quality', 'must be 1..100');
@@ -324,11 +307,7 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
       throw ArgumentError.value(format, 'format', 'webp can be decoded, not encoded: use png or jpg');
     case ImageFormat.ico:
       if (inner.width > 256 || inner.height > 256) {
-        throw ArgumentError.value(
-          '${inner.width}x${inner.height}',
-          'image',
-          '.ico supports at most 256x256',
-        );
+        throw ArgumentError.value('${inner.width}x${inner.height}', 'image', '.ico supports at most 256x256');
       }
       return img.encodeIco(inner);
   }

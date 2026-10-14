@@ -62,8 +62,12 @@ abstract final class Archive {
   /// A path outside [dir] is an [ArgumentError]; links are refused with a
   /// [FormatException], the same as [unarchive]: an archive never silently
   /// drops entries.
-  static Reader archive(List<String> paths,
-      {ArchiveFormat format = ArchiveFormat.zip, String dir = '.', String? password}) {
+  static Reader archive(
+    List<String> paths, {
+    ArchiveFormat format = ArchiveFormat.zip,
+    String dir = '.',
+    String? password,
+  }) {
     if (password != null && (format == ArchiveFormat.tar || format == ArchiveFormat.tgz)) {
       throw ArgumentError.value(format, 'format', 'tar has no encryption: use zip for a password');
     }
@@ -178,7 +182,13 @@ final class _Packed with Reader {
       // Streamed from disk: the stat size goes in the header, exactly that
       // many bytes follow (a file that shrinks mid-pack is an error).
       final size = m.dir ? 0 : st?.size ?? 0;
-      for (final chunk in _tarHeader(name: m.name, size: size, mode: mode, mtime: mtime, typeflag: m.dir ? _tarDir : _tarFile)) {
+      for (final chunk in _tarHeader(
+        name: m.name,
+        size: size,
+        mode: mode,
+        mtime: mtime,
+        typeflag: m.dir ? _tarDir : _tarFile,
+      )) {
         yield chunk;
       }
       if (m.dir) continue;
@@ -278,7 +288,12 @@ final class _Extraction {
     }
     for (final f in entries) {
       // One member inflated at a time.
-      await _writeMember(f.name, f.mode, isDir: f.isDir, data: f.isDir ? null : f.data(password: password));
+      await _writeMember(
+        f.name,
+        f.mode,
+        isDir: f.isDir,
+        data: f.isDir ? null : f.data(password: password),
+      );
     }
   }
 
@@ -369,7 +384,7 @@ final class _Extraction {
     }
   }
 
-  /// Never delete the target (F1): create it and merge each top-level
+  /// Never delete the target: create it and merge each top-level
   /// member in (rename, copy fallback). Existing files are kept. Every
   /// file/folder collision fails before the first rename, so a failed
   /// unpack leaves the target as it was.
@@ -435,7 +450,7 @@ final class _Unpacker implements Writer {
     final isRar = rarlib.isRar(head);
     final isXz = xz.isXz(head);
     // Normalise the target; the temp folder is a SIBLING of the target,
-    // never inside it (F2). Use the absolute path so '.' (whose dirname is
+    // never inside it. Use the absolute path so '.' (whose dirname is
     // '.') still gets a sibling outside itself.
     final d = p.normalize(_dir);
     final x = _Extraction(io.Directory(posix.tmpPath(p.normalize(p.absolute(d)))));
@@ -478,17 +493,16 @@ final class _Unpacker implements Writer {
   /// target folders that already exist (their modes stay).
   static Future<Set<String>> _checkCollisions(String tmp, String target) async {
     final existing = <String>{};
-    if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) return existing;
+    if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) {
+      return existing;
+    }
     await for (final e in io.Directory(tmp).list(recursive: true, followLinks: false)) {
       final dest = p.join(target, p.relative(e.path, from: tmp));
       final dt = await io.FileSystemEntity.type(dest, followLinks: false);
       if (dt == io.FileSystemEntityType.notFound) continue;
       final destIsDir = dt == io.FileSystemEntityType.directory;
       if ((e is io.Directory) != destIsDir) {
-        throw io.FileSystemException(
-          'archive member collides with existing ${destIsDir ? 'directory' : 'file'}',
-          dest,
-        );
+        throw io.FileSystemException('archive member collides with existing ${destIsDir ? 'directory' : 'file'}', dest);
       }
       if (destIsDir) existing.add(dest);
     }
@@ -500,12 +514,8 @@ final class _Unpacker implements Writer {
   static Future<void> _moveInto(String src, String dest) async {
     final srcType = await io.FileSystemEntity.type(src, followLinks: false);
     final destType = await io.FileSystemEntity.type(dest, followLinks: false);
-    if (srcType == io.FileSystemEntityType.directory &&
-        destType == io.FileSystemEntityType.directory) {
-      await for (final child in io.Directory(src).list(
-        recursive: false,
-        followLinks: false,
-      )) {
+    if (srcType == io.FileSystemEntityType.directory && destType == io.FileSystemEntityType.directory) {
+      await for (final child in io.Directory(src).list(recursive: false, followLinks: false)) {
         await _moveInto(child.path, p.join(dest, p.basename(child.path)));
       }
       try {
@@ -519,10 +529,7 @@ final class _Unpacker implements Writer {
       if (srcIsDir != destIsDir) {
         // Never delete on type collision: an archive file over an existing
         // dir (or vice versa) throws instead of rm -rf.
-        throw io.FileSystemException(
-          'archive member collides with existing ${destIsDir ? 'directory' : 'file'}',
-          dest,
-        );
+        throw io.FileSystemException('archive member collides with existing ${destIsDir ? 'directory' : 'file'}', dest);
       }
       try {
         if (destType == io.FileSystemEntityType.directory) {
@@ -568,10 +575,7 @@ final class _Unpacker implements Writer {
   }
 
   static final _badPart = RegExp(r'[<>:"|?*\x00-\x1f]');
-  static final _reserved = RegExp(
-    r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$',
-    caseSensitive: false,
-  );
+  static final _reserved = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', caseSensitive: false);
 
   /// Rejects, on every OS, any name that would not extract the same way on
   /// Linux, macOS and Windows: escapes, device names, characters and
@@ -581,9 +585,7 @@ final class _Unpacker implements Writer {
     if (name.isEmpty) {
       throw FormatException('archive member has an empty name');
     }
-    if (name.startsWith('/') ||
-        name.startsWith('\\') ||
-        RegExp(r'^[A-Za-z]:').hasMatch(name)) {
+    if (name.startsWith('/') || name.startsWith('\\') || RegExp(r'^[A-Za-z]:').hasMatch(name)) {
       throw FormatException('archive member escapes: $name');
     }
     var path = '';
@@ -598,9 +600,7 @@ final class _Unpacker implements Writer {
       if (part.isEmpty || part == '.') continue;
       path = path.isEmpty ? part : '$path/$part';
       if ((folded[path.toLowerCase()] ??= path) != path) {
-        throw FormatException(
-          'archive members differ only in case: $name',
-        );
+        throw FormatException('archive members differ only in case: $name');
       }
     }
   }
@@ -659,9 +659,7 @@ List<List<int>> _tarHeader({
     final tail = slash < 0 ? core : core.substring(slash + 1);
     final head = slash < 0 ? '' : core.substring(0, slash);
     final tailBytes = utf8.encode(isDir ? '$tail/' : tail).length;
-    if (slash > 0 &&
-        tailBytes <= 100 &&
-        utf8.encode(head).length <= 155) {
+    if (slash > 0 && tailBytes <= 100 && utf8.encode(head).length <= 155) {
       headerName = isDir ? '$tail/' : tail;
       prefix = head;
     } else {
@@ -683,16 +681,7 @@ List<List<int>> _tarHeader({
       headerName = _truncateUtf8(name, 100);
     }
   }
-  out.add(
-    _rawHeader(
-      name: headerName,
-      size: size,
-      mode: mode,
-      mtime: mtime,
-      typeflag: typeflag,
-      prefix: prefix,
-    ),
-  );
+  out.add(_rawHeader(name: headerName, size: size, mode: mode, mtime: mtime, typeflag: typeflag, prefix: prefix));
   return out;
 }
 
@@ -743,13 +732,7 @@ void _writeField(List<int> buf, int offset, int length, List<int> bytes) {
 
 /// Zero-padded octal digits with a trailing NUL (`length` includes it); the
 /// checksum field instead ends NUL + space.
-void _writeOctal(
-  List<int> buf,
-  int offset,
-  int length,
-  int value, {
-  bool trailingSpace = false,
-}) {
+void _writeOctal(List<int> buf, int offset, int length, int value, {bool trailingSpace = false}) {
   final width = trailingSpace ? length - 2 : length - 1;
   var digits = value.toRadixString(8);
   if (digits.length > width) digits = digits.substring(digits.length - width);
@@ -791,10 +774,7 @@ const _tarMetaMax = 1 << 20;
 /// whatever the member size); only the 512-byte header and pax/GNU records
 /// are buffered. A zero block or a clean EOF ends the archive; a partial
 /// header or body at EOF or a bad checksum is a [FormatException].
-Stream<_TarEvent> _parseTar(
-  Stream<List<int>> input, {
-  required bool fromGzip,
-}) async* {
+Stream<_TarEvent> _parseTar(Stream<List<int>> input, {required bool fromGzip}) async* {
   final head = BytesBuilder(copy: false);
   final metaBuf = BytesBuilder(copy: false);
   var remaining = 0; // body bytes still to come
@@ -809,9 +789,7 @@ Stream<_TarEvent> _parseTar(
   Never fail(String message, {bool notTar = false}) {
     // Gzip that decodes but opens with a bad header is not a tar at all.
     if (notTar && fromGzip && seen == 0) {
-      throw const FormatException(
-        'corrupt archive: gzip data is not a tar archive',
-      );
+      throw const FormatException('corrupt archive: gzip data is not a tar archive');
     }
     throw FormatException(message);
   }
@@ -823,15 +801,11 @@ Stream<_TarEvent> _parseTar(
       // `linkpath=` marks a link, which unpack refuses like zip does.
       final records = _parsePax(data);
       if (records.keys.any((k) => k.startsWith('GNU.sparse.'))) {
-        throw FormatException(
-          'sparse tar member unsupported: ${records['GNU.sparse.name'] ?? records['path']}',
-        );
+        throw FormatException('sparse tar member unsupported: ${records['GNU.sparse.name'] ?? records['path']}');
       }
       final linkpath = records['linkpath'];
       if (linkpath != null && linkpath.isNotEmpty) {
-        throw FormatException(
-          'archive member is a link: ${records['path']}',
-        );
+        throw FormatException('archive member is a link: ${records['path']}');
       }
       final renamed = records['path'];
       if (renamed != null && renamed.isNotEmpty) {
@@ -908,10 +882,7 @@ Stream<_TarEvent> _parseTar(
         fail('corrupt archive: bad tar size in header', notTar: true);
       }
       final typeflag = h[156];
-      final isMeta = typeflag == 0x78 ||
-          typeflag == 0x67 ||
-          typeflag == 0x4c ||
-          typeflag == 0x4b;
+      final isMeta = typeflag == 0x78 || typeflag == 0x67 || typeflag == 0x4c || typeflag == 0x4b;
       if (!isMeta && pendingSize != null) {
         size = pendingSize!;
         pendingSize = null;
@@ -954,10 +925,7 @@ Stream<_TarEvent> _parseTar(
     }
   }
   if (!ended && (head.length != 0 || remaining != 0 || pad != 0)) {
-    fail(
-      'corrupt archive: truncated tar',
-      notTar: true,
-    );
+    fail('corrupt archive: truncated tar', notTar: true);
   }
 }
 
@@ -1036,8 +1004,7 @@ Map<String, String> _parsePax(Uint8List data) {
     if (space < 0) break;
     final len = int.tryParse(utf8.decode(data.sublist(i, space)));
     if (len == null || len <= 0 || i + len > data.length) break;
-    var record =
-        utf8.decode(data.sublist(space + 1, i + len), allowMalformed: true);
+    var record = utf8.decode(data.sublist(space + 1, i + len), allowMalformed: true);
     if (record.endsWith('\n')) record = record.substring(0, record.length - 1);
     final eq = record.indexOf('=');
     if (eq > 0) out[record.substring(0, eq)] = record.substring(eq + 1);
@@ -1095,9 +1062,7 @@ Stream<List<int>> _gunzipChecked(Stream<List<int>> input) async* {
   }
   final wantSize = ByteData.sublistView(last8).getUint32(4, Endian.little);
   if (size != wantSize) {
-    throw const FormatException(
-      'bad gzip data: size mismatch (truncated, corrupt or multi-member)',
-    );
+    throw const FormatException('bad gzip data: size mismatch (truncated, corrupt or multi-member)');
   }
 }
 

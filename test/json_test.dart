@@ -17,7 +17,12 @@ void main() {
 
   group('Json.encode', () {
     test('renders compact by default', () {
-      expect(Json.encode({'a': [1, 2]}), '{"a":[1,2]}');
+      expect(
+        Json.encode({
+          'a': [1, 2],
+        }),
+        '{"a":[1,2]}',
+      );
     });
 
     test('pretty indents by two spaces', () {
@@ -26,9 +31,7 @@ void main() {
   });
 
   group('Json', () {
-    final doc = Json.parse(
-      '{"server": {"port": 8080}, "users": [{"name": "a"}, {"name": "b"}]}',
-    );
+    final doc = Json.parse('{"server": {"port": 8080}, "users": [{"name": "a"}, {"name": "b"}]}');
 
     test(r'$() follows dotted paths, numeric indexes arrays', () {
       expect(doc.$('server.port').value<int>(), 8080);
@@ -77,10 +80,7 @@ void main() {
     });
 
     test('mirror on Future<Reader>', () async {
-      expect(
-        await Future<Reader>.value(_Mem('[1,2]')).json().$('1').value<int>(),
-        2,
-      );
+      expect(await Future<Reader>.value(_Mem('[1,2]')).json().$('1').value<int>(), 2);
     });
   });
 
@@ -90,10 +90,7 @@ void main() {
       expect((await f.$('a')).$('b').value<int>(), 1);
       expect(await f.$('a.b').value<int>(), 1);
       expect(await Future.value(Json.parse('[1,2]')).asList<int>(), [1, 2]);
-      expect(
-        await Future.value(Json.parse('{"a":1}')).asMap<int>(),
-        {'a': 1},
-      );
+      expect(await Future.value(Json.parse('{"a":1}')).asMap<int>(), {'a': 1});
     });
   });
 
@@ -139,49 +136,35 @@ void main() {
     });
 
     test('asList reads REST shapes in one pass', () {
-      expect(
-        Json.parse('[{"a":1},{"b":2}]').asList<Map<String, Object?>>(),
-        isNotNull,
-      );
-      expect(
-        Json.parse('[{"a":1},{"b":2}]').asList<Map<String, dynamic>>(),
-        isNotNull,
-      );
+      expect(Json.parse('[{"a":1},{"b":2}]').asList<Map<String, Object?>>(), isNotNull);
+      expect(Json.parse('[{"a":1},{"b":2}]').asList<Map<String, dynamic>>(), isNotNull);
       // value<List<...>> is not the typed read; debug builds say so.
       expect(() => Json.parse('[1,2]').value<List<int>>(), throwsA(isA<AssertionError>()));
       expect(() => Json.parse('{"a":1}').value<Map<String, int>>(), throwsA(isA<AssertionError>()));
     });
 
     test('Json.of wraps a held value', () {
-      expect(Json.of({'a': [1, 2]}).$('a').asList<int>(), [1, 2]);
+      expect(
+        Json.of({
+          'a': [1, 2],
+        }).$('a').asList<int>(),
+        [1, 2],
+      );
       expect(Json.of([1, 2]).asList<int>(), [1, 2]);
     });
 
     test('nested reads go through iteration (records)', () {
-      final doc = Json.parse(
-        '{"users": [{"name": "a", "age": 1}, {"name": "b", "age": 2}]}',
-      );
-      final users = [
-        for (final u in doc.$('users'))
-          (
-            name: u.$('name').or(''),
-            age: u.$('age').or(0),
-          ),
-      ];
+      final doc = Json.parse('{"users": [{"name": "a", "age": 1}, {"name": "b", "age": 2}]}');
+      final users = [for (final u in doc.$('users')) (name: u.$('name').or(''), age: u.$('age').or(0))];
       expect(users, [(name: 'a', age: 1), (name: 'b', age: 2)]);
     });
   });
 
   group('star paths (V14)', () {
-    final doc = Json.parse(
-      '{"data":{"users":[{"name":"a"},{"name":"b"},{"x":1}]}}',
-    );
+    final doc = Json.parse('{"data":{"users":[{"name":"a"},{"name":"b"},{"x":1}]}}');
 
     test('* maps over items, missing keys are null entries', () {
-      expect(
-        doc.$('data.users.*.name').asList<String?>(),
-        ['a', 'b', null],
-      );
+      expect(doc.$('data.users.*.name').asList<String?>(), ['a', 'b', null]);
       expect(doc.$('data.users.*.name').asList<String>(), isEmpty);
     });
 
@@ -224,10 +207,7 @@ void main() {
         dartType = e.runtimeType;
       }
       expect(dartType, isNotNull);
-      expect(
-        () => Json.encode({1: 2}),
-        throwsA(predicate((e) => e.runtimeType == dartType)),
-      );
+      expect(() => Json.encode({1: 2}), throwsA(predicate((e) => e.runtimeType == dartType)));
     });
 
     test('indexed loops stay linear', () {

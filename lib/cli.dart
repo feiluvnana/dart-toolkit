@@ -26,12 +26,6 @@ import 'src/sanitize.dart' as term;
 /// A schema definition, read back with `context(param)` as a `T`. Sealed:
 /// the only inhabitants are [Flag], [Opt], [Multi] and [Arg],
 /// so the type comes from the definition, not the call site.
-///
-/// Each definition carries one private record: its names, its help, the
-/// reader resolved once in the constructor (so parsing a token is one
-/// closure call: O(1), not a runtime `Type` chain), the value when absent,
-/// and its kind. Behaviour that differs per shape switches on the sealed
-/// subtype; nothing throws [UnsupportedError].
 sealed class Param<T> {
   Param._({
     required this._name,
@@ -55,8 +49,7 @@ sealed class Param<T> {
   final Object? Function() _absent;
   final Object? Function(String raw, String what)? _readOne;
   final Object? Function(List<String> raws, String what)? _readMany;
-  final Object? Function(List<String> parentRaws, String what, Object? child)?
-      _mergeMany;
+  final Object? Function(List<String> parentRaws, String what, Object? child)? _mergeMany;
 
   bool get _isArg => _kind == _Kind.argument;
   bool get _isMulti => _kind == _Kind.multi;
@@ -83,16 +76,8 @@ final class _Reader<T> {
 /// usage.
 final class Flag extends Param<bool> {
   Flag(String name, String help, {String? short, bool or = false})
-      : _or = or,
-        super._(
-          name: name,
-          short: short,
-          help: help,
-          kind: _Kind.flag,
-          required: false,
-          hint: '',
-          absent: () => or,
-        ) {
+    : _or = or,
+      super._(name: name, short: short, help: help, kind: _Kind.flag, required: false, hint: '', absent: () => or) {
     _checkName(name);
     _checkShort(short);
     _checkHelpReserved(name);
@@ -108,27 +93,28 @@ final class Flag extends Param<bool> {
 /// [or] or `required` is an [ArgumentError]. Yes/no is always a
 /// [Flag]: `Opt<bool>` is an [ArgumentError].
 final class Opt<T> extends Param<T> {
-  Opt(String name, String help,
-      {String? short,
-      T? or,
-      bool required = false,
-      String? env,
-      T Function(String)? parse})
-      : this._withReader(name, help, _resolve<T>(name, parse),
-            short: short, or: or, required: required, env: env);
+  Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse})
+    : this._withReader(name, help, _resolve<T>(name, parse), short: short, or: or, required: required, env: env);
 
-  Opt._withReader(String name, String help, _Reader<T> reader,
-      {String? short, required T? or, required bool required, this._env})
-      : _or = or,
-        super._(
-            name: name,
-            short: short,
-            help: help,
-            kind: _Kind.option,
-            required: required,
-            hint: reader.hint,
-            absent: () => or,
-            readOne: reader.read) {
+  Opt._withReader(
+    String name,
+    String help,
+    _Reader<T> reader, {
+    String? short,
+    required T? or,
+    required bool required,
+    this._env,
+  }) : _or = or,
+       super._(
+         name: name,
+         short: short,
+         help: help,
+         kind: _Kind.option,
+         required: required,
+         hint: reader.hint,
+         absent: () => or,
+         readOne: reader.read,
+       ) {
     _checkName(name);
     _checkShort(short);
     _checkHelpReserved(name);
@@ -147,31 +133,26 @@ final class Opt<T> extends Param<T> {
 /// where [or] or [parse] gives it. Yes/no is always a [Flag]:
 /// `Multi<bool>` is an [ArgumentError].
 final class Multi<T> extends Param<List<T>> {
-  Multi(String name, String help,
-      {String? short,
-      List<T> or = const [],
-      T Function(String)? parse})
-      : this._withElement(name, help, _resolve<T>(name, parse),
-            short: short, or: or);
+  Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse})
+    : this._withElement(name, help, _resolve<T>(name, parse), short: short, or: or);
 
-  Multi._withElement(String name, String help, _Reader<T> element,
-      {String? short, required List<T> or})
-      : _or = or,
-        super._(
-            name: name,
-            short: short,
-            help: help,
-            kind: _Kind.multi,
-            required: false,
-            hint: '${element.hint}...',
-            absent: () => List<T>.unmodifiable(List<T>.of(or)),
-            readOne: element.read,
-            readMany: (raws, what) => List<T>.unmodifiable(
-                [for (final raw in raws) element.read(raw, what)]),
-            mergeMany: (parentRaws, what, child) => List<T>.unmodifiable([
-                  for (final raw in parentRaws) element.read(raw, what),
-                  ...((child as List?) ?? const []).cast<T>(),
-                ])) {
+  Multi._withElement(String name, String help, _Reader<T> element, {String? short, required List<T> or})
+    : _or = or,
+      super._(
+        name: name,
+        short: short,
+        help: help,
+        kind: _Kind.multi,
+        required: false,
+        hint: '${element.hint}...',
+        absent: () => List<T>.unmodifiable(List<T>.of(or)),
+        readOne: element.read,
+        readMany: (raws, what) => List<T>.unmodifiable([for (final raw in raws) element.read(raw, what)]),
+        mergeMany: (parentRaws, what, child) => List<T>.unmodifiable([
+          for (final raw in parentRaws) element.read(raw, what),
+          ...((child as List?) ?? const []).cast<T>(),
+        ]),
+      ) {
     _checkName(name);
     _checkShort(short);
     _checkHelpReserved(name);
@@ -186,22 +167,20 @@ final class Multi<T> extends Param<List<T>> {
 /// is inferred where [or] or [parse] gives it. Yes/no is always a
 /// [Flag]: `Arg<bool>` is an [ArgumentError].
 final class Arg<T> extends Param<T> {
-  Arg(String name, String help,
-      {T? or, bool required = false, T Function(String)? parse})
-      : this._withReader(name, help, _resolve<T>(name, parse),
-            or: or, required: required);
+  Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse})
+    : this._withReader(name, help, _resolve<T>(name, parse), or: or, required: required);
 
-  Arg._withReader(String name, String help, _Reader<T> reader,
-      {required T? or, required bool required})
-      : super._(
-            name: name,
-            short: null,
-            help: help,
-            kind: _Kind.argument,
-            required: required,
-            hint: reader.hint,
-            absent: () => or,
-            readOne: reader.read) {
+  Arg._withReader(String name, String help, _Reader<T> reader, {required T? or, required bool required})
+    : super._(
+        name: name,
+        short: null,
+        help: help,
+        kind: _Kind.argument,
+        required: required,
+        hint: reader.hint,
+        absent: () => or,
+        readOne: reader.read,
+      ) {
     _checkName(name);
     _checkHelpReserved(name);
     _checkDefault<T>(name, or, required);
@@ -210,18 +189,20 @@ final class Arg<T> extends Param<T> {
 
 /// A command: schema plus the handler that runs it.
 final class Command {
-  Command(String name, String help,
-      {List<Param<Object?>> params = const [],
-      List<Command> commands = const [],
-      FutureOr<void> Function(Context context)? handler,
-      List<String> aliases = const []})
-      : _name = name,
-        _help = help,
-        _params = params,
-        _commands = commands,
-        // ignore: prefer_initializing_formals – the public argument stays `handler`.
-        _handler = handler,
-        _aliases = aliases {
+  Command(
+    String name,
+    String help, {
+    List<Param<Object?>> params = const [],
+    List<Command> commands = const [],
+    FutureOr<void> Function(Context context)? handler,
+    List<String> aliases = const [],
+  }) : _name = name,
+       _help = help,
+       _params = params,
+       _commands = commands,
+       // ignore: prefer_initializing_formals – the public argument stays `handler`.
+       _handler = handler,
+       _aliases = aliases {
     if (name.isEmpty) {
       throw ArgumentError.value(name, 'name', 'Invalid name: empty');
     }
@@ -236,51 +217,46 @@ final class Command {
       final paramName = p._name;
       final paramShort = p._short;
       if (!names.add(paramName)) {
-        throw ArgumentError.value(
-            paramName, 'params', 'Invalid params: declared twice');
+        throw ArgumentError.value(paramName, 'params', 'Invalid params: declared twice');
       }
       if (paramShort != null) {
         final owner = shorts[paramShort];
         if (owner != null) {
-          throw ArgumentError.value(
-              paramShort, 'params', 'Invalid params: -$paramShort twice');
+          throw ArgumentError.value(paramShort, 'params', 'Invalid params: -$paramShort twice');
         }
         shorts[paramShort] = paramName;
       }
       if (p._isArg) argDefs.add(p);
     }
     if (argDefs.isNotEmpty && commands.isNotEmpty) {
-      throw ArgumentError.value(
-          name, 'params', 'Invalid params: arguments and commands are exclusive');
+      throw ArgumentError.value(name, 'params', 'Invalid params: arguments and commands are exclusive');
     }
     var optional = false;
     for (final a in argDefs) {
       final required = a._isRequired;
       if (optional && required) {
-        throw ArgumentError.value(a._name, 'params',
-            'Invalid arguments: required <${a._name}> after an optional one');
+        throw ArgumentError.value(a._name, 'params', 'Invalid arguments: required <${a._name}> after an optional one');
       }
       optional |= !required;
     }
     final seen = <String>{name, ...aliases};
     if (seen.length != aliases.length + 1) {
-      throw ArgumentError.value(
-          aliases, 'aliases', 'Invalid aliases: duplicate name');
+      throw ArgumentError.value(aliases, 'aliases', 'Invalid aliases: duplicate name');
     }
     final subSeen = <String>{};
     for (final c in commands) {
       for (final n in [c._name, ...c._aliases]) {
         if (!subSeen.add(n)) {
-          throw ArgumentError.value(
-              n, 'commands', 'Invalid commands: "$n" twice');
+          throw ArgumentError.value(n, 'commands', 'Invalid commands: "$n" twice');
         }
       }
     }
     // A child cannot redeclare an ancestor's --name or -s with a different
     // meaning (sharing the identical Param object is fine: it is the same
     // meaning).
-    _checkSubtree(commands, {for (final p in params) p},
-        {for (final p in params) p._name}, {for (final p in params) p._short});
+    _checkSubtree(commands, {for (final p in params) p}, {for (final p in params) p._name}, {
+      for (final p in params) p._short,
+    });
   }
 
   final String _name;
@@ -290,24 +266,27 @@ final class Command {
   final FutureOr<void> Function(Context context)? _handler;
   final List<String> _aliases;
 
-  static void _checkSubtree(List<Command> commands,
-      Set<Param<Object?>> seenParams, Set<String?> longs, Set<String?> shorts) {
+  static void _checkSubtree(
+    List<Command> commands,
+    Set<Param<Object?>> seenParams,
+    Set<String?> longs,
+    Set<String?> shorts,
+  ) {
     for (final c in commands) {
       for (final p in c._params) {
         if (seenParams.contains(p)) continue;
         if (!p._isArg && longs.contains(p._name)) {
-          throw ArgumentError.value(p._name, 'commands',
-              'Invalid commands: "${c._name}" redeclares --${p._name}');
+          throw ArgumentError.value(p._name, 'commands', 'Invalid commands: "${c._name}" redeclares --${p._name}');
         }
         final s = p._short;
         if (s != null && shorts.contains(s)) {
-          throw ArgumentError.value(s, 'commands',
-              'Invalid commands: "${c._name}" redeclares -$s');
+          throw ArgumentError.value(s, 'commands', 'Invalid commands: "${c._name}" redeclares -$s');
         }
       }
-      _checkSubtree(c._commands, {...seenParams, ...c._params},
-          {...longs, for (final p in c._params) p._name},
-          {...shorts, for (final p in c._params) p._short});
+      _checkSubtree(c._commands, {...seenParams, ...c._params}, {...longs, for (final p in c._params) p._name}, {
+        ...shorts,
+        for (final p in c._params) p._short,
+      });
     }
   }
 
@@ -328,8 +307,9 @@ final class Command {
       print(_commandUsage(parsed.target, parsed.chain));
       return 0;
     }
-    final context = Context._(parsed.target, parsed.chain, parsed.params,
-        parsed.extraArgs, {for (final c in parsed.chain) ...c._params});
+    final context = Context._(parsed.target, parsed.chain, parsed.params, parsed.extraArgs, {
+      for (final c in parsed.chain) ...c._params,
+    });
     try {
       final h = parsed.target._handler ?? ((c) => print(c.usage()));
       await Future.sync(() => h(context));
@@ -348,10 +328,9 @@ final class Command {
 /// What a handler is handed: params read back with `context(param)`, typed
 /// by the definition.
 final class Context {
-  Context._(this._target, this._chain, this._params, List<String> extraArgs,
-      Set<Param<Object?>> declared)
-      : _rest = List.unmodifiable(extraArgs),
-        _declared = Set.unmodifiable(declared);
+  Context._(this._target, this._chain, this._params, List<String> extraArgs, Set<Param<Object?>> declared)
+    : _rest = List.unmodifiable(extraArgs),
+      _declared = Set.unmodifiable(declared);
 
   final Command _target;
   final List<Command> _chain;
@@ -367,8 +346,7 @@ final class Context {
   /// (or an ancestor, for options) does not declare is a [StateError].
   T call<T>(Param<T> param) {
     if (!_declared.contains(param)) {
-      throw StateError(
-          'Cannot read ${_paramShown(param)}: it is not declared on "$_fullName"');
+      throw StateError('Cannot read ${_paramShown(param)}: it is not declared on "$_fullName"');
     }
     if (_params.containsKey(param)) return _params[param] as T;
     return param._absent() as T;
@@ -378,6 +356,7 @@ final class Context {
   /// [Arg] params).
   List<String> rest() => List.of(_rest);
 
+  /// The help text for this command (what `--help` prints).
   String usage() => _commandUsage(_target, _chain);
 
   String get _fullName => _chain.map((c) => c._name).join(' ');
@@ -387,6 +366,7 @@ final class Context {
 final class UsageException implements Exception {
   const UsageException(this.message);
 
+  /// The one line printed before the `--help` hint.
   final String message;
 
   @override
@@ -395,16 +375,14 @@ final class UsageException implements Exception {
 
 void _checkName(String name) {
   if (name.isEmpty || name.startsWith('-') || RegExp(r'[\s=]').hasMatch(name)) {
-    throw ArgumentError.value(name, 'name',
-        'Invalid name: expected a word without dashes in front');
+    throw ArgumentError.value(name, 'name', 'Invalid name: expected a word without dashes in front');
   }
 }
 
 void _checkShort(String? short) {
   if (short == null) return;
   if (short.length != 1 || short == '-') {
-    throw ArgumentError.value(
-        short, 'short', 'Invalid short: expected one character');
+    throw ArgumentError.value(short, 'short', 'Invalid short: expected one character');
   }
 }
 
@@ -420,12 +398,10 @@ void _checkHelpReserved(String name) {
 
 void _checkDefault<T>(String name, T? or, bool required) {
   if (required && or != null) {
-    throw ArgumentError.value(
-        or, 'or', 'Invalid default: required and defaulted');
+    throw ArgumentError.value(or, 'or', 'Invalid default: required and defaulted');
   }
   if (or == null && !required && null is! T) {
-    throw ArgumentError.value(or, 'or',
-        'Invalid default: "$name" is not nullable, so it needs or: or required:');
+    throw ArgumentError.value(or, 'or', 'Invalid default: "$name" is not nullable, so it needs or: or required:');
   }
 }
 
@@ -471,8 +447,7 @@ String? _closest(String typed, Iterable<String> candidates) {
 /// chain per token and no chain per usage row.
 _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
   if (_same<T, bool>() || _same<T, bool?>()) {
-    throw ArgumentError.value(T, 'T',
-        'Invalid type for "$name": yes/no is always a Flag');
+    throw ArgumentError.value(T, 'T', 'Invalid type for "$name": yes/no is always a Flag');
   }
   if (parse != null) {
     return _Reader((raw, what) {
@@ -491,8 +466,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = int.tryParse(raw);
       if (v == null) {
-        throw FormatException(
-            'Invalid value "$raw" for $what: expected an integer');
+        throw FormatException('Invalid value "$raw" for $what: expected an integer');
       }
       return v as T;
     }, '<int>');
@@ -500,8 +474,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = double.tryParse(raw);
       if (v == null) {
-        throw FormatException(
-            'Invalid value "$raw" for $what: expected a number');
+        throw FormatException('Invalid value "$raw" for $what: expected a number');
       }
       return v as T;
     }, '<number>');
@@ -509,8 +482,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = num.tryParse(raw);
       if (v == null) {
-        throw FormatException(
-            'Invalid value "$raw" for $what: expected a number');
+        throw FormatException('Invalid value "$raw" for $what: expected a number');
       }
       return v as T;
     }, '<number>');
@@ -518,8 +490,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = _parseDuration(raw);
       if (v == null) {
-        throw FormatException(
-            'Invalid value "$raw" for $what: expected a duration such as 90s or 1h30m');
+        throw FormatException('Invalid value "$raw" for $what: expected a duration such as 90s or 1h30m');
       }
       return v as T;
     }, '<duration>');
@@ -527,8 +498,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = DateTime.tryParse(raw);
       if (v == null) {
-        throw FormatException(
-            'Invalid value "$raw" for $what: expected a date such as 2026-10-08');
+        throw FormatException('Invalid value "$raw" for $what: expected a date such as 2026-10-08');
       }
       return v as T;
     }, '<date>');
@@ -536,12 +506,14 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final u = Uri.tryParse(raw);
       if (u != null && u.hasScheme) return u as T;
-      throw FormatException(
-          'Invalid value "$raw" for $what: expected a URL');
+      throw FormatException('Invalid value "$raw" for $what: expected a URL');
     }, '<url>');
   }
-  throw ArgumentError.value(T, 'T',
-      'Unsupported type for "$name": use String, int, double, num, Duration, DateTime, Uri, or parse:');
+  throw ArgumentError.value(
+    T,
+    'T',
+    'Unsupported type for "$name": use String, int, double, num, Duration, DateTime, Uri, or parse:',
+  );
 }
 
 Duration? _parseDuration(String raw) {
@@ -561,9 +533,7 @@ Duration? _parseDuration(String raw) {
     final n = num.tryParse(compact);
     if (n != null) parsed = Duration(milliseconds: (n * 1000).round());
   } else {
-    final m =
-        RegExp(r'(\d+(?:\.\d+)?)(ms|h|m|s|d)', caseSensitive: false)
-            .allMatches(compact);
+    final m = RegExp(r'(\d+(?:\.\d+)?)(ms|h|m|s|d)', caseSensitive: false).allMatches(compact);
     if (m.isNotEmpty) {
       var covered = 0;
       var ms = 0.0;
@@ -627,19 +597,17 @@ final class _Parsed {
 
 /// Usage for `help a b …`: the resolved command, or a 64 with a suggestion
 /// when a name does not resolve.
-_Parsed _helpParsed(
-    Command root, List<Command> chain, List<String> argv) {
+_Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
   var cmd = root;
   var resolved = List<Command>.of(chain);
   for (final t in argv) {
     if (t.startsWith('-') || t == '--') break;
     final sub = _findSub(cmd._commands, t);
     if (sub == null) {
-      final guess = _closest(
-          t, [for (final c in cmd._commands) ...[c._name, ...c._aliases]]);
-      throw FormatException(
-        'Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}.',
-      );
+      final guess = _closest(t, [
+        for (final c in cmd._commands) ...[c._name, ...c._aliases],
+      ]);
+      throw FormatException('Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}.');
     }
     cmd = sub;
     resolved = [...resolved, cmd];
@@ -665,9 +633,7 @@ _Parsed _mergeParent(
   for (final e in multiRaws.entries) {
     final key = e.key;
     final s = key._short;
-    final what = s == null
-        ? 'option "--${key._name}"'
-        : 'option "--${key._name}"/"-$s"';
+    final what = s == null ? 'option "--${key._name}"' : 'option "--${key._name}"/"-$s"';
     merged[key] = key._mergeMany!(e.value, what, merged[key]);
   }
   _fromEnv(root, merged);
@@ -687,8 +653,7 @@ _Parsed _mergeParent(
       merged[v] = v._absent();
     }
   }
-  return _Parsed(
-      child.target, child.chain, merged, child.extraArgs, child.help);
+  return _Parsed(child.target, child.chain, merged, child.extraArgs, child.help);
 }
 
 List<Param<Object?>> _argDefsOf(Command cmd) {
@@ -699,8 +664,7 @@ List<Param<Object?>> _argDefsOf(Command cmd) {
   return out;
 }
 
-_Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
-    _Deepest deepest) {
+_Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, _Deepest deepest) {
   final chain = [...ancestors, root];
   deepest.touch(chain);
   // Visible defs, nearest first.
@@ -738,10 +702,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
       if (t == '-h' || t.startsWith('-h=')) return true;
       // Group containing reserved -h (e.g. -vh): help, handled in group loop.
       // Here (valued-value position) a bare -h group means help.
-      if (t.startsWith('-') &&
-          !t.startsWith('--') &&
-          t.contains('h') &&
-          t.length > 1) {
+      if (t.startsWith('-') && !t.startsWith('--') && t.contains('h') && t.length > 1) {
         // Only when h is help (reserved) — group loop would set help.
         // Treat as help, not a value.
         var onlyHelp = true;
@@ -784,23 +745,18 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         final sub = _findSub(root._commands, token);
         if (sub != null) {
           // Carry parsed-so-far params into the child; the parent's
-          // definitions bind and validate first (C2/C3).
+          // definitions bind and validate first.
           final child = _parseCommand(sub, argv.sublist(i + 1), chain, deepest);
           return _mergeParent(root, params, multiRaws, child.withHelp(help));
         }
         // No subcommand named and no Arg defs: unknown command.
         if (argDefs.isEmpty) {
           final guess = _closest(token, [
-            for (final c in root._commands) ...[c._name, ...c._aliases]
+            for (final c in root._commands) ...[c._name, ...c._aliases],
           ]);
-          throw FormatException(
-            'Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}.',
-          );
+          throw FormatException('Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}.');
         }
-      } else if (isHelpName &&
-          extraArgs.isEmpty &&
-          root._commands.isEmpty &&
-          argDefs.isEmpty) {
+      } else if (isHelpName && extraArgs.isEmpty && root._commands.isEmpty && argDefs.isEmpty) {
         // Leaf `help` shows help, not the handler.
         return _Parsed(root, chain, params, const [], true);
       }
@@ -829,9 +785,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           }
         }
         final guess = _closest(key, suggestPool());
-        throw FormatException(
-          'Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}',
-        );
+        throw FormatException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
       }
       if (param is Flag) {
         putSingle(param, inline == null ? true : _parseFlagValue(param._name, inline));
@@ -865,9 +819,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         }
       } else {
         final guess = _closest(key, suggestPool());
-        throw FormatException(
-          'Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}',
-        );
+        throw FormatException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
       }
       continue;
     }
@@ -1000,8 +952,7 @@ void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
   }
 }
 
-bool _isShortish(String t) =>
-    t.startsWith('-') && !t.startsWith('--') && t.length > 1 && t != '-';
+bool _isShortish(String t) => t.startsWith('-') && !t.startsWith('--') && t.length > 1 && t != '-';
 
 bool _isNumberToken(String t, Map<String, Param<Object?>> byShort) {
   if (!t.startsWith('-') || t.startsWith('--') || t.length < 2) return false;
@@ -1020,8 +971,7 @@ bool _parseFlagValue(String name, String raw) {
     case 'no':
       return false;
     default:
-      throw FormatException(
-          'Invalid value "$raw" for option "--$name": a flag takes true or false');
+      throw FormatException('Invalid value "$raw" for option "--$name": a flag takes true or false');
   }
 }
 
@@ -1047,16 +997,10 @@ String _commandUsage(Command target, List<Command> chain) {
     }
   }
 
-  section(
-    'Arguments:',
-    [for (final a in argDefs) (_argPlaceholder(a), _describeArg(a))],
-  );
-  section(
-    'Commands:',
-    [
-      for (final c in target._commands) ([c._name, ...c._aliases].join(', '), c._help)
-    ],
-  );
+  section('Arguments:', [for (final a in argDefs) (_argPlaceholder(a), _describeArg(a))]);
+  section('Commands:', [
+    for (final c in target._commands) ([c._name, ...c._aliases].join(', '), c._help),
+  ]);
   final optionRows = _optionRows(target);
   optionRows.add(_helpRow(target, chain));
   section('Options:', optionRows);
@@ -1081,10 +1025,7 @@ String _commandUsage(Command target, List<Command> chain) {
   for (final v in target._params) {
     if (v._short == 'h') shortH = false;
   }
-  return (
-    shortH ? '-h, --help' : '    --help',
-    'Show this help and exit.'
-  );
+  return (shortH ? '-h, --help' : '    --help', 'Show this help and exit.');
 }
 
 String _argPlaceholder(Param<Object?> a) {
@@ -1103,29 +1044,24 @@ List<(String, String)> _optionRows(Command cmd) {
   for (final v in cmd._params) {
     switch (v) {
       case Flag():
-        final left =
-            '${v._short != null ? '-${v._short}, ' : '    '}--${v._or ? '[no-]' : ''}${v._name}';
+        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._or ? '[no-]' : ''}${v._name}';
         rows.add((left, v._help));
       case Opt<Object?>():
-        final left =
-            '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
+        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
         if (v._env != null) right = '${right.isEmpty ? '' : '$right '}[env: ${v._env}]';
         if (v._or != null) {
-          right =
-              '${right.isEmpty ? '' : '$right '}[default: ${v._or}]';
+          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or}]';
         }
         if (v._required) {
           right = '${right.isEmpty ? '' : '$right '}[required]';
         }
         rows.add((left, right.trimLeft()));
       case Multi<Object?>():
-        final left =
-            '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
+        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
         if (v._or.isNotEmpty) {
-          right =
-              '${right.isEmpty ? '' : '$right '}[default: ${v._or.join(', ')}]';
+          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or.join(', ')}]';
         }
         rows.add((left, right.trimLeft()));
       case Arg<Object?>():

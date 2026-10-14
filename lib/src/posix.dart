@@ -37,10 +37,7 @@ Future<void> chmod(String path, int mode) async {
   if (!isPosix) return;
   try {
     final perms = mode & 0xFFF;
-    final r = await io.Process.run(
-      'chmod',
-      [perms.toRadixString(8), '--', path],
-    );
+    final r = await io.Process.run('chmod', [perms.toRadixString(8), '--', path]);
     if (r.exitCode != 0) return;
   } catch (_) {}
 }
@@ -54,16 +51,10 @@ Future<void> chmodBatched(Map<int, List<String>> byMode) async {
     final paths = entry.value;
     // ~200 paths per fork keeps argv far below ARG_MAX on all targets.
     for (var i = 0; i < paths.length; i += 200) {
-      final chunk = paths.sublist(
-        i,
-        i + 200 > paths.length ? paths.length : i + 200,
-      );
+      final chunk = paths.sublist(i, i + 200 > paths.length ? paths.length : i + 200);
       if (chunk.isEmpty) continue;
       try {
-        await io.Process.run(
-          'chmod',
-          [mode.toRadixString(8), '--', ...chunk],
-        );
+        await io.Process.run('chmod', [mode.toRadixString(8), '--', ...chunk]);
       } catch (_) {}
     }
   }
@@ -130,9 +121,7 @@ Future<bool> copyTreeWithCp(String from, String to) async {
 /// before `a-b` and mixed `/` and `\\` paths order the same.
 void sortByRelative<T>(List<T> items, String Function(T) path, String from) {
   final sep = RegExp(r'[\\/]');
-  final key = {
-    for (final e in items) e: p.relative(path(e), from: from).replaceAll(sep, '\x00'),
-  };
+  final key = {for (final e in items) e: p.relative(path(e), from: from).replaceAll(sep, '\x00')};
   items.sort((a, b) => key[a]!.compareTo(key[b]!));
 }
 
@@ -144,10 +133,7 @@ String tmpPath(String target) {
   // 255-byte name must still get a temp under NAME_MAX.
   final base = String.fromCharCodes(p.basename(target).runes.take(32));
   final rand = Random().nextInt(1 << 32);
-  return p.join(
-    dir,
-    '.$base.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.$rand',
-  );
+  return p.join(dir, '.$base.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.$rand');
 }
 
 /// True for a name [tmpPath] made: `.<base>.tmp<pid>.<µs>.<rand>`.

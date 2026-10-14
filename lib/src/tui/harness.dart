@@ -1,5 +1,6 @@
 // Harness: in-memory TestSession (never exported by package:tui).
 part of '../tui.dart';
+
 /// In-memory test harness: drive a state-driven app without a terminal.
 final class TestSession<S> {
   TestSession._(this._s, this._out);
@@ -64,10 +65,7 @@ final class TestSession<S> {
           _s._dirty = false;
         }
       });
-      if (_s._pending.isEmpty &&
-          _s._activeH == 0 &&
-          !_s._dirty &&
-          !_s._quitFlag) {
+      if (_s._pending.isEmpty && _s._activeH == 0 && !_s._dirty && !_s._quitFlag) {
         break;
       }
     }
@@ -91,10 +89,12 @@ final class TestSession<S> {
 
   /// The id of the focused widget (the widget object itself for fields and lists).
   Object? get focus => _s._focusId;
+
   /// Distinct styles in the packing table.
   int get styleCount => _s._styles.length;
   bool get quitRequested => _s._quitFlag;
   S get state => _s._state;
+
   /// Everything written to the terminal so far (frames, OSC).
   String get output => _out.toString();
 
@@ -110,24 +110,21 @@ final class TestSession<S> {
 /// session writes lands in [TestSession.output]. [env] sets the colour and charset capabilities as
 /// `TERM`/`COLORTERM`/`NO_COLOR`/`LANG` would. Call [TestSession.close] at the end to release the
 /// shared Console bridge slot.
-TestSession<S> testSession<S>(S state,
-    Screen Function(S state, App<S> app) screen,
-    {int width = 80,
-    int height = 24,
-    Color? accent,
-    Map<String, String>? env}) {
+TestSession<S> testSession<S>(
+  S state,
+  Screen Function(S state, App<S> app) screen, {
+  int width = 80,
+  int height = 24,
+  Color? accent,
+  Map<String, String>? env,
+}) {
   final sink = StringBuffer();
-  final s = _Session<S>(state, screen,
-      out: sink.write,
-      size: () => (width, height),
-      accent: accent);
+  final s = _Session<S>(state, screen, out: sink.write, size: () => (width, height), accent: accent);
   s._w = width;
   s._h = height;
   s._grid = List.generate(height, (_) => List.filled(width, _Cell.blank));
   s._testMode = true;
-  s._caps = env == null
-      ? _fallbackCaps
-      : term.TerminalCaps.of(env, hasTerminal: false);
+  s._caps = env == null ? _fallbackCaps : term.TerminalCaps.of(env, hasTerminal: false);
   late Zone z;
   runZoned(() {
     z = Zone.current;

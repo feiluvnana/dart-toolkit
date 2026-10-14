@@ -103,15 +103,19 @@ List<SevenZipEntry> readSevenZip(Uint8List b, {String? password}) {
     final offset = info.subOffset(fi, inFolder);
     final size = info.subSizes[si];
     final crc = info.subCrcs[si];
-    out.add(SevenZipEntry._(f.name, false, f.mode, () {
-      final whole = cache[fi] ??= _decodeFolder(b, info, fi, pw);
-      if (offset + size > whole.length) _bad('file past its folder');
-      final data = Uint8List.sublistView(whole, offset, offset + size);
-      if (crc != null && crc32(data) != crc) {
-        throw FormatException(pw == null ? 'corrupt archive: 7z CRC of ${f.name}' : 'wrong password or corrupt archive: ${f.name}');
-      }
-      return data;
-    }));
+    out.add(
+      SevenZipEntry._(f.name, false, f.mode, () {
+        final whole = cache[fi] ??= _decodeFolder(b, info, fi, pw);
+        if (offset + size > whole.length) _bad('file past its folder');
+        final data = Uint8List.sublistView(whole, offset, offset + size);
+        if (crc != null && crc32(data) != crc) {
+          throw FormatException(
+            pw == null ? 'corrupt archive: 7z CRC of ${f.name}' : 'wrong password or corrupt archive: ${f.name}',
+          );
+        }
+        return data;
+      }),
+    );
     inFolder++;
     sub++;
   }
@@ -434,13 +438,13 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   }
 
   output = (int out) => cache[out] ??= () {
-        final (c, firstIn) = owner(out);
-        final coder = f.coders[c];
-        if (coder.ins != 1 || coder.outs != 1) {
-          throw FormatException('unsupported 7z coder ${_hex(coder.id)} (BCJ2): repack with BCJ or no filter');
-        }
-        return _run(coder, input(firstIn), f.unpackSizes[out], password);
-      }();
+    final (c, firstIn) = owner(out);
+    final coder = f.coders[c];
+    if (coder.ins != 1 || coder.outs != 1) {
+      throw FormatException('unsupported 7z coder ${_hex(coder.id)} (BCJ2): repack with BCJ or no filter');
+    }
+    return _run(coder, input(firstIn), f.unpackSizes[out], password);
+  }();
 
   final data = output(f.mainOut);
   final crc = f.crc;
@@ -701,9 +705,17 @@ final class _Bytes {
 Uint8List writeSevenZip(List<(String, int, List<int>)> entries, {String? password}) {
   final files = [
     for (final (name, mode, data) in entries)
-      (name: name.endsWith('/') ? name.substring(0, name.length - 1) : name, dir: name.endsWith('/'), mode: mode, data: data),
+      (
+        name: name.endsWith('/') ? name.substring(0, name.length - 1) : name,
+        dir: name.endsWith('/'),
+        mode: mode,
+        data: data,
+      ),
   ];
-  final streams = [for (final f in files) if (!f.dir && f.data.isNotEmpty) f];
+  final streams = [
+    for (final f in files)
+      if (!f.dir && f.data.isNotEmpty) f,
+  ];
   final plain = BytesBuilder(copy: false);
   for (final f in streams) {
     plain.add(f.data);
@@ -715,7 +727,13 @@ Uint8List writeSevenZip(List<(String, int, List<int>)> entries, {String? passwor
     final (packed, coders) = _encode(raw, password);
     pack.add(packed);
     h.byte(0x04); // main streams
-    _writeStreams(h, packPos: 0, packSize: packed.length, coders: coders, unpackSizes: [raw.length, if (password != null) coders.deflated]);
+    _writeStreams(
+      h,
+      packPos: 0,
+      packSize: packed.length,
+      coders: coders,
+      unpackSizes: [raw.length, if (password != null) coders.deflated],
+    );
     h
       ..byte(0x08) // substreams
       ..byte(0x0D)
@@ -740,7 +758,13 @@ Uint8List writeSevenZip(List<(String, int, List<int>)> entries, {String? passwor
   final empty = [for (final f in files) f.dir || f.data.isEmpty];
   if (empty.contains(true)) {
     h.property(0x0E, _bitBytes(empty));
-    h.property(0x0F, _bitBytes([for (final f in files) if (f.dir || f.data.isEmpty) !f.dir]));
+    h.property(
+      0x0F,
+      _bitBytes([
+        for (final f in files)
+          if (f.dir || f.data.isEmpty) !f.dir,
+      ]),
+    );
   }
   final names = _Out()..byte(0);
   for (final f in files) {
@@ -816,7 +840,13 @@ typedef _Coders = ({List<(List<int>, Uint8List)> list, int deflated});
 
 final _random = Random.secure();
 
-void _writeStreams(_Out h, {required int packPos, required int packSize, required _Coders coders, required List<int> unpackSizes}) {
+void _writeStreams(
+  _Out h, {
+  required int packPos,
+  required int packSize,
+  required _Coders coders,
+  required List<int> unpackSizes,
+}) {
   final list = coders.list;
   h
     ..byte(0x06)

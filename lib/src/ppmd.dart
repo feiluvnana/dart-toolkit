@@ -186,9 +186,7 @@ final _hb2Flag = Uint8List(256)..fillRange(0x40, 256, 8);
 /// The PPMd variant H model. One instance per stream (RAR keeps it across
 /// PPM blocks of a solid run unless a block resets it).
 final class Ppmd {
-  Ppmd(int memSize, this._maxOrder)
-      : _size = memSize,
-        _heap = Uint8List(_start + memSize + 3 * _unit) {
+  Ppmd(int memSize, this._maxOrder) : _size = memSize, _heap = Uint8List(_start + memSize + 3 * _unit) {
     _view = ByteData.sublistView(_heap);
     _restart();
   }
@@ -754,7 +752,8 @@ final class Ppmd {
       // decodeBinSymbol
       final rs = _oneState(c);
       _hiBitsFlag = _hb2Flag[_sym(_foundState)];
-      final idx = (_freq(rs) - 1) * 64 +
+      final idx =
+          (_freq(rs) - 1) * 64 +
           _prevSuccess +
           _ns2BsIndx[_numStats(_suffix(c)) - 1] +
           _hiBitsFlag +

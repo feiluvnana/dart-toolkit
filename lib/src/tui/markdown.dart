@@ -2,90 +2,358 @@
 part of '../tui.dart';
 
 extension RegionMarkdown on Region {
-    /// Markdown: headings, lists (nested, numbered), `>` quotes, tables
-    /// (box-drawn), `---`, inline bold/italic/strike/`code`/links (OSC 8).
-    /// Fenced code is highlighted by an in-house lexer; an unclosed fence or
-    /// emphasis renders as if closed (safe to stream). Layout is memoized
-    /// per call site (see [_mdLayout]): an unchanged source is an O(1) hit,
-    /// a streamed append re-lays only from the last block boundary.
-    Region markdown(String source) {
-      for (final line in _mdLayout(source, _w, _s._caps.ascii, _s)) {
-        if (_cursor >= _h) {
-          _cursor++;
-          continue;
-        }
-        var col = _gx;
-        for (final seg in line) {
-          col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text,
-              _s._mdStyle(seg), seg.link);
-        }
+  /// Markdown: headings, lists (nested, numbered), `>` quotes, tables
+  /// (box-drawn), `---`, inline bold/italic/strike/`code`/links (OSC 8).
+  /// Fenced code is highlighted by an in-house lexer; an unclosed fence or
+  /// emphasis renders as if closed (safe to stream). Layout is memoized
+  /// per call site: an unchanged source is an O(1) hit,
+  /// a streamed append re-lays only from the last block boundary.
+  Region markdown(String source) {
+    for (final line in _mdLayout(source, _w, _s._caps.ascii, _s)) {
+      if (_cursor >= _h) {
         _cursor++;
+        continue;
       }
-      return this;
+      var col = _gx;
+      for (final seg in line) {
+        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._mdStyle(seg), seg.link);
+      }
+      _cursor++;
     }
+    return this;
+  }
 }
+
 /// Markdown keyword sets by canonical language.
 const _mdKw = {
   'dart': {
-    'abstract', 'as', 'assert', 'async', 'await', 'base', 'bool', 'break',
-    'case', 'catch', 'class', 'const', 'continue', 'covariant', 'default',
-    'deferred', 'do', 'double', 'dynamic', 'else', 'enum', 'export',
-    'extends', 'extension', 'external', 'factory', 'false', 'final',
-    'finally', 'for', 'Function', 'get', 'hide', 'if', 'implements',
-    'import', 'in', 'interface', 'int', 'is', 'late', 'library', 'mixin',
-    'new', 'null', 'num', 'on', 'operator', 'part', 'required', 'rethrow',
-    'return', 'sealed', 'set', 'show', 'static', 'String', 'super', 'switch',
-    'sync', 'this', 'throw', 'true', 'try', 'typedef', 'var', 'void',
-    'while', 'with', 'yield'
+    'abstract',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'base',
+    'bool',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'covariant',
+    'default',
+    'deferred',
+    'do',
+    'double',
+    'dynamic',
+    'else',
+    'enum',
+    'export',
+    'extends',
+    'extension',
+    'external',
+    'factory',
+    'false',
+    'final',
+    'finally',
+    'for',
+    'Function',
+    'get',
+    'hide',
+    'if',
+    'implements',
+    'import',
+    'in',
+    'interface',
+    'int',
+    'is',
+    'late',
+    'library',
+    'mixin',
+    'new',
+    'null',
+    'num',
+    'on',
+    'operator',
+    'part',
+    'required',
+    'rethrow',
+    'return',
+    'sealed',
+    'set',
+    'show',
+    'static',
+    'String',
+    'super',
+    'switch',
+    'sync',
+    'this',
+    'throw',
+    'true',
+    'try',
+    'typedef',
+    'var',
+    'void',
+    'while',
+    'with',
+    'yield',
   },
   'js': {
-    'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
-    'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export',
-    'extends', 'false', 'finally', 'for', 'function', 'if', 'implements',
-    'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null',
-    'package', 'private', 'protected', 'public', 'return', 'static',
-    'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var',
-    'void', 'while', 'with', 'yield', 'async', 'of', 'from',
-    'type', 'string', 'number', 'boolean'
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'debugger',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'enum',
+    'export',
+    'extends',
+    'false',
+    'finally',
+    'for',
+    'function',
+    'if',
+    'implements',
+    'import',
+    'in',
+    'instanceof',
+    'interface',
+    'let',
+    'new',
+    'null',
+    'package',
+    'private',
+    'protected',
+    'public',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'true',
+    'try',
+    'typeof',
+    'var',
+    'void',
+    'while',
+    'with',
+    'yield',
+    'async',
+    'of',
+    'from',
+    'type',
+    'string',
+    'number',
+    'boolean',
   },
   'python': {
-    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
-    'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
-    'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
-    'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try',
-    'while', 'with', 'yield', 'self', 'print'
+    'False',
+    'None',
+    'True',
+    'and',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'class',
+    'continue',
+    'def',
+    'del',
+    'elif',
+    'else',
+    'except',
+    'finally',
+    'for',
+    'from',
+    'global',
+    'if',
+    'import',
+    'in',
+    'is',
+    'lambda',
+    'nonlocal',
+    'not',
+    'or',
+    'pass',
+    'raise',
+    'return',
+    'try',
+    'while',
+    'with',
+    'yield',
+    'self',
+    'print',
   },
   'shell': {
-    'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while',
-    'until', 'do', 'done', 'in', 'function', 'select', 'time', 'export',
-    'local', 'return', 'exit', 'echo', 'true', 'false', 'set', 'shift',
-    'continue', 'break', 'trap', 'await'
+    'if',
+    'then',
+    'else',
+    'elif',
+    'fi',
+    'case',
+    'esac',
+    'for',
+    'while',
+    'until',
+    'do',
+    'done',
+    'in',
+    'function',
+    'select',
+    'time',
+    'export',
+    'local',
+    'return',
+    'exit',
+    'echo',
+    'true',
+    'false',
+    'set',
+    'shift',
+    'continue',
+    'break',
+    'trap',
+    'await',
   },
   'json': {'true', 'false', 'null'},
   'yaml': {'true', 'false', 'null', 'yes', 'no', 'on', 'off'},
   'rust': {
-    'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern',
-    'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match',
-    'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self',
-    'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe',
-    'use', 'where', 'while', 'async', 'await', 'dyn', 'become', 'do'
+    'as',
+    'break',
+    'const',
+    'continue',
+    'crate',
+    'else',
+    'enum',
+    'extern',
+    'false',
+    'fn',
+    'for',
+    'if',
+    'impl',
+    'in',
+    'let',
+    'loop',
+    'match',
+    'mod',
+    'move',
+    'mut',
+    'pub',
+    'ref',
+    'return',
+    'self',
+    'Self',
+    'static',
+    'struct',
+    'super',
+    'trait',
+    'true',
+    'type',
+    'unsafe',
+    'use',
+    'where',
+    'while',
+    'async',
+    'await',
+    'dyn',
+    'become',
+    'do',
   },
   'go': {
-    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer',
-    'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import',
-    'interface', 'map', 'package', 'range', 'return', 'select', 'struct',
-    'switch', 'type', 'var', 'true', 'false', 'nil', 'string', 'int',
-    'bool', 'error'
+    'break',
+    'case',
+    'chan',
+    'const',
+    'continue',
+    'default',
+    'defer',
+    'else',
+    'fallthrough',
+    'for',
+    'func',
+    'go',
+    'goto',
+    'if',
+    'import',
+    'interface',
+    'map',
+    'package',
+    'range',
+    'return',
+    'select',
+    'struct',
+    'switch',
+    'type',
+    'var',
+    'true',
+    'false',
+    'nil',
+    'string',
+    'int',
+    'bool',
+    'error',
   },
   'c': {
-    'auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do',
-    'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if',
-    'inline', 'int', 'long', 'register', 'restrict', 'return', 'short',
-    'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union',
-    'unsigned', 'void', 'volatile', 'while', 'class', 'public', 'private',
-    'new', 'true', 'false', 'null', 'using', 'namespace', 'template',
-    'virtual', 'override', 'final', 'import', 'package', 'String',
-    'System', 'var'
+    'auto',
+    'break',
+    'case',
+    'char',
+    'const',
+    'continue',
+    'default',
+    'do',
+    'double',
+    'else',
+    'enum',
+    'extern',
+    'float',
+    'for',
+    'goto',
+    'if',
+    'inline',
+    'int',
+    'long',
+    'register',
+    'restrict',
+    'return',
+    'short',
+    'signed',
+    'sizeof',
+    'static',
+    'struct',
+    'switch',
+    'typedef',
+    'union',
+    'unsigned',
+    'void',
+    'volatile',
+    'while',
+    'class',
+    'public',
+    'private',
+    'new',
+    'true',
+    'false',
+    'null',
+    'using',
+    'namespace',
+    'template',
+    'virtual',
+    'override',
+    'final',
+    'import',
+    'package',
+    'String',
+    'System',
+    'var',
   },
 };
 
@@ -137,19 +405,11 @@ List<_MdSeg> _mdHighlight(String line, String? lang, List<bool> block) {
   }
 
   var i = 0;
-  final hashComment = lang == 'python' ||
-      lang == 'shell' ||
-      lang == 'yaml' ||
-      lang == 'rust';
-  final slashComment =
-      lang != 'python' && lang != 'shell' && lang != 'yaml';
+  final hashComment = lang == 'python' || lang == 'shell' || lang == 'yaml' || lang == 'rust';
+  final slashComment = lang != 'python' && lang != 'shell' && lang != 'yaml';
   final blockComment = slashComment && lang != 'json';
   final kws = _mdKw[lang] ?? const {};
-  bool ident(int c) =>
-      (c >= 0x30 && c <= 0x39) ||
-      (c >= 0x41 && c <= 0x5A) ||
-      c == 0x5F ||
-      (c >= 0x61 && c <= 0x7A);
+  bool ident(int c) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || c == 0x5F || (c >= 0x61 && c <= 0x7A);
   while (i < line.length) {
     final c = line.codeUnitAt(i);
     if (block[0]) {
@@ -345,12 +605,10 @@ List<_MdSeg> _mdEmph(String text, Set<Style> base) {
     plain.clear();
     if (close < 0) {
       // Unclosed emphasis renders as if closed (streaming-safe).
-      out.addAll(_mdEmph(
-          text.substring(i + mark.length), {...base, bit}));
+      out.addAll(_mdEmph(text.substring(i + mark.length), {...base, bit}));
       i = text.length;
     } else {
-      out.addAll(_mdEmph(
-          text.substring(i + mark.length, close), {...base, bit}));
+      out.addAll(_mdEmph(text.substring(i + mark.length, close), {...base, bit}));
       i = close + mark.length;
     }
   }
@@ -380,9 +638,11 @@ List<List<_MdSeg>> _mdWrap(List<_MdSeg> segs, int width, int indent) {
         used = start = indent;
       } else if (gap == 1) {
         // The gap belongs to the text it sits in, never to a styled neighbour.
-        line.add(identical(prev, seg)
-            ? _MdSeg(' ', seg.fg, seg.bg, seg.style, seg.link)
-            : _MdSeg(' ', null, null, const {}, null));
+        line.add(
+          identical(prev, seg)
+              ? _MdSeg(' ', seg.fg, seg.bg, seg.style, seg.link)
+              : _MdSeg(' ', null, null, const {}, null),
+        );
         used++;
       }
       line.add(_MdSeg(word, seg.fg, seg.bg, seg.style, seg.link));
@@ -434,8 +694,7 @@ List<String> _mdLines(String source) {
 
 /// One markdown call site's last layout (see [_mdLayout]).
 final class _MdMemo {
-  _MdMemo(this.src, this.width, this.ascii, this.layout, this.stableLines,
-      this.stableOut);
+  _MdMemo(this.src, this.width, this.ascii, this.layout, this.stableLines, this.stableOut);
 
   String src;
   int width;
@@ -457,14 +716,12 @@ const _mdMemoCap = 8;
 /// Lay out [source] at [width] into styled lines (memoized per call site).
 ///
 /// The same string object at the same width is an O(1) [identical] hit with
-/// no hashing of the text (the old `'$width:..\n$source'` key copied and
-/// hashed the whole source on every draw). A streamed append — the new
+/// no hashing of the text. A streamed append — the new
 /// source starts with the remembered one, one prefix compare, no
 /// allocation — re-lays only from the last block boundary and reuses the
 /// stable prefix. Any other edit lays out from scratch, so a stale layout is
 /// never reused.
-List<List<_MdSeg>> _mdLayout(
-    String source, int width, bool ascii, _Session<Object?> session) {
+List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Object?> session) {
   final memos = session._mdMemos;
   for (var k = 0; k < memos.length; k++) {
     final m = memos[k];
@@ -478,28 +735,18 @@ List<List<_MdSeg>> _mdLayout(
   }
   for (var k = 0; k < memos.length; k++) {
     final m = memos[k];
-    if (m.width == width &&
-        m.ascii == ascii &&
-        source.length >= m.src.length &&
-        source.startsWith(m.src)) {
+    if (m.width == width && m.ascii == ascii && source.length >= m.src.length && source.startsWith(m.src)) {
       if (source.length == m.src.length) return m.layout;
       final raw = _mdLines(source);
       final tail = _mdRenderRange(raw, m.stableLines, width, ascii);
-      final layout = [
-        ...m.layout.sublist(0, m.stableOut.clamp(0, m.layout.length)),
-        ...tail.lines,
-      ];
-      memos[k] = _MdMemo(source, width, ascii, layout, tail.blockSrc.last,
-          m.stableOut + tail.blockOut.last);
+      final layout = [...m.layout.sublist(0, m.stableOut.clamp(0, m.layout.length)), ...tail.lines];
+      memos[k] = _MdMemo(source, width, ascii, layout, tail.blockSrc.last, m.stableOut + tail.blockOut.last);
       return layout;
     }
   }
   final raw = _mdLines(source);
   final traced = _mdRenderRange(raw, 0, width, ascii);
-  memos.insert(
-      0,
-      _MdMemo(source, width, ascii, traced.lines, traced.blockSrc.last,
-          traced.blockOut.last));
+  memos.insert(0, _MdMemo(source, width, ascii, traced.lines, traced.blockSrc.last, traced.blockOut.last));
   if (memos.length > _mdMemoCap) memos.removeLast();
   return traced.lines;
 }
@@ -510,8 +757,12 @@ List<List<_MdSeg>> _mdLayout(
 /// blocks never depend on later lines — so rendering a suffix from a block
 /// boundary matches a full render. The seeded `[start]`/`[0]` entries keep
 /// `.last` total when the range is empty.
-({List<List<_MdSeg>> lines, List<int> blockSrc, List<int> blockOut})
-    _mdRenderRange(List<String> raw, int start, int width, bool ascii) {
+({List<List<_MdSeg>> lines, List<int> blockSrc, List<int> blockOut}) _mdRenderRange(
+  List<String> raw,
+  int start,
+  int width,
+  bool ascii,
+) {
   final out = <List<_MdSeg>>[];
   final blockSrc = [start];
   final blockOut = [0];
@@ -545,19 +796,21 @@ List<List<_MdSeg>> _mdLayout(
     final head = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
     if (head != null) {
       final styled = _mdInline(head.group(2) ?? '');
-      out.addAll(_mdWrap(
-          [for (final s in styled) _MdSeg(s.text, s.fg, s.bg, {...s.style, Style.bold}, s.link)],
+      out.addAll(
+        _mdWrap(
+          [
+            for (final s in styled) _MdSeg(s.text, s.fg, s.bg, {...s.style, Style.bold}, s.link),
+          ],
           width,
-          0));
+          0,
+        ),
+      );
       i++;
       continue;
     }
     // Rule.
     if (RegExp(r'^\s*(---|\*\*\*|___)\s*$').hasMatch(line)) {
-      out.add([
-        _MdSeg((ascii ? '-' : '─') * math.max(1, width), null, null, {},
-            null)
-      ]);
+      out.add([_MdSeg((ascii ? '-' : '─') * math.max(1, width), null, null, {}, null)]);
       i++;
       continue;
     }
@@ -572,7 +825,7 @@ List<List<_MdSeg>> _mdLayout(
         for (final wl in _mdWrap(_mdInline(il), width - 2, 0)) {
           out.add([
             const _MdSeg('> ', null, null, {Style.dim}, null),
-            ...wl
+            ...wl,
           ]);
         }
       }
@@ -595,17 +848,11 @@ List<List<_MdSeg>> _mdLayout(
     if (lm != null) {
       final items = <(int, bool, String, String)>[];
       while (i < raw.length) {
-        final m =
-            RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(raw[i]);
+        final m = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(raw[i]);
         if (m == null) break;
         final indent = m.group(1)!.replaceAll('\t', '  ').length;
         final marker = m.group(2)!;
-        items.add((
-          indent ~/ 2,
-          RegExp(r'^\d').hasMatch(marker),
-          marker,
-          m.group(3) ?? ''
-        ));
+        items.add((indent ~/ 2, RegExp(r'^\d').hasMatch(marker), marker, m.group(3) ?? ''));
         i++;
       }
       for (final (level, ordered, marker, text) in items) {
@@ -613,13 +860,8 @@ List<List<_MdSeg>> _mdLayout(
         final indent = level * 2;
         final pre = ' ' * indent + bullet;
         var firstLine = true;
-        for (final wl in _mdWrap(
-            _mdInline(text), width - term.displayWidth(pre), 0)) {
-          out.add([
-            _MdSeg(firstLine ? pre : ' ' * (indent + 2), null, null, {},
-                null),
-            ...wl
-          ]);
+        for (final wl in _mdWrap(_mdInline(text), width - term.displayWidth(pre), 0)) {
+          out.add([_MdSeg(firstLine ? pre : ' ' * (indent + 2), null, null, {}, null), ...wl]);
           firstLine = false;
         }
       }
@@ -645,6 +887,7 @@ List<List<_MdSeg>> _mdLayout(
   }
   return (lines: out, blockSrc: blockSrc, blockOut: blockOut);
 }
+
 bool _mdSep(String line) {
   final t = line.trim();
   if (!t.contains('|') || !t.contains('-')) return false;
@@ -662,10 +905,8 @@ List<String> _mdCells(String line) {
   return cells;
 }
 
-List<List<_MdSeg>> _mdTable(
-    List<String> head, List<List<String>> rows, int width, bool ascii) {
-  final n = math.max(
-      head.length, rows.fold<int>(0, (m, r) => math.max(m, r.length)));
+List<List<_MdSeg>> _mdTable(List<String> head, List<List<String>> rows, int width, bool ascii) {
+  final n = math.max(head.length, rows.fold<int>(0, (m, r) => math.max(m, r.length)));
   if (n == 0) return [];
   final widths = List<int>.filled(n, 3);
   String cell(List<String> r, int k) => k < r.length ? r[k] : '';
@@ -697,9 +938,7 @@ List<List<_MdSeg>> _mdTable(
       if (k > 0) segs.add(_MdSeg(' $vb ', null, null, {}, null));
       final t = term.truncateWidth(cell(cells, k), widths[k]);
       segs.add(_MdSeg(t, null, null, st, null));
-      segs.add(_MdSeg(
-          ' ' * math.max(0, widths[k] - term.displayWidth(t)), null, null,
-          st, null));
+      segs.add(_MdSeg(' ' * math.max(0, widths[k] - term.displayWidth(t)), null, null, st, null));
     }
     segs.add(_MdSeg(' $vb', null, null, {}, null));
     return segs;
@@ -724,6 +963,7 @@ List<List<_MdSeg>> _mdTable(
     rule('└', '┴', '┘'),
   ];
 }
+
 final class _MdSeg {
   const _MdSeg(this.text, this.fg, this.bg, this.style, this.link);
 

@@ -14,10 +14,12 @@ int crc32(List<int> data, {int crc = 0, int start = 0, int? end}) {
 }
 
 /// The byte-wise table; ZipCrypto's key schedule steps it directly.
-final crcTable = Uint32List.fromList(List.generate(256, (n) {
-  var c = n;
-  for (var k = 0; k < 8; k++) {
-    c = c & 1 != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
-  }
-  return c;
-}));
+final crcTable = Uint32List.fromList(
+  List.generate(256, (n) {
+    var c = n;
+    for (var k = 0; k < 8; k++) {
+      c = c & 1 != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+    }
+    return c;
+  }),
+);

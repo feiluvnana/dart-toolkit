@@ -5,9 +5,8 @@ import 'package:dart_toolkit/image.dart';
 import 'package:image/image.dart' as img;
 import 'package:test/test.dart';
 
-List<int> get tinyPng => base64Decode(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-    );
+List<int> get tinyPng =>
+    base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
 
 /// [tinyPng] with its IHDR claiming 15000x15000 (checksum fixed).
 Uint8List _bombPng() {
@@ -54,8 +53,10 @@ void main() {
         ..setUint32(14, png.length, Endian.little)
         ..setUint32(18, 22, Endian.little);
       ico.setRange(22, ico.length, png);
-      expect(() => Image.decode(ico),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))));
+      expect(
+        () => Image.decode(ico),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))),
+      );
     });
 
     test('unknown bytes are a FormatException', () {
@@ -64,8 +65,10 @@ void main() {
 
     test('M12: a huge declared size is refused before decoding', () async {
       final bomb = _bombPng();
-      expect(() => Image.decode(bomb),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))));
+      expect(
+        () => Image.decode(bomb),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))),
+      );
       await expectLater(_Mem(bomb).image(), throwsFormatException);
     });
   });
@@ -76,10 +79,7 @@ void main() {
     });
 
     test('mirror on Future<Reader>', () async {
-      expect(
-        await Future<Reader>.value(_Mem(tinyPng)).image().height(),
-        1,
-      );
+      expect(await Future<Reader>.value(_Mem(tinyPng)).image().height(), 1);
     });
   });
 
@@ -105,9 +105,7 @@ void main() {
 
     test('F14: GIF decodes its first frame only', () async {
       // 1x1 two-frame GIF (red, then blue).
-      final gif = base64Decode(
-        'R0lGODlhAQABAIAAAP///////yH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
-      );
+      final gif = base64Decode('R0lGODlhAQABAIAAAP///////yH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==');
       final img = Image.decode(gif);
       expect(img.width(), 1);
       expect(img.height(), 1);
@@ -119,10 +117,7 @@ void main() {
     test('F14: .ico above 256px is an ArgumentError', () async {
       final big = Image.decode(tinyPng).resize(width: 300, height: 300);
       // Encoding is lazy: the error surfaces when read.
-      await expectLater(
-        big.encode(ImageFormat.ico).bytes(),
-        throwsArgumentError,
-      );
+      await expectLater(big.encode(ImageFormat.ico).bytes(), throwsArgumentError);
       // 256px is fine.
       final ok = Image.decode(tinyPng).resize(width: 256, height: 256);
       expect(await ok.encode(ImageFormat.ico).bytes(), isNotEmpty);
@@ -173,8 +168,7 @@ void main() {
   });
 
   group('large images', () {
-    test('decode/resize/encode above ~1MP go through a worker isolate',
-        () async {
+    test('decode/resize/encode above ~1MP go through a worker isolate', () async {
       // Deterministic noise: flat fills compress below the isolate
       // threshold, so thumbnails would never exercise the offload path.
       final noisy = img.Image(width: 1200, height: 1000);
@@ -198,8 +192,7 @@ void main() {
       expect(small.width(), 120);
       expect(small.height(), 100);
 
-      final encoded =
-          await image.encode(ImageFormat.jpg, quality: 80).bytes();
+      final encoded = await image.encode(ImageFormat.jpg, quality: 80).bytes();
       expect(encoded.sublist(0, 2), [0xff, 0xd8]);
       expect(Image.decode(encoded).width(), 1200);
     });

@@ -31,7 +31,13 @@ Uint8List xzDecode(Uint8List b) {
     final check = b[i + 7] & 0x0F;
     if (crc32(b, start: i + 6, end: i + 8) != _u32(b, i + 8)) _bad('stream header CRC');
     i += 12;
-    final checkSize = switch (check) { 0 => 0, 1 => 4, 4 => 8, 10 => 32, _ => _bad('unknown check $check') };
+    final checkSize = switch (check) {
+      0 => 0,
+      1 => 4,
+      4 => 8,
+      10 => 32,
+      _ => _bad('unknown check $check'),
+    };
     // Blocks until the index (its first byte is 0).
     while (true) {
       if (i >= b.length) _bad('stream ends early');

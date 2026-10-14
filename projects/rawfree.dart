@@ -122,7 +122,12 @@ Future<Slice<Chapter>> resolveChapters(String url, {int page = 1}) async {
   if (slug == null) throw FormatException('bad url', url);
 
   Future<Slice<Chapter>> chapters(int tag) async {
-    final r = await _api('posts', {'tags': '$tag', 'per_page': '100', 'page': '$page', '_fields': 'id,link,title'}, page);
+    final r = await _api('posts', {
+      'tags': '$tag',
+      'per_page': '100',
+      'page': '$page',
+      '_fields': 'id,link,title',
+    }, page);
     return (
       items: [for (final p in r.json) (title: _title(p).trim(), url: p.$('link').or(''), postId: p.$('id').or(0))]
           .where((c) => c.postId != 0 && c.url.isNotEmpty && c.title.isNotEmpty)
@@ -242,11 +247,7 @@ const _halted = 'halted';
 Future<String?> _fetchPage(Job job, int i, String url) async {
   final n = i + 1;
   try {
-    final img = await Http.get(
-      url,
-      headers: {..._headers, 'referer': '$_base/'},
-      insecure: _insecureHosts,
-    );
+    final img = await Http.get(url, headers: {..._headers, 'referer': '$_base/'}, insecure: _insecureHosts);
     if (!img.ok()) {
       await img.close();
       return 'HTTP ${img.status()} p$n';

@@ -14,6 +14,7 @@
 //   empty:  prompts answered by empty lines (stdin is \n per prompt).
 import 'dart:async';
 import 'dart:io';
+
 import 'package:dart_toolkit/console.dart';
 
 Future<void> main(List<String> args) async {
@@ -22,10 +23,7 @@ Future<void> main(List<String> args) async {
   if (Platform.environment['PROBE_ACCENT'] != null) Console.accent = Color.orange;
   switch (mode) {
     case 'bar':
-      final bar = Console.bar(
-        100,
-        label: 'a very long label that must be cut somewhere along the way',
-      );
+      final bar = Console.bar(100, label: 'a very long label that must be cut somewhere along the way');
       for (var i = 0; i < 5; i++) {
         bar.tick(20);
         await Future<void>.delayed(const Duration(milliseconds: 120));

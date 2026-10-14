@@ -7,14 +7,11 @@
 /// await Pool.map(urls, fetch, onResult: (_) => bar.tick()); // closes at its total
 /// ```
 ///
-/// Public surface is exactly: [Console], [Bar].
-/// - `Console.ask/confirm/choose/key/spin/bar/log/clear()` prompt, read keys,
-///   show progress, or print above it.
+/// Public surface is exactly: [Console], [Bar], [Color].
+/// - `Console.ask/confirm/choose/key/spin/bar/log/notify/copy/clear()` prompt,
+///   read keys, show progress, print above it or reach the desktop;
+///   `Console.accent` colours live lines.
 /// - [Bar] supports `tick` `setTotal` (plus [Pipe]/[Closeable]).
-/// Key decoding, broadcast stdin, terminal modes and capabilities are shared
-/// with `tui` through `src/terminal.dart` (imported relatively, never
-/// exported). Signals go through `src/exit.dart` (the only `ProcessSignal`
-/// subscriber in the package); key names through `src/keys.dart`.
 /// Everything else is private.
 library;
 
@@ -38,18 +35,19 @@ const _reset = '\x1b[0m';
 /// Entry point: prompts and progress, all on stderr.
 abstract final class Console {
   /// Colour of live lines (spinners, bars) and the `choose` selection;
-  /// null (default) stays monochrome. `Color.orange` is the old look.
+  /// null (default) stays monochrome; e.g. [Color.orange].
   static Color? accent;
 
-  static String get _accentOn =>
-      _styled && accent != null ? '\x1b[38;5;${accent!.code}m' : '';
+  static String get _accentOn => _styled && accent != null ? '\x1b[38;5;${accent!.code}m' : '';
 
   static _Live? _live;
 
   static void _claim(_Live live) {
     if (_live != null) {
-      throw StateError('only one live spinner or bar at a time: close() the one before '
-          '(a bar ticked to its total closes itself)');
+      throw StateError(
+        'only one live spinner or bar at a time: close() the one before '
+        '(a bar ticked to its total closes itself)',
+      );
     }
     _live = live;
   }
@@ -100,11 +98,7 @@ abstract final class Console {
   /// instead of trusting the inherited ones: a run killed mid-menu can
   /// leave echo off, which makes typing invisible while Enter still
   /// submits. The captured modes are restored afterwards.
-  static Future<String?> ask(
-    String question, {
-    bool secret = false,
-    String? or,
-  }) async {
+  static Future<String?> ask(String question, {bool secret = false, String? or}) async {
     final shown = or == null || secret ? question : '$question [$or]';
     final String? line;
     try {
@@ -170,10 +164,9 @@ abstract final class Console {
   /// [Console.accent] (bold by default) with a scrolling window when the items outnumber the
   /// rows. [keys] maps bindings to values that return immediately without
   /// Enter (`{'b escape': Next.back, 'q': Next.quit}` — one typed map for
-  /// shortcuts and Escape together); each binding holds space-separated
-  /// alternatives matched with `keys.matchesBinding` (case-insensitive for
-  /// named keys, either case for single characters), canonicalized up front
-  /// so an unknown name is an [ArgumentError] here, not a dead menu entry.
+  /// shortcuts and Escape together); each binding lists space-separated
+  /// alternatives (key names as in `Tui`); an unknown name is an
+  /// [ArgumentError].
   /// Bindings win over movement keys. An unbound Escape gives [or]. Where raw mode is unavailable (or piped), a numbered list
   /// and a number instead, so the menu always works. Empty [items] is an
   /// [ArgumentError]. While a state-driven `Tui.run` is active, shows as a
@@ -193,9 +186,7 @@ abstract final class Console {
     if (items.isEmpty) {
       throw ArgumentError.value(items, 'items', 'must not be empty');
     }
-    final labels = [
-      for (final item in items) term.plainLabel(label == null ? '$item' : label(item)),
-    ];
+    final labels = [for (final item in items) term.plainLabel(label == null ? '$item' : label(item))];
     var selected = 0;
     if (or != null) {
       final at = items.indexOf(or);
@@ -231,8 +222,7 @@ abstract final class Console {
     if (ks == null) return {};
     final out = <String, T>{};
     ks.forEach((binding, value) {
-      out[keys.splitBinding(binding).map(keys.canonicalize).join(' ')] =
-          value;
+      out[keys.splitBinding(binding).map(keys.canonicalize).join(' ')] = value;
     });
     return out;
   }
@@ -240,11 +230,7 @@ abstract final class Console {
   /// Numbered choose: print the list, read a number. Used piped and
   /// wherever raw single-key mode is unavailable. Restores cooked, echoed
   /// input first (best effort), so typing stays visible and line-buffered.
-  static Future<T> _chooseNumbered<T>(
-    String question,
-    List<T> items,
-    List<String> labels,
-  ) async {
+  static Future<T> _chooseNumbered<T>(String question, List<T> items, List<String> labels) async {
     _cooked();
     io.stderr.writeln(term.safeText(question));
     for (var i = 0; i < labels.length; i++) {
@@ -342,9 +328,6 @@ abstract final class Console {
     } catch (_) {}
   }
 
-  /// Print [line] to stderr above a live spinner or bar, which redraws
-  /// beneath it. While a state-driven `Tui.run` is active it goes to the
-  /// status row.
   /// A desktop notification ("done", "needs you"): OSC 9/777 plus a bell,
   /// for long runs a human walked away from. Inside a running `Tui.run` it
   /// goes through the app (silent while the terminal has focus).
@@ -370,6 +353,9 @@ abstract final class Console {
     }
   }
 
+  /// Print [line] to stderr above a live spinner or bar, which redraws
+  /// beneath it. While a state-driven `Tui.run` is active it goes to the
+  /// status row.
   static void log(String line) {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.log(line);
@@ -389,13 +375,16 @@ abstract final class Console {
     final bridge = term.TuiBridge.current;
     if (bridge != null) {
       final id = bridge.spinStarted(label);
-      return work.then((v) {
-        bridge.spinEnded(id, true);
-        return v;
-      }, onError: (Object e, StackTrace st) {
-        bridge.spinEnded(id, false);
-        throw e;
-      });
+      return work.then(
+        (v) {
+          bridge.spinEnded(id, true);
+          return v;
+        },
+        onError: (Object e, StackTrace st) {
+          bridge.spinEnded(id, false);
+          throw e;
+        },
+      );
     }
     final _Live live = _Spinner(label);
     try {
@@ -414,49 +403,51 @@ abstract final class Console {
     }
 
     if (!_animated) {
-      return work.then((v) {
-        live._free();
-        io.stderr.writeln('$_okMark $label');
-        return v;
-      }, onError: (Object e, StackTrace st) {
-        live._free();
-        io.stderr.writeln('$_failMark $label');
-        throw e;
-      });
+      return work.then(
+        (v) {
+          live._free();
+          io.stderr.writeln('$_okMark $label');
+          return v;
+        },
+        onError: (Object e, StackTrace st) {
+          live._free();
+          io.stderr.writeln('$_failMark $label');
+          throw e;
+        },
+      );
     }
     var i = 0;
-    final frames = _ascii
-        ? const ['-', '\\', '|', '/']
-        : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    final frames = _ascii ? const ['-', '\\', '|', '/'] : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     final timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
       io.stderr.write('\r${fit(frames[i % frames.length], label)}\x1b[K');
       i++;
     });
 
-    return work.then((v) async {
-      timer.cancel();
-      live._free();
-      io.stderr.writeln('\r${fit(_okMark, label)}\x1b[K');
-      return v;
-    }, onError: (Object e, StackTrace st) async {
-      timer.cancel();
-      live._free();
-      io.stderr.writeln('\r${fit(_failMark, label)}\x1b[K');
-      throw e;
-    });
+    return work.then(
+      (v) async {
+        timer.cancel();
+        live._free();
+        io.stderr.writeln('\r${fit(_okMark, label)}\x1b[K');
+        return v;
+      },
+      onError: (Object e, StackTrace st) async {
+        timer.cancel();
+        live._free();
+        io.stderr.writeln('\r${fit(_failMark, label)}\x1b[K');
+        throw e;
+      },
+    );
   }
 
   /// A progress bar over [total] items or bytes (`null` or 0 means unknown).
-  /// As a [Pipe] it counts bytes; with [tick] it counts items. While a
+  /// As a [Pipe] it counts bytes; with [Bar.tick] it counts items. While a
   /// state-driven `Tui.run` is active, draws in its status row instead
   /// (several at once).
   static Bar bar(int? total, {String? label}) {
     if (label != null) label = term.plainLabel(label);
     final bridge = term.TuiBridge.current;
     if (bridge != null) {
-      return Bar._bridged(
-          bridge, bridge.barStarted(total, label), total,
-          label: label);
+      return Bar._bridged(bridge, bridge.barStarted(total, label), total, label: label);
     }
     final bar = Bar._(total, label: label);
     // Claim before the first draw, so a second bar throws before it can
@@ -500,7 +491,7 @@ abstract final class Console {
       return Future.value(line);
     }
     final result = Completer<String>();
-    final buf = <int>[...? _linePushback];
+    final buf = <int>[...?_linePushback];
     _linePushback = null;
     if (_afterCr && buf.isNotEmpty) {
       if (buf.first == 0x0a) buf.removeAt(0);
@@ -511,15 +502,18 @@ abstract final class Console {
     late final StreamSubscription<List<int>> sub;
     void finish([List<int>? rest]) {
       if (rest != null && rest.isNotEmpty) _linePushback = rest;
-      sub.cancel().then((_) {
-        if (!result.isCompleted) {
-          result.complete(utf8.decode(buf, allowMalformed: true));
-        }
-      }, onError: (_) {
-        if (!result.isCompleted) {
-          result.complete(utf8.decode(buf, allowMalformed: true));
-        }
-      });
+      sub.cancel().then(
+        (_) {
+          if (!result.isCompleted) {
+            result.complete(utf8.decode(buf, allowMalformed: true));
+          }
+        },
+        onError: (_) {
+          if (!result.isCompleted) {
+            result.complete(utf8.decode(buf, allowMalformed: true));
+          }
+        },
+      );
     }
 
     // Check the pushback first: it may already contain a newline.
@@ -554,11 +548,7 @@ abstract final class Console {
       },
       onError: (Object e) {
         if (!result.isCompleted) {
-          result.completeError(
-            e is io.IOException
-                ? e
-                : const io.StdinException('stdin is closed'),
-          );
+          result.completeError(e is io.IOException ? e : const io.StdinException('stdin is closed'));
         }
       },
       onDone: () {
@@ -670,9 +660,7 @@ abstract final class Console {
   /// terminal-restore hook armed; restores the terminal modes afterwards.
   /// Shared by the interactive [choose] menu and [key]. Signals run
   /// through `src/exit.dart`: the restore hook runs first, then browsers.
-  static Future<T> _withKeys<T>(
-    Future<T> Function(_KeyReader keys) body,
-  ) async {
+  static Future<T> _withKeys<T>(Future<T> Function(_KeyReader keys) body) async {
     final modes = term.captureModes();
     term.setRawModes();
     final token = exit.onExit(() => term.restoreModes(modes));
@@ -698,11 +686,7 @@ abstract final class Console {
   /// Paint the scrolling window around [selected] plus a dim key-hint row;
   /// each choice cut to fit. The selection draws in [accent] (bold by default).
   /// Returns the rows painted (for the next repaint's move-up).
-  static int _paintChoices(
-    List<String> choices,
-    int selected,
-    int painted,
-  ) {
+  static int _paintChoices(List<String> choices, int selected, int painted) {
     final cols = _columns();
     final rows = _lines() - 3; // question, hint, and a spare row
     final visible = rows.clamp(1, choices.length);
@@ -715,12 +699,9 @@ abstract final class Console {
     for (var r = 0; r < visible; r++) {
       final current = start + r == selected;
       final choice = term.truncateWidth(choices[start + r], width);
-      final row =
-          '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
+      final row = '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
       if (_styled && current) {
-        io.stderr.writeln(accent == null
-            ? '$_bold$row$_reset\x1b[K'
-            : '$_accentOn$row$_reset\x1b[K');
+        io.stderr.writeln(accent == null ? '$_bold$row$_reset\x1b[K' : '$_accentOn$row$_reset\x1b[K');
       } else {
         io.stderr.writeln('$row\x1b[K');
       }
@@ -777,22 +758,23 @@ final class _KeyReader {
   /// keys and are skipped. A lone ESC that gains no sequel within 150 ms
   /// counts as `escape` (it is not held forever, and it never swallows the
   /// next key). `null` when stdin closed with nothing left to decode.
-  Future<String?> nextKey() => _pump((event) => switch (event) {
-        term.TermKey(:final name) => name,
-        term.TermType(text: final text, paste: false)
-            when text.runes.length == 1 =>
-          text,
-        _ => null,
-      });
+  Future<String?> nextKey() => _pump(
+    (event) => switch (event) {
+      term.TermKey(:final name) => name,
+      term.TermType(text: final text, paste: false) when text.runes.length == 1 => text,
+      _ => null,
+    },
+  );
 
   /// The next decoded input event that counts as a keypress (a [term.TermKey]
   /// or non-paste [term.TermType]); mouse, focus and paste events are
   /// skipped. Same waiting semantics as [nextKey].
-  Future<term.TermEvent?> nextEvent() =>
-      _pump((event) => switch (event) {
-        term.TermKey() || term.TermType(paste: false) => event,
-        _ => null,
-      });
+  Future<term.TermEvent?> nextEvent() => _pump(
+    (event) => switch (event) {
+      term.TermKey() || term.TermType(paste: false) => event,
+      _ => null,
+    },
+  );
 
   /// Pull decoded events off [_pending], returning the first one [pick]
   /// accepts. Bytes arrive in chunks, so a trailing incomplete sequence is
@@ -823,9 +805,7 @@ final class _KeyReader {
           _pending.clear();
           return null;
         }
-        if (parsed.consumed == 0 &&
-            _pending.length == 1 &&
-            _pending[0] == 0x1b) {
+        if (parsed.consumed == 0 && _pending.length == 1 && _pending[0] == 0x1b) {
           // A lone ESC: hold briefly for its sequel; on quiet, it is Escape.
           if (await _escQuiet()) {
             _pending.clear();
@@ -890,12 +870,9 @@ String _fmtSize(num bytes) {
 /// count and a rate with no bar, so `Console.bar(res.size())`
 /// just works.
 final class Bar extends _Live implements Pipe, Closeable {
-  Bar._(this._total, {this._label})
-      : _bridge = null,
-        _bridgeId = null;
+  Bar._(this._total, {this._label}) : _bridge = null, _bridgeId = null;
 
-  Bar._bridged(this._bridge, this._bridgeId, this._total,
-      {this._label});
+  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
 
   int? _total;
   final String? _label;
@@ -978,8 +955,7 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (_piped) {
         final rate = secs > 0 ? _done / secs : 0.0;
         if (total != null && total > 0) {
-          io.stderr.writeln(
-              '$label${_fmtSize(_done)}/${_fmtSize(total)}  ${_fmtRate(rate)}');
+          io.stderr.writeln('$label${_fmtSize(_done)}/${_fmtSize(total)}  ${_fmtRate(rate)}');
         } else {
           io.stderr.writeln('$label${_fmtSize(_done)}  ${_fmtRate(rate)}');
         }
@@ -1002,7 +978,7 @@ final class Bar extends _Live implements Pipe, Closeable {
   /// [Pipe.abort]: the run failed (possibly before this stage was ever
   /// read). Print ✗ and release the live line without starting anything.
   /// Covers broadcast sources too. Synchronous: the line is free before
-  /// [Reader.to] rethrows, so the next bar builds (K2).
+  /// [Reader.to] rethrows, so the next bar can start at once.
   @override
   void abort(Object error) {
     final bridge = _bridge;
@@ -1084,9 +1060,7 @@ final class Bar extends _Live implements Pipe, Closeable {
     final String counts;
     final String rateText;
     if (_piped) {
-      counts = total != null && total > 0
-          ? '${_fmtSize(_done)}/${_fmtSize(total)}'
-          : _fmtSize(_done);
+      counts = total != null && total > 0 ? '${_fmtSize(_done)}/${_fmtSize(total)}' : _fmtSize(_done);
       rateText = _fmtRate(rate);
     } else {
       counts = total != null && total > 0 ? '$_done/$total' : '$_done';
@@ -1100,8 +1074,7 @@ final class Bar extends _Live implements Pipe, Closeable {
         if (room <= 0) {
           line = '$counts  $rateText';
         } else {
-          line =
-              '${term.truncateWidth(label.trimRight(), room)} $counts  $rateText';
+          line = '${term.truncateWidth(label.trimRight(), room)} $counts  $rateText';
         }
       }
       return line;
@@ -1120,8 +1093,7 @@ final class Bar extends _Live implements Pipe, Closeable {
           line = '$counts  $rateText';
         }
       } else {
-        line =
-            '${term.truncateWidth(label.trimRight(), room)} $cells  $counts  $rateText';
+        line = '${term.truncateWidth(label.trimRight(), room)} $cells  $counts  $rateText';
       }
     }
     return line;
@@ -1129,9 +1101,7 @@ final class Bar extends _Live implements Pipe, Closeable {
 
   String _bar(int width) {
     final total = _total;
-    final frac = total == null || total <= 0
-        ? 0.0
-        : (_done / total).clamp(0.0, 1.0);
+    final frac = total == null || total <= 0 ? 0.0 : (_done / total).clamp(0.0, 1.0);
     final cells = frac * width;
     final full = cells.floor();
     final half = cells - full >= 0.5 && full < width;

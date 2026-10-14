@@ -1,19 +1,13 @@
 // Session: loop, zone, routing, App/Screen/Tui.
 part of '../tui.dart';
+
 /// An event binding: a shown label plus the action it runs.
 /// Binding names list alternatives separated by spaces (`'b escape'`).
 /// An empty label hides the binding from the key help.
 typedef Binding = (String label, FutureOr<void> Function() action);
 
 /// Mouse event names usable in [Binding] maps.
-const _mouseNames = {
-  'click',
-  'doubleclick',
-  'rightclick',
-  'middleclick',
-  'wheelup',
-  'wheeldown',
-};
+const _mouseNames = {'click', 'doubleclick', 'rightclick', 'middleclick', 'wheelup', 'wheeldown'};
 
 /// Lifecycle event names usable in [Binding] maps.
 const _lifecycleNames = {'show', 'resize', 'focus', 'blur'};
@@ -24,8 +18,8 @@ const _unbounded = 1 << 20;
 bool _isMouse(String name) => _mouseNames.contains(name);
 bool _isLifecycle(String name) => _lifecycleNames.contains(name);
 
-bool _sameId(Object? a, Object? b) =>
-    identical(a, b) || (a is String && b is String && a == b);
+bool _sameId(Object? a, Object? b) => identical(a, b) || (a is String && b is String && a == b);
+
 /// The app handle handed to `screen` and bindings.
 final class App<S> {
   App._(this._s);
@@ -49,15 +43,14 @@ final class App<S> {
 /// key bindings.
 final class Screen {
   // ignore: prefer_initializing_formals – the public arguments keep their names.
-  Screen(void Function(Region r) draw,
-      {String? title, String? status, Map<String, Binding> keys = const {}})
-      : _draw = draw,
-        // ignore: prefer_initializing_formals
-        _title = title,
-        // ignore: prefer_initializing_formals
-        _status = status,
-        // ignore: prefer_initializing_formals
-        _keys = keys;
+  Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}})
+    : _draw = draw,
+      // ignore: prefer_initializing_formals
+      _title = title,
+      // ignore: prefer_initializing_formals
+      _status = status,
+      // ignore: prefer_initializing_formals
+      _keys = keys;
 
   final void Function(Region r) _draw;
   final String? _title;
@@ -69,28 +62,28 @@ final class Screen {
 abstract final class Tui {
   static bool _active = false;
 
-  /// Own the loop: redraw on every input event, handler settle, `go` /
-  /// `status`, resize, and at most every 80 ms while work is pending or
-  /// a spinner is
-  /// visible. Returns the state passed to [App.quit]. A second [run] while
-  /// one is active throws [StateError]. Throws [StdoutException] when stdout
+  /// Own the loop: redraw (coalesced to 60 fps) after input, handler work,
+  /// `go`/`status` and resize; spinners tick every 80 ms. Returns
+  /// `app.state()` once [App.quit] is called. A second [run] while
+  /// one is active throws [StateError]. Throws `StdoutException` when stdout
   /// is not a terminal.
-  static Future<S> run<S>(S state,
-      Screen Function(S state, App<S> app) screen,
-      {Color? accent}) {
+  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color? accent}) {
     if (_active) throw StateError('Tui.run is already active');
     _active = true;
-    final session = _Session<S>(state, screen,
-        out: io.stdout.write,
-        size: () => (io.stdout.terminalColumns, io.stdout.terminalLines),
-        accent: accent);
+    final session = _Session<S>(
+      state,
+      screen,
+      out: io.stdout.write,
+      size: () => (io.stdout.terminalColumns, io.stdout.terminalLines),
+      accent: accent,
+    );
     return session._run().whenComplete(() => _active = false);
   }
 }
+
 /// One focusable thing drawn this frame.
 final class _F {
-  _F(this.id, this.x, this.y, this.w, this.h, this.order, this.tryKey,
-      {this.onMap, this.fixed = false});
+  _F(this.id, this.x, this.y, this.w, this.h, this.order, this.tryKey, {this.onMap, this.fixed = false});
 
   /// Inside a popup: screen coordinates.
   final bool fixed;
@@ -147,10 +140,7 @@ final class _CBridge {
 }
 
 final class _Session<S> implements term.TuiBridge {
-  _Session(this._state, this._screenFn,
-      {required this.out,
-      required this.size,
-      required this.accent});
+  _Session(this._state, this._screenFn, {required this.out, required this.size, required this.accent});
 
   S _state;
   final Screen Function(S state, App<S> app) _screenFn;
@@ -201,6 +191,7 @@ final class _Session<S> implements term.TuiBridge {
     }
     return _drawnKeys;
   }
+
   String? _title;
   Object? _shownState;
 
@@ -224,6 +215,7 @@ final class _Session<S> implements term.TuiBridge {
   final _mBuild = <int, int>{};
   var _refocused = false;
   var _spinVisible = false;
+
   /// The spinner frame follows the clock, so redraws from a busy stream
   /// can't starve it.
   int get _spinTick => _now() ~/ 80;
@@ -247,54 +239,52 @@ final class _Session<S> implements term.TuiBridge {
   static int _now() => DateTime.now().millisecondsSinceEpoch;
 
   ZoneSpecification _spec() => ZoneSpecification(
-        // Wake after the callback ran, so the redraw sees what it changed.
-        scheduleMicrotask: (self, parent, zone, f) {
-          parent.scheduleMicrotask(zone, () {
-            try {
-              f();
-            } finally {
-              _dirtyAndWake();
-            }
-          });
-        },
-        createTimer: (self, parent, zone, duration, f) =>
-            parent.createTimer(zone, duration, () {
-              try {
-                f();
-              } finally {
-                _dirtyAndWake();
-              }
-            }),
-        createPeriodicTimer: (self, parent, zone, period, f) =>
-            parent.createPeriodicTimer(zone, period, (timer) {
-              try {
-                f(timer);
-              } finally {
-                _dirtyAndWake();
-              }
-            }),
-        // Stream and I/O callbacks (socket data, a reply's listen). Marks
-        // the frame dirty on every callback, including each socket chunk of
-        // a download started from a key: wakeups, not paints (frames are
-        // still coalesced to 60 fps), so this stays as is. An optional
-        // future throttle could dirty at most once per millisecond here.
-        runUnary: <R, T>(self, parent, zone, R Function(T) f, T arg) {
-          try {
-            return parent.runUnary(zone, f, arg);
-          } finally {
-            _dirtyAndWake();
-          }
-        },
-        handleUncaughtError: (self, parent, zone, e, st) {
-          if (e is Exception) {
-            _failStatus(e);
-          } else {
-            _fatal ??= e;
-            _fatalStack ??= st;
-          }
+    // Wake after the callback ran, so the redraw sees what it changed.
+    scheduleMicrotask: (self, parent, zone, f) {
+      parent.scheduleMicrotask(zone, () {
+        try {
+          f();
+        } finally {
           _dirtyAndWake();
-        },
-      );
+        }
+      });
+    },
+    createTimer: (self, parent, zone, duration, f) => parent.createTimer(zone, duration, () {
+      try {
+        f();
+      } finally {
+        _dirtyAndWake();
+      }
+    }),
+    createPeriodicTimer: (self, parent, zone, period, f) => parent.createPeriodicTimer(zone, period, (timer) {
+      try {
+        f(timer);
+      } finally {
+        _dirtyAndWake();
+      }
+    }),
+    // Stream and I/O callbacks (socket data, a reply's listen). Marks
+    // the frame dirty on every callback, including each socket chunk of
+    // a download started from a key: wakeups, not paints (frames are
+    // still coalesced to 60 fps), so this stays as is. An optional
+    // future throttle could dirty at most once per millisecond here.
+    runUnary: <R, T>(self, parent, zone, R Function(T) f, T arg) {
+      try {
+        return parent.runUnary(zone, f, arg);
+      } finally {
+        _dirtyAndWake();
+      }
+    },
+    handleUncaughtError: (self, parent, zone, e, st) {
+      if (e is Exception) {
+        _failStatus(e);
+      } else {
+        _fatal ??= e;
+        _fatalStack ??= st;
+      }
+      _dirtyAndWake();
+    },
+  );
 
   Future<T> _zoneRun<T>(Future<T> Function() fn) {
     final z = _zone;
@@ -333,10 +323,7 @@ final class _Session<S> implements term.TuiBridge {
         _fatal = null;
         Error.throwWithStackTrace(e, st);
       }
-      final active = _activeH > 0 ||
-          _spinVisible ||
-          _cSpinners.isNotEmpty ||
-          _cBars.isNotEmpty;
+      final active = _activeH > 0 || _spinVisible || _cSpinners.isNotEmpty || _cBars.isNotEmpty;
       _waker ??= Completer<void>();
       final w = _waker!;
       // Wake on an event, or: when a redraw waits out the 60 fps gap, when
@@ -345,10 +332,10 @@ final class _Session<S> implements term.TuiBridge {
       final wait = _dirty
           ? math.max(0, 16 - (_now() - _lastPaint))
           : _pending.isNotEmpty
-              ? 30
-              : active
-                  ? 80
-                  : null;
+          ? 30
+          : active
+          ? 80
+          : null;
       if (wait == null) {
         await w.future;
       } else {
@@ -547,8 +534,7 @@ final class _Session<S> implements term.TuiBridge {
   /// One identity per key set, so a `Region.on` region is the same
   /// focusable on every frame.
   final _bindIds = <String, Object>{};
-  Object _bindId(Map<String, Binding> events) =>
-      _bindIds.putIfAbsent(events.keys.join('\x00'), Object.new);
+  Object _bindId(Map<String, Binding> events) => _bindIds.putIfAbsent(events.keys.join('\x00'), Object.new);
 
   void _setFocus(Object id) {
     if (!_sameId(_focusId, id)) {
@@ -572,31 +558,34 @@ final class _Session<S> implements term.TuiBridge {
     final id = _focusId;
     if (id == null) return false;
     for (final f in _focusables) {
-      if (_sameId(f.id, id) &&
-          f.x < x + w &&
-          f.x + f.w > x &&
-          f.y < y + h &&
-          f.y + f.h > y) {
+      if (_sameId(f.id, id) && f.x < x + w && f.x + f.w > x && f.y < y + h && f.y + f.h > y) {
         return true;
       }
     }
     return false;
   }
 
-  void _addFocusable(Object id, int x, int y, int w, int h, int order,
-      bool Function(_Ev ev)? tryKey,
-      {Map<String, Binding>? onMap, bool fixed = false}) {
-    _focusables.add(
-        _F(id, x, y, w, h, order, tryKey, onMap: onMap, fixed: fixed));
+  void _addFocusable(
+    Object id,
+    int x,
+    int y,
+    int w,
+    int h,
+    int order,
+    bool Function(_Ev ev)? tryKey, {
+    Map<String, Binding>? onMap,
+    bool fixed = false,
+  }) {
+    _focusables.add(_F(id, x, y, w, h, order, tryKey, onMap: onMap, fixed: fixed));
   }
 
-  int _listStart(Object id, int n, int h) =>
-      _listStarts[id]?.clamp(0, math.max<int>(0, n - h)) ?? 0;
+  int _listStart(Object id, int n, int h) => _listStarts[id]?.clamp(0, math.max<int>(0, n - h)) ?? 0;
 
   void _listStartSave(Object id, int start) => _listStarts[id] = start;
 
   final _styleCache = <(Color?, Color?, int), int>{};
   final _styles = <(Color?, Color?, int)>[];
+
   /// Last-layout memos, one per markdown call site (see [_mdLayout]):
   /// an `identical` source is an O(1) hit, a streamed append re-lays only
   /// from the last block boundary.
@@ -617,8 +606,7 @@ final class _Session<S> implements term.TuiBridge {
   /// Markdown highlighting without an accent: comments dim, no colour.
   int _mdStyle(_MdSeg g) => accent != null
       ? _pack(g.fg, g.bg, g.style)
-      : _pack(null, null,
-          g.fg == Color.gray ? {...g.style, Style.dim} : g.style);
+      : _pack(null, null, g.fg == Color.gray ? {...g.style, Style.dim} : g.style);
 
   int _pack(Color? fg, Color? bg, Set<Style> style) {
     var bits = 0;
@@ -661,9 +649,7 @@ final class _Session<S> implements term.TuiBridge {
       return;
     }
     final waited = now - _heldSince!;
-    final maybeCsi = _pending.length >= 2 &&
-        _pending[0] == 0x1b &&
-        (_pending[1] == 0x5b || _pending[1] == 0x4f);
+    final maybeCsi = _pending.length >= 2 && _pending[0] == 0x1b && (_pending[1] == 0x5b || _pending[1] == 0x4f);
     if (maybeCsi) {
       if (waited < 1000) return;
       _pending.clear();
@@ -714,10 +700,7 @@ final class _Session<S> implements term.TuiBridge {
     if (kind == 'click') {
       final now = _now();
       final last = _lastClick;
-      if (last != null &&
-          last.$1 == x &&
-          last.$2 == y &&
-          now - _lastClickAt < 400) {
+      if (last != null && last.$1 == x && last.$2 == y && now - _lastClickAt < 400) {
         _lastClick = null;
         _routeMouse('doubleclick', x, y);
         return;
@@ -779,9 +762,7 @@ final class _Session<S> implements term.TuiBridge {
         break;
       }
     }
-    target ??= _focusables
-        .where((f) => f.id is Field && f.tryKey != null)
-        .firstOrNull;
+    target ??= _focusables.where((f) => f.id is Field && f.tryKey != null).firstOrNull;
     if (target != null) {
       target.tryKey!(_KeyEv('', text: text, paste: paste));
       return;
@@ -896,8 +877,7 @@ final class _Session<S> implements term.TuiBridge {
     var bestArea = 1 << 30;
     var bestOrder = -1;
     for (final f in _focusables) {
-      final mouseable = (kind == 'click' && f.tryKey != null) ||
-          (f.onMap != null && _lookup(f.onMap!, kind) != null);
+      final mouseable = (kind == 'click' && f.tryKey != null) || (f.onMap != null && _lookup(f.onMap!, kind) != null);
       if (!mouseable) continue;
       if (x < f.x || x >= f.x + f.w || y < f.y || y >= f.y + f.h) continue;
       final area = f.w * f.h;
@@ -964,14 +944,17 @@ final class _Session<S> implements term.TuiBridge {
     try {
       final r = _zone != null ? _zone!.run(action) : action();
       if (r is Future) {
-        r.then((_) {
-          _activeH--;
-          _dirtyAndWake();
-        }, onError: (Object e, StackTrace st) {
-          _activeH--;
-          _handlerError(e, st);
-          _dirtyAndWake();
-        });
+        r.then(
+          (_) {
+            _activeH--;
+            _dirtyAndWake();
+          },
+          onError: (Object e, StackTrace st) {
+            _activeH--;
+            _handlerError(e, st);
+            _dirtyAndWake();
+          },
+        );
       } else {
         _activeH--;
       }
@@ -1057,13 +1040,11 @@ final class _Session<S> implements term.TuiBridge {
       try {
         hasTerminal = io.stdout.hasTerminal;
       } catch (_) {}
-      _caps = term.TerminalCaps.of(io.Platform.environment,
-          hasTerminal: hasTerminal);
+      _caps = term.TerminalCaps.of(io.Platform.environment, hasTerminal: hasTerminal);
     }
     // Fresh working grid every draw; _shown keeps last-painted state so the
     // paint still writes only changed cells.
-    if (_grid.length != _h ||
-        _grid.isNotEmpty && _grid.first.length != _w) {
+    if (_grid.length != _h || _grid.isNotEmpty && _grid.first.length != _w) {
       _grid = List.generate(_h, (_) => List.filled(_w, _Cell.blank));
       _shown = null;
       _repaint = true;
@@ -1084,9 +1065,14 @@ final class _Session<S> implements term.TuiBridge {
     _measured(() {
       screen._draw(Region._(this, _grid, 0, titleH, _w, bodyH));
       if (titleH == 1) {
-        Region._(this, _grid, 0, 0, _w, 1)
-            .write(' ${_title ?? ''} ',
-            color: accent, style: accent == null ? {Style.reverse} : {});
+        Region._(
+          this,
+          _grid,
+          0,
+          0,
+          _w,
+          1,
+        ).write(' ${_title ?? ''} ', color: accent, style: accent == null ? {Style.reverse} : {});
       }
     }, _resetFrame);
     _statusY = _h - 1;
@@ -1094,8 +1080,7 @@ final class _Session<S> implements term.TuiBridge {
     _compositeScrolls();
     _drawPrompt();
     _compositePopups();
-    if (_focusables.isNotEmpty &&
-        !_focusables.any((f) => _sameId(f.id, _focusId))) {
+    if (_focusables.isNotEmpty && !_focusables.any((f) => _sameId(f.id, _focusId))) {
       _F? best;
       for (final f in _focusables) {
         if (best == null || _focusStamp(f.id) > _focusStamp(best.id)) best = f;
@@ -1134,9 +1119,7 @@ final class _Session<S> implements term.TuiBridge {
     int leftStyle = 0;
     if (_error != null) {
       left = _error!;
-      leftStyle = accent == null
-          ? _pack(null, null, {Style.bold})
-          : _pack(Color.red, null, {});
+      leftStyle = accent == null ? _pack(null, null, {Style.bold}) : _pack(Color.red, null, {});
     } else if (_sayMsg != null) {
       left = _sayMsg!;
     } else if (_cSpinners.isNotEmpty || _cBars.isNotEmpty) {
@@ -1149,10 +1132,7 @@ final class _Session<S> implements term.TuiBridge {
     final helps = <String>[];
     for (final entry in _keys.entries) {
       if (entry.value.$1.trim().isEmpty) continue;
-      final alts = keys
-          .splitBinding(entry.key)
-          .where((a) => !_isMouse(a) && !_isLifecycle(a))
-          .toList();
+      final alts = keys.splitBinding(entry.key).where((a) => !_isMouse(a) && !_isLifecycle(a)).toList();
       if (alts.isEmpty) continue;
       final shown = alts.first == 'escape' ? 'esc' : alts.first;
       helps.add('$shown ${entry.value.$1}');
@@ -1175,31 +1155,28 @@ final class _Session<S> implements term.TuiBridge {
 
   /// The running Console spinners and bars for the status row.
   String _consoleStatus() {
-    final frames = _caps.ascii
-        ? const ['-', '\\', '|', '/']
-        : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    final frames = _caps.ascii ? const ['-', '\\', '|', '/'] : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     final parts = <String>[];
     for (final label in _cSpinners.values) {
       parts.add('${frames[_spinTick % frames.length]} $label');
     }
     for (final bar in _cBars.values) {
       final lab = bar.label == null ? '' : '${bar.label} ';
-      final secs =
-          DateTime.now().difference(bar.start).inMilliseconds / 1000;
+      final secs = DateTime.now().difference(bar.start).inMilliseconds / 1000;
       if (bar.bytes) {
         final rate = secs > 0 ? bar.done / secs : 0.0;
         final counts = bar.total != null && bar.total! > 0
             ? '${_fmtSize(bar.done)}/${_fmtSize(bar.total!)}'
             : _fmtSize(bar.done);
-        parts.add(
-            '$lab${_barGlyphs(bar.done, bar.total)}$counts  ${_fmtRate(rate)}');
+        parts.add('$lab${_barGlyphs(bar.done, bar.total)}$counts  ${_fmtRate(rate)}');
       } else {
         final total = bar.total;
-        final counts =
-            total != null && total > 0 ? '${bar.done}/$total' : '${bar.done}';
+        final counts = total != null && total > 0 ? '${bar.done}/$total' : '${bar.done}';
         final rate = secs > 0 ? bar.done / secs : 0.0;
-        parts.add('$lab${_barGlyphs(bar.done, total)}$counts  '
-            '${_fmtCount(rate)}/s');
+        parts.add(
+          '$lab${_barGlyphs(bar.done, total)}$counts  '
+          '${_fmtCount(rate)}/s',
+        );
       }
     }
     return parts.join(' · ');
@@ -1265,9 +1242,7 @@ final class _Session<S> implements term.TuiBridge {
         for (var r = 0; r < ctx.viewH; r++) {
           final dst = ctx.gy + r;
           if (dst < 0 || dst >= _grid.length) continue;
-          final ch = (r >= top && r < top + size)
-              ? (_caps.ascii ? '#' : '█')
-              : (_caps.ascii ? '|' : '│');
+          final ch = (r >= top && r < top + size) ? (_caps.ascii ? '#' : '█') : (_caps.ascii ? '|' : '│');
           final dx = ctx.gx + ctx.w - 1;
           if (dx >= 0 && dx < _grid[dst].length) {
             _grid[dst][dx] = _Cell(ch, 0, 1);
@@ -1359,10 +1334,12 @@ final class _Session<S> implements term.TuiBridge {
   static const _leaveCodes =
       '\x1b[<u\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l';
 
-  void _listenStdin() => _subs.add(term.sharedStdin().listen((b) {
-        _pending.addAll(b);
-        _wake();
-      }, onError: (_) {}));
+  void _listenStdin() => _subs.add(
+    term.sharedStdin().listen((b) {
+      _pending.addAll(b);
+      _wake();
+    }, onError: (_) {}),
+  );
 
   /// Ctrl-Z (POSIX): give the terminal back, stop this process, and take the
   /// terminal again when the shell continues it.
@@ -1404,11 +1381,13 @@ final class _Session<S> implements term.TuiBridge {
     _cancelPrompts();
     if (!_entered) return;
     _wake();
-    await Future.wait(_subs.map((sub) async {
-      try {
-        await sub.cancel();
-      } catch (_) {}
-    }));
+    await Future.wait(
+      _subs.map((sub) async {
+        try {
+          await sub.cancel();
+        } catch (_) {}
+      }),
+    );
     _subs.clear();
     _restoreTerminal();
     term.ttyInput = false;

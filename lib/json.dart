@@ -10,6 +10,7 @@
 ///   wraps a value you already hold.
 /// - [Json] supports `$` (dotted path) `[]` (index the iteration) `value`
 ///   (typed scalar read) `or` (read with a default) `asList`/`asMap` (flat collections).
+/// - `toJson` lets `jsonEncode` read a nested [Json].
 /// Everything else is private.
 library;
 
@@ -350,7 +351,7 @@ extension ReaderFutureJson on Future<Reader> {
   Future<Json> json() async => (await this).json();
 }
 
-/// The Future mirror (rule 6). The extension name is import-only; never reference it.
+/// The Future mirror (rule 4). The extension name is import-only; never reference it.
 extension JsonFuture on Future<Json> {
   Future<Json> $(String path) async => (await this).$(path);
   Future<Json> operator [](int index) async => (await this)[index];

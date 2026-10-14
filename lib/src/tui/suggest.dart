@@ -173,8 +173,7 @@ extension on _Session<dynamic> {
     for (var r = 0; r < rows && start + r < sg.matches.length; r++) {
       final idx = start + r;
       final sel = idx == sg.index;
-      final st = _pack(null, sel ? accent : null,
-          sel ? {Style.bold, if (accent == null) Style.reverse} : {});
+      final st = _pack(null, sel ? accent : null, sel ? {Style.bold, if (accent == null) Style.reverse} : {});
       final label = term.truncateWidth(sg.matches[idx], math.max(1, w - 4));
       var col = 2;
       if (sel) {

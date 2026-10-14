@@ -29,7 +29,6 @@ Future<void> main(List<String> args) async {
   if (mode == 'write') {
     await Fs.file('$dir/out.bin').consume(_hang([1, 2, 3]));
   } else {
-    await Archive.unarchive('$dir/out')
-        .consume(_hang([..._tarHeader(), ...List.filled(100, 7)]));
+    await Archive.unarchive('$dir/out').consume(_hang([..._tarHeader(), ...List.filled(100, 7)]));
   }
 }

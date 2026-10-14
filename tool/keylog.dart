@@ -24,8 +24,7 @@ void main() {
     stdout.writeln('set lineMode=false FAILED: $e');
   }
   try {
-    stdout.writeln(
-        'readback: echoMode=${stdin.echoMode} lineMode=${stdin.lineMode}');
+    stdout.writeln('readback: echoMode=${stdin.echoMode} lineMode=${stdin.lineMode}');
   } catch (e) {
     stdout.writeln('readback FAILED: $e');
   }
@@ -35,12 +34,8 @@ void main() {
   }
   stdout.writeln('keylog: press keys, q quits. One hex line per stdin read.');
   stdin.listen((List<int> bytes) {
-    final String hex =
-        bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-    final String ascii = bytes
-        .map((int b) =>
-            b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.')
-        .join();
+    final String hex = bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+    final String ascii = bytes.map((int b) => b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.').join();
     stdout.writeln('$hex   |$ascii|');
     if (bytes.length == 1 && bytes[0] == 0x71) {
       exit(0);

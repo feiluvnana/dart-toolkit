@@ -1,13 +1,10 @@
 /// The only `ProcessSignal` subscriber in the package.
 ///
-/// Three modules used to watch signals and call `exit` themselves: `chrome`
-/// (leaked Chromium + a live `watch` that kept the VM alive after
-/// `browser.close()`), `console` prompts (sync `exit(130)` while chrome's
-/// async `close()` was still awaiting → orphaned profile), and `tui`
-/// (sync `exit(143)` without awaiting a live browser). A live
-/// `ProcessSignal.watch` subscription keeps the VM alive (verified, macOS).
+/// No module watches signals or calls `exit` itself: a live
+/// `ProcessSignal.watch` keeps the VM alive, and an `exit` from one module
+/// would cut short another's async cleanup (an orphaned browser profile).
 ///
-/// One owner fixes both: facades register ordered cleanup hooks via
+/// Facades register ordered cleanup hooks via
 /// [onExit] and remove them via [offExit]. The first hook installs
 /// `SIGINT`/`SIGTERM`/`SIGHUP` watchers (only the signals the OS has —
 /// Windows only `SIGINT`); the last removal cancels them so the script may
@@ -90,23 +87,14 @@ void offResize(Object token) {
 void _install() {
   // SIGINT always exists (Windows too).
   try {
-    _sigintSub ??= io.ProcessSignal.sigint.watch().listen(
-      (_) => _handle(130, isSigint: true),
-      onError: (_) {},
-    );
+    _sigintSub ??= io.ProcessSignal.sigint.watch().listen((_) => _handle(130, isSigint: true), onError: (_) {});
   } catch (_) {}
   if (io.Platform.isWindows) return;
   try {
-    _sigtermSub ??= io.ProcessSignal.sigterm.watch().listen(
-      (_) => _handle(143, isSigint: false),
-      onError: (_) {},
-    );
+    _sigtermSub ??= io.ProcessSignal.sigterm.watch().listen((_) => _handle(143, isSigint: false), onError: (_) {});
   } catch (_) {}
   try {
-    _sighupSub ??= io.ProcessSignal.sighup.watch().listen(
-      (_) => _handle(129, isSigint: false),
-      onError: (_) {},
-    );
+    _sighupSub ??= io.ProcessSignal.sighup.watch().listen((_) => _handle(129, isSigint: false), onError: (_) {});
   } catch (_) {}
 }
 
@@ -144,12 +132,8 @@ Future<void> _handle(int code, {required bool isSigint}) async {
   final hooks = List<FutureOr<void> Function()>.of(_hooks.values).reversed;
   for (final hook in hooks) {
     try {
-      await Future.sync(hook).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () {},
-      );
+      await Future.sync(hook).timeout(const Duration(seconds: 5), onTimeout: () {});
     } catch (_) {}
   }
   io.exit(code);
 }
-

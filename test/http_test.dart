@@ -13,26 +13,11 @@ import 'support/child.dart';
 /// the suite needs no python at test time.
 const _cjk = {
   'euc-kr': ('euc-kr', [176, 161, 179, 170, 199, 209, 177, 219]), // 가나한글
-  'shift_jis': (
-    'shift_jis',
-    [147, 250, 150, 123, 140, 234, 131, 101, 131, 88, 131, 103]
-  ), // 日本語テスト
-  'euc-jp': (
-    'euc-jp',
-    [198, 252, 203, 220, 184, 236, 165, 198, 165, 185, 165, 200]
-  ), // 日本語テスト
-  'gbk': (
-    'gbk',
-    [214, 208, 206, 196, 188, 242, 204, 229, 178, 226, 202, 212]
-  ), // 中文简体测试
-  'gb18030': (
-    'gb18030',
-    [149, 50, 130, 54, 149, 50, 130, 55]
-  ), // 𠀀𠀁 (4-byte sequences)
-  'big5': (
-    'big5',
-    [164, 164, 164, 229, 193, 99, 197, 233, 180, 250, 184, 213]
-  ), // 中文繁體測試
+  'shift_jis': ('shift_jis', [147, 250, 150, 123, 140, 234, 131, 101, 131, 88, 131, 103]), // 日本語テスト
+  'euc-jp': ('euc-jp', [198, 252, 203, 220, 184, 236, 165, 198, 165, 185, 165, 200]), // 日本語テスト
+  'gbk': ('gbk', [214, 208, 206, 196, 188, 242, 204, 229, 178, 226, 202, 212]), // 中文简体测试
+  'gb18030': ('gb18030', [149, 50, 130, 54, 149, 50, 130, 55]), // 𠀀𠀁 (4-byte sequences)
+  'big5': ('big5', [164, 164, 164, 229, 193, 99, 197, 233, 180, 250, 184, 213]), // 中文繁體測試
   'cp949': ('euc-kr', [148, 238, 138, 221]), // 뷁듶 (CP949 extensions)
 };
 
@@ -121,8 +106,7 @@ void main() {
         final entry = _cjk[which]!;
         request.response
           ..statusCode = HttpStatus.ok
-          ..headers.contentType =
-              ContentType('text', 'html', charset: entry.$1)
+          ..headers.contentType = ContentType('text', 'html', charset: entry.$1)
           ..add(entry.$2);
       } else if (path == '/meta') {
         // No header charset: <meta charset> in the first 1024 bytes wins.
@@ -133,12 +117,10 @@ void main() {
               utf8.encode('</body></html>'),
         );
       } else if (path == '/badbytes') {
-        request.response.headers.contentType =
-            ContentType('text', 'plain', charset: 'shift_jis');
+        request.response.headers.contentType = ContentType('text', 'plain', charset: 'shift_jis');
         request.response.add([0xff, 0x41, 0x82, 0x28]);
       } else if (path == '/unknown-charset') {
-        request.response.headers.contentType =
-            ContentType('text', 'plain', charset: 'x-made-up');
+        request.response.headers.contentType = ContentType('text', 'plain', charset: 'x-made-up');
         request.response.write('plain ascii');
       } else {
         request.response
@@ -181,13 +163,11 @@ void main() {
     test('check: true throws with status, method, url and a body snippet', () async {
       await expectLater(
         Http.get('$base/nope', check: true),
-        throwsA(isA<HttpException>().having((e) => e.message, 'message',
-            'HTTP 404 GET $base/nope: nope')),
+        throwsA(isA<HttpException>().having((e) => e.message, 'message', 'HTTP 404 GET $base/nope: nope')),
       );
       await expectLater(
         Http.post('$base/nope', check: true),
-        throwsA(isA<HttpException>()
-            .having((e) => e.message, 'message', startsWith('HTTP 404 POST '))),
+        throwsA(isA<HttpException>().having((e) => e.message, 'message', startsWith('HTTP 404 POST '))),
       );
       expect(await Http.get('$base/hello', check: true).text(), isNotEmpty);
     });
@@ -207,8 +187,7 @@ void main() {
     });
 
     test('Body.json accepts a Json inside the value', () async {
-      final r = await Http.post('$base/echo',
-          body: .json({'a': Json.parse('{"b":[1,2]}')}));
+      final r = await Http.post('$base/echo', body: .json({'a': Json.parse('{"b":[1,2]}')}));
       expect(await r.text(), 'got:{"a":{"b":[1,2]}}');
     });
 
@@ -271,14 +250,9 @@ void main() {
       expect(await res.text(), 'size:10;length:10');
     });
 
-    test('H1: an upload the server never reads times out, never hangs',
-        () async {
+    test('H1: an upload the server never reads times out, never hangs', () async {
       await expectLater(
-        Http.put(
-          '$base/blackhole',
-          body: Body.stream(_SlowReader()),
-          timeout: const Duration(seconds: 1),
-        ),
+        Http.put('$base/blackhole', body: Body.stream(_SlowReader()), timeout: const Duration(seconds: 1)),
         throwsA(isA<TimeoutException>()),
       );
     });
@@ -351,9 +325,11 @@ void main() {
         ..useCertificateChain('${dir.path}/cert.pem')
         ..usePrivateKey('${dir.path}/key.pem');
       final tls = await HttpServer.bindSecure(InternetAddress.loopbackIPv4, 0, ctx);
-      tls.listen((r) => r.response
-        ..write('secret')
-        ..close());
+      tls.listen(
+        (r) => r.response
+          ..write('secret')
+          ..close(),
+      );
       addTearDown(() => tls.close(force: true));
       final u = 'https://localhost:${tls.port}/';
       expect(await Http.get(u, insecure: ['localhost']).text(), 'secret');
@@ -396,17 +372,10 @@ void main() {
     });
 
     test('a stalled body times out naming the URL', () async {
-      final res = await Http.get(
-        '$base/stall',
-        timeout: const Duration(milliseconds: 300),
-      );
+      final res = await Http.get('$base/stall', timeout: const Duration(milliseconds: 300));
       expect(
         res.bytes(),
-        throwsA(isA<TimeoutException>().having(
-          (e) => e.message,
-          'message',
-          contains('$base/stall'),
-        )),
+        throwsA(isA<TimeoutException>().having((e) => e.message, 'message', contains('$base/stall'))),
       );
     });
 
@@ -433,10 +402,7 @@ void main() {
 
     test('Future mirrors match', () async {
       expect(await Http.get('$base/hello').status(), HttpStatus.ok);
-      expect(
-        await Http.get('$base/hello').header('content-type'),
-        contains('text/plain'),
-      );
+      expect(await Http.get('$base/hello').header('content-type'), contains('text/plain'));
       expect(await Http.get('$base/hello').url(), '$base/hello');
       expect(await Http.get('$base/hello').text(), contains('hello'));
       expect(await Http.get('$base/hello').ok(), isTrue);
@@ -459,11 +425,7 @@ void main() {
       final bad = await Http.get('$base/nope');
       await expectLater(
         bad.json(),
-        throwsA(isA<FormatException>().having(
-          (e) => e.message,
-          'message',
-          contains('404'),
-        )),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('404'))),
       );
     });
   });
@@ -510,8 +472,7 @@ final class _BoomWriter implements Writer {
 
 final class _ThrowFirstWriter implements Writer {
   @override
-  Future<void> consume(Stream<List<int>> input) async =>
-      throw StateError('before reading');
+  Future<void> consume(Stream<List<int>> input) async => throw StateError('before reading');
 }
 
 void abortTests() {
@@ -577,7 +538,8 @@ void abortTests() {
     });
 
     test('a script that aborts a slow download exits by itself', () async {
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/http.dart';
 Future<void> main(List<String> a) async {
   final res = await Http.get(a[0]);
@@ -585,7 +547,10 @@ Future<void> main(List<String> a) async {
   await Future<void>.delayed(const Duration(milliseconds: 200));
   Http.abort();
 }
-''', args: ['$url/slow'], timeout: const Duration(seconds: 20));
+''',
+        args: ['$url/slow'],
+        timeout: const Duration(seconds: 20),
+      );
       expect(r.exitCode, 0, reason: '${r.stderr}');
     });
   });
@@ -646,9 +611,11 @@ void edgeTests() {
               ..statusCode = sid == 's3cret' ? 200 : 401
               ..write('sid=$sid');
           case '/logout':
-            r.response.cookies.add(Cookie('sid', '')
-              ..path = '/'
-              ..maxAge = 0);
+            r.response.cookies.add(
+              Cookie('sid', '')
+                ..path = '/'
+                ..maxAge = 0,
+            );
           case '/to-bad':
             r.response
               ..statusCode = 302
@@ -665,8 +632,11 @@ void edgeTests() {
     tearDownAll(() => server.close(force: true));
 
     test('an upload that keeps moving outlives the timeout', () async {
-      final res = await Http.put('$url/sink',
-          body: Body.stream(_Drip(8, const Duration(milliseconds: 150))), timeout: const Duration(milliseconds: 500));
+      final res = await Http.put(
+        '$url/sink',
+        body: Body.stream(_Drip(8, const Duration(milliseconds: 150))),
+        timeout: const Duration(milliseconds: 500),
+      );
       expect(await res.text(), '8');
     });
 
@@ -725,12 +695,10 @@ Future<void> main() async {
         r.response.close();
       });
       addTearDown(() => other.close(force: true));
-      await Http.get('$url/to-other?to=http://127.0.0.1:${other.port}/', headers: {
-        'authorization': 'Bearer T',
-        'x-api-key': 'K',
-        'private-token': 'P',
-        'accept': 'text/html',
-      }).then((r) => r.close());
+      await Http.get(
+        '$url/to-other?to=http://127.0.0.1:${other.port}/',
+        headers: {'authorization': 'Bearer T', 'x-api-key': 'K', 'private-token': 'P', 'accept': 'text/html'},
+      ).then((r) => r.close());
       expect(seen, {'authorization': null, 'x-api-key': null, 'private-token': null, 'accept': 'text/html'});
     });
 
@@ -738,11 +706,13 @@ Future<void> main() async {
       final secret = url.replaceFirst('http://', 'http://alice:hunter2@');
       await expectLater(
         Http.get('$secret/denied?access_token=SECRET&page=2', check: true),
-        throwsA(isA<HttpException>().having((e) => '$e', 'text', allOf(
-          contains('access_token=***&page=2'),
-          isNot(contains('hunter2')),
-          isNot(contains('SECRET')),
-        ))),
+        throwsA(
+          isA<HttpException>().having(
+            (e) => '$e',
+            'text',
+            allOf(contains('access_token=***&page=2'), isNot(contains('hunter2')), isNot(contains('SECRET'))),
+          ),
+        ),
       );
     });
 
@@ -770,9 +740,11 @@ Future<void> main() async {
     test('a body past the 64 KB prefix reads whole after a delay, and pipes', () async {
       final big = List.generate(300000, (i) => i % 251);
       final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      other.listen((r) => r.response
-        ..add(big)
-        ..close());
+      other.listen(
+        (r) => r.response
+          ..add(big)
+          ..close(),
+      );
       addTearDown(() => other.close(force: true));
       final u = 'http://127.0.0.1:${other.port}/';
       final res = await Http.get(u);
@@ -787,8 +759,12 @@ Future<void> main() async {
       final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final port = dead.port;
       await dead.close();
-      await expectLater(Http.get('http://127.0.0.1:$port/thing', retries: 0),
-          throwsA(isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing'))));
+      await expectLater(
+        Http.get('http://127.0.0.1:$port/thing', retries: 0),
+        throwsA(
+          isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing')),
+        ),
+      );
     });
 
     test('query: appends encoded pairs; a null value drops its key', () async {
@@ -830,14 +806,18 @@ Future<void> main() async {
 
     test('a script whose first call is Http.hold() exits once it closes', () async {
       final sw = Stopwatch()..start();
-      final r = await runDart('''
+      final r = await runDart(
+        '''
 import 'package:dart_toolkit/http.dart';
 Future<void> main(List<String> a) async {
   final hold = Http.hold();
   print(await Http.get(a[0]).text());
   await hold.close();
 }
-''', args: ['$url/hello'], timeout: const Duration(seconds: 25));
+''',
+        args: ['$url/hello'],
+        timeout: const Duration(seconds: 25),
+      );
       expect(r.stdout, 'hello\n');
       expect(sw.elapsed, lessThan(const Duration(seconds: 6)));
     });

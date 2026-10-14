@@ -40,8 +40,10 @@ void main() {
       await (Reader.of(utf8.encode('abc')) | Hash.sha256(expect: abc.toUpperCase()) > ok);
       expect(await ok.text(), 'abc');
       final bad = Fs.file('${tmp.path}/bad');
-      await expectLater(Reader.of(utf8.encode('abd')) | Hash.sha256(expect: abc) > bad,
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('sha256 mismatch'))));
+      await expectLater(
+        Reader.of(utf8.encode('abd')) | Hash.sha256(expect: abc) > bad,
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('sha256 mismatch'))),
+      );
       expect(await bad.exists(), isFalse);
       await expectLater(Reader.of(utf8.encode('abd')) > Hash.sha256(expect: abc), throwsFormatException);
     });
@@ -50,7 +52,10 @@ void main() {
       final src = Fs.dir('${tmp.path}/src');
       await src.file('a.txt').write('a');
       final tgz = await Archive.archive(['.'], dir: src.path(), format: ArchiveFormat.tgz).bytes();
-      await expectLater(Reader.of(tgz) | Hash.sha256(expect: abc) > Archive.unarchive('${tmp.path}/out'), throwsFormatException);
+      await expectLater(
+        Reader.of(tgz) | Hash.sha256(expect: abc) > Archive.unarchive('${tmp.path}/out'),
+        throwsFormatException,
+      );
       expect(await Fs.entry('${tmp.path}/out'), isNull);
     });
   });
@@ -58,14 +63,8 @@ void main() {
   group('Hasher', () {
     test('one-shot matches known digests', () {
       expect(Hash.md5().add('hello').hex(), '5d41402abc4b2a76b9719d911017c592');
-      expect(
-        Hash.sha1().add('hello').hex(),
-        'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d',
-      );
-      expect(
-        Hash.sha256().add('hello').hex(),
-        '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
-      );
+      expect(Hash.sha1().add('hello').hex(), 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d');
+      expect(Hash.sha256().add('hello').hex(), '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
       expect(Hash.sha512().add('hello').hex().length, 128);
     });
 
@@ -77,10 +76,7 @@ void main() {
     });
 
     test('addBytes feeds raw bytes identically to utf8 text', () {
-      expect(
-        Hash.sha256().addBytes(utf8.encode('hello')).hex(),
-        Hash.sha256().add('hello').hex(),
-      );
+      expect(Hash.sha256().addBytes(utf8.encode('hello')).hex(), Hash.sha256().add('hello').hex());
     });
 
     test('add and addBytes chain incrementally', () {
@@ -112,8 +108,7 @@ void main() {
       expect(h.hex(), Hash.sha256().add('hello').hex());
     });
 
-    test('a failed run poisons the hasher instead of a partial hex',
-        () async {
+    test('a failed run poisons the hasher instead of a partial hex', () async {
       final h = Hash.sha256();
       await expectLater(_Boom() | h > null, throwsStateError);
       expect(() => h.hex(), throwsStateError);
@@ -129,14 +124,9 @@ void main() {
       expect(_Mem('y').pipe(h).bytes(), throwsStateError);
     });
 
-    test(
-        'F6: a writer that fails before reading poisons the pipe hasher too',
-        () async {
+    test('F6: a writer that fails before reading poisons the pipe hasher too', () async {
       final h = Hash.sha256();
-      await expectLater(
-        _Mem('hello') | h > _ThrowBeforeRead(),
-        throwsA(isA<ArgumentError>()),
-      );
+      await expectLater(_Mem('hello') | h > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
       // Not the empty-input digest: the run never delivered the bytes.
       expect(() => h.hex(), throwsStateError);
     });

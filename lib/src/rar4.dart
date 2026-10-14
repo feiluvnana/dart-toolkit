@@ -117,7 +117,9 @@ RarEntry _file4(Uint8List h, int hp, int flags, Uint8List b, int dataStart, int 
       rethrow;
     }
     if (crc32(data) != crc) {
-      throw FormatException(encrypted ? 'wrong password or corrupt archive: $name' : 'corrupt archive: RAR CRC of $name');
+      throw FormatException(
+        encrypted ? 'wrong password or corrupt archive: $name' : 'corrupt archive: RAR CRC of $name',
+      );
     }
     return data;
   }, isLink: isLink);
@@ -215,10 +217,10 @@ final class _Key4 {
 final class _Sha1 {
   _Sha1();
   _Sha1._copy(_Sha1 o)
-      : _h = Uint32List.fromList(o._h),
-        _buf = Uint8List.fromList(o._buf),
-        _used = o._used,
-        _length = o._length;
+    : _h = Uint32List.fromList(o._h),
+      _buf = Uint8List.fromList(o._buf),
+      _used = o._used,
+      _length = o._length;
 
   var _h = Uint32List.fromList([0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]);
   var _buf = Uint8List(64);
@@ -331,7 +333,36 @@ final class _Run4 {
 }
 
 const _nc3 = 299, _dc3 = 60, _ldc3 = 17, _rc3 = 28;
-const _lDecode = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224];
+const _lDecode = [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  10,
+  12,
+  14,
+  16,
+  20,
+  24,
+  28,
+  32,
+  40,
+  48,
+  56,
+  64,
+  80,
+  96,
+  112,
+  128,
+  160,
+  192,
+  224,
+];
 const _lBits = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5];
 const _sdDecode = [0, 4, 8, 16, 32, 64, 128, 192];
 const _sdBits = [2, 2, 3, 4, 5, 6, 6, 6];

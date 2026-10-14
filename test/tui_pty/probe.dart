@@ -82,7 +82,7 @@ Future<void> main(List<String> args) async {
               },
             ),
             // Exit before any redraw: the screen shows what was painted.
-          'q': ('', () => exit(0)),
+            'q': ('', () => exit(0)),
           },
         ),
       );
@@ -112,9 +112,7 @@ Future<void> main(List<String> args) async {
         0,
         (s, app) => Screen(
           (r) => r.spin('busy').write(text),
-          keys: {
-            'show': ('', () => Timer(const Duration(milliseconds: 300), () => text = 'timer fired')),
-          },
+          keys: {'show': ('', () => Timer(const Duration(milliseconds: 300), () => text = 'timer fired'))},
         ),
       );
     case 'idle':
