@@ -8,7 +8,8 @@
 ///
 /// Public surface is exactly: [Html], [Elements], [Element].
 /// - `Html.parse()` parses HTML and returns [Elements].
-/// - [Elements] supports `$` `[]` `without` `text` `attr` `attrs` (plus [Iterable] helpers).
+/// - [Elements] supports `$` `[]` `without` `text` `texts` `attr` `attrs`
+///   (plus [Iterable] helpers).
 /// - [Element] supports `$` `without` `text` `attr` `parent`.
 /// A selector the engine rejects is a [FormatException] naming the selector.
 /// Everything else is private.
@@ -20,12 +21,16 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 // `query_selector.dart` is engine-internal: package:html offers no public
 // `matches`, so `$` cannot test the element itself without it. The import is
-// private (nothing is re-exported) and holds no public surface.
+// private (nothing is re-exported) and holds no public surface. Pinned to
+// `html >=0.15.7 <0.16.0` (see pubspec.yaml) so a minor bump cannot break it;
+// `matches` on a root element is covered in tests (self-matching groups).
 // ignore: implementation_imports
 import 'package:html/src/query_selector.dart' as query;
 
 import 'core.dart';
 export 'core.dart';
+
+import 'src/origin.dart' as names;
 
 /// Entry point: parse HTML source into top-level [Elements].
 abstract final class Html {
@@ -34,9 +39,12 @@ abstract final class Html {
   /// `$('body')` works); anything else is a fragment.
   /// [baseUrl] is the base for relative links: with one, URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
-  /// absolute.
+  /// absolute. The base is parsed once per [Elements] and shared with every
+  /// child (1000 links no longer parse it 1000 times). A document's
+  /// `<base href>` overrides it.
   static Elements parse(String html, {String? baseUrl}) {
-    var s = html.replaceFirst('\uFEFF', '').trimLeft();
+    final baseUri = _parseBase(baseUrl);
+    var s = html.replaceFirst('﻿', '').trimLeft();
     while (s.startsWith('<!--')) {
       final end = s.indexOf('-->');
       if (end < 0) break;
@@ -45,29 +53,43 @@ abstract final class Html {
     final head = s.length <= 9 ? s.toLowerCase() : s.substring(0, 9).toLowerCase();
     if (head.startsWith('<!doctype') || head.startsWith('<html')) {
       final doc = parser.parse(html);
+      final declared = doc.querySelector('base[href]')?.attributes['href']?.trim();
+      final base = declared == null || declared.isEmpty
+          ? baseUri
+          : baseUri?.resolve(declared) ?? Uri.tryParse(declared);
       return Elements._(
-        [for (final n in doc.nodes) if (n is dom.Element) Element._(n, baseUrl)],
-        baseUrl,
+        [for (final n in doc.nodes) if (n is dom.Element) Element._(n, base)],
+        base,
       );
     }
     final frag = parser.parseFragment(html);
     return Elements._(
-      [for (final n in frag.nodes) if (n is dom.Element) Element._(n, baseUrl)],
-      baseUrl,
+      [for (final n in frag.nodes) if (n is dom.Element) Element._(n, baseUri)],
+      baseUri,
     );
   }
 }
 
+/// Parse [baseUrl] once; null when absent or unparseable.
+Uri? _parseBase(String? baseUrl) {
+  if (baseUrl == null || baseUrl.isEmpty) return null;
+  return Uri.tryParse(baseUrl);
+}
+
 /// A list of elements. Query with `$()`, read with `[]`.
 final class Elements extends Iterable<Element> {
-  Elements._(this._items, this._baseUrl);
+  Elements._(this._items, this._baseUri);
 
   final List<Element> _items;
-  final String? _baseUrl;
+
+  /// The base for relative links, parsed once and shared with every child.
+  final Uri? _baseUri;
 
   /// Matches in document order without duplicates: every element that is one
   /// of these elements or a descendant of one. The element itself is matched
   /// with the engine's `matches`, so combinators see the real tree.
+  /// Selectors are parsed once and cached (64-entry LRU keyed by the
+  /// selector string): scrapes running the same selectors per page are O(1).
   Elements $(String selector) {
     return Elements._(
       [
@@ -75,9 +97,9 @@ final class Elements extends Iterable<Element> {
           [for (final e in _items) e._el],
           selector,
         ))
-          Element._(el, _baseUrl),
+          Element._(el, _baseUri),
       ],
-      _baseUrl,
+      _baseUri,
     );
   }
 
@@ -100,7 +122,7 @@ final class Elements extends Iterable<Element> {
         for (final m in found) {
           m.remove();
         }
-        out.add(Element._(clone, _baseUrl));
+        out.add(Element._(clone, _baseUri));
       }
     } on FormatException catch (e) {
       throw FormatException(
@@ -111,17 +133,21 @@ final class Elements extends Iterable<Element> {
     } catch (e) {
       throw FormatException("invalid selector '$selector': $e");
     }
-    return Elements._(out, _baseUrl);
+    return Elements._(out, _baseUri);
   }
 
   /// Reads the **first** match (`''` when there is none), like [attr]; for
-  /// every match use `.map((e) => e.text())`.
+  /// every match use [texts].
   /// Reads like `innerText`, so scraped text needs no `.trim()`.
   String text() {
     final first = _items.firstOrNull;
     if (first == null) return '';
     return first.text();
   }
+
+  /// Every match's text in document order. Pairs `text`/`texts` like
+  /// `attr`/`attrs`; replaces `.map((e) => e.text()).toList()`.
+  List<String> texts() => [for (final e in _items) e.text()];
 
   /// The first match's attribute, or `null` when nothing matched or the
   /// attribute is absent. Case-insensitive; `href`/`src` resolve with the base.
@@ -144,18 +170,20 @@ final class Elements extends Iterable<Element> {
 
 /// A single element.
 final class Element {
-  Element._(this._el, this._baseUrl);
+  Element._(this._el, this._baseUri);
 
   final dom.Element _el;
-  final String? _baseUrl;
+
+  /// The base for relative links, shared from the parent [Elements].
+  final Uri? _baseUri;
 
   /// Matches that are this element or a descendant of it, in document order
   /// without duplicates. The element itself is matched with the engine's
   /// `matches`, so combinators see the real tree.
   Elements $(String selector) {
     return Elements._(
-      [for (final el in _queryRoots([_el], selector)) Element._(el, _baseUrl)],
-      _baseUrl,
+      [for (final el in _queryRoots([_el], selector)) Element._(el, _baseUri)],
+      _baseUri,
     );
   }
 
@@ -171,7 +199,7 @@ final class Element {
       if (evaluator.matches(clone, group)) {
         // Self matches whole (like Elements.without drops it): clear content.
         clone.nodes.clear();
-        return Element._(clone, _baseUrl);
+        return Element._(clone, _baseUri);
       }
       evaluator.querySelectorAll(clone, group, found);
     } on FormatException catch (e) {
@@ -186,12 +214,12 @@ final class Element {
     for (final m in found) {
       m.remove();
     }
-    return Element._(clone, _baseUrl);
+    return Element._(clone, _baseUri);
   }
 
   /// Text like `innerText`, so scraped text needs no `.trim()`. Runs of
   /// spaces collapse to one space, and a run that holds a newline becomes one
-  /// newline. Block elements and `<br>` break lines; the result has no
+  /// newline. Block elements and `<br>` break lines, table cells are space-separated; the result has no
   /// leading/trailing collapsed whitespace, and `<pre>` keeps its whitespace.
   String text() {
     final out = StringBuffer();
@@ -245,6 +273,7 @@ final class Element {
         }
         final isBlock = tag != null && _blocks.contains(tag);
         if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
+        if ((tag == 'td' || tag == 'th') && !pre && out.isNotEmpty) gap(newline: false);
         final inner = pre || tag == 'pre';
         for (final child in node.nodes) {
           walk(child, inner);
@@ -260,16 +289,17 @@ final class Element {
 
   /// Attribute [name] (case-insensitive) or `null` if absent. URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and, with a
-  /// base URL, resolved to absolute URLs.
+  /// base URL, resolved to absolute URLs (the base was parsed once per
+  /// [Elements], not per attribute).
   String? attr(String name) {
     final raw = _el.attributes[name.toLowerCase()];
     if (raw == null) return null;
     if (!_urlAttrs.contains(name.toLowerCase())) return raw;
     final value = raw.trim();
-    final base = _baseUrl;
+    final base = _baseUri;
     if (base == null || value.isEmpty) return value;
     try {
-      return Uri.parse(base).resolve(value).toString();
+      return base.resolve(value).toString();
     } catch (_) {
       return value;
     }
@@ -278,7 +308,7 @@ final class Element {
   /// Parent element, or `null` at top level.
   Element? parent() {
     final p = _el.parent;
-    return p == null ? null : Element._(p, _baseUrl);
+    return p == null ? null : Element._(p, _baseUri);
   }
 }
 
@@ -326,13 +356,28 @@ const _blocks = {
   'ul',
 };
 
+/// Parsed selectors, keyed by the selector string. Scrapes run the same
+/// handful of selectors on every page, so repeats are O(1). Bounded at 64
+/// entries (LRU: a hit moves to the end, a miss evicts the oldest).
+final _selectorCache = <String, css.SelectorGroup>{};
+
 /// Parse [selector] with the engine's parser; a bad selector is a
 /// [FormatException] naming it.
 css.SelectorGroup _parseSelector(String selector) {
+  final hit = _selectorCache.remove(selector);
+  if (hit != null) {
+    // Re-insert to mark most-recently-used.
+    _selectorCache[selector] = hit;
+    return hit;
+  }
   final errors = <css.Message>[];
   final group = css.parseSelectorGroup(selector, errors: errors);
   if (group == null || errors.isNotEmpty) {
     throw FormatException("invalid selector '$selector': $errors");
+  }
+  _selectorCache[selector] = group;
+  if (_selectorCache.length > 64) {
+    _selectorCache.remove(_selectorCache.keys.first);
   }
   return group;
 }
@@ -372,28 +417,22 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
 }
 
 /// Bytes → a value. Relative links resolve against the response's URL
-/// (or the file's URI); other readers parse without a base. A failure on
-/// an error page names the HTTP status in the message.
+/// (or the file's URI) from the typed [Origin]; other readers parse without
+/// a base. A failure on an error page names the HTTP status in the message.
 extension ReaderHtml on Reader {
   Future<Elements> html() async {
     final text = await this.text();
+    final o = origin();
     try {
-      return Html.parse(text, baseUrl: _baseUrlOf(this));
+      return Html.parse(
+        text,
+        baseUrl: names.baseUrlFor(url: o.url(), path: o.path()),
+      );
     } on FormatException catch (e) {
-      final status = _statusOf(this);
+      final status = o.status();
       if (status == null || (status >= 200 && status < 300)) rethrow;
       throw FormatException('${e.message} (HTTP $status)', e.source, e.offset);
     }
-  }
-}
-
-int? _statusOf(Reader reader) {
-  try {
-    // ignore: avoid_dynamic_calls
-    final s = (reader as dynamic).status() as int?;
-    return s;
-  } catch (_) {
-    return null;
   }
 }
 
@@ -409,6 +448,7 @@ extension ElementsFuture on Future<Elements> {
   Future<Elements> without(String selector) async =>
       (await this).without(selector);
   Future<String> text() async => (await this).text();
+  Future<List<String>> texts() async => (await this).texts();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<List<String>> attrs(String name) async => (await this).attrs(name);
 }
@@ -421,26 +461,4 @@ extension ElementFuture on Future<Element> {
   Future<String> text() async => (await this).text();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<Element?> parent() async => (await this).parent();
-}
-
-String? _baseUrlOf(Reader reader) {
-  // The reader's own URL when it has one (a response's final URL) or its
-  // path as a file URI. Dynamic so this module never imports http or fs.
-  try {
-    // ignore: avoid_dynamic_calls
-    final u = (reader as dynamic).url() as String?;
-    if (u != null && u.isNotEmpty) return u;
-  } catch (_) {}
-  try {
-    // ignore: avoid_dynamic_calls
-    final path = (reader as dynamic).path() as String?;
-    if (path != null) {
-      try {
-        return Uri.file(path).toString();
-      } catch (_) {
-        return null;
-      }
-    }
-  } catch (_) {}
-  return null;
 }

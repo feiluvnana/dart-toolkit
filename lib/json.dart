@@ -6,8 +6,10 @@
 /// ```
 ///
 /// Public surface is exactly: [Json].
-/// - `Json.parse()` parses text, `Json.encode()` renders it.
-/// - [Json] supports `$` (dotted path) `[]` (index the iteration) `value` (typed read).
+/// - `Json.parse()` parses text, `Json.encode()` renders it, `Json.of()`
+///   wraps a value you already hold.
+/// - [Json] supports `$` (dotted path) `[]` (index the iteration) `value`
+///   (typed scalar read) `listOf`/`mapOf` (flat collections).
 /// Everything else is private.
 library;
 
@@ -32,16 +34,21 @@ final class Json extends Iterable<Json> {
     }
   }
 
+  /// Wrap a value you already hold (e.g. a decoded `evaluate` result):
+  /// no `jsonEncode` → parse round trip. Lets `chrome.evaluate` skip
+  /// re-encoding and lets scripts wrap values without copying them.
+  static Json of(Object? decoded) => Json._(decoded);
+
   /// Render [value] as JSON text. Accepts what `dart:convert` accepts (string
   /// keys) and throws what it throws. A [Json] anywhere inside is read as its
   /// raw value.
   static String encode(Object? value, {bool pretty = false}) {
-    Object? unwrap(Object? v) => v is Json ? v._v : v;
-    final encoder = pretty
-        ? JsonEncoder.withIndent('  ', unwrap)
-        : JsonEncoder(unwrap);
+    final encoder = pretty ? const JsonEncoder.withIndent('  ') : const JsonEncoder();
     return encoder.convert(value);
   }
+
+  /// What `jsonEncode` calls: a [Json] inside any encoded value is its raw value.
+  Object? toJson() => _v;
 
   /// Dotted path (`users.0.name`); a numeric segment indexes an array. A `*`
   /// segment maps over every item: `$('data.users.*.name')` is a [Json] of
@@ -72,14 +79,27 @@ final class Json extends Iterable<Json> {
   }
 
   /// The value when it is a `T`, else null, so `??` gives the default.
-  /// Integral numbers read as both `int` and `double`, so `3`, `3.0`,
-  /// `value<int>()` and `value<double>()` all agree (a non-integral `double`
-  /// is not an `int`). `value<List<T>>()` and `value<Map<String, T>>()` check
-  /// each element: the whole read is null unless every element converts (for
-  /// example `p.$('tags').value<List<int>>()`). Use `num` for numbers that
-  /// may be either, `Object` for the raw value.
+  /// Scalars: integral numbers read as both `int` and `double`, so `3`,
+  /// `3.0`, `value<int>()` and `value<double>()` all agree (a non-integral
+  /// `double` is not an `int`). Use `num` for numbers that may be either,
+  /// `Object` for the raw value. Flat collections read with [listOf]/[mapOf]
+  /// (the element type is the parameter); nested data reads by iterating
+  /// (see below), which is also where records come from:
+  ///
+  /// ```dart
+  /// final port = cfg.$('server.port').value<int>() ?? 8080;
+  /// final users = [
+  ///   for (final u in doc.$('users'))
+  ///     (name: u.$('name').value<String>() ?? '', age: u.$('age').value<int>() ?? 0),
+  /// ];
+  /// ```
   T? value<T>() {
     final v = _v;
+    assert(
+        v is T ||
+            !((v is List || v is Map) &&
+            (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)),
+        'value<$T>() reads scalars; use listOf/mapOf');
     if (v is T) return v;
     if (v is num) {
       if (v is int) {
@@ -94,9 +114,48 @@ final class Json extends Iterable<Json> {
       }
       return null;
     }
-    if (v is List) return _valueList<T>(v);
-    if (v is Map) return _valueMap<T>(v);
     return null;
+  }
+
+  /// The value as a `List<T>`, or null unless it is a list and every element
+  /// converts to `T` (with the same integral-number coercion as [value]).
+  /// One pass, O(n): a mismatch returns null after a single scan, not
+  /// O(33·n) across a table of shapes. Flat cases only; nested data reads
+  /// by iterating:
+  ///
+  /// ```dart
+  /// final names = doc.$('data.users.*.name').listOf<String>() ?? [];
+  /// ```
+  List<T>? listOf<T>() {
+    final v = _v;
+    if (v is! List) return null;
+    final out = <T>[];
+    for (final e in v) {
+      final c = _scalar<T>(e);
+      if (identical(c, _mismatch)) return null;
+      out.add(c as T);
+    }
+    return out;
+  }
+
+  /// The value as a `Map<String, T>`, or null unless it is an object with
+  /// string keys and every value converts to `T`. One pass, O(n).
+  ///
+  /// ```dart
+  /// final counts = doc.$('stats').mapOf<int>() ?? {};
+  /// ```
+  Map<String, T>? mapOf<T>() {
+    final v = _v;
+    if (v is! Map) return null;
+    final out = <String, T>{};
+    for (final entry in v.entries) {
+      final k = entry.key;
+      if (k is! String) return null;
+      final c = _scalar<T>(entry.value);
+      if (identical(c, _mismatch)) return null;
+      out[k] = c as T;
+    }
+    return out;
   }
 
   @override
@@ -236,12 +295,15 @@ final class _MapJsonIterator implements Iterator<Json> {
   Json get current => _current ?? (throw StateError('no current element'));
 }
 
-/// Mismatch marker for the element converters below. It never escapes: every
+/// Mismatch marker for the element converter below. It never escapes: every
 /// use checks `identical(c, _mismatch)` before the value can leave.
 final Object _mismatch = Object();
 
 /// Convert [e] to [E]: a match, an integral-number coercion, or [_mismatch].
 /// `null` converts only when [E] admits it (`Null`, `E?`, `dynamic`…).
+/// `Map<String, dynamic>` (the engine's object shape) is `E` whenever `E`
+/// admits it (e.g. `Map<String, Object?>`), so `listOf<Map<String, Object?>>`
+/// and `mapOf` read the common REST shapes in one pass.
 Object? _scalar<E>(Object? e) {
   if (e is E) return e;
   if (e is int) {
@@ -258,145 +320,6 @@ Object? _scalar<E>(Object? e) {
   return _mismatch;
 }
 
-/// An element converter for lists of [S], built from a value converter.
-Object? Function(Object?) _listOf<S>(Object? Function(Object?) convert) {
-  return (Object? e) {
-    if (e is! List) return _mismatch;
-    final out = <S>[];
-    for (final x in e) {
-      final c = convert(x);
-      if (identical(c, _mismatch)) return _mismatch;
-      out.add(c as S);
-    }
-    return out;
-  };
-}
-
-/// An element converter for maps with string keys and [V] values.
-Object? Function(Object?) _mapOf<V>(Object? Function(Object?) convert) {
-  return (Object? e) {
-    if (e is! Map) return _mismatch;
-    final out = <String, V>{};
-    for (final entry in e.entries) {
-      final k = entry.key;
-      if (k is! String) return _mismatch;
-      final c = convert(entry.value);
-      if (identical(c, _mismatch)) return _mismatch;
-      out[k] = c as V;
-    }
-    return out;
-  };
-}
-
-/// Read list [v] as [T]: null unless [T] is a list shape and every element
-/// converts. Each `attempt` builds one static element type and keeps it only
-/// when it `is T`, so the returned list is genuinely typed.
-T? _valueList<T>(List<dynamic> v) {
-  if (<Never>[] is! T) return null;
-  T? attempt<E>(Object? Function(Object? element) convert) {
-    final out = <E>[];
-    for (final e in v) {
-      final c = convert(e);
-      if (identical(c, _mismatch)) return null;
-      out.add(c as E);
-    }
-    if (out is T) return out as T;
-    return null;
-  }
-
-  return attempt<int>(_scalar<int>) ??
-      attempt<double>(_scalar<double>) ??
-      attempt<num>(_scalar<num>) ??
-      attempt<String>(_scalar<String>) ??
-      attempt<bool>(_scalar<bool>) ??
-      attempt<int?>(_scalar<int?>) ??
-      attempt<double?>(_scalar<double?>) ??
-      attempt<num?>(_scalar<num?>) ??
-      attempt<String?>(_scalar<String?>) ??
-      attempt<bool?>(_scalar<bool?>) ??
-      attempt<Null>(_scalar<Null>) ??
-      attempt<List<int>>(_listOf<int>(_scalar<int>)) ??
-      attempt<List<double>>(_listOf<double>(_scalar<double>)) ??
-      attempt<List<num>>(_listOf<num>(_scalar<num>)) ??
-      attempt<List<String>>(_listOf<String>(_scalar<String>)) ??
-      attempt<List<bool>>(_listOf<bool>(_scalar<bool>)) ??
-      attempt<List<int?>>(_listOf<int?>(_scalar<int?>)) ??
-      attempt<List<String?>>(_listOf<String?>(_scalar<String?>)) ??
-      attempt<List<double?>>(_listOf<double?>(_scalar<double?>)) ??
-      attempt<List<bool?>>(_listOf<bool?>(_scalar<bool?>)) ??
-      attempt<List<List<int>>>(_listOf<List<int>>(_listOf<int>(_scalar<int>))) ??
-      attempt<List<List<String>>>(
-        _listOf<List<String>>(_listOf<String>(_scalar<String>)),
-      ) ??
-      attempt<List<List<bool>>>(
-        _listOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
-      ) ??
-      attempt<Map<String, int>>(_mapOf<int>(_scalar<int>)) ??
-      attempt<Map<String, String>>(_mapOf<String>(_scalar<String>)) ??
-      attempt<Map<String, double>>(_mapOf<double>(_scalar<double>)) ??
-      attempt<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)) ??
-      attempt<Map<String, num>>(_mapOf<num>(_scalar<num>)) ??
-      attempt<Map<String, List<bool>>>(
-        _mapOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
-      ) ??
-      attempt<Object>(_scalar<Object>) ??
-      attempt<Object?>(_scalar<Object?>) ??
-      attempt<dynamic>(_scalar<dynamic>);
-}
-
-/// Read map [v] as [T]: null unless [T] is a map shape, every key is a
-/// string, and every value converts.
-T? _valueMap<T>(Map<dynamic, dynamic> v) {
-  if (<Never, Never>{} is! T) return null;
-  T? attempt<V>(Object? Function(Object? value) convert) {
-    final out = <String, V>{};
-    for (final entry in v.entries) {
-      final k = entry.key;
-      if (k is! String) return null;
-      final c = convert(entry.value);
-      if (identical(c, _mismatch)) return null;
-      out[k] = c as V;
-    }
-    if (out is T) return out as T;
-    return null;
-  }
-
-  return attempt<int>(_scalar<int>) ??
-      attempt<double>(_scalar<double>) ??
-      attempt<num>(_scalar<num>) ??
-      attempt<String>(_scalar<String>) ??
-      attempt<bool>(_scalar<bool>) ??
-      attempt<int?>(_scalar<int?>) ??
-      attempt<double?>(_scalar<double?>) ??
-      attempt<num?>(_scalar<num?>) ??
-      attempt<String?>(_scalar<String?>) ??
-      attempt<bool?>(_scalar<bool?>) ??
-      attempt<Null>(_scalar<Null>) ??
-      attempt<List<int>>(_listOf<int>(_scalar<int>)) ??
-      attempt<List<String>>(_listOf<String>(_scalar<String>)) ??
-      attempt<List<double>>(_listOf<double>(_scalar<double>)) ??
-      attempt<List<bool>>(_listOf<bool>(_scalar<bool>)) ??
-      attempt<List<num>>(_listOf<num>(_scalar<num>)) ??
-      attempt<List<int?>>(_listOf<int?>(_scalar<int?>)) ??
-      attempt<List<String?>>(_listOf<String?>(_scalar<String?>)) ??
-      attempt<List<bool?>>(_listOf<bool?>(_scalar<bool?>)) ??
-      attempt<Map<String, int>>(_mapOf<int>(_scalar<int>)) ??
-      attempt<Map<String, String>>(_mapOf<String>(_scalar<String>)) ??
-      attempt<Map<String, double>>(_mapOf<double>(_scalar<double>)) ??
-      attempt<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)) ??
-      attempt<Map<String, num>>(_mapOf<num>(_scalar<num>)) ??
-      attempt<List<bool>>(_listOf<bool>(_scalar<bool>)) ??
-      attempt<Map<String, List<bool>>>(
-        _mapOf<List<bool>>(_listOf<bool>(_scalar<bool>)),
-      ) ??
-      attempt<Map<String, Map<String, bool>>>(
-        _mapOf<Map<String, bool>>(_mapOf<bool>(_scalar<bool>)),
-      ) ??
-      attempt<Object>(_scalar<Object>) ??
-      attempt<Object?>(_scalar<Object?>) ??
-      attempt<dynamic>(_scalar<dynamic>);
-}
-
 /// Bytes → a value. Throws [FormatException] on invalid JSON; a failure
 /// on an error page names the HTTP status in the message.
 extension ReaderJson on Reader {
@@ -410,22 +333,10 @@ extension ReaderJson on Reader {
   }
 }
 
-/// The status of a response-like reader, or null for anything else.
-/// Dynamic so this module never imports http or fs.
-int? _statusOf(Reader reader) {
-  try {
-    // ignore: avoid_dynamic_calls
-    final s = (reader as dynamic).status() as int?;
-    return s;
-  } catch (_) {
-    return null;
-  }
-}
-
 /// Annotate a content [FormatException] with the HTTP status when the
-/// reader is an error page.
+/// reader is an error page. Typed via [Origin]; no `dynamic` probe.
 FormatException _withStatus(Reader reader, FormatException e) {
-  final status = _statusOf(reader);
+  final status = reader.origin().status();
   if (status == null) return e;
   // Only error pages are annotated; a 2xx body that isn't JSON is just
   // invalid content.
@@ -443,4 +354,6 @@ extension JsonFuture on Future<Json> {
   Future<Json> $(String path) async => (await this).$(path);
   Future<Json> operator [](int index) async => (await this)[index];
   Future<T?> value<T>() async => (await this).value<T>();
+  Future<List<T>?> listOf<T>() async => (await this).listOf<T>();
+  Future<Map<String, T>?> mapOf<T>() async => (await this).mapOf<T>();
 }

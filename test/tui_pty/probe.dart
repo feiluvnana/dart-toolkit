@@ -53,13 +53,13 @@ Future<void> main(List<String> args) async {
         }, keys: {'escape': ('', () => quitOnEscape(app))}),
       );
     case 'widgets':
-      final query = Field();
-      final items = Pick(['alpha', 'beta', 'gamma', 'delta', 'epsilon']);
+      final query = TextField();
+      final items = Selection(['alpha', 'beta', 'gamma', 'delta', 'epsilon']);
       var go = false;
       await Tui.run<int>(
         0,
         (s, app) => Screen((r) {
-          final [hd, bd, ft] = r.rows([1, 0, 1]);
+          final [hd, bd, ft] = r.splitRows([1, 0, 1]);
           hd.input(query);
           bd.list(items, (x) => x);
           ft.button('go', () => go = true);
@@ -67,7 +67,7 @@ Future<void> main(List<String> args) async {
       );
       seen.addAll(['query=${query.text()}', 'sel=${items.index()}', 'go=$go']);
     case 'inline':
-      final prompt = Field();
+      final prompt = TextField();
       await Tui.run<int>(
         0,
         fullscreen: false,
@@ -79,7 +79,7 @@ Future<void> main(List<String> args) async {
               'send',
               () {
                 final text = prompt.submit();
-                app.print((r) => r.write('> $text'));
+                app.printAbove((r) => r.write('> $text'));
               },
             ),
             'escape': ('', () => quitOnEscape(app)),
@@ -164,9 +164,9 @@ Future<void> main(List<String> args) async {
       await Tui.run<int>(
         0,
         (s, app) => Screen((r) {
-          final [a, b] = r.rows([3, 0]);
+          final [a, b] = r.splitRows([3, 0]);
           a.box('t');
-          b.bar(1, 2).write('x', color: Color.red);
+          b.progressBar(1, 2).write('x', color: Color.red);
         }, keys: {'escape': ('', () => quitOnEscape(app))}),
       );
   }

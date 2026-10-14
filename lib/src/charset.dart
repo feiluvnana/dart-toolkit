@@ -32,6 +32,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// Charset-aware decoding. The single choke point for response bodies.
 abstract final class Charset {
@@ -54,15 +55,29 @@ abstract final class Charset {
       start = 2;
     } else {
       final header = headerCharset(contentType);
-      if (header != null && header.isNotEmpty) {
-        name = canonical(header);
+      final known = header == null ? null : _labels[header.trim().toLowerCase()];
+      if (known != null) {
+        name = known;
       } else {
+        // No header, or one we do not know: fall through to the <meta> hint.
         final meta = metaCharset(bytes);
         name = meta == null ? 'utf-8' : canonical(meta);
+        // A meta tag is ASCII-readable, so it cannot name UTF-16 (WHATWG).
+        if (name == 'utf-16le' || name == 'utf-16be') name = 'utf-8';
+        if (name == 'x-user-defined') name = 'windows-1252';
       }
     }
+    if (name == 'utf-8') {
+      return const Utf8Decoder(allowMalformed: true).convert(bytes, start);
+    }
     final decoder = IncrementalDecoder(name);
-    final text = decoder.add(bytes.sublist(start));
+    final text = decoder.add(
+      start == 0
+          ? bytes
+          : bytes is Uint8List
+              ? Uint8List.sublistView(bytes, start)
+              : bytes.sublist(start),
+    );
     return text + decoder.finish();
   }
 
@@ -174,7 +189,14 @@ final class IncrementalDecoder {
       case 'big5':
         _big5(chunk, out);
       default:
-        _utf8(chunk, false, out);
+        final table = _singleByte[_name];
+        if (table == null) {
+          _utf8(chunk, false, out);
+        } else {
+          for (final byte in chunk) {
+            out.writeCharCode(byte < 0x80 ? byte : table.codeUnitAt(byte - 0x80));
+          }
+        }
     }
     return out.toString();
   }
@@ -681,6 +703,186 @@ const _labels = <String, String>{
   'unicodefffe': 'utf-16be',
   'utf-16be': 'utf-16be',
   'x-user-defined': 'x-user-defined',
+  '866': 'ibm866',
+  'cp866': 'ibm866',
+  'csibm866': 'ibm866',
+  'ibm866': 'ibm866',
+  'csisolatin2': 'iso-8859-2',
+  'iso-8859-2': 'iso-8859-2',
+  'iso-ir-101': 'iso-8859-2',
+  'iso8859-2': 'iso-8859-2',
+  'iso88592': 'iso-8859-2',
+  'iso_8859-2': 'iso-8859-2',
+  'iso_8859-2:1987': 'iso-8859-2',
+  'l2': 'iso-8859-2',
+  'latin2': 'iso-8859-2',
+  'csisolatin3': 'iso-8859-3',
+  'iso-8859-3': 'iso-8859-3',
+  'iso-ir-109': 'iso-8859-3',
+  'iso8859-3': 'iso-8859-3',
+  'iso88593': 'iso-8859-3',
+  'iso_8859-3': 'iso-8859-3',
+  'iso_8859-3:1988': 'iso-8859-3',
+  'l3': 'iso-8859-3',
+  'latin3': 'iso-8859-3',
+  'csisolatin4': 'iso-8859-4',
+  'iso-8859-4': 'iso-8859-4',
+  'iso-ir-110': 'iso-8859-4',
+  'iso8859-4': 'iso-8859-4',
+  'iso88594': 'iso-8859-4',
+  'iso_8859-4': 'iso-8859-4',
+  'iso_8859-4:1988': 'iso-8859-4',
+  'l4': 'iso-8859-4',
+  'latin4': 'iso-8859-4',
+  'csisolatincyrillic': 'iso-8859-5',
+  'cyrillic': 'iso-8859-5',
+  'iso-8859-5': 'iso-8859-5',
+  'iso-ir-144': 'iso-8859-5',
+  'iso8859-5': 'iso-8859-5',
+  'iso88595': 'iso-8859-5',
+  'iso_8859-5': 'iso-8859-5',
+  'iso_8859-5:1988': 'iso-8859-5',
+  'arabic': 'iso-8859-6',
+  'asmo-708': 'iso-8859-6',
+  'csiso88596e': 'iso-8859-6',
+  'csiso88596i': 'iso-8859-6',
+  'csisolatinarabic': 'iso-8859-6',
+  'ecma-114': 'iso-8859-6',
+  'iso-8859-6': 'iso-8859-6',
+  'iso-8859-6-e': 'iso-8859-6',
+  'iso-8859-6-i': 'iso-8859-6',
+  'iso-ir-127': 'iso-8859-6',
+  'iso8859-6': 'iso-8859-6',
+  'iso88596': 'iso-8859-6',
+  'iso_8859-6': 'iso-8859-6',
+  'iso_8859-6:1987': 'iso-8859-6',
+  'csisolatingreek': 'iso-8859-7',
+  'ecma-118': 'iso-8859-7',
+  'elot_928': 'iso-8859-7',
+  'greek': 'iso-8859-7',
+  'greek8': 'iso-8859-7',
+  'iso-8859-7': 'iso-8859-7',
+  'iso-ir-126': 'iso-8859-7',
+  'iso8859-7': 'iso-8859-7',
+  'iso88597': 'iso-8859-7',
+  'iso_8859-7': 'iso-8859-7',
+  'iso_8859-7:1987': 'iso-8859-7',
+  'sun_eu_greek': 'iso-8859-7',
+  'csiso88598e': 'iso-8859-8',
+  'csiso88598i': 'iso-8859-8',
+  'csisolatinhebrew': 'iso-8859-8',
+  'hebrew': 'iso-8859-8',
+  'iso-8859-8': 'iso-8859-8',
+  'iso-8859-8-e': 'iso-8859-8',
+  'iso-8859-8-i': 'iso-8859-8',
+  'iso-ir-138': 'iso-8859-8',
+  'iso8859-8': 'iso-8859-8',
+  'iso88598': 'iso-8859-8',
+  'iso_8859-8': 'iso-8859-8',
+  'iso_8859-8:1988': 'iso-8859-8',
+  'logical': 'iso-8859-8',
+  'visual': 'iso-8859-8',
+  'csisolatin6': 'iso-8859-10',
+  'iso-8859-10': 'iso-8859-10',
+  'iso-ir-157': 'iso-8859-10',
+  'iso8859-10': 'iso-8859-10',
+  'iso885910': 'iso-8859-10',
+  'l6': 'iso-8859-10',
+  'latin6': 'iso-8859-10',
+  'iso-8859-13': 'iso-8859-13',
+  'iso8859-13': 'iso-8859-13',
+  'iso885913': 'iso-8859-13',
+  'iso-8859-14': 'iso-8859-14',
+  'iso8859-14': 'iso-8859-14',
+  'iso885914': 'iso-8859-14',
+  'csisolatin9': 'iso-8859-15',
+  'iso-8859-15': 'iso-8859-15',
+  'iso8859-15': 'iso-8859-15',
+  'iso885915': 'iso-8859-15',
+  'iso_8859-15': 'iso-8859-15',
+  'l9': 'iso-8859-15',
+  'iso-8859-16': 'iso-8859-16',
+  'cskoi8r': 'koi8-r',
+  'koi': 'koi8-r',
+  'koi8': 'koi8-r',
+  'koi8-r': 'koi8-r',
+  'koi8_r': 'koi8-r',
+  'koi8-u': 'koi8-u',
+  'csmacintosh': 'macintosh',
+  'mac': 'macintosh',
+  'macintosh': 'macintosh',
+  'x-mac-roman': 'macintosh',
+  'dos-874': 'windows-874',
+  'iso-8859-11': 'windows-874',
+  'iso8859-11': 'windows-874',
+  'iso885911': 'windows-874',
+  'tis-620': 'windows-874',
+  'windows-874': 'windows-874',
+  'cp1250': 'windows-1250',
+  'windows-1250': 'windows-1250',
+  'x-cp1250': 'windows-1250',
+  'cp1251': 'windows-1251',
+  'windows-1251': 'windows-1251',
+  'x-cp1251': 'windows-1251',
+  'cp1253': 'windows-1253',
+  'windows-1253': 'windows-1253',
+  'x-cp1253': 'windows-1253',
+  'cp1254': 'windows-1254',
+  'csisolatin5': 'windows-1254',
+  'iso-8859-9': 'windows-1254',
+  'iso-ir-148': 'windows-1254',
+  'iso8859-9': 'windows-1254',
+  'iso88599': 'windows-1254',
+  'iso_8859-9': 'windows-1254',
+  'iso_8859-9:1989': 'windows-1254',
+  'l5': 'windows-1254',
+  'latin5': 'windows-1254',
+  'windows-1254': 'windows-1254',
+  'x-cp1254': 'windows-1254',
+  'cp1255': 'windows-1255',
+  'windows-1255': 'windows-1255',
+  'x-cp1255': 'windows-1255',
+  'cp1256': 'windows-1256',
+  'windows-1256': 'windows-1256',
+  'x-cp1256': 'windows-1256',
+  'cp1257': 'windows-1257',
+  'windows-1257': 'windows-1257',
+  'x-cp1257': 'windows-1257',
+  'cp1258': 'windows-1258',
+  'windows-1258': 'windows-1258',
+  'x-cp1258': 'windows-1258',
+  'x-mac-cyrillic': 'x-mac-cyrillic',
+  'x-mac-ukrainian': 'x-mac-cyrillic',
+};
+
+/// Bytes 0x80-0xFF of each single-byte encoding (U+FFFD = unmapped).
+const _singleByte = <String, String>{
+  'ibm866': 'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмноп░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀рстуфхцчшщъыьэюяЁёЄєЇїЎў°∙·√№¤■ ',
+  'iso-8859-2': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F Ą˘Ł¤ĽŚ§¨ŠŞŤŹ\u00ADŽŻ°ą˛ł´ľśˇ¸šşťź˝žżŔÁÂĂÄĹĆÇČÉĘËĚÍÎĎĐŃŇÓÔŐÖ×ŘŮÚŰÜÝŢßŕáâăäĺćçčéęëěíîďđńňóôőö÷řůúűüýţ˙',
+  'iso-8859-3': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F Ħ˘£¤\uFFFDĤ§¨İŞĞĴ\u00AD\uFFFDŻ°ħ²³´µĥ·¸ışğĵ½\uFFFDżÀÁÂ\uFFFDÄĊĈÇÈÉÊËÌÍÎÏ\uFFFDÑÒÓÔĠÖ×ĜÙÚÛÜŬŜßàáâ\uFFFDäċĉçèéêëìíîï\uFFFDñòóôġö÷ĝùúûüŭŝ˙',
+  'iso-8859-4': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ĄĸŖ¤ĨĻ§¨ŠĒĢŦ\u00ADŽ¯°ą˛ŗ´ĩļˇ¸šēģŧŊžŋĀÁÂÃÄÅÆĮČÉĘËĖÍÎĪĐŅŌĶÔÕÖ×ØŲÚÛÜŨŪßāáâãäåæįčéęëėíîīđņōķôõö÷øųúûüũū˙',
+  'iso-8859-5': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ЁЂЃЄЅІЇЈЉЊЋЌ\u00ADЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя№ёђѓєѕіїјљњћќ§ўџ',
+  'iso-8859-6': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F \uFFFD\uFFFD\uFFFD¤\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD،\u00AD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD؛\uFFFD\uFFFD\uFFFD؟\uFFFDءآأؤإئابةتثجحخدذرزسشصضطظعغ\uFFFD\uFFFD\uFFFD\uFFFD\uFFFDـفقكلمنهوىيًٌٍَُِّْ\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD',
+  'iso-8859-7': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ‘’£€₯¦§¨©ͺ«¬\u00AD\uFFFD―°±²³΄΅Ά·ΈΉΊ»Ό½ΎΏΐΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡ\uFFFDΣΤΥΦΧΨΩΪΫάέήίΰαβγδεζηθικλμνξοπρςστυφχψωϊϋόύώ\uFFFD',
+  'iso-8859-8': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F \uFFFD¢£¤¥¦§¨©×«¬\u00AD®¯°±²³´µ¶·¸¹÷»¼½¾\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD‗אבגדהוזחטיךכלםמןנסעףפץצקרשת\uFFFD\uFFFD‎‏\uFFFD',
+  'iso-8859-10': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ĄĒĢĪĨĶ§ĻĐŠŦŽ\u00ADŪŊ°ąēģīĩķ·ļđšŧž―ūŋĀÁÂÃÄÅÆĮČÉĘËĖÍÎÏÐŅŌÓÔÕÖŨØŲÚÛÜÝÞßāáâãäåæįčéęëėíîïðņōóôõöũøųúûüýþĸ',
+  'iso-8859-13': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ”¢£¤„¦§Ø©Ŗ«¬\u00AD®Æ°±²³“µ¶·ø¹ŗ»¼½¾æĄĮĀĆÄÅĘĒČÉŹĖĢĶĪĻŠŃŅÓŌÕÖ×ŲŁŚŪÜŻŽßąįāćäåęēčéźėģķīļšńņóōõö÷ųłśūüżž’',
+  'iso-8859-14': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F Ḃḃ£ĊċḊ§Ẁ©ẂḋỲ\u00AD®ŸḞḟĠġṀṁ¶ṖẁṗẃṠỳẄẅṡÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏŴÑÒÓÔÕÖṪØÙÚÛÜÝŶßàáâãäåæçèéêëìíîïŵñòóôõöṫøùúûüýŷÿ',
+  'iso-8859-15': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ¡¢£€¥Š§š©ª«¬\u00AD®¯°±²³Žµ¶·ž¹º»ŒœŸ¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ',
+  'iso-8859-16': '\u0080\u0081\u0082\u0083\u0084\u0085\u0086\u0087\u0088\u0089\u008A\u008B\u008C\u008D\u008E\u008F\u0090\u0091\u0092\u0093\u0094\u0095\u0096\u0097\u0098\u0099\u009A\u009B\u009C\u009D\u009E\u009F ĄąŁ€„Š§š©Ș«Ź\u00ADźŻ°±ČłŽ”¶·žčș»ŒœŸżÀÁÂĂÄĆÆÇÈÉÊËÌÍÎÏĐŃÒÓÔŐÖŚŰÙÚÛÜĘȚßàáâăäćæçèéêëìíîïđńòóôőöśűùúûüęțÿ',
+  'koi8-r': '─│┌┐└┘├┤┬┴┼▀▄█▌▐░▒▓⌠■∙√≈≤≥ ⌡°²·÷═║╒ё╓╔╕╖╗╘╙╚╛╜╝╞╟╠╡Ё╢╣╤╥╦╧╨╩╪╫╬©юабцдефгхийклмнопярстужвьызшэщчъЮАБЦДЕФГХИЙКЛМНОПЯРСТУЖВЬЫЗШЭЩЧЪ',
+  'koi8-u': '─│┌┐└┘├┤┬┴┼▀▄█▌▐░▒▓⌠■∙√≈≤≥ ⌡°²·÷═║╒ёє╔ії╗╘╙╚╛ґ╝╞╟╠╡ЁЄ╣ІЇ╦╧╨╩╪Ґ╬©юабцдефгхийклмнопярстужвьызшэщчъЮАБЦДЕФГХИЙКЛМНОПЯРСТУЖВЬЫЗШЭЩЧЪ',
+  'macintosh': 'ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø¿¡¬√ƒ≈∆«»… ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›ﬁﬂ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ',
+  'windows-874': '€\uFFFD\uFFFD\uFFFD\uFFFD…\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD‘’“”•–—\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรฤลฦวศษสหฬอฮฯะัาำิีึืฺุู\uFFFD\uFFFD\uFFFD\uFFFD฿เแโใไๅๆ็่้๊๋์ํ๎๏๐๑๒๓๔๕๖๗๘๙๚๛\uFFFD\uFFFD\uFFFD\uFFFD',
+  'windows-1250': '€\uFFFD‚\uFFFD„…†‡\uFFFD‰Š‹ŚŤŽŹ\uFFFD‘’“”•–—\uFFFD™š›śťžź ˇ˘Ł¤Ą¦§¨©Ş«¬\u00AD®Ż°±˛ł´µ¶·¸ąş»Ľ˝ľżŔÁÂĂÄĹĆÇČÉĘËĚÍÎĎĐŃŇÓÔŐÖ×ŘŮÚŰÜÝŢßŕáâăäĺćçčéęëěíîďđńňóôőö÷řůúűüýţ˙',
+  'windows-1251': 'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—\uFFFD™љ›њќћџ ЎўЈ¤Ґ¦§Ё©Є«¬\u00AD®Ї°±Ііґµ¶·ё№є»јЅѕїАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя',
+  'windows-1253': '€\uFFFD‚ƒ„…†‡\uFFFD‰\uFFFD‹\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD‘’“”•–—\uFFFD™\uFFFD›\uFFFD\uFFFD\uFFFD\uFFFD ΅Ά£¤¥¦§¨©\uFFFD«¬\u00AD®―°±²³΄µ¶·ΈΉΊ»Ό½ΎΏΐΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡ\uFFFDΣΤΥΦΧΨΩΪΫάέήίΰαβγδεζηθικλμνξοπρςστυφχψωϊϋόύώ\uFFFD',
+  'windows-1254': '€\uFFFD‚ƒ„…†‡ˆ‰Š‹Œ\uFFFD\uFFFD\uFFFD\uFFFD‘’“”•–—˜™š›œ\uFFFD\uFFFDŸ ¡¢£¤¥¦§¨©ª«¬\u00AD®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏĞÑÒÓÔÕÖ×ØÙÚÛÜİŞßàáâãäåæçèéêëìíîïğñòóôõö÷øùúûüışÿ',
+  'windows-1255': '€\uFFFD‚ƒ„…†‡ˆ‰\uFFFD‹\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD‘’“”•–—˜™\uFFFD›\uFFFD\uFFFD\uFFFD\uFFFD ¡¢£₪¥¦§¨©×«¬\u00AD®¯°±²³´µ¶·¸¹÷»¼½¾¿ְֱֲֳִֵֶַָֹ\uFFFDֻּֽ־ֿ׀ׁׂ׃װױײ׳״\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFDאבגדהוזחטיךכלםמןנסעףפץצקרשת\uFFFD\uFFFD‎‏\uFFFD',
+  'windows-1256': '€پ‚ƒ„…†‡ˆ‰ٹ‹Œچژڈگ‘’“”•–—ک™ڑ›œ‌‍ں ،¢£¤¥¦§¨©ھ«¬\u00AD®¯°±²³´µ¶·¸¹؛»¼½¾؟ہءآأؤإئابةتثجحخدذرزسشصض×طظعغـفقكàلâمنهوçèéêëىيîïًٌٍَôُِ÷ّùْûü‎‏ے',
+  'windows-1257': '€\uFFFD‚\uFFFD„…†‡\uFFFD‰\uFFFD‹\uFFFD¨ˇ¸\uFFFD‘’“”•–—\uFFFD™\uFFFD›\uFFFD¯˛\uFFFD \uFFFD¢£¤\uFFFD¦§Ø©Ŗ«¬\u00AD®Æ°±²³´µ¶·ø¹ŗ»¼½¾æĄĮĀĆÄÅĘĒČÉŹĖĢĶĪĻŠŃŅÓŌÕÖ×ŲŁŚŪÜŻŽßąįāćäåęēčéźėģķīļšńņóōõö÷ųłśūüżž˙',
+  'windows-1258': '€\uFFFD‚ƒ„…†‡ˆ‰\uFFFD‹Œ\uFFFD\uFFFD\uFFFD\uFFFD‘’“”•–—˜™\uFFFD›œ\uFFFD\uFFFDŸ ¡¢£¤¥¦§¨©ª«¬\u00AD®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂĂÄÅÆÇÈÉÊË̀ÍÎÏĐÑ̉ÓÔƠÖ×ØÙÚÛÜỮßàáâăäåæçèéêë́íîïđṇ̃óôơö÷øùúûüư₫ÿ',
+  'x-mac-cyrillic': 'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ†°Ґ£§•¶І®©™Ђђ≠Ѓѓ∞±≤≥іµґЈЄєЇїЉљЊњјЅ¬√ƒ≈∆«»… ЋћЌќѕ–—“”‘’÷„ЎўЏџ№Ёёяабвгдежзийклмнопрстуфхцчшщъыьэю€',
 };
 
 /// windows-1252 index for 0x80–0x9F (null = unmapped → U+FFFD).

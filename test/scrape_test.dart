@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:io' as io;
 
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
@@ -39,6 +40,15 @@ void main() {
         } else {
           request.response.write('recovered');
         }
+      } else if (path == '/r1' || path == '/r2') {
+        request.response
+          ..statusCode = HttpStatus.found
+          ..headers.set('location', '/a');
+      } else if (path.startsWith('/wait')) {
+        if (path != '/wait0') {
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+        request.response.write('w');
       } else if (path == '/slow') {
         request.response.write('slow-ok');
       } else if (path == '/js') {
@@ -60,12 +70,12 @@ void main() {
 
   setUp(() => hits.clear());
 
-  group('Scrape.run', () {
+  group('Scrape.crawl', () {
     test('crawls start URLs and emits records', () async {
-      final titles = await Scrape.run<String>(['$base/'], (v) async {
+      final titles = await Scrape.crawl<String>(['$base/'], (v) async {
         final doc = await v.html();
         v.follow(doc.$('a').attrs('href'), (w) async {
-          w.emit('${w.status()}:${w.url()}');
+          w.emit('${w.statusCode()}:${w.finalUrl()}');
         });
       }).toList();
       expect(
@@ -76,21 +86,53 @@ void main() {
 
     test('each URL is visited once', () async {
       var n = 0;
-      await Scrape.run<String>(['$base/', '$base/a'], (v) async {
+      await Scrape.crawl<String>(['$base/', '$base/a'], (v) async {
         n++;
       }).toList();
       expect(n, 2); // / and /a; the duplicate /a from follow is skipped
       hits.clear();
-      await Scrape.run<String>(['$base/'], (v) async {
+      await Scrape.crawl<String>(['$base/'], (v) async {
         v.follow(['$base/a', '$base/a#frag'], (w) async {});
       }).toList();
       expect(hits.where((h) => h.endsWith('/a')), hasLength(1));
     });
 
+    test('redirects to one page are visited once, cached or not', () async {
+      final dir = await Directory.systemTemp.createTemp('scrape_redirect');
+      try {
+        for (var run = 0; run < 2; run++) {
+          final got = await Scrape.crawl<String>(['$base/r1', '$base/r2'],
+              (v) async {
+            v.emit(v.finalUrl());
+          }, cacheDir: dir.path, concurrency: 1).toList();
+          expect(got, ['$base/a']);
+        }
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    });
+
+    test('a paused consumer pauses the crawl', () async {
+      final urls = [for (var i = 0; i < 20; i++) '$base/slow?$i'];
+      final done = Completer<void>();
+      late StreamSubscription<String> sub;
+      var n = 0;
+      sub = Scrape.crawl<String>(urls, (v) async {
+        v.emit(await v.text());
+      }, concurrency: 1).listen((_) {
+        if (++n == 1) sub.pause();
+      }, onDone: done.complete);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(hits.length, lessThan(5));
+      sub.resume();
+      await done.future;
+      expect(n, 20);
+    });
+
     test('a 404 reaches its handler', () async {
       var status = 0;
-      await Scrape.run<void>(['$base/b'], (v) async {
-        status = v.status();
+      await Scrape.crawl<void>(['$base/b'], (v) async {
+        status = v.statusCode();
         expect(await v.text(), 'nope');
       }).toList();
       expect(status, HttpStatus.notFound);
@@ -98,19 +140,40 @@ void main() {
 
     test('relative links resolve against the page', () async {
       final urls = <String>[];
-      await Scrape.run<void>(['$base/'], (v) async {
+      await Scrape.crawl<void>(['$base/'], (v) async {
         final doc = await v.html();
         v.follow(doc.$('a').attrs('href'), (w) async {
-          urls.add(w.url());
+          urls.add(w.finalUrl());
         });
       }).toList();
       expect(urls..sort(), ['$base/a', '$base/b']);
     });
 
+    test('a 3-level tree with more workers than URLs never stalls', () async {
+      // concurrency: 8 with a narrow tree parks most workers in _waitWork;
+      // without a notify on every enqueue/finish the crawl would hang here.
+      final seen = <String>{};
+      Future<void> handler(Visit<void> v) async {
+        seen.add(v.finalUrl());
+        if (v.finalUrl() == '$base/') {
+          final doc = await v.html();
+          v.follow(doc.$('a').attrs('href'), handler);
+        } else if (v.finalUrl() == '$base/a') {
+          final doc = await v.html();
+          v.follow(doc.$('img').attrs('src'), handler);
+        }
+      }
+
+      await Scrape.crawl<void>(['$base/'], handler, concurrency: 8)
+          .toList()
+          .timeout(const Duration(seconds: 30));
+      expect(seen, {'$base/', '$base/a', '$base/b', '$base/img.png'});
+    });
+
     test('visit is a Reader: download assets in a handler', () async {
       final dir = await Directory.systemTemp.createTemp('scrape_img');
       try {
-        await Scrape.run<void>(['$base/a'], (v) async {
+        await Scrape.crawl<void>(['$base/a'], (v) async {
           final doc = await v.html();
           v.follow(doc.$('img').attrs('src'), (img) async {
             await (img > Fs.dir(dir.path).file('img.png'));
@@ -122,8 +185,23 @@ void main() {
       }
     });
 
+    test('visit reads agree: fileName, contentLength, isSuccess', () async {
+      await Scrape.crawl<void>(['$base/a'], (v) async {
+        expect(v.fileName(), 'a');
+        expect(v.contentLength(), greaterThan(0));
+        expect(v.isSuccess(), isTrue);
+        expect((await v.bytes()).length, v.contentLength());
+        expect(v.origin().url(), v.finalUrl());
+        expect(v.origin().status(), v.statusCode());
+      }).toList();
+      await Scrape.crawl<void>(['$base/b'], (v) async {
+        expect(v.isSuccess(), isFalse);
+        expect(v.statusCode(), HttpStatus.notFound);
+      }).toList();
+    });
+
     test('retries recover a flaky page', () async {
-      final out = await Scrape.run<String>(
+      final out = await Scrape.crawl<String>(
         ['$base/flaky'],
         (w) async => w.emit(await w.text()),
         retries: 2,
@@ -133,7 +211,7 @@ void main() {
 
     test('failures end the run by default', () async {
       expect(
-        Scrape.run<String>(['$base/flaky'], (w) async {
+        Scrape.crawl<String>(['$base/flaky'], (w) async {
           throw StateError('handler blew up');
         }).toList(),
         throwsStateError,
@@ -142,16 +220,16 @@ void main() {
 
     test('S1: a failure with queued URLs errors instead of hanging',
         () async {
-      // limit: 1, the handler queues two URLs then throws: without the
+      // concurrency: 1, the handler queues two URLs then throws: without the
       // queue-clearing fix the workers exit but _drain waits forever.
       await expectLater(
-        Scrape.run<String>(
+        Scrape.crawl<String>(
           ['$base/'],
           (v) async {
             v.follow(['$base/a', '$base/b'], (w) async {});
             throw StateError('handler blew up after queueing');
           },
-          limit: 1,
+          concurrency: 1,
         ).toList().timeout(const Duration(seconds: 30)),
         throwsStateError,
       );
@@ -159,10 +237,10 @@ void main() {
 
     test('S2: non-http(s) links are skipped, never visited', () async {
       final seen = <String>[];
-      await Scrape.run<void>(['$base/'], (v) async {
+      await Scrape.crawl<void>(['$base/'], (v) async {
         v.follow(
           ['mailto:a@b.c', 'tel:+1', 'javascript:void(0)', 'data:,x', '$base/a'],
-          (w) async => seen.add(w.url()),
+          (w) async => seen.add(w.finalUrl()),
         );
       }).toList();
       expect(seen, ['$base/a']);
@@ -170,10 +248,10 @@ void main() {
 
     test('onError reports and the crawl goes on', () async {
       final errors = <String>[];
-      final out = await Scrape.run<String>(
+      final out = await Scrape.crawl<String>(
         ['$base/a', '$base/b'],
         (w) async {
-          if (w.url().endsWith('/a')) throw StateError('bad a');
+          if (w.finalUrl().endsWith('/a')) throw StateError('bad a');
           w.emit('b-ok');
         },
         onError: (url, e) => errors.add(url),
@@ -182,9 +260,36 @@ void main() {
       expect(errors, ['$base/a']);
     });
 
-    test('bad limit is an ArgumentError', () {
+    test('cancelling a crawl lets the process exit', () async {
+      final dir = await Directory.systemTemp.createTemp('scrape_cancel');
+      try {
+        final script = io.File('${dir.path}/c.dart');
+        await script.writeAsString('''
+import 'package:dart_toolkit/scrape.dart';
+Future<void> main(List<String> args) async {
+  final base = args.single;
+  final first = await Scrape.crawl<String>(['\$base/wait0'], (v) async {
+    v.follow([for (var i = 1; i < 40; i++) '\$base/wait\$i'], (w) async {});
+    v.emit('hit');
+  }).first;
+  print(first);
+}
+''');
+        final res = await Process.run(Platform.resolvedExecutable, [
+          '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+          script.path,
+          base,
+        ]).timeout(const Duration(seconds: 8));
+        expect(res.stdout, contains('hit'));
+        expect(res.exitCode, 0);
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    });
+
+    test('bad concurrency is an ArgumentError', () {
       expect(
-        () => Scrape.run<String>([], (v) async {}, limit: 0),
+        () => Scrape.crawl<String>([], (v) async {}, concurrency: 0),
         throwsArgumentError,
       );
     });
@@ -193,9 +298,9 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('scrape_cache');
       try {
         Future<Stream<String>> crawl() => Future.value(
-              Scrape.run<String>(['$base/slow'], (w) async {
+              Scrape.crawl<String>(['$base/slow'], (w) async {
                 w.emit(await w.text());
-              }, cache: dir.path),
+              }, cacheDir: dir.path),
             );
         expect(await (await crawl()).toList(), ['slow-ok']);
         final firstHits = hits.length;
@@ -208,13 +313,13 @@ void main() {
       }
     });
 
-    test('delay spaces requests to one host', () async {
+    test('perHostDelay spaces requests to one host', () async {
       final sw = Stopwatch()..start();
-      await Scrape.run<void>(
+      await Scrape.crawl<void>(
         ['$base/a', '$base/b'],
         (v) async {},
-        delay: const Duration(milliseconds: 400),
-        limit: 2,
+        perHostDelay: const Duration(milliseconds: 400),
+        concurrency: 2,
       ).toList();
       expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(350));
     });
@@ -222,8 +327,8 @@ void main() {
     test('browser visits render JS', () async {
       final browser = await Chrome.launch();
       try {
-        final out = await Scrape.run<String>(['$base/js'], (v) async {
-          v.emit('${v.status()}:${(await v.html()).$('title').text()}');
+        final out = await Scrape.crawl<String>(['$base/js'], (v) async {
+          v.emit('${v.statusCode()}:${(await v.html()).$('title').text()}');
         }, browser: browser).toList();
         expect(out, ['200:rendered']);
       } finally {

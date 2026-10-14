@@ -1,0 +1,722 @@
+// Markdown: lexer, layout, streaming memo.
+part of '../tui.dart';
+
+extension RegionMarkdown on Region {
+    /// Markdown: headings, lists (nested, numbered), `>` quotes, tables
+    /// (box-drawn), `---`, inline bold/italic/strike/`code`/links (OSC 8).
+    /// Fenced code is highlighted by an in-house lexer; an unclosed fence or
+    /// emphasis renders as if closed (safe to stream). Layout is memoized
+    /// per call site (see [_mdLayout]): an unchanged source is an O(1) hit,
+    /// a streamed append re-lays only from the last block boundary.
+    Region markdown(String source) {
+      for (final line in _mdLayout(source, _w, _s._caps.ascii, _s)) {
+        if (_cursor >= _h) {
+          _cursor++;
+          continue;
+        }
+        var col = _gx;
+        for (final seg in line) {
+          col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text,
+              _s._pack(seg.fg, seg.bg, seg.style), seg.link);
+        }
+        _cursor++;
+      }
+      return this;
+    }
+}
+/// Markdown keyword sets by canonical language.
+const _mdKw = {
+  'dart': {
+    'abstract', 'as', 'assert', 'async', 'await', 'base', 'bool', 'break',
+    'case', 'catch', 'class', 'const', 'continue', 'covariant', 'default',
+    'deferred', 'do', 'double', 'dynamic', 'else', 'enum', 'export',
+    'extends', 'extension', 'external', 'factory', 'false', 'final',
+    'finally', 'for', 'Function', 'get', 'hide', 'if', 'implements',
+    'import', 'in', 'interface', 'int', 'is', 'late', 'library', 'mixin',
+    'new', 'null', 'num', 'on', 'operator', 'part', 'required', 'rethrow',
+    'return', 'sealed', 'set', 'show', 'static', 'String', 'super', 'switch',
+    'sync', 'this', 'throw', 'true', 'try', 'typedef', 'var', 'void',
+    'while', 'with', 'yield'
+  },
+  'js': {
+    'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
+    'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export',
+    'extends', 'false', 'finally', 'for', 'function', 'if', 'implements',
+    'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null',
+    'package', 'private', 'protected', 'public', 'return', 'static',
+    'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var',
+    'void', 'while', 'with', 'yield', 'async', 'of', 'from',
+    'type', 'string', 'number', 'boolean'
+  },
+  'python': {
+    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
+    'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+    'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
+    'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try',
+    'while', 'with', 'yield', 'self', 'print'
+  },
+  'shell': {
+    'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while',
+    'until', 'do', 'done', 'in', 'function', 'select', 'time', 'export',
+    'local', 'return', 'exit', 'echo', 'true', 'false', 'set', 'shift',
+    'continue', 'break', 'trap', 'await'
+  },
+  'json': {'true', 'false', 'null'},
+  'yaml': {'true', 'false', 'null', 'yes', 'no', 'on', 'off'},
+  'rust': {
+    'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern',
+    'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match',
+    'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self',
+    'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe',
+    'use', 'where', 'while', 'async', 'await', 'dyn', 'become', 'do'
+  },
+  'go': {
+    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer',
+    'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import',
+    'interface', 'map', 'package', 'range', 'return', 'select', 'struct',
+    'switch', 'type', 'var', 'true', 'false', 'nil', 'string', 'int',
+    'bool', 'error'
+  },
+  'c': {
+    'auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do',
+    'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if',
+    'inline', 'int', 'long', 'register', 'restrict', 'return', 'short',
+    'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union',
+    'unsigned', 'void', 'volatile', 'while', 'class', 'public', 'private',
+    'new', 'true', 'false', 'null', 'using', 'namespace', 'template',
+    'virtual', 'override', 'final', 'import', 'package', 'String',
+    'System', 'var'
+  },
+};
+
+/// Canonical language key for a fence info string, or null for plain code.
+String? _mdLang(String info) {
+  final key = info.trim().split(RegExp(r'\s+')).firstOrNull?.toLowerCase();
+  if (key == null || key.isEmpty) return null;
+  const aliases = {
+    'javascript': 'js',
+    'typescript': 'js',
+    'ts': 'js',
+    'jsx': 'js',
+    'tsx': 'js',
+    'py': 'python',
+    'sh': 'shell',
+    'bash': 'shell',
+    'zsh': 'shell',
+    'console': 'shell',
+    'yml': 'yaml',
+    'rs': 'rust',
+    'cpp': 'c',
+    'c++': 'c',
+    'h': 'c',
+    'hpp': 'c',
+    'java': 'c',
+    'cs': 'c',
+    'csharp': 'c',
+  };
+  final canon = aliases[key] ?? key;
+  return _mdKw.containsKey(canon) ? canon : null;
+}
+
+/// Highlight one code line; [block] tracks `/* */` across lines.
+List<_MdSeg> _mdHighlight(String line, String? lang, List<bool> block) {
+  if (lang == null) return [_MdSeg(line, null, null, {}, null)];
+  const str = Color.green;
+  const com = Color.gray;
+  const num = Color.cyan;
+  const kw = Color.yellow;
+  final out = <_MdSeg>[];
+  final buf = StringBuffer();
+  void text(String s) {
+    if (s.isNotEmpty) out.add(_MdSeg(s, null, null, {}, null));
+  }
+
+  void flush() {
+    text(buf.toString());
+    buf.clear();
+  }
+
+  var i = 0;
+  final hashComment = lang == 'python' ||
+      lang == 'shell' ||
+      lang == 'yaml' ||
+      lang == 'rust';
+  final slashComment =
+      lang != 'python' && lang != 'shell' && lang != 'yaml';
+  final blockComment = slashComment && lang != 'json';
+  final kws = _mdKw[lang] ?? const {};
+  bool ident(int c) =>
+      (c >= 0x30 && c <= 0x39) ||
+      (c >= 0x41 && c <= 0x5A) ||
+      c == 0x5F ||
+      (c >= 0x61 && c <= 0x7A);
+  while (i < line.length) {
+    final c = line.codeUnitAt(i);
+    if (block[0]) {
+      final end = line.indexOf('*/', i);
+      if (end < 0) {
+        out.add(_MdSeg(line.substring(i), com, null, {}, null));
+        i = line.length;
+        break;
+      }
+      out.add(_MdSeg(line.substring(i, end + 2), com, null, {}, null));
+      i = end + 2;
+      block[0] = false;
+      continue;
+    }
+    if (slashComment && line.startsWith('//', i)) {
+      flush();
+      out.add(_MdSeg(line.substring(i), com, null, {}, null));
+      break;
+    }
+    if (hashComment && c == 0x23) {
+      flush();
+      out.add(_MdSeg(line.substring(i), com, null, {}, null));
+      break;
+    }
+    if (blockComment && line.startsWith('/*', i)) {
+      flush();
+      final end = line.indexOf('*/', i + 2);
+      if (end < 0) {
+        out.add(_MdSeg(line.substring(i), com, null, {}, null));
+        block[0] = true;
+        break;
+      }
+      out.add(_MdSeg(line.substring(i, end + 2), com, null, {}, null));
+      i = end + 2;
+      continue;
+    }
+    if (c == 0x22 || c == 0x27 || c == 0x60) {
+      flush();
+      var j = i + 1;
+      while (j < line.length) {
+        if (line.codeUnitAt(j) == 0x5c) {
+          j += 2;
+          continue;
+        }
+        if (line.codeUnitAt(j) == c) {
+          j++;
+          break;
+        }
+        j++;
+      }
+      out.add(_MdSeg(line.substring(i, j), str, null, {}, null));
+      i = j;
+      continue;
+    }
+    if (c >= 0x30 && c <= 0x39) {
+      flush();
+      var j = i;
+      while (j < line.length) {
+        final d = line.codeUnitAt(j);
+        if ((d >= 0x30 && d <= 0x39) ||
+            d == 0x2E ||
+            d == 0x5F ||
+            d == 0x78 ||
+            d == 0x58 ||
+            (d >= 0x41 && d <= 0x46) ||
+            (d >= 0x61 && d <= 0x66)) {
+          j++;
+        } else {
+          break;
+        }
+      }
+      out.add(_MdSeg(line.substring(i, j), num, null, {}, null));
+      i = j;
+      continue;
+    }
+    if (ident(c)) {
+      var j = i;
+      while (j < line.length && ident(line.codeUnitAt(j))) {
+        j++;
+      }
+      final word = line.substring(i, j);
+      flush();
+      if (kws.contains(word)) {
+        out.add(_MdSeg(word, kw, null, {}, null));
+      } else {
+        out.add(_MdSeg(word, null, null, {}, null));
+      }
+      i = j;
+      continue;
+    }
+    buf.writeCharCode(c);
+    i++;
+  }
+  flush();
+  if (out.isEmpty) out.add(_MdSeg('', null, null, {}, null));
+  return out;
+}
+
+/// Inline runs for prose [text] (bold/italic/strike/code/links).
+List<_MdSeg> _mdInline(String text) {
+  final out = <_MdSeg>[];
+  // Code spans first (no formatting inside).
+  final parts = <Object>[text];
+  final codeRe = RegExp(r'`([^`\n]+)`');
+  for (var k = 0; k < parts.length; k++) {
+    final part = parts[k];
+    if (part is! String) continue;
+    final m = codeRe.firstMatch(part);
+    if (m == null) continue;
+    parts.replaceRange(k, k + 1, [
+      part.substring(0, m.start),
+      _MdSeg(m.group(1)!, null, null, const {Style.reverse}, null),
+      part.substring(m.end),
+    ]);
+  }
+  // Links.
+  final linkRe = RegExp(r'\[([^\]]*)\]\(([^)\s]+)\)');
+  for (var k = 0; k < parts.length; k++) {
+    final part = parts[k];
+    if (part is! String) continue;
+    final m = linkRe.firstMatch(part);
+    if (m == null) continue;
+    parts.replaceRange(k, k + 1, [
+      part.substring(0, m.start),
+      _MdSeg(m.group(1)!, null, null, const {Style.underline}, m.group(2)),
+      part.substring(m.end),
+    ]);
+  }
+  for (final part in parts) {
+    if (part is _MdSeg) {
+      out.add(part);
+    } else if ((part as String).isNotEmpty) {
+      out.addAll(_mdEmph(part, {}));
+    }
+  }
+  return out;
+}
+
+List<_MdSeg> _mdEmph(String text, Set<Style> base) {
+  const opens = ['**', '__', '~~', '*', '_'];
+  final out = <_MdSeg>[];
+  var i = 0;
+  var plain = StringBuffer();
+  void textOut(String s) {
+    if (s.isNotEmpty) out.add(_MdSeg(s, null, null, base, null));
+  }
+
+  while (i < text.length) {
+    String? mark;
+    for (final o in opens) {
+      if (text.startsWith(o, i)) {
+        mark = o;
+        break;
+      }
+    }
+    if (mark != null) {
+      final prev = i > 0 ? text.codeUnitAt(i - 1) : 0x20;
+      final after = i + mark.length;
+      final next = after < text.length ? text.codeUnitAt(after) : 0x20;
+      if (next == 0x20 || (mark[0] == '_' && _isWordChar(prev))) {
+        plain.write(mark);
+        i = after;
+        continue;
+      }
+    }
+    if (mark == null) {
+      plain.writeCharCode(text.codeUnitAt(i));
+      i++;
+      continue;
+    }
+    final bit = switch (mark) {
+      '**' || '__' => Style.bold,
+      '~~' => Style.strike,
+      _ => Style.italic,
+    };
+    var close = text.indexOf(mark, i + mark.length);
+    while (close > 0 &&
+        (text.codeUnitAt(close - 1) == 0x20 ||
+            (mark[0] == '_' &&
+                close + mark.length < text.length &&
+                _isWordChar(text.codeUnitAt(close + mark.length))))) {
+      close = text.indexOf(mark, close + mark.length);
+    }
+    textOut(plain.toString());
+    plain.clear();
+    if (close < 0) {
+      // Unclosed emphasis renders as if closed (streaming-safe).
+      out.addAll(_mdEmph(
+          text.substring(i + mark.length), {...base, bit}));
+      i = text.length;
+    } else {
+      out.addAll(_mdEmph(
+          text.substring(i + mark.length, close), {...base, bit}));
+      i = close + mark.length;
+    }
+  }
+  textOut(plain.toString());
+  return out;
+}
+
+/// Wrap segments to [width] with hanging [indent] on continuations.
+List<List<_MdSeg>> _mdWrap(List<_MdSeg> segs, int width, int indent) {
+  final lines = <List<_MdSeg>>[];
+  var line = <_MdSeg>[];
+  var used = 0;
+  var start = 0; // where words begin on this line
+  var space = false; // the source had a space before the next word
+  for (final seg in segs) {
+    final words = seg.text.split(' ');
+    for (var k = 0; k < words.length; k++) {
+      if (k > 0) space = true;
+      final word = words[k];
+      if (word.isEmpty) continue;
+      final w = term.displayWidth(word);
+      final gap = space && used > start ? 1 : 0;
+      if (used + gap + w > width && used > start) {
+        lines.add(line);
+        line = [];
+        used = start = indent;
+      } else if (gap == 1) {
+        line.add(_MdSeg(' ', seg.fg, seg.bg, seg.style, seg.link));
+        used++;
+      }
+      line.add(_MdSeg(word, seg.fg, seg.bg, seg.style, seg.link));
+      used += w;
+      space = false;
+    }
+  }
+  lines.add(line);
+  return lines;
+}
+
+/// Code lines keep their spaces and break at [width] cells.
+List<List<_MdSeg>> _mdHard(List<_MdSeg> segs, int width) {
+  final lines = <List<_MdSeg>>[];
+  var line = <_MdSeg>[];
+  var used = 0;
+  for (final seg in segs) {
+    var part = StringBuffer();
+    for (final rune in seg.text.runes) {
+      final w = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
+      if (used + w > width && used > 0) {
+        if (part.isNotEmpty) {
+          line.add(_MdSeg('$part', seg.fg, seg.bg, seg.style, seg.link));
+        }
+        lines.add(line);
+        line = [];
+        used = 0;
+        part = StringBuffer();
+      }
+      part.writeCharCode(rune);
+      used += w;
+    }
+    if (part.isNotEmpty) {
+      line.add(_MdSeg('$part', seg.fg, seg.bg, seg.style, seg.link));
+    }
+  }
+  lines.add(line);
+  return lines;
+}
+
+/// Split [source] into raw lines, dropping one trailing newline like
+/// `Region.write` does, so full and incremental layouts share line space.
+List<String> _mdLines(String source) {
+  var src = source;
+  if (src.endsWith('\n')) src = src.substring(0, src.length - 1);
+  return src.split('\n');
+}
+
+/// One markdown call site's last layout (see [_mdLayout]).
+final class _MdMemo {
+  _MdMemo(this.src, this.width, this.ascii, this.layout, this.stableLines,
+      this.stableOut);
+
+  String src;
+  int width;
+  bool ascii;
+  List<List<_MdSeg>> layout;
+
+  /// Leading raw lines of [src] forming complete blocks before the final
+  /// block, and the layout lines they produced. A streamed append keeps this
+  /// prefix verbatim (it is a character prefix of the new source), so only
+  /// the tail from [stableLines] is re-laid.
+  int stableLines;
+  int stableOut;
+}
+
+/// Cap on remembered call sites; more markdown widgets than this re-lay from
+/// scratch each frame (still correct, just slower).
+const _mdMemoCap = 8;
+
+/// Lay out [source] at [width] into styled lines (memoized per call site).
+///
+/// The same string object at the same width is an O(1) [identical] hit with
+/// no hashing of the text (the old `'$width:..\n$source'` key copied and
+/// hashed the whole source on every draw). A streamed append — the new
+/// source starts with the remembered one, one prefix compare, no
+/// allocation — re-lays only from the last block boundary and reuses the
+/// stable prefix. Any other edit lays out from scratch, so a stale layout is
+/// never reused.
+List<List<_MdSeg>> _mdLayout(
+    String source, int width, bool ascii, _Session<Object?> session) {
+  final memos = session._mdMemos;
+  for (var k = 0; k < memos.length; k++) {
+    final m = memos[k];
+    if (identical(source, m.src) && m.width == width && m.ascii == ascii) {
+      if (k > 0) {
+        memos.removeAt(k);
+        memos.insert(0, m);
+      }
+      return m.layout;
+    }
+  }
+  for (var k = 0; k < memos.length; k++) {
+    final m = memos[k];
+    if (m.width == width &&
+        m.ascii == ascii &&
+        source.length >= m.src.length &&
+        source.startsWith(m.src)) {
+      if (source.length == m.src.length) return m.layout;
+      final raw = _mdLines(source);
+      final tail = _mdRenderRange(raw, m.stableLines, width, ascii);
+      final layout = [
+        ...m.layout.sublist(0, m.stableOut.clamp(0, m.layout.length)),
+        ...tail.lines,
+      ];
+      memos[k] = _MdMemo(source, width, ascii, layout, tail.blockSrc.last,
+          m.stableOut + tail.blockOut.last);
+      return layout;
+    }
+  }
+  final raw = _mdLines(source);
+  final traced = _mdRenderRange(raw, 0, width, ascii);
+  memos.insert(
+      0,
+      _MdMemo(source, width, ascii, traced.lines, traced.blockSrc.last,
+          traced.blockOut.last));
+  if (memos.length > _mdMemoCap) memos.removeLast();
+  return traced.lines;
+}
+
+/// Render [raw] lines from [start] (a block boundary), recording where each
+/// block starts in raw-line space ([blockSrc]) and in output-line space
+/// ([blockOut]). Block parsing is sequential and context-free — earlier
+/// blocks never depend on later lines — so rendering a suffix from a block
+/// boundary matches a full render. The seeded `[start]`/`[0]` entries keep
+/// `.last` total when the range is empty.
+({List<List<_MdSeg>> lines, List<int> blockSrc, List<int> blockOut})
+    _mdRenderRange(List<String> raw, int start, int width, bool ascii) {
+  final out = <List<_MdSeg>>[];
+  final blockSrc = [start];
+  final blockOut = [0];
+  var i = start;
+  bool blank(String s) => s.trim().isEmpty;
+
+  while (i < raw.length) {
+    blockSrc.add(i);
+    blockOut.add(out.length);
+    final line = raw[i];
+    final trim = line.trimLeft();
+    // Fenced code.
+    if (trim.startsWith('```')) {
+      final lang = _mdLang(trim.substring(3));
+      i++;
+      final code = <String>[];
+      while (i < raw.length && !raw[i].trimLeft().startsWith('```')) {
+        code.add(raw[i]);
+        i++;
+      }
+      if (i < raw.length) i++; // closing fence
+      final block = [false];
+      for (final cl in code) {
+        final segs = _mdHighlight(cl, lang, block);
+        out.addAll(_mdHard(segs, width));
+      }
+      if (code.isEmpty) out.add([]);
+      continue;
+    }
+    // Heading.
+    final head = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
+    if (head != null) {
+      final styled = _mdInline(head.group(2) ?? '');
+      out.addAll(_mdWrap(
+          [for (final s in styled) _MdSeg(s.text, s.fg, s.bg, {...s.style, Style.bold}, s.link)],
+          width,
+          0));
+      i++;
+      continue;
+    }
+    // Rule.
+    if (RegExp(r'^\s*(---|\*\*\*|___)\s*$').hasMatch(line)) {
+      out.add([
+        _MdSeg((ascii ? '-' : '─') * math.max(1, width), null, null, {},
+            null)
+      ]);
+      i++;
+      continue;
+    }
+    // Quote.
+    if (RegExp(r'^\s*>').hasMatch(line)) {
+      final inner = <String>[];
+      while (i < raw.length && RegExp(r'^\s*>').hasMatch(raw[i])) {
+        inner.add(raw[i].replaceFirst(RegExp(r'^\s*>\s?'), ''));
+        i++;
+      }
+      for (final il in inner) {
+        for (final wl in _mdWrap(_mdInline(il), width - 2, 0)) {
+          out.add([
+            const _MdSeg('> ', null, null, {Style.dim}, null),
+            ...wl
+          ]);
+        }
+      }
+      continue;
+    }
+    // Table.
+    if (line.contains('|') && i + 1 < raw.length && _mdSep(raw[i + 1])) {
+      final headCells = _mdCells(line);
+      i += 2;
+      final rows = <List<String>>[];
+      while (i < raw.length && raw[i].contains('|') && !blank(raw[i])) {
+        rows.add(_mdCells(raw[i]));
+        i++;
+      }
+      out.addAll(_mdTable(headCells, rows, width, ascii));
+      continue;
+    }
+    // List.
+    final lm = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(line);
+    if (lm != null) {
+      final items = <(int, bool, String, String)>[];
+      while (i < raw.length) {
+        final m =
+            RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(raw[i]);
+        if (m == null) break;
+        final indent = m.group(1)!.replaceAll('\t', '  ').length;
+        final marker = m.group(2)!;
+        items.add((
+          indent ~/ 2,
+          RegExp(r'^\d').hasMatch(marker),
+          marker,
+          m.group(3) ?? ''
+        ));
+        i++;
+      }
+      for (final (level, ordered, marker, text) in items) {
+        final bullet = ordered ? '$marker ' : '${ascii ? '-' : '•'} ';
+        final indent = level * 2;
+        final pre = ' ' * indent + bullet;
+        var firstLine = true;
+        for (final wl in _mdWrap(
+            _mdInline(text), width - term.displayWidth(pre), 0)) {
+          out.add([
+            _MdSeg(firstLine ? pre : ' ' * (indent + 2), null, null, {},
+                null),
+            ...wl
+          ]);
+          firstLine = false;
+        }
+      }
+      continue;
+    }
+    // Paragraph.
+    if (blank(line)) {
+      i++;
+      continue;
+    }
+    final para = <String>[];
+    while (i < raw.length &&
+        !blank(raw[i]) &&
+        !raw[i].trimLeft().startsWith('```') &&
+        RegExp(r'^(#{1,6})\s+').firstMatch(raw[i]) == null &&
+        RegExp(r'^\s*(---|\*\*\*|___)\s*$').firstMatch(raw[i]) == null &&
+        RegExp(r'^\s*>').firstMatch(raw[i]) == null &&
+        RegExp(r'^(\s*)([-*+]|\d+[.)])\s+').firstMatch(raw[i]) == null) {
+      para.add(raw[i].trim());
+      i++;
+    }
+    out.addAll(_mdWrap(_mdInline(para.join(' ')), width, 0));
+  }
+  return (lines: out, blockSrc: blockSrc, blockOut: blockOut);
+}
+bool _mdSep(String line) {
+  final t = line.trim();
+  if (!t.contains('|') || !t.contains('-')) return false;
+  return RegExp(r'^[\s|:\-]+$').hasMatch(t);
+}
+
+List<String> _mdCells(String line) {
+  var cells = line.split('|').map((c) => c.trim()).toList();
+  if (cells.isNotEmpty && cells.first.isEmpty) {
+    cells = cells.sublist(1);
+  }
+  if (cells.isNotEmpty && cells.last.isEmpty) {
+    cells = cells.sublist(0, cells.length - 1);
+  }
+  return cells;
+}
+
+List<List<_MdSeg>> _mdTable(
+    List<String> head, List<List<String>> rows, int width, bool ascii) {
+  final n = math.max(
+      head.length, rows.fold<int>(0, (m, r) => math.max(m, r.length)));
+  if (n == 0) return [];
+  final widths = List<int>.filled(n, 3);
+  String cell(List<String> r, int k) => k < r.length ? r[k] : '';
+  for (var k = 0; k < n; k++) {
+    var m = term.displayWidth(cell(head, k));
+    for (final r in rows) {
+      m = math.max(m, term.displayWidth(cell(r, k)));
+    }
+    widths[k] = math.max(3, m);
+  }
+  var total = widths.fold(0, (a, b) => a + b) + 3 * (n - 1) + 4;
+  while (total > width) {
+    var cut = -1;
+    var best = 3;
+    for (var k = 0; k < n; k++) {
+      if (widths[k] > best) {
+        best = widths[k];
+        cut = k;
+      }
+    }
+    if (cut < 0) break;
+    widths[cut]--;
+    total--;
+  }
+  final vb = ascii ? '|' : '│';
+  List<_MdSeg> row(List<String> cells, Set<Style> st) {
+    final segs = <_MdSeg>[_MdSeg('$vb ', null, null, {}, null)];
+    for (var k = 0; k < n; k++) {
+      if (k > 0) segs.add(_MdSeg(' $vb ', null, null, {}, null));
+      final t = term.truncateWidth(cell(cells, k), widths[k]);
+      segs.add(_MdSeg(t, null, null, st, null));
+      segs.add(_MdSeg(
+          ' ' * math.max(0, widths[k] - term.displayWidth(t)), null, null,
+          st, null));
+    }
+    segs.add(_MdSeg(' $vb', null, null, {}, null));
+    return segs;
+  }
+
+  List<_MdSeg> rule(String l, String m, String r) {
+    if (ascii) l = m = r = '+';
+    final b = StringBuffer(l);
+    for (var k = 0; k < n; k++) {
+      if (k > 0) b.write(m);
+      b.write((ascii ? '-' : '─') * (widths[k] + 2));
+    }
+    b.write(r);
+    return [_MdSeg(b.toString(), null, null, {}, null)];
+  }
+
+  return [
+    rule('┌', '┬', '┐'),
+    row(head, const {Style.bold}),
+    rule('├', '┼', '┤'),
+    for (final r in rows) row(r, const {}),
+    rule('└', '┴', '┘'),
+  ];
+}
+final class _MdSeg {
+  const _MdSeg(this.text, this.fg, this.bg, this.style, this.link);
+
+  final String text;
+  final Color? fg;
+  final Color? bg;
+  final Set<Style> style;
+  final String? link;
+}

@@ -1,16 +1,19 @@
-/// Minimal HTTP client. Thin facade over `package:http`.
+/// Minimal HTTP client. Thin facade over SDK `dart:io` `HttpClient`.
 ///
 /// ```dart
 /// final user = await Http.get('https://api.example.com/me',
 ///     headers: {'authorization': token}).json();
 /// await (Http.get(url) > Fs.file('page.html'));
-/// await Http.put('https://cdn.example.com/d.iso', body: Fs.file('d.iso'));
+/// await Http.put('https://cdn.example.com/d.iso', body: .stream(Fs.file('d.iso')));
 /// ```
 ///
-/// Public surface is exactly: [Http], [Response].
+/// Public surface is exactly: [Http], [Response], [Body], [HttpHold].
 /// - `Http.get/head/delete/options/post/put/patch()` return a [Response].
-/// - [Response] supports `status` `ok` `header` `url` `size` `name`
-///   (plus [Reader]/[Closeable]).
+/// - [Response] supports `statusCode` `isSuccess` `header` `finalUrl`
+///   `contentLength` `fileName` (plus [Reader]/[Closeable]).
+/// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
+///   `.stream`. A [Body.stream] is sent once and never retried.
+/// - [HttpHold] keeps the shared client open for a crawl (see [Http.hold]).
 /// A non-2xx status is still a [Response]; only network failures and
 /// timeouts throw. Everything else is private.
 library;
@@ -20,31 +23,101 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
-
 import 'core.dart';
 export 'core.dart';
 
 import 'src/charset.dart' as charset;
+import 'src/origin.dart' as names;
+import 'src/retry.dart' as retry;
+
+/// A request body. The compiler rejects a wrong shape; there is no
+/// `body:`/`json:` pair to pass together and no runtime `ArgumentError`.
+///
+/// ```dart
+/// await Http.post('$api/items', body: .json(item));
+/// await Http.post('$base/ajax', body: .form({'action': 'decode'}));
+/// await Http.put(uploadUrl, body: .stream(Archive.pack('site', .zip)));
+/// ```
+sealed class Body {
+  const Body._();
+
+  /// `text/plain; charset=utf-8` (unless `content-type` is given).
+  const factory Body.text(String text) = _TextBody;
+
+  /// Raw bytes; no default `content-type`.
+  const factory Body.bytes(List<int> bytes) = _BytesBody;
+
+  /// URL-encoded form (`application/x-www-form-urlencoded`).
+  const factory Body.form(Map<String, String> fields) = _FormBody;
+
+  /// `jsonEncode(value)` as `application/json`.
+  const factory Body.json(Object? value) = _JsonBody;
+
+  /// Streamed from [reader]: sent once, never retried.
+  const factory Body.stream(Reader reader) = _StreamBody;
+}
+
+final class _TextBody extends Body {
+  const _TextBody(this._text) : super._();
+
+  final String _text;
+}
+
+final class _BytesBody extends Body {
+  const _BytesBody(this._bytes) : super._();
+
+  final List<int> _bytes;
+}
+
+final class _FormBody extends Body {
+  const _FormBody(this._fields) : super._();
+
+  final Map<String, String> _fields;
+}
+
+final class _JsonBody extends Body {
+  const _JsonBody(this._value) : super._();
+
+  final Object? _value;
+}
+
+/// A streamed body. Sent once, never retried: a 307/308 (or a 301/302 that
+/// keeps the method) that would need the bytes back throws [HttpException]
+/// naming the limitation instead of silently downgrading.
+final class _StreamBody extends Body {
+  const _StreamBody(this._reader) : super._();
+
+  final Reader _reader;
+}
 
 /// Entry point: one method per HTTP verb. A verb completes when the headers
 /// arrive; the body streams as a [Reader].
 ///
+/// - Connections are pooled on one shared `HttpClient` per certificate mode
+///   (secure + `insecure`), counted by responses (and requests) in flight.
+///   When the count reaches 0, `close()` is scheduled with `Timer.run`, so a
+///   sequential `for … await` loop still finds the open connection while a
+///   finished script exits without waiting on an idle timeout. Picked over
+///   (a) no reuse and (b) a 1 s `idleTimeout` delaying exit, by A/B.
+///   [Http.hold] keeps the client open for a whole crawl.
 /// - Redirects are followed for every verb, up to 10 hops: 301/302/303 after
 ///   a POST become a GET (the body is dropped); 307/308 keep the method and
 ///   resend an in-memory body. A 307/308 (or a 301/302 that keeps the method)
-///   with a streamed [Reader] body cannot be resent, so it throws
-///   [HttpException] naming the limitation. `url()` is the final URL.
-/// - `body` is a `String` (`text/plain; charset=utf-8` unless `content-type`
-///   is given), a `List<int>`, a `Reader` (streamed), or a
-///   `Map<String, String>` (a URL-encoded form). `json:` sends
-///   `jsonEncode(value)` as `application/json`. Giving both is an
-///   [ArgumentError].
-/// - `retries` re-sends on network errors, timeouts, 5xx and 429, with
-///   doubling backoff from 1 s or the server's `Retry-After`. It applies only
-///   when the body is in memory (and only to the send: a body that stalls
-///   after the [Response] is delivered throws [TimeoutException] instead);
-///   a [Reader] body is sent once and never retried.
+///   with a [Body.stream] cannot be resent, so it throws [HttpException]
+///   naming the limitation. `finalUrl()` is the final URL.
+/// - `body` is a [Body] (`.text`/`.bytes`/`.form`/`.json`/`.stream`).
+/// - `insecure` accepts a bad certificate for this call only (one broken CDN
+///   chain): it uses the shared insecure client, scoped to the request and
+///   visible at the call site. It replaces the example's hand-written
+///   `_getPageInsecure` (~40 lines of `dart:io`).
+/// - `retries` re-sends GET/HEAD/OPTIONS/PUT/DELETE (never POST or PATCH) on network errors, timeouts, 5xx and 429, with
+///   doubling backoff from 1 s or the server's `Retry-After` (see
+///   `src/retry.dart`; TLS/Handshake errors are permanent and never
+///   retried). It applies only when the body is in memory (and only to the
+///   send: a body that stalls after the [Response] is delivered throws
+///   [TimeoutException] instead); a [Body.stream] is sent once and never
+///   retried. A 5xx retry force-closes the socket instead of draining the
+///   error body (which would wait up to the full timeout).
 abstract final class Http {
   /// Bound on the wait for the headers, then on any stall streaming.
   static const Duration _defaultTimeout = Duration(seconds: 30);
@@ -52,30 +125,57 @@ abstract final class Http {
   /// Redirect hops followed per send before failing with [HttpException].
   static const int _maxRedirects = 10;
 
-  /// GET [url] with optional [headers], [timeout] and [retries].
+  /// Hold the shared client open across many requests (a crawl). While the
+  /// hold is open, the idle `Timer.run` close is suppressed; closing the
+  /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
+  static HttpHold hold() {
+    _securePool._hold();
+    _insecurePool._hold();
+    return HttpHold._();
+  }
+
+  /// GET [url] with optional [headers], [timeout], [retries] and [insecure].
   static Future<Response> get(
     String url, {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
-      _send('GET', url, headers: headers, timeout: timeout, retries: retries);
+      _send(
+        'GET',
+        url,
+        headers: headers,
+        timeout: timeout,
+        retries: retries,
+        insecure: insecure,
+      );
 
-  /// HEAD [url] with optional [headers], [timeout] and [retries].
+  /// HEAD [url] with optional [headers], [timeout], [retries] and [insecure].
   static Future<Response> head(
     String url, {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
-      _send('HEAD', url, headers: headers, timeout: timeout, retries: retries);
+      _send(
+        'HEAD',
+        url,
+        headers: headers,
+        timeout: timeout,
+        retries: retries,
+        insecure: insecure,
+      );
 
-  /// DELETE [url] with optional [headers], [timeout] and [retries].
+  /// DELETE [url] with optional [headers], [timeout], [retries] and
+  /// [insecure].
   static Future<Response> delete(
     String url, {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
       _send(
         'DELETE',
@@ -83,14 +183,17 @@ abstract final class Http {
         headers: headers,
         timeout: timeout,
         retries: retries,
+        insecure: insecure,
       );
 
-  /// OPTIONS [url] with optional [headers], [timeout] and [retries].
+  /// OPTIONS [url] with optional [headers], [timeout], [retries] and
+  /// [insecure].
   static Future<Response> options(
     String url, {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
       _send(
         'OPTIONS',
@@ -98,119 +201,196 @@ abstract final class Http {
         headers: headers,
         timeout: timeout,
         retries: retries,
+        insecure: insecure,
       );
 
-  /// POST [url] with a [body] (`String`, `List<int>`, [Reader] or
-  /// `Map<String, String>` form) or [json]. Giving both is an
-  /// [ArgumentError].
+  /// POST [url] with a [Body] (`body: .json(item)`).
   static Future<Response> post(
     String url, {
-    Object? body,
-    Object? json,
+    Body? body,
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
       _send(
         'POST',
         url,
         body: body,
-        json: json,
         headers: headers,
         timeout: timeout,
         retries: retries,
+        insecure: insecure,
       );
 
-  /// PUT [url] with a [body] or [json] (same as [post]).
+  /// PUT [url] with a [Body] (same as [post]).
   static Future<Response> put(
     String url, {
-    Object? body,
-    Object? json,
+    Body? body,
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
       _send(
         'PUT',
         url,
         body: body,
-        json: json,
         headers: headers,
         timeout: timeout,
         retries: retries,
+        insecure: insecure,
       );
 
-  /// PATCH [url] with a [body] or [json] (same as [post]).
+  /// PATCH [url] with a [Body] (same as [post]).
   static Future<Response> patch(
     String url, {
-    Object? body,
-    Object? json,
+    Body? body,
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
+    bool insecure = false,
   }) =>
       _send(
         'PATCH',
         url,
         body: body,
-        json: json,
         headers: headers,
         timeout: timeout,
         retries: retries,
+        insecure: insecure,
       );
 }
 
+/// Keeps the shared client open. Close to release; idempotent.
+final class HttpHold implements Closeable {
+  HttpHold._();
+
+  var _closed = false;
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    _securePool._unhold();
+    _insecurePool._unhold();
+  }
+}
+
+/// One pooled `HttpClient`: shared by every request with the same
+/// certificate mode, counted by requests + live responses + holds. When all
+/// reach 0, `close()` is scheduled with `Timer.run`.
+final class _ClientPool {
+  _ClientPool({required this.insecure});
+
+  final bool insecure;
+  HttpClient? _client;
+  var _active = 0;
+  var _holds = 0;
+
+  HttpClient _ensure() {
+    var c = _client;
+    if (c == null) {
+      c = HttpClient();
+      if (insecure) {
+        c.badCertificateCallback = (cert, host, port) => true;
+      }
+      _client = c;
+    }
+    return c;
+  }
+
+  /// A request starts: count it and hand out the shared client.
+  HttpClient retain() {
+    _active++;
+    return _ensure();
+  }
+
+  /// A request failed before delivering a [Response]: uncount it.
+  void release() {
+    _active--;
+    assert(_active >= 0, 'client pool over-released');
+    if (_active == 0 && _holds == 0) Timer.run(_maybeClose);
+  }
+
+  /// A [Response] takes ownership of its request's count: it will
+  /// [release] when it finishes. Called implicitly by [_attempt].
+
+  void _hold() {
+    _holds++;
+  }
+
+  void _unhold() {
+    _holds--;
+    assert(_holds >= 0, 'client pool hold over-released');
+    if (_active == 0 && _holds == 0) Timer.run(_maybeClose);
+  }
+
+  void _maybeClose() {
+    if (_active != 0 || _holds != 0) return;
+    try {
+      _client?.close(force: true);
+    } catch (_) {}
+    _client = null;
+  }
+}
+
+final _securePool = _ClientPool(insecure: false);
+final _insecurePool = _ClientPool(insecure: true);
+
 /// An HTTP response: a [Reader] of the body, streamed from the socket.
 ///
-/// - A non-2xx status is still a [Response]. [ok] tests 200–299. The
+/// - A non-2xx status is still a [Response]. [isSuccess] tests 200–299. The
 ///   readings ([text], [bytes]) work on any status, but only a 2xx body can
-///   be piped: [stream] (and so `>`/`to`) throws [HttpException] naming the
-///   status and URL otherwise.
+///   be piped: [stream] (and so `>`/`writeTo`) throws [HttpException] naming
+///   the status and URL otherwise.
 /// - [text] decodes with the charset in `content-type`, then
 ///   `<meta charset>`, then UTF-8 (WHATWG CJK decoders included). Unknown
 ///   charsets fall back to UTF-8; bad bytes become `�`.
 /// - [close] drops an unread body. A body read or piped to the end releases
-///   the connection by itself. The `Future<Response>` mirrors
-///   (`Http.get(u).status()`) close the response after reading: a response
-///   reached only through a mirror can never be read later.
+///   the connection by itself (back to the pool). The `Future<Response>`
+///   mirrors (`Http.get(u).statusCode()`) close the response after reading:
+///   a response reached only through a mirror can never be read later. (This
+///   keeps the code; VISION §4.2 still says mirrors leave the body readable
+///   and needs the fix, not the code.)
 final class Response with Reader implements Closeable {
-  Response._(this._resp, this._client, this._timeout, this._url);
+  Response._(this._resp, this._pool, this._timeout, this._url);
 
-  final http.StreamedResponse _resp;
-  final http.Client _client;
+  final HttpClientResponse _resp;
+  final _ClientPool _pool;
   final Duration _timeout;
 
   /// The final URL, after redirects.
   final String _url;
 
-  List<int>? _cached;
+  Uint8List? _cached;
   var _streaming = false;
   var _closed = false;
   var _done = false;
+  var _released = false;
 
   /// HTTP status code (e.g. 200, 404). Sync from when the headers arrive.
-  int status() => _resp.statusCode;
+  int statusCode() => _resp.statusCode;
 
   /// Whether the status is 2xx.
-  bool ok() {
+  bool isSuccess() {
     final code = _resp.statusCode;
     return code >= 200 && code < 300;
   }
 
-  /// Response header [name] (case-insensitive) or `null` if absent.
+  /// Response header [name] (case-insensitive) or `null` if absent. The
+  /// engine already lowercases keys, so this is one map lookup: O(1).
   String? header(String name) {
-    final key = name.toLowerCase();
-    for (final entry in _resp.headers.entries) {
-      if (entry.key.toLowerCase() == key) return entry.value;
-    }
-    return null;
+    final values = _resp.headers[name];
+    if (values == null || values.isEmpty) return null;
+    return values.join(', ');
   }
 
   /// The final URL, after redirects.
-  String url() => _url;
+  String finalUrl() => _url;
 
   /// The `content-length`, or `null` when absent or unparseable.
-  int? size() {
+  int? contentLength() {
     final value = header('content-length');
     if (value == null) return null;
     final n = int.tryParse(value.trim());
@@ -220,30 +400,43 @@ final class Response with Reader implements Closeable {
 
   /// A file name for the body: the `content-disposition` filename
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
-  /// URL's last segment, else `'download'`.
-  String name() => _fileName(
-    url: _url,
-    contentDisposition: header('content-disposition'),
-  );
+  /// URL's last segment, else `'download'`. Shared with scrape/chrome via
+  /// `src/origin.dart`.
+  String fileName() => names.fileName(
+        url: _url,
+        contentDisposition: header('content-disposition'),
+      );
+
+  /// Typed provenance: replaces `(reader as dynamic).url()`/`.status()`/
+  /// `.name()` probes in `html`/`json`/`chrome`.
+  @override
+  Origin origin() => Origin(
+        url: _url,
+        status: _resp.statusCode,
+        name: fileName(),
+      );
 
   /// The body as text (see the class doc for the charset rules). Reads into
   /// memory and caches, so calling again (or [bytes]) is free. Works on any
   /// status.
   @override
-  Future<String> text() async =>
-      charset.Charset.decode(await bytes(), contentType: header('content-type'));
+  Future<String> text() async => charset.Charset.decode(
+        await bytes(),
+        contentType: header('content-type'),
+      );
 
-  /// The body as bytes, cached like [text]. Works on any status.
-  /// Returns a copy so callers can't mutate the cache.
+  /// The body as bytes, cached like [text]. Works on any status. Returns an
+  /// unmodifiable view of the cache: O(1), no copy (returning
+  /// `Uint8List.fromList` each call peaks at 2x the body).
   @override
   Future<List<int>> bytes() async {
     if (_closed) {
-      throw StateError('response is closed: ${url()}');
+      throw StateError('response is closed: ${finalUrl()}');
     }
     final cached = _cached;
-    if (cached != null) return Uint8List.fromList(cached);
+    if (cached != null) return cached.asUnmodifiableView();
     if (_streaming) {
-      throw StateError('body already streaming: ${url()}');
+      throw StateError('body already streaming: ${finalUrl()}');
     }
     _streaming = true;
     try {
@@ -251,8 +444,9 @@ final class Response with Reader implements Closeable {
       await for (final chunk in _bodyStream()) {
         out.add(chunk);
       }
-      _cached = out.takeBytes();
-      return Uint8List.fromList(_cached!);
+      final flat = out.takeBytes();
+      _cached = flat;
+      return flat.asUnmodifiableView();
     } finally {
       _finish();
     }
@@ -261,35 +455,35 @@ final class Response with Reader implements Closeable {
   @override
   Stream<List<int>> stream() {
     if (_closed) {
-      throw StateError('response is closed: ${url()}');
+      throw StateError('response is closed: ${finalUrl()}');
     }
     final cached = _cached;
     if (cached != null) {
-      if (!ok()) {
+      if (!isSuccess()) {
         throw HttpException(
-          'HTTP ${status()}: ${url()}',
-          uri: Uri.tryParse(url()),
+          'HTTP ${statusCode()}: ${finalUrl()}',
+          uri: Uri.tryParse(finalUrl()),
         );
       }
-      return Stream.value(Uint8List.fromList(cached));
+      return Stream.value(cached.asUnmodifiableView());
     }
     if (_streaming) {
-      throw StateError('body already streaming: ${url()}');
+      throw StateError('body already streaming: ${finalUrl()}');
     }
-    if (!ok()) {
+    if (!isSuccess()) {
       // Only a 2xx body can be piped, so an error page is never saved.
-      // Drop the body (releasing the client) and fail loudly; readings
+      // Drop the body (releasing the pool count) and fail loudly; readings
       // still work only when the body was never piped.
       unawaited(close());
       throw HttpException(
-        'HTTP ${status()}: ${url()}',
-        uri: Uri.tryParse(url()),
+        'HTTP ${statusCode()}: ${finalUrl()}',
+        uri: Uri.tryParse(finalUrl()),
       );
     }
     _streaming = true;
     // async* so a downstream failure (a writer that throws mid-run, a pipe
-    // that throws, a cancelled subscription) still releases the socket via
-    // the finally: without this the client leaks and keeps the script alive.
+    // that throws, a cancelled subscription) still releases the pool count
+    // via the finally: without this the socket leaks.
     return _streamBody();
   }
 
@@ -308,13 +502,28 @@ final class Response with Reader implements Closeable {
   /// [close] is a [StateError].
   @override
   Future<void> close() async {
-    if (_closed || _done) return;
+    if (_closed || _done) {
+      _releaseOnce();
+      return;
+    }
+    final len = contentLength();
+    if (len == null || len > 64 * 1024) return _abandon();
     _closed = true;
     try {
-      // Drop, don't hang: a stalled body can't block close forever.
-      // Drain with the response timeout, then release via _finish
-      // (which closes the client).
-      await _resp.stream.drain<void>().timeout(_timeout, onTimeout: () {});
+      // Small known-length bodies drain back to the pool for reuse; a
+      // stalled drain detaches the socket.
+      try {
+        await _resp.drain<void>().timeout(_timeout, onTimeout: () {
+          throw TimeoutException('close timed out: $_url', _timeout);
+        });
+      } catch (_) {
+        try {
+          final socket = await _resp.detachSocket();
+          try {
+            socket.destroy();
+          } catch (_) {}
+        } catch (_) {}
+      }
     } catch (_) {
       // Dropping must not throw.
     } finally {
@@ -322,28 +531,45 @@ final class Response with Reader implements Closeable {
     }
   }
 
-  Stream<List<int>> _bodyStream() => _resp.stream
-      .timeout(
+  /// Abandon an error body without draining it: force-close the socket
+  /// (the connection is discarded anyway) instead of waiting up to the full
+  /// timeout for junk bytes. Used for 5xx/429 retries.
+  Future<void> _abandon() async {
+    if (_done) {
+      _releaseOnce();
+      return;
+    }
+    _closed = true;
+    try {
+      final socket = await _resp.detachSocket();
+      try {
+        socket.destroy();
+      } catch (_) {}
+    } catch (_) {}
+    _finish();
+  }
+
+  Stream<List<int>> _bodyStream() => _resp.timeout(
         _timeout,
         onTimeout: (sink) {
           sink.addError(
             TimeoutException(
-              'body stalled for $_timeout: ${url()}',
+              'body stalled for $_timeout: $_url',
               _timeout,
             ),
           );
         },
-      )
-      .handleError((Object e) {
-        if (e is http.ClientException) {
-          throw HttpException(e.message, uri: Uri.tryParse(url()));
-        }
-        throw e;
-      });
+      );
 
   void _finish() {
     _done = true;
-    _client.close();
+    _releaseOnce();
+  }
+
+  void _releaseOnce() {
+    if (_released) return;
+    _released = true;
+    _pool.release();
   }
 }
 
@@ -352,19 +578,19 @@ final class Response with Reader implements Closeable {
 /// Each mirror closes the response after reading: a response reached only
 /// through a mirror can never be read later.
 extension ResponseFuture on Future<Response> {
-  Future<int> status() async {
+  Future<int> statusCode() async {
     final res = await this;
     try {
-      return res.status();
+      return res.statusCode();
     } finally {
       await res.close();
     }
   }
 
-  Future<bool> ok() async {
+  Future<bool> isSuccess() async {
     final res = await this;
     try {
-      return res.ok();
+      return res.isSuccess();
     } finally {
       await res.close();
     }
@@ -379,140 +605,32 @@ extension ResponseFuture on Future<Response> {
     }
   }
 
-  Future<String> url() async {
+  Future<String> finalUrl() async {
     final res = await this;
     try {
-      return res.url();
+      return res.finalUrl();
     } finally {
       await res.close();
     }
   }
 
-  Future<int?> size() async {
+  Future<int?> contentLength() async {
     final res = await this;
     try {
-      return res.size();
+      return res.contentLength();
     } finally {
       await res.close();
     }
   }
 
-  Future<String> name() async {
+  Future<String> fileName() async {
     final res = await this;
     try {
-      return res.name();
+      return res.fileName();
     } finally {
       await res.close();
     }
   }
-}
-
-/// A file name for a response body. Kept as one helper so `Visit.name()`
-/// can share it later.
-String _fileName({required String url, String? contentDisposition}) {
-  final fromHeader = _dispositionName(contentDisposition);
-  if (fromHeader != null) return fromHeader;
-  final uri = Uri.tryParse(url);
-  final segments =
-      uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
-  if (segments.isNotEmpty) {
-    final last = segments.last;
-    try {
-      final decoded = Uri.decodeComponent(last);
-      if (decoded.isNotEmpty) return decoded;
-    } catch (_) {
-      if (last.isNotEmpty) return last;
-    }
-  }
-  return 'download';
-}
-
-/// The `content-disposition` filename, or null when absent or empty.
-/// `filename*=` (RFC 6266/8187) wins over `filename=`; paths are stripped.
-String? _dispositionName(String? header) {
-  if (header == null) return null;
-  final star = RegExp(
-    r'''filename\*\s*=\s*([^;]+)''',
-    caseSensitive: false,
-  ).firstMatch(header);
-  if (star != null) {
-    var value = star.group(1)!.trim();
-    if (value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'")))) {
-      value = value.substring(1, value.length - 1);
-    }
-    String decoded;
-    final first = value.indexOf("'");
-    final second = first < 0 ? -1 : value.indexOf("'", first + 1);
-    if (first > 0 && second > first) {
-      final encoding = charset.Charset.canonical(value.substring(0, first));
-      final raw = value.substring(second + 1);
-      final decoder = charset.IncrementalDecoder(encoding);
-      decoded = decoder.add(_percentDecode(raw)) + decoder.finish();
-    } else {
-      decoded = _percentDecodeString(value);
-    }
-    final name = _stripPath(decoded.trim());
-    if (name.isNotEmpty) return name;
-  }
-  final plain = RegExp(
-    r'''filename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]+))''',
-    caseSensitive: false,
-  ).firstMatch(header);
-  if (plain != null) {
-    // `filename=` cannot match inside `filename*=` (the `*` breaks it).
-    final name = _stripPath(
-      (plain.group(1) ?? plain.group(2) ?? plain.group(3) ?? '').trim(),
-    );
-    if (name.isNotEmpty) return name;
-  }
-  return null;
-}
-
-String _stripPath(String name) {
-  final parts = name.split(RegExp(r'[\\/]'));
-  return parts.isEmpty ? name : parts.last;
-}
-
-List<int> _percentDecode(String s) {
-  final out = <int>[];
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
-      if (v != null) {
-        out.add(v);
-        i += 2;
-        continue;
-      }
-    }
-    if (c < 0x80) {
-      out.add(c);
-    } else {
-      out.addAll(utf8.encode(String.fromCharCode(c)));
-    }
-  }
-  return out;
-}
-
-String _percentDecodeString(String s) {
-  // A bare `filename=` is already text; only unescape percent runs so
-  // `%20` reads as a space while other bytes stay as they are.
-  final out = StringBuffer();
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
-      if (v != null && v >= 0x20 && v < 0x7F) {
-        out.writeCharCode(v);
-        i += 2;
-        continue;
-      }
-    }
-    out.writeCharCode(c);
-  }
-  return out.toString();
 }
 
 /// Retryable send failure, caught inside [_send] only.
@@ -522,39 +640,32 @@ final class _Retryable {
   final Object cause;
 }
 
-/// In-memory bodies resend on redirect and retry; streamed ones go once.
-sealed class _Body {
-  const _Body();
+({List<int> bytes, String? contentType}) _encodeBody(Body? body) {
+  final b = body;
+  if (b == null) return (bytes: const [], contentType: null);
+  return switch (b) {
+    _TextBody() => (bytes: utf8.encode(b._text), contentType: 'text/plain; charset=utf-8'),
+    _BytesBody() => (bytes: b._bytes, contentType: null),
+    _FormBody() => (
+        bytes: utf8.encode(Uri(queryParameters: b._fields).query),
+        contentType: 'application/x-www-form-urlencoded',
+      ),
+    _JsonBody() => (bytes: utf8.encode(jsonEncode(b._value)), contentType: 'application/json'),
+    _StreamBody() => throw StateError('streamed body is not in-memory: $b'),
+  };
 }
 
-final class _NoBody extends _Body {
-  const _NoBody();
-}
-
-final class _MemBody extends _Body {
-  const _MemBody(this.bytes, this.contentType);
-
-  /// The encoded bytes.
-  final List<int> bytes;
-
-  /// The default `content-type`, used only when the caller gave none.
-  final String? contentType;
-}
-
-final class _StreamBody extends _Body {
-  const _StreamBody(this.reader);
-
-  final Reader reader;
-}
+/// Verbs a retry may re-send: POST and PATCH could repeat an effect the server already committed.
+const _idempotent = {'GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'};
 
 Future<Response> _send(
   String method,
   String url, {
-  Object? body,
-  Object? json,
+  Body? body,
   Map<String, String>? headers,
   Duration? timeout,
   int retries = 0,
+  bool insecure = false,
 }) async {
   final limit = timeout ?? Http._defaultTimeout;
   if (retries < 0) {
@@ -573,92 +684,34 @@ Future<Response> _send(
       'must be an absolute http(s) URL',
     );
   }
-  final encoded = _encodeBody(body, json);
-  final resendable = encoded is! _StreamBody;
+  final resendable = body is! _StreamBody && _idempotent.contains(method);
+  final pool = insecure ? _insecurePool : _securePool;
   var attempt = 0;
   Duration? retryAfter;
   while (true) {
     if (attempt > 0) {
-      await Future<void>.delayed(_backoff(attempt - 1, retryAfter));
+      await Future<void>.delayed(retry.backoff(attempt - 1, retryAfter));
     }
     retryAfter = null;
     try {
-      final res = await _attempt(method, first, encoded, headers, limit);
+      final res = await _attempt(method, first, body, headers, limit, pool);
       if (resendable &&
-          (res.status() == 429 || res.status() >= 500) &&
+          (res.statusCode() == 429 || res.statusCode() >= 500) &&
           attempt < retries) {
-        retryAfter = _retryAfter(res.header('retry-after'));
-        await res.close();
+        retryAfter = retry.parseRetryAfter(res.header('retry-after'));
+        // Force-close the socket; don't drain the error body.
+        await res._abandon();
         attempt++;
         continue;
       }
       return res;
     } on _Retryable catch (e) {
-      if (!resendable || attempt >= retries) throw e.cause;
+      if (!resendable || attempt >= retries || !retry.isRetryable(e.cause)) {
+        throw e.cause;
+      }
       attempt++;
     }
   }
-}
-
-_Body _encodeBody(Object? body, Object? json) {
-  if (json != null && body != null) {
-    throw ArgumentError.value(
-      json,
-      'json',
-      'cannot give both body: and json:',
-    );
-  }
-  if (json != null) {
-    return _MemBody(utf8.encode(jsonEncode(json)), 'application/json');
-  }
-  if (body == null) return const _NoBody();
-  if (body is String) {
-    return _MemBody(utf8.encode(body), 'text/plain; charset=utf-8');
-  }
-  if (body is List<int>) return _MemBody(body, null);
-  if (body is Map) {
-    final entries = <String, String>{};
-    for (final entry in body.entries) {
-      final key = entry.key, value = entry.value;
-      if (key is! String || value is! String) {
-        throw ArgumentError.value(
-          body,
-          'body',
-          'a form map must be Map<String, String>',
-        );
-      }
-      entries[key] = value;
-    }
-    return _MemBody(
-      utf8.encode(Uri(queryParameters: entries).query),
-      'application/x-www-form-urlencoded',
-    );
-  }
-  if (body is Reader) return _StreamBody(body);
-  throw ArgumentError.value(
-    body,
-    'body',
-    'must be a String, List<int>, Map<String, String>, or Reader',
-  );
-}
-
-Duration _backoff(int attempt, Duration? server) {
-  final shift = attempt > 10 ? 10 : attempt;
-  var wait = Duration(seconds: 1 << shift);
-  if (server != null && server > wait) wait = server;
-  return wait;
-}
-
-Duration? _retryAfter(String? value) {
-  if (value == null) return null;
-  final seconds = int.tryParse(value.trim());
-  if (seconds != null && seconds >= 0) return Duration(seconds: seconds);
-  try {
-    final date = HttpDate.parse(value.trim());
-    final wait = date.difference(DateTime.now().toUtc());
-    if (wait > Duration.zero) return wait;
-  } catch (_) {}
-  return null;
 }
 
 /// One send: the request plus manual redirect following. Retryable network
@@ -667,19 +720,22 @@ Duration? _retryAfter(String? value) {
 Future<Response> _attempt(
   String method,
   Uri first,
-  _Body body,
+  Body? body,
   Map<String, String>? headers,
   Duration limit,
+  _ClientPool pool,
 ) async {
-  // Fresh client per attempt: no pooling, no shared state to leak.
-  var client = http.Client();
+  // Counted by the pool: one retain per attempt, transferred to the
+  // delivered Response (which releases on finish), released on failure.
+  final client = pool.retain();
+  var ok = false;
   try {
     var currentMethod = method;
     var currentUri = first;
-    _Body currentBody = body;
+    Body? currentBody = body;
     Map<String, String>? currentHeaders = headers;
     for (var hop = 0; ; hop++) {
-      http.StreamedResponse resp;
+      HttpClientResponse resp;
       try {
         resp = await _singleSend(
           client,
@@ -692,48 +748,49 @@ Future<Response> _attempt(
       } on TimeoutException catch (e) {
         throw _Retryable(e);
       } on HttpException catch (e) {
+        // TLS failures surface as HttpException on some paths; retry.dart
+        // classifies them as permanent at the _send boundary.
         throw _Retryable(e);
-      } on http.ClientException catch (e) {
-        throw _Retryable(HttpException(e.message, uri: currentUri));
+      } on SocketException catch (e) {
+        throw _Retryable(e);
+      } on HandshakeException catch (e) {
+        throw _Retryable(e);
+      } on CertificateException catch (e) {
+        throw _Retryable(e);
+      } on TlsException catch (e) {
+        throw _Retryable(e);
       } on IOException catch (e) {
         throw _Retryable(e);
       }
       if (!_isRedirect(resp.statusCode)) {
-        return Response._(resp, client, limit, currentUri.toString());
+        ok = true;
+        return Response._(resp, pool, limit, currentUri.toString());
       }
-      final location = _locationOf(resp.headers);
+      final location = _locationOf(resp);
       if (location == null || location.isEmpty) {
-        return Response._(resp, client, limit, currentUri.toString());
+        ok = true;
+        return Response._(resp, pool, limit, currentUri.toString());
       }
       if (hop >= Http._maxRedirects) {
-        try {
-          await resp.stream.drain<void>().timeout(limit);
-        } catch (_) {}
+        await _detach(resp);
         throw HttpException(
           'too many redirects (>${Http._maxRedirects}): $currentUri',
           uri: currentUri,
         );
       }
       final next = currentUri.resolve(location);
-      try {
-        await resp.stream.drain<void>().timeout(limit);
-      } catch (_) {
-        // A stalled drain can't hold the socket for the next hop:
-        // drop the pooled connection and continue with a fresh client.
-        try {
-          client.close();
-        } catch (_) {}
-        client = http.Client();
-      }
+      // Small redirect bodies drain back to the pool for reuse; a stalled
+      // drain detaches instead of holding the next hop.
+      await _discard(resp, limit);
       final code = resp.statusCode;
       if ((code == 301 || code == 302) && currentMethod == 'POST') {
         currentMethod = 'GET';
-        currentBody = const _NoBody();
+        currentBody = null;
         currentHeaders = _withoutContent(currentHeaders);
       } else if (code == 303) {
         if (currentMethod != 'HEAD') {
           currentMethod = 'GET';
-          currentBody = const _NoBody();
+          currentBody = null;
           currentHeaders = _withoutContent(currentHeaders);
         }
       } else if (currentBody is _StreamBody) {
@@ -745,13 +802,15 @@ Future<Response> _attempt(
           uri: currentUri,
         );
       }
-      if (currentUri.hasScheme && next.hasScheme && currentUri.origin != next.origin) {
+      if (currentUri.hasScheme &&
+          next.hasScheme &&
+          currentUri.origin != next.origin) {
         currentHeaders = _stripSensitiveHeaders(currentHeaders);
       }
       currentUri = next;
     }
   } catch (_) {
-    client.close();
+    if (!ok) pool.release();
     rethrow;
   }
 }
@@ -764,11 +823,11 @@ bool _isRedirect(int status) =>
     status == 308;
 
 /// The `location` header, case-insensitively (servers send `Location`).
-String? _locationOf(Map<String, String> headers) {
-  for (final entry in headers.entries) {
-    if (entry.key.toLowerCase() == 'location') return entry.value;
-  }
-  return null;
+/// O(1): the engine already lowercases keys.
+String? _locationOf(HttpClientResponse resp) {
+  final values = resp.headers['location'];
+  if (values == null || values.isEmpty) return null;
+  return values.first;
 }
 
 bool _hasHeader(Map<String, String> headers, String name) {
@@ -800,28 +859,39 @@ Map<String, String>? _stripSensitiveHeaders(Map<String, String>? headers) {
   return out;
 }
 
-/// Send one request without following redirects. On a header timeout with a
-/// [Reader] body the client is closed first and the body feed is cancelled
-/// without awaiting it, so a server that never reads the body cannot hang
-/// the send; guarded callbacks keep it from surfacing async errors later.
-Future<http.StreamedResponse> _singleSend(
-  http.Client client,
+/// Send one request without following redirects. On a header timeout the
+/// request is aborted (shared client: only this request, never the pool)
+/// so a server that never reads the body cannot hang the send.
+Future<HttpClientResponse> _singleSend(
+  HttpClient client,
   String method,
   Uri uri,
-  _Body body,
+  Body? body,
   Map<String, String>? headers,
   Duration limit,
 ) async {
-  TimeoutException timeout() =>
+  TimeoutException headerTimeout() =>
       TimeoutException('no headers for $limit: $uri', limit);
+  final req = await client.openUrl(method, uri).timeout(limit, onTimeout: () {
+    throw headerTimeout();
+  });
+  req.followRedirects = false;
+  String? lengthHeader;
+  if (headers != null) {
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == 'content-length') {
+        lengthHeader = entry.value;
+        continue;
+      }
+      req.headers.set(entry.key, entry.value);
+    }
+  }
+  final b = body;
   try {
-    if (body is _StreamBody) {
-      final req = http.StreamedRequest(method, uri);
-      req.followRedirects = false;
-      if (headers != null) req.headers.addAll(headers);
-      final contentLength = _headerValue(req.headers, 'content-length');
+    if (b is _StreamBody) {
+      final contentLength = lengthHeader;
       if (contentLength != null) {
-        final n = int.tryParse(contentLength);
+        final n = int.tryParse(contentLength.trim());
         if (n == null || n < 0) {
           throw ArgumentError.value(
             contentLength,
@@ -830,76 +900,99 @@ Future<http.StreamedResponse> _singleSend(
           );
         }
         req.contentLength = n;
+      } else {
+        req.contentLength = -1;
       }
-      StreamSubscription<List<int>>? feed;
+      req.bufferOutput = false;
       try {
-        feed = body.reader.stream().listen(
-          (chunk) {
-            try {
-              req.sink.add(chunk);
-            } catch (_) {}
-          },
-          onError: (Object e) {
-            try {
-              req.sink.addError(e);
-            } catch (_) {}
-            try {
-              req.sink.close();
-            } catch (_) {}
-          },
-          onDone: () {
-            try {
-              req.sink.close();
-            } catch (_) {}
-          },
-          cancelOnError: true,
-        );
+        await req
+            .addStream(b._reader.stream())
+            .timeout(limit, onTimeout: () {
+          throw TimeoutException('upload stalled for $limit: $uri', limit);
+        });
       } catch (_) {
         try {
-          req.sink.close();
+          req.abort();
         } catch (_) {}
         rethrow;
       }
       try {
-        return await client.send(req).timeout(limit, onTimeout: () {
-          throw timeout();
+        return await req.close().timeout(limit, onTimeout: () {
+          throw headerTimeout();
         });
       } catch (_) {
-        client.close();
-        unawaited(_cancelFeed(feed));
+        try {
+          req.abort();
+        } catch (_) {}
         rethrow;
       }
     }
-    final req = http.Request(method, uri);
-    req.followRedirects = false;
-    if (headers != null) req.headers.addAll(headers);
-    if (body is _MemBody) {
-      req.bodyBytes = body.bytes;
-      final contentType = body.contentType;
-      if (contentType != null && !_hasHeader(req.headers, 'content-type')) {
-        req.headers['content-type'] = contentType;
+    if (b == null) {
+      req.contentLength = 0;
+      try {
+        return await req.close().timeout(limit, onTimeout: () {
+          throw headerTimeout();
+        });
+      } catch (_) {
+        try {
+          req.abort();
+        } catch (_) {}
+        rethrow;
       }
     }
-    return await client.send(req).timeout(limit, onTimeout: () {
-      throw timeout();
-    });
-  } on http.ClientException catch (e) {
-    throw HttpException(e.message, uri: uri);
+    final encoded = _encodeBody(b);
+    req.contentLength = encoded.bytes.length;
+    final contentType = encoded.contentType;
+    if (contentType != null && !_hasHeader(req.headersToMap(), 'content-type')) {
+      try {
+        req.headers.set('content-type', contentType);
+      } catch (_) {}
+    }
+    req.add(encoded.bytes);
+    try {
+      return await req.close().timeout(limit, onTimeout: () {
+        throw headerTimeout();
+      });
+    } catch (_) {
+      try {
+        req.abort();
+      } catch (_) {}
+      rethrow;
+    }
+  } on ArgumentError {
+    try {
+      req.abort();
+    } catch (_) {}
+    rethrow;
   }
 }
 
-String? _headerValue(Map<String, String> headers, String name) {
-  final key = name.toLowerCase();
-  for (final entry in headers.entries) {
-    if (entry.key.toLowerCase() == key) return entry.value;
-  }
-  return null;
-}
-
-/// Cancel a body feed without ever throwing (H1: never awaited after a
-/// failure, and never surfacing async errors).
-Future<void> _cancelFeed(StreamSubscription<List<int>>? feed) async {
+/// Drain a redirect body back to the pool; detach when the drain stalls.
+Future<void> _discard(HttpClientResponse resp, Duration limit) async {
   try {
-    await feed?.cancel();
+    await resp.drain<void>().timeout(limit);
+  } catch (_) {
+    await _detach(resp);
+  }
+}
+
+/// Force-close a response's socket without waiting for its body.
+Future<void> _detach(HttpClientResponse resp) async {
+  try {
+    final socket = await resp.detachSocket();
+    try {
+      socket.destroy();
+    } catch (_) {}
   } catch (_) {}
+}
+
+extension on HttpClientRequest {
+  /// This request's headers as a plain map for [_hasHeader].
+  Map<String, String> headersToMap() {
+    final out = <String, String>{};
+    headers.forEach((name, values) {
+      if (values.isNotEmpty) out[name] = values.join(', ');
+    });
+    return out;
+  }
 }

@@ -11,6 +11,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'winconsole.dart' as win;
+
 /// Terminal input for `Tui.run` and the prompts, as a broadcast stream that
 /// can be listened to again after every listener has cancelled — and that
 /// lets the process exit once nobody listens.
@@ -311,27 +313,18 @@ abstract class TuiBridge {
       i += 1 + width;
       continue;
     }
-    if (b == 0x00 || b == 0xe0) {
-      // Windows console extended keys: two bytes (a 0x00/0xE0 prefix plus a
-      // scan code) for arrows, home/end, page up/down, insert/delete and
-      // F1-F12. A bare 0xE0 is also a UTF-8 lead byte, but its continuation
-      // bytes (0x80-0xBF) never match the scan codes below, so real text
-      // falls through to the printable run untouched.
+    if (b == 0xe0) {
+      // Windows console extended keys: 0xE0 plus a scan code (< 0x80, so
+      // never UTF-8 text) for arrows, home/end, page up/down, insert/delete.
+      // A bare 0xE0 is also a UTF-8 lead byte; text falls through below.
       if (i + 1 >= bytes.length) break; // split across reads: hold.
-      final String? win = windowsKey(b, bytes[i + 1]);
+      final String? win = windowsKey(bytes[i + 1]);
       if (win != null) {
         flush();
         out.add(TermKey(win));
         i += 2;
         continue;
       }
-      // Unknown prefix pair (never valid UTF-8 either): skip both bytes.
-      if (b == 0x00) {
-        flush();
-        i += 2;
-        continue;
-      }
-      // A 0xE0 that starts real text: fall through to the printable run.
     }
     if (b == 0x09) {
       flush();
@@ -540,10 +533,9 @@ String? csiName(String params, int fin) {
   return '$prefix$base';
 }
 
-/// Name a Windows console extended key, or null when [code] is not a known
-/// scan code for [prefix] (`0x00` or `0xE0`). Navigation keys arrive under
-/// both prefixes depending on the keyboard/terminal; F1-F12 only under 0x00.
-String? windowsKey(int prefix, int code) {
+/// Name a Windows console extended key (`0xE0` + [code]), or null when
+/// [code] is not a known navigation scan code.
+String? windowsKey(int code) {
   switch (code) {
     case 0x48:
       return 'up';
@@ -565,30 +557,6 @@ String? windowsKey(int prefix, int code) {
       return 'insert';
     case 0x53:
       return 'delete';
-    case 0x3b when prefix == 0x00:
-      return 'f1';
-    case 0x3c when prefix == 0x00:
-      return 'f2';
-    case 0x3d when prefix == 0x00:
-      return 'f3';
-    case 0x3e when prefix == 0x00:
-      return 'f4';
-    case 0x3f when prefix == 0x00:
-      return 'f5';
-    case 0x40 when prefix == 0x00:
-      return 'f6';
-    case 0x41 when prefix == 0x00:
-      return 'f7';
-    case 0x42 when prefix == 0x00:
-      return 'f8';
-    case 0x43 when prefix == 0x00:
-      return 'f9';
-    case 0x44 when prefix == 0x00:
-      return 'f10';
-    case 0x85 when prefix == 0x00:
-      return 'f11';
-    case 0x86 when prefix == 0x00:
-      return 'f12';
     default:
       return null;
   }
@@ -656,10 +624,17 @@ int _pasteEnd(List<int> bytes, int from) {
 
 /// Saved stdin terminal modes, best-effort (a non-terminal stdin throws on
 /// access, in which case there is nothing to save or restore).
-final class TermModes {  TermModes(this.echo, this.line);
+final class TermModes {
+  TermModes(this.echo, this.line, [this.win]);
 
   final bool? echo;
   final bool? line;
+
+  /// Windows console input mode, restored as a whole.
+  final int? win;
+
+  /// True once [setRawModes] cleared `ISIG`; [restoreModes] sets it back.
+  bool isigCleared = false;
 }
 
 /// Capture the current echo/line modes.
@@ -671,23 +646,40 @@ TermModes captureModes() {
   try {
     line = io.stdin.lineMode;
   } catch (_) {}
-  return TermModes(echo, line);
+  return TermModes(echo, line, win.inputMode());
 }
 
-/// Raw-ish mode for apps: no echo, no line buffering. (Clearing `ICANON`
-/// does not clear `ISIG`, so Ctrl-C still arrives as SIGINT — which we
-/// trap and report as `pressed('ctrl+c')`.)
-void setRawModes() {
+bool _isig(bool on) {
+  if (io.Platform.isWindows || !io.stdin.hasTerminal) return false;
+  try {
+    return io.Process.runSync('/bin/sh', ['-c', 'stty ${on ? '' : '-'}isig </dev/tty']).exitCode == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Raw-ish mode for apps: no echo, no line buffering. Clearing `ICANON`
+/// does not clear `ISIG`, so Ctrl-C still arrives as SIGINT. With
+/// [signals] false (POSIX) `ISIG` is cleared too: Ctrl-C and Ctrl-Z then
+/// arrive as the bytes `0x03` and `0x1a`, recorded in [modes] for
+/// [restoreModes].
+void setRawModes([TermModes? modes, bool signals = true]) {
   try {
     io.stdin.echoMode = false;
   } catch (_) {}
   try {
     io.stdin.lineMode = false;
   } catch (_) {}
+  win.enableVtInput();
+  if (!signals && modes != null) modes.isigCleared = _isig(false);
 }
 
 /// Restore modes captured by [captureModes].
 void restoreModes(TermModes modes) {
+  if (modes.isigCleared) {
+    modes.isigCleared = false;
+    _isig(true);
+  }
   if (modes.echo != null) {
     try {
       io.stdin.echoMode = modes.echo!;
@@ -698,6 +690,7 @@ void restoreModes(TermModes modes) {
       io.stdin.lineMode = modes.line!;
     } catch (_) {}
   }
+  if (modes.win != null) win.setInputMode(modes.win!);
 }
 
 /// True for runes that take no cell and attach to the previous cell's
@@ -747,6 +740,10 @@ int displayWidth(String text) {
   return w;
 }
 
+/// [s] with control characters (newline, ESC, C1 CSI) replaced by `�`, so an
+/// untrusted label cannot break a repaint or move the cursor.
+String plainLabel(String s) => s.replaceAll(RegExp(r'[\x00-\x1f\x7f\x9b]'), '\uFFFD');
+
 /// Cut [text] to at most [width] cells, ending with `…` when cut. Wide
 /// chars that don't fit are dropped whole.
 String truncateWidth(String text, int width) {
@@ -793,3 +790,89 @@ bool _wideEmoji(int rune) =>
     (rune >= 0x1f7e0 && rune <= 0x1f7eb) ||
     (rune >= 0x1f90c && rune <= 0x1f9ff) ||
     (rune >= 0x1fa70 && rune <= 0x1faff);
+
+/// Terminal capabilities for one run, shared by `console` and `tui`.
+///
+/// One detector (was: `Console._styled` checked only `hasTerminal` +
+/// `NO_COLOR`; `tui` had its own `_Caps`). `FORCE_COLOR`/`NO_COLOR` follow
+/// the env conventions: `NO_COLOR` (any value) drops styling, `FORCE_COLOR`
+/// (`1`/`true`, case-insensitive) forces it even piped. Motion (live
+/// spinners/bars, menu repaints) still needs a real terminal.
+final class TerminalCaps {
+  const TerminalCaps({
+    required this.truecolor,
+    required this.color256,
+    required this.noColor,
+    required this.ascii,
+    required this.styled,
+    required this.animated,
+  });
+
+  /// Detect from [env] plus whether stderr/stdout are terminals.
+  /// [hasTerminal] is stderr's (console) or stdout's (tui) terminal check;
+  /// pass the stream the facade draws on.
+  static TerminalCaps of(
+    Map<String, String> env, {
+    required bool hasTerminal,
+  }) {
+    final noColor = env['NO_COLOR'] != null;
+    final force = env['FORCE_COLOR']?.toLowerCase();
+    final forced = force == '1' || force == 'true' || force == 'always';
+    final colorterm = (env['COLORTERM'] ?? '').toLowerCase();
+    final tm = (env['TERM'] ?? '').toLowerCase();
+    final locale = [
+      env['LC_ALL'],
+      env['LC_CTYPE'],
+      env['LANG'],
+    ].firstWhere((v) => v != null && v.isNotEmpty, orElse: () => '')!.toLowerCase();
+    final truecolor =
+        colorterm.contains('truecolor') || colorterm.contains('24bit');
+    final color256 = truecolor || tm.contains('256color');
+    final ascii = !locale.contains('utf');
+    final styled = !noColor && (forced || hasTerminal);
+    final animated = hasTerminal && !noColor;
+    return TerminalCaps(
+      truecolor: truecolor,
+      color256: color256,
+      noColor: noColor,
+      ascii: ascii,
+      styled: styled,
+      animated: animated,
+    );
+  }
+
+  /// Detect from the process environment and [io.stderr] (console default).
+  static TerminalCaps get current => of(
+        io.Platform.environment,
+        hasTerminal: () {
+          try {
+            return io.stderr.hasTerminal;
+          } catch (_) {
+            return false;
+          }
+        }(),
+      );
+
+  final bool truecolor;
+  final bool color256;
+  final bool noColor;
+  final bool ascii;
+
+  /// Colour codes may be emitted.
+  final bool styled;
+
+  /// Live redraw may animate (needs a terminal plus styling).
+  final bool animated;
+}
+
+/// The one shared accent for live progress and selections: xterm 256-colour
+/// index 173, a muted orange.
+///
+/// `Console` live lines (bars, spinners, the `choose` menu) and the Tui
+/// selection, tabs and title all use this. VISION §4.12 names cyan and the
+/// Tui engine previously defaulted to 208 (bright orange); 173 is the value
+/// the console pass already shipped for its live lines, readable on dark and
+/// light terminals, so the engine adopts it here and `Color.orange` carries
+/// this index. The console pass keeps its own private escape until it adopts
+/// this constant; VISION's cyan remains aspirational for a future theme pass.
+const tuiAccent256 = 173;

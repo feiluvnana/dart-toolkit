@@ -46,7 +46,7 @@ void main() {
 
     test('method chain needs no parentheses', () async {
       final w = _Sink();
-      await _Mem([7]).pipe(null).to(w);
+      await _Mem([7]).pipe(null).writeTo(w);
       expect(w.data, [7]);
     });
   });
@@ -110,13 +110,38 @@ void main() {
     });
   });
 
+  group('Origin', () {
+    test('reads through methods; a plain reader is empty', () {
+      const o = Origin(url: 'u', status: 200, name: 'n', path: 'p');
+      expect([o.url(), o.status(), o.name(), o.path()], ['u', 200, 'n', 'p']);
+      expect(Reader.of([1]).origin().url(), isNull);
+    });
+  });
+
   group('Future mirrors', () {
     test('Future<Reader> mirrors Reader', () async {
       final f = Future<Reader>.value(_Mem(utf8.encode('x')));
       expect(await f.text(), 'x');
       expect(await f.bytes(), utf8.encode('x'));
       await (f | null > null);
-      await f.to(null);
+      await f.writeTo(null);
+    });
+
+    test('a writer that fails before reading closes the source', () async {
+      final r = _CloseReader();
+      await expectLater(r | _Tap(() {}) > _ThrowFirst(), throwsStateError);
+      await Future<void>.delayed(Duration.zero);
+      expect(r.closed, isTrue);
+      final f = _CloseReader();
+      await expectLater(Future<Reader>.value(f) > _ThrowFirst(), throwsStateError);
+      await Future<void>.delayed(Duration.zero);
+      expect(f.closed, isTrue);
+    });
+
+    test('origin() on a Future<Reader> closes the response', () async {
+      final r = _CloseReader();
+      await Future<Reader>.value(r).origin();
+      expect(r.closed, isTrue);
     });
 
     test('Future<Closeable> mirrors close', () async {
@@ -175,6 +200,9 @@ final class _Tap implements Pipe {
       yield c;
     }
   }
+
+  @override
+  void abort(Object error) {}
 }
 
 final class _Boom implements Pipe {
@@ -184,6 +212,9 @@ final class _Boom implements Pipe {
       throw StateError('boom');
     }
   }
+
+  @override
+  void abort(Object error) {}
 }
 
 final class _Sink implements Writer {
@@ -259,4 +290,17 @@ final class _BoomWriter implements Writer {
       if (n == 2) throw StateError('writer blew up mid-write');
     }
   }
+}
+
+final class _CloseReader with Reader implements Closeable {
+  var closed = false;
+  @override
+  Stream<List<int>> stream() => Stream.value([1]);
+  @override
+  Future<void> close() async => closed = true;
+}
+
+final class _ThrowFirst implements Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async => throw StateError('no');
 }

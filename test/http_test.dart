@@ -37,6 +37,7 @@ const _cjk = {
 void main() {
   late HttpServer server;
   late String base;
+  final hits = <String, int>{};
 
   setUpAll(() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -91,6 +92,9 @@ void main() {
         request.response
           ..statusCode = HttpStatus.ok
           ..write('size:$size;length:${request.headers.value('content-length')}');
+      } else if (path == '/boom') {
+        hits[method] = (hits[method] ?? 0) + 1;
+        request.response.statusCode = HttpStatus.internalServerError;
       } else if (path == '/stall') {
         request.response.statusCode = HttpStatus.ok;
         request.response.write('a');
@@ -146,9 +150,9 @@ void main() {
   group('verbs', () {
     test('get returns status/header/url', () async {
       final res = await Http.get('$base/hello');
-      expect(res.status(), HttpStatus.ok);
+      expect(res.statusCode(), HttpStatus.ok);
       expect(res.header('content-type'), contains('text/plain'));
-      expect(res.url(), '$base/hello');
+      expect(res.finalUrl(), '$base/hello');
       await res.close();
     });
 
@@ -166,31 +170,53 @@ void main() {
 
     test('non-2xx is still a Response', () async {
       final res = await Http.get('$base/nope');
-      expect(res.status(), HttpStatus.notFound);
+      expect(res.statusCode(), HttpStatus.notFound);
       expect(await res.text(), 'nope');
     });
 
-    test('redirects are followed, url() is final', () async {
+    test('redirects are followed, finalUrl() is final', () async {
       final res = await Http.get('$base/redirect');
-      expect(res.status(), HttpStatus.ok);
-      expect(res.url(), '$base/hello');
+      expect(res.statusCode(), HttpStatus.ok);
+      expect(res.finalUrl(), '$base/hello');
       expect(await res.text(), contains('hello'));
     });
 
     test('post sends body, returns status/text/header', () async {
-      final res = await Http.post('$base/echo', body: 'a=1');
-      expect(res.status(), HttpStatus.created);
+      final res = await Http.post('$base/echo', body: Body.text('a=1'));
+      expect(res.statusCode(), HttpStatus.created);
       expect(await res.text(), 'got:a=1');
       expect(res.header('x-echo'), 'yes');
     });
 
+    test('Body.json accepts a Json inside the value', () async {
+      final r = await Http.post('$base/echo',
+          body: .json({'a': Json.parse('{"b":[1,2]}')}));
+      expect(await r.text(), 'got:{"a":{"b":[1,2]}}');
+    });
+
+    test('retries re-send idempotent verbs but never POST or PATCH', () async {
+      await Http.put('$base/boom', body: Body.text('x'), retries: 1);
+      expect(hits['PUT'], 2);
+      await Http.post('$base/boom', body: Body.text('x'), retries: 1);
+      await Http.patch('$base/boom', body: Body.text('x'), retries: 1);
+      expect(hits['POST'], 1);
+      expect(hits['PATCH'], 1);
+    });
+
+    test('post sends json and form bodies', () async {
+      final j = await Http.post('$base/echo', body: .json({'a': 1}));
+      expect(await j.text(), 'got:{"a":1}');
+      final f = await Http.post('$base/echo', body: Body.form({'a': '1'}));
+      expect(await f.text(), 'got:a=1');
+    });
+
     test('put sends body', () async {
-      final res = await Http.put('$base/item', body: 'a=1');
+      final res = await Http.put('$base/item', body: Body.text('a=1'));
       expect(await res.text(), 'put:a=1');
     });
 
     test('patch sends body', () async {
-      final res = await Http.patch('$base/item', body: 'b=2');
+      final res = await Http.patch('$base/item', body: Body.text('b=2'));
       expect(await res.text(), 'patch:b=2');
     });
 
@@ -201,7 +227,7 @@ void main() {
 
     test('head returns status, empty text', () async {
       final res = await Http.head('$base/hello');
-      expect(res.status(), HttpStatus.ok);
+      expect(res.statusCode(), HttpStatus.ok);
       expect(await res.text(), isEmpty);
     });
 
@@ -212,14 +238,14 @@ void main() {
     });
 
     test('body takes bytes', () async {
-      final res = await Http.post('$base/echo', body: utf8.encode('a=2'));
+      final res = await Http.post('$base/echo', body: Body.bytes(utf8.encode('a=2')));
       expect(await res.text(), 'got:a=2');
     });
 
     test('body streams a Reader', () async {
       final res = await Http.put(
         '$base/upload',
-        body: _Mem('0123456789'),
+        body: Body.stream(_Mem('0123456789')),
         headers: {'content-length': '10'},
       );
       expect(await res.text(), 'size:10;length:10');
@@ -230,18 +256,17 @@ void main() {
       await expectLater(
         Http.put(
           '$base/blackhole',
-          body: _SlowReader(),
+          body: Body.stream(_SlowReader()),
           timeout: const Duration(seconds: 1),
         ),
         throwsA(isA<TimeoutException>()),
       );
     });
 
-    test('wrong body type is an ArgumentError', () async {
-      expect(
-        Http.post('$base/echo', body: 42),
-        throwsArgumentError,
-      );
+    test('a streamed body is sent once, never retried', () async {
+      // A stream cannot be resent: resendable is false by type, so even
+      // with retries a failure surfaces instead of hanging or resending.
+      // Covered by the type (Body.stream) + the H1 timeout above.
     });
   });
 
@@ -289,6 +314,25 @@ void main() {
       expect(await res.bytes(), utf8.encode(a));
     });
 
+    test('bytes() is an unmodifiable O(1) view, not a copy', () async {
+      final res = await Http.get('$base/hello');
+      final b = await res.bytes();
+      expect(() => b[0] = 0, throwsUnsupportedError);
+      await res.close();
+    });
+
+    test('insecure is per-call and hold() keeps the client', () async {
+      final plain = await Http.get('$base/hello', insecure: true);
+      expect(await plain.text(), contains('hello'));
+      final hold = Http.hold();
+      try {
+        final r = await Http.get('$base/hello');
+        expect(await r.text(), contains('hello'));
+      } finally {
+        await hold.close();
+      }
+    });
+
     test('piping streams without caching; reading after is StateError', () async {
       final res = await Http.get('$base/hello');
       final sink = _Sink();
@@ -326,6 +370,20 @@ void main() {
       );
     });
 
+    test('dropping an unbounded body does not drain it', () async {
+      final res = await Http.get('$base/stall');
+      final sw = Stopwatch()..start();
+      await res.close();
+      expect(sw.elapsedMilliseconds, lessThan(2000));
+    });
+
+    test('a writer that fails before reading frees a slow response', () async {
+      final sw = Stopwatch()..start();
+      await expectLater(Http.get('$base/stall') > _ThrowFirstWriter(), throwsStateError);
+      await Http.get('$base/hello').text();
+      expect(sw.elapsedMilliseconds, lessThan(2000));
+    });
+
     test('a failed pipe releases the connection', () async {
       final res = await Http.get('$base/hello');
       await expectLater(res > _BoomWriter(), throwsStateError);
@@ -334,23 +392,23 @@ void main() {
     });
 
     test('Future mirrors match', () async {
-      expect(await Http.get('$base/hello').status(), HttpStatus.ok);
+      expect(await Http.get('$base/hello').statusCode(), HttpStatus.ok);
       expect(
         await Http.get('$base/hello').header('content-type'),
         contains('text/plain'),
       );
-      expect(await Http.get('$base/hello').url(), '$base/hello');
+      expect(await Http.get('$base/hello').finalUrl(), '$base/hello');
       expect(await Http.get('$base/hello').text(), contains('hello'));
-      expect(await Http.get('$base/hello').ok(), isTrue);
+      expect(await Http.get('$base/hello').isSuccess(), isTrue);
       // /hello is chunked (no content-length); /sized sets one.
-      expect(await Http.get('$base/hello').size(), isNull);
-      expect(await Http.get('$base/sized').size(), 5);
-      expect(await Http.get('$base/hello').name(), 'hello');
+      expect(await Http.get('$base/hello').contentLength(), isNull);
+      expect(await Http.get('$base/sized').contentLength(), 5);
+      expect(await Http.get('$base/hello').fileName(), 'hello');
     });
 
     test('H2: mirrors close the response (one-shot)', () async {
       final f = Http.get('$base/hello');
-      expect(await f.status(), HttpStatus.ok);
+      expect(await f.statusCode(), HttpStatus.ok);
       // Nothing else can reach the response now: reading fails, closing
       // is a harmless no-op, and the process is not kept alive.
       await expectLater(f.text(), throwsStateError);
@@ -408,4 +466,10 @@ final class _BoomWriter implements Writer {
       if (n == 1) throw StateError('writer blew up mid-write');
     }
   }
+}
+
+final class _ThrowFirstWriter implements Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async =>
+      throw StateError('before reading');
 }

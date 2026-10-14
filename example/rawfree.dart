@@ -33,9 +33,6 @@ Future<void> main([List<String> args = const []]) async {
 }
 
 Future<void> runConsole(String initialQuery) async {
-  // Interactive-first: always style the menus, even with NO_COLOR set
-  // (the library default honors it; remove this to follow the convention).
-  Console.forceColor = true;
   var query = initialQuery.trim();
   // Outer loop: one search per iteration. Setting [query] to '' prompts
   // again on the next pass. The browsing menus clear the screen; the
@@ -69,7 +66,7 @@ Future<String> _seriesMenu(String query) async {
   SearchPage first;
   try {
     final q = query;
-    first = await Console.spin(
+    first = await Console.withSpinner(
       'searching for "$q"',
       () => searchManga(q),
     );
@@ -96,13 +93,14 @@ Future<String> _seriesMenu(String query) async {
     final moreLabel = '⋯ Load more results (page ${page + 1})';
     final String choice;
     try {
+      Console.clearScreen();
+      final items = [...labels, if (hasMore) moreLabel, _newSearch, _quit];
       choice = await Console.choose(
         'Results for "$query" — pick a series:',
-        [...labels, if (hasMore) moreLabel, _newSearch, _quit],
-        clear: true,
-        initial: keepIndex,
-        escapeValue: _newSearch,
-        shortcuts: const {'b': _newSearch, 'q': _quit},
+        items,
+        label: (s) => s,
+        initial: keepIndex < items.length ? items[keepIndex] : null,
+        keys: const {'b': _newSearch, 'q': _quit, 'escape': _newSearch},
       );
     } catch (_) {
       _quitRequested = true;
@@ -117,7 +115,7 @@ Future<String> _seriesMenu(String query) async {
     if (choice == moreLabel) {
       page++;
       try {
-        final next = await Console.spin(
+        final next = await Console.withSpinner(
           'loading results (page $page)…',
           () => searchManga(query, page: page),
         );
@@ -149,7 +147,7 @@ enum _ChapterExit { back, newSearch, quit }
 Future<_ChapterExit> _chapterMenu(Hit hit) async {
   ChapterPage first;
   try {
-    first = await Console.spin(
+    first = await Console.withSpinner(
       'loading chapters for ${hit.title}',
       () => resolveChapters(hit.url),
     );
@@ -175,24 +173,26 @@ Future<_ChapterExit> _chapterMenu(Hit hit) async {
     final moreLabel = '⋯ Load older chapters (page ${page + 1})';
     final String choice;
     try {
+      Console.clearScreen();
+      final items = [
+        allLabel,
+        ...labels,
+        if (hasMore) moreLabel,
+        _openBrowser,
+        _backToSeries,
+        _newSearch,
+        _quit,
+      ];
       choice = await Console.choose(
         'Chapters of ${hit.title} — pick to download:',
-        [
-          allLabel,
-          ...labels,
-          if (hasMore) moreLabel,
-          _openBrowser,
-          _backToSeries,
-          _newSearch,
-          _quit,
-        ],
-        clear: true,
-        initial: keepIndex,
-        escapeValue: _backToSeries,
-        shortcuts: const {
+        items,
+        label: (s) => s,
+        initial: keepIndex < items.length ? items[keepIndex] : null,
+        keys: const {
           'b': _backToSeries,
           'o': _openBrowser,
           'q': _quit,
+          'escape': _backToSeries,
         },
       );
     } catch (_) {
@@ -215,7 +215,7 @@ Future<_ChapterExit> _chapterMenu(Hit hit) async {
     if (choice == moreLabel) {
       page++;
       try {
-        final next = await Console.spin(
+        final next = await Console.withSpinner(
           'loading chapters (page $page)…',
           () => resolveChapters(hit.url, page: page),
         );
@@ -234,7 +234,7 @@ Future<_ChapterExit> _chapterMenu(Hit hit) async {
       while (hasMore) {
         page++;
         try {
-          final next = await Console.spin(
+          final next = await Console.withSpinner(
             'loading chapters (page $page)…',
             () => resolveChapters(hit.url, page: page),
           );
@@ -265,7 +265,7 @@ Future<_ChapterExit> _chapterMenu(Hit hit) async {
 /// quit the flow by itself.
 Future<void> _pause() async {
   try {
-    await Console.key(prompt: 'Press any key to continue…');
+    await Console.readKey(prompt: 'Press any key to continue…');
   } catch (_) {
     // Ignored: the next prompt fails naturally on a closed stdin.
   }
@@ -304,12 +304,12 @@ Future<void> _downloadChapters(Hit hit, List<Chapter> chapters) async {
   final failed = <Job>[];
   for (final chapter in chapters) {
     final job = Job(hit, chapter)..status = JobStatus.active;
-    Bar? bar;
+    ProgressBar? bar;
     try {
       await fetchChapter(
         job,
         onTotal: (total) {
-          bar ??= Console.bar(total, label: '⇣ ${chapter.title}');
+          bar ??= Console.progressBar(total, label: '⇣ ${chapter.title}');
         },
         onTick: () => bar?.tick(),
       );
@@ -336,7 +336,7 @@ Future<void> _downloadChapters(Hit hit, List<Chapter> chapters) async {
     );
     final String answer;
     try {
-      answer = (await Console.key()).trim().toLowerCase();
+      answer = (await Console.readKey()).trim().toLowerCase();
     } catch (_) {
       return;
     }
@@ -349,12 +349,12 @@ Future<void> _downloadChapters(Hit hit, List<Chapter> chapters) async {
     failed.clear();
     for (final job in todo) {
       job.status = JobStatus.active;
-      Bar? bar;
+      ProgressBar? bar;
       try {
         await fetchChapter(
           job,
           onTotal: (total) {
-            bar ??= Console.bar(total, label: '⇣ ${job.chapter.title}');
+            bar ??= Console.progressBar(total, label: '⇣ ${job.chapter.title}');
           },
           onTick: () => bar?.tick(),
         );

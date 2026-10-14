@@ -150,16 +150,16 @@ Future<List<String>> _nativeTitles(String query) =>
       try {
         final res = await Http.post(
           'https://graphql.anilist.co',
-          json: {
+          body: Body.json({
             'query':
                 'query (\$q: String) { Page(perPage: 5) { media(search: \$q, type: MANGA, sort: SEARCH_MATCH) { title { native } } } }',
             'variables': {'q': query},
-          },
+          }),
           headers: {'accept': 'application/json'},
           timeout: const Duration(seconds: 15),
           retries: 1,
         );
-        if (!res.ok()) {
+        if (!res.isSuccess()) {
           await res.close();
           return const [];
         }
@@ -196,7 +196,7 @@ Future<ChapterPage> resolveChapters(
   final posts = await _apiGet('posts?slug=$sq&_fields=id,tags');
   for (final p in posts) {
     if (p.$('id').value<int>() == null) continue;
-    final tagIds = p.$('tags').value<List<int>>() ?? [];
+    final tagIds = p.$('tags').listOf<int>() ?? [];
     final tagId = await _seriesTag(tagIds);
     if (tagId == null) throw const FormatException('no series tag');
     final chapters = await _apiPage(
@@ -230,14 +230,14 @@ Future<List<String>> chapterImages(int postId) async {
   for (var round = 0; round < 12; round++) {
     final decoded = await Http.post(
       '$_base/wp-admin/admin-ajax.php',
-      body: {
+      body: Body.form({
         'action': 'z_do_ajax',
         '_action': 'decode_images',
         'p': '$postId',
         'img_index': '$index',
         'content': '',
         'nonce': 'x',
-      },
+      }),
     ).json();
     final mes = decoded.$('mes').value<String>() ?? '';
     if (mes.isNotEmpty) {
@@ -309,7 +309,7 @@ Future<void> fetchChapter(
 }
 
 /// Open the series page in the desktop browser.
-Future<void> openSeries(Hit hit) => Shell.open(hit.url);
+Future<void> openSeries(Hit hit) => Shell.openInDefaultApp(hit.url);
 
 /// One page; null on success, else a short reason (non-2xx with status,
 /// network error, or a <1 KB stub that is usually an error page or an
@@ -328,7 +328,10 @@ Future<String?> _fetchPage(Job job, int i, String url) async {
   }
   if (status < 200 || status > 299) return 'HTTP $status p${i + 1}';
   if (data.length < 1024) return 'empty reply p${i + 1}';
-  await Fs.dir(job.dir).file('${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, contentType)}').write(data);
+  await (Reader.of(data) >
+      Fs.dir(job.dir).file(
+        '${'${i + 1}'.padLeft(3, '0')}${_imgExt(data, contentType)}',
+      ));
   return null;
 }
 
@@ -344,8 +347,8 @@ Future<(int status, List<int> data, String? contentType)> _getPage(String url) a
       headers: {..._headers, 'referer': '$_base/'},
       retries: 2,
     );
-    final bool ok = img.ok();
-    final int status = img.status();
+    final bool ok = img.isSuccess();
+    final int status = img.statusCode();
     final List<int> data = ok ? await img.bytes() : const <int>[];
     final String? contentType = img.header('content-type');
     if (!ok) await img.close();
@@ -412,11 +415,11 @@ Future<({Json json, int totalPages})> _apiPage(String path) async {
     headers: _headers,
     retries: 2,
   );
-  if (!res.ok()) {
+  if (!res.isSuccess()) {
     final text = await res.text();
     await res.close();
-    throw HttpException('HTTP ${res.status()}: ${shortError(text)}',
-        uri: Uri.parse(res.url()));
+    throw HttpException('HTTP ${res.statusCode()}: ${shortError(text)}',
+        uri: Uri.parse(res.finalUrl()));
   }
   final totalPages =
       int.tryParse(res.header('x-wp-totalpages') ?? '') ?? 1;

@@ -1,38 +1,42 @@
 /// Typed file-system handles. Thin facade over `dart:io` and `package:path`.
 ///
 /// ```dart
-/// switch (await Fs.entry(args.first)) {
+/// switch (await Fs.lookup(args.first)) {
 ///   case File file: print('file, ${await file.size()} bytes');
 ///   case Dir dir: print('folder of ${(await dir.list()).length}');
-///   case Link link: print('link → ${await link.target()}');
+///   case Link link: print('link → ${await link.targetPath()}');
 ///   case null: print('nothing there');
 /// }
-/// await (Fs.file('a.iso') | hash > Fs.file('b.iso'));
+/// await (Reader.of(bytes) > Fs.file('a.bin'));
 /// ```
 ///
 /// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link].
-/// - `Fs.entry/file/dir/link()` inspect or build handles (no I/O for the latter three).
+/// - `Fs.lookup/file/dir/link()` inspect or build handles (`lookup` is the
+///   one call that does I/O; the other three do none).
 /// - [Entry] supports `path` `name` `parent` `exists` `delete` `copy` `move`.
 /// - [File] supports `write` `append` `size` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `create`.
-/// - [Link] supports `target` `resolve` `create`.
+/// - [Link] supports `targetPath` `resolveTarget` `create`.
 /// Everything else is private.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
-import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
 import 'core.dart';
 export 'core.dart';
 
+import 'src/exit.dart' as exit;
+import 'src/posix.dart' as posix;
+
 /// Entry point: inspect the disk or build handles (handles do no I/O).
 abstract final class Fs {
-  /// What is on disk now: a [File], [Dir], [Link], or null. Never follows links.
-  static Future<Entry?> entry(String path) async {
+  /// What is on disk now: a [File], [Dir], [Link], or null. Never follows
+  /// links. The one `Fs.` call that does I/O; `file`/`dir`/`link` don't.
+  static Future<Entry?> lookup(String path) async {
     final type = await io.FileSystemEntity.type(path, followLinks: false);
     return switch (type) {
       io.FileSystemEntityType.file => File._(path),
@@ -134,9 +138,9 @@ final class File extends Entry with Reader implements Writer {
     try {
       await io.File(_path).rename(to);
     } on io.FileSystemException catch (e) {
-      // Rename across devices is EXDEV (18); anything else (missing
-      // source, occupied destination, permissions) must surface.
-      if (!_isExdev(e)) rethrow;
+      // Rename across devices; anything else (missing source, occupied
+      // destination, permissions) must surface.
+      if (!posix.isCrossDevice(e)) rethrow;
       await io.File(_path).copy(to);
       await _preserveFileMeta(_path, to);
       await io.File(_path).delete();
@@ -144,40 +148,40 @@ final class File extends Entry with Reader implements Writer {
     return File._(to);
   }
 
-  /// Replace the content with in-memory [data] (`String` as UTF-8 or
-  /// `List<int>` as is; anything else is an [ArgumentError]), atomically.
-  /// Creates missing parents. Returns this file.
-  Future<File> write(Object data) async {
+  /// Replace the content with UTF-8 [text], atomically. Creates missing
+  /// parents. Returns this file. Bytes go through the one [Writer] path:
+  /// `await (Reader.of(bytes) > file)`.
+  Future<File> write(String text) async {
     await _ensureParent(_path);
-    await _atomicWrite(Stream.value(_toBytes(data)));
+    await _atomicWrite(Stream.value(utf8.encode(text)));
     return this;
   }
 
-  /// Add in-memory [data] to the end, atomically (temp+rename, so a crash
-  /// keeps the old content). Creates missing parents. Returns this.
-  Future<File> append(Object data) async {
+  /// Add [text] to the end with OS append mode (`O_APPEND`) under an
+  /// exclusive lock: O(len(data)), so concurrent appends never lose data
+  /// and never replace open inodes. Creates missing parents. Returns this.
+  Future<File> append(String text) async {
     await _ensureParent(_path);
-    List<int> existing = const [];
-    try {
-      // Through symlinks, like writes (F7): append to the real target.
-      final t = await io.FileSystemEntity.type(_path, followLinks: false);
-      if (t == io.FileSystemEntityType.file) {
-        existing = await io.File(_path).readAsBytes();
-      } else if (t == io.FileSystemEntityType.link) {
+    // Serialised process-wide first (see [_appendMutex]), then one
+    // open/seek/write under the OS lock.
+    await _appendMutex.run(() async {
+      final raf = await io.File(_path).open(mode: io.FileMode.append);
+      try {
+        await raf.lock(io.FileLock.exclusive);
         try {
-          final target = await io.Link(_path).resolveSymbolicLinks();
-          existing = await io.File(target).readAsBytes();
-        } catch (_) {
-          existing = const [];
+          // The file offset is captured per open, so seek to the end
+          // inside the lock: concurrent opens would otherwise all write
+          // at the same stale offset.
+          await raf.setPosition(await raf.length());
+          await raf.writeString(text);
+          await raf.flush();
+        } finally {
+          await raf.unlock();
         }
+      } finally {
+        await raf.close();
       }
-    } catch (_) {
-      existing = const [];
-    }
-    final add = _toBytes(data);
-    await _atomicWrite(
-      Stream.value([...existing, ...add]),
-    );
+    });
     return this;
   }
 
@@ -185,14 +189,13 @@ final class File extends Entry with Reader implements Writer {
   Future<int> size() => io.File(_path).length();
 
   @override
+  Origin origin() => Origin(path: _path, name: p.basename(_path));
+
+  @override
   Stream<List<int>> stream() => io.File(_path).openRead();
 
   @override
   Future<List<int>> bytes() => io.File(_path).readAsBytes();
-
-  @override
-  Future<String> text() async =>
-      utf8.decode(await bytes(), allowMalformed: true);
 
   @override
   Future<void> consume(Stream<List<int>> input) async {
@@ -225,22 +228,27 @@ final class File extends Entry with Reader implements Writer {
       final st = await io.FileStat.stat(target);
       oldMode = st.mode & 0xFFF;
     } catch (_) {}
-    final dir = p.dirname(target);
-    // Unique tmp name (pid + micros + 32 random bits); created exclusively
-    // (O_EXCL) so a collision retries instead of clobbering.
-    io.File tmpFile = io.File('');
-    var tmpPath = '';
-    for (var attempt = 0; attempt < 5; attempt++) {
-      tmpPath =
-          '$dir/.${p.basename(target)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
-      tmpFile = io.File(tmpPath);
+    // Unique temp sibling (`p.join`, so Windows never mixes separators),
+    // created exclusively (O_EXCL) so a collision retries with a fresh name
+    // instead of clobbering.
+    var tmp = posix.tmpPath(target);
+    var tmpFile = io.File(tmp);
+    for (var attempt = 0; ; attempt++) {
       try {
         await tmpFile.create(exclusive: true);
         break;
       } on io.FileSystemException {
-        if (attempt == 4) rethrow;
+        if (attempt >= 4) rethrow;
+        tmp = posix.tmpPath(target);
+        tmpFile = io.File(tmp);
       }
     }
+    // An interrupt skips `finally`: the exit hook removes the temp file.
+    final token = exit.onExit(() async {
+      try {
+        await tmpFile.delete();
+      } catch (_) {}
+    });
     try {
       final sink = tmpFile.openWrite();
       try {
@@ -252,25 +260,25 @@ final class File extends Entry with Reader implements Writer {
         } catch (_) {}
         rethrow;
       }
-      // chmod the tmp before the rename (no umask window on the target).
-      if (oldMode != 0) await _chmod(tmpPath, oldMode);
-      await tmpFile.rename(target);
+      // chmod the tmp before the rename (no umask window on the target),
+      // and only when the fresh tmp mode differs from the old one: under
+      // the same umask that is almost never, so overwrites skip the fork.
+      if (oldMode != 0) {
+        var tmpMode = 0;
+        try {
+          tmpMode = (await io.FileStat.stat(tmp)).mode & 0xFFF;
+        } catch (_) {}
+        if (tmpMode != oldMode) await posix.chmod(tmp, oldMode);
+      }
+      await _renameOver(tmpFile, target);
     } catch (_) {
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (_) {}
       rethrow;
+    } finally {
+      exit.offExit(token);
     }
-  }
-
-  static List<int> _toBytes(Object data) {
-    if (data is String) return utf8.encode(data);
-    if (data is List<int>) return data;
-    throw ArgumentError.value(
-      data,
-      'data',
-      'must be a String or List<int>',
-    );
   }
 }
 
@@ -284,8 +292,8 @@ final class Dir extends Entry {
   /// A folder handle under this folder. No I/O.
   Dir dir(String name) => Dir._(p.join(_path, name));
 
-  /// Typed children, sorted by name. With [recursive], descends into
-  /// subfolders but never through links.
+  /// Typed children, sorted by relative path (depth-first when [recursive]).
+  /// Never descends through links.
   Future<List<Entry>> list({bool recursive = false}) async {
     final t = await io.FileSystemEntity.type(_path, followLinks: false);
     if (t != io.FileSystemEntityType.directory) {
@@ -306,7 +314,7 @@ final class Dir extends Entry {
         out.add(Dir._(e.path));
       }
     }
-    out.sort((a, b) => a.name().compareTo(b.name()));
+    posix.sortByRelative(out, (e) => e.path(), _path);
     return out;
   }
 
@@ -341,6 +349,14 @@ final class Dir extends Entry {
     await _checkSource(_path, to, io.FileSystemEntityType.directory);
     await _ensureParent(to);
     await _removeDestLink(to);
+    // One `cp -pPR` keeps modes, times and links with a single fork. It
+    // only matches the merge semantics for a fresh destination (into an
+    // existing tree `cp` would nest instead), so an existing target, a
+    // missing `cp`, or Windows falls back to the in-process loop below.
+    if (await io.FileSystemEntity.type(to, followLinks: false) ==
+        io.FileSystemEntityType.notFound) {
+      if (await posix.copyTreeWithCp(_path, to)) return Dir._(to);
+    }
     await _copyDir(_path, to);
     return Dir._(to);
   }
@@ -353,10 +369,11 @@ final class Dir extends Entry {
     try {
       await io.Directory(_path).rename(to);
     } on io.FileSystemException catch (e) {
-      // Only EXDEV falls back to copy-then-delete. Anything else (e.g.
-      // moving into a non-empty folder, permissions) must rethrow instead
-      // of silently merging/overwriting and deleting the source.
-      if (!_isExdev(e)) rethrow;
+      // Only a cross-device move falls back to copy-then-delete. Anything
+      // else (e.g. moving into a non-empty folder, permissions) must
+      // rethrow instead of silently merging/overwriting and deleting the
+      // source.
+      if (!posix.isCrossDevice(e)) rethrow;
       final destType = await io.FileSystemEntity.type(to, followLinks: false);
       if (destType != io.FileSystemEntityType.notFound) {
         throw io.FileSystemException('Destination already exists', to);
@@ -373,11 +390,11 @@ final class Link extends Entry {
   Link._(super.path) : super._();
 
   /// The stored target string.
-  Future<String> target() => io.Link(_path).target();
+  Future<String> targetPath() => io.Link(_path).target();
 
   /// Follow the chain to what is finally there, or null when broken.
   /// Returns a handle AT THE TARGET path (not the link's own path).
-  Future<Entry?> resolve() async {
+  Future<Entry?> resolveTarget() async {
     String resolved;
     try {
       resolved = await io.Link(_path).resolveSymbolicLinks();
@@ -399,9 +416,7 @@ final class Link extends Entry {
   /// Returns this.
   Future<Link> create(String target) async {
     await _ensureParent(_path);
-    final dir = p.dirname(_path);
-    final tmp =
-        '$dir/.${p.basename(_path)}.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.${Random().nextInt(1 << 32)}';
+    final tmp = posix.tmpPath(_path);
     final tmpLink = io.Link(tmp);
     await tmpLink.create(target, recursive: true);
     try {
@@ -465,16 +480,7 @@ final class Link extends Entry {
   @override
   Future<Link> copy(String to) async {
     await _checkSource(_path, to, io.FileSystemEntityType.link);
-    await _ensureParent(to);
-    final t = await target();
-    final link = io.Link(to);
-    try {
-      await link.create(t, recursive: true);
-    } on io.FileSystemException {
-      await link.delete();
-      await link.create(t, recursive: true);
-    }
-    return Link._(to);
+    return Link._(to).create(await targetPath());
   }
 
   @override
@@ -484,8 +490,8 @@ final class Link extends Entry {
     try {
       await io.Link(_path).rename(to);
     } on io.FileSystemException catch (e) {
-      if (!_isExdev(e)) rethrow;
-      final t = await target();
+      if (!posix.isCrossDevice(e)) rethrow;
+      final t = await targetPath();
       await io.Link(to).create(t, recursive: true);
       await io.Link(_path).delete();
     }
@@ -514,8 +520,8 @@ extension FileFuture on Future<File> {
   Future<void> delete() async => (await this).delete();
   Future<File> copy(String to) async => (await this).copy(to);
   Future<File> move(String to) async => (await this).move(to);
-  Future<File> write(Object data) async => (await this).write(data);
-  Future<File> append(Object data) async => (await this).append(data);
+  Future<File> write(String text) async => (await this).write(text);
+  Future<File> append(String text) async => (await this).append(text);
   Future<int> size() async => (await this).size();
 }
 
@@ -544,8 +550,8 @@ extension LinkFuture on Future<Link> {
   Future<void> delete() async => (await this).delete();
   Future<Link> copy(String to) async => (await this).copy(to);
   Future<Link> move(String to) async => (await this).move(to);
-  Future<String> target() async => (await this).target();
-  Future<Entry?> resolve() async => (await this).resolve();
+  Future<String> targetPath() async => (await this).targetPath();
+  Future<Entry?> resolveTarget() async => (await this).resolveTarget();
   Future<Link> create(String target) async =>
       (await this).create(target);
 }
@@ -557,17 +563,46 @@ Future<void> _ensureParent(String path) async {
   }
 }
 
-/// True only for cross-device renames.
-bool _isExdev(io.FileSystemException e) {
-  final code = e.osError?.errorCode;
-  if (code == 18 || code == 17) return true;
-  if (code == null) {
-    final msg = e.message.toLowerCase();
-    if (msg.contains('cross-device') || msg.contains('different device')) {
-      return true;
-    }
+/// Process-wide FIFO mutex serialising appends. `dart:io` file locks are
+/// `fcntl` locks, which never conflict between opens of one process, so
+/// the OS lock alone cannot stop same-process appends racing on a stale
+/// file offset (verified: the OS lock let 20 concurrent appends through
+/// and 19 lines were lost). The mutex serialises this process; the OS
+/// lock still excludes other processes.
+final _appendMutex = _Mutex();
+
+final class _Mutex {
+  Future<void> _tail = Future.value();
+
+  Future<void> run(Future<void> Function() work) {
+    final next = Completer<void>();
+    final prev = _tail;
+    _tail = next.future;
+    return prev.then((_) => work()).whenComplete(next.complete);
   }
-  return false;
+}
+
+/// Rename the temp file over [target]. Atomic on POSIX; on Windows a target
+/// held open elsewhere (an editor, antivirus, the indexer) can fail with a
+/// sharing violation, so retry briefly (3 attempts, 50 ms apart) there.
+Future<void> _renameOver(io.File tmp, String target) async {
+  try {
+    await tmp.rename(target);
+    return;
+  } on io.FileSystemException catch (first) {
+    if (posix.isPosix) rethrow;
+    var last = first;
+    for (var i = 0; i < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      try {
+        await tmp.rename(target);
+        return;
+      } on io.FileSystemException catch (e) {
+        last = e;
+      }
+    }
+    throw last;
+  }
 }
 
 /// Replace a dest symlink with nothing, so a file/dir copy replaces the
@@ -612,7 +647,13 @@ Future<void> _checkSource(
   }
   // Resolve symlinks for a real self-copy check.
   try {
-    final realFrom = await io.File(nf).resolveSymbolicLinks();
+    // A link has no inside: judge it by where it sits, not what it points at.
+    final realFrom = expected == io.FileSystemEntityType.link
+        ? p.join(
+            await io.Directory(p.dirname(nf)).resolveSymbolicLinks(),
+            p.basename(nf),
+          )
+        : await io.File(nf).resolveSymbolicLinks();
     String realTo;
     try {
       // Dest may not exist: resolve its parent.
@@ -634,20 +675,6 @@ Future<void> _checkSource(
   }
 }
 
-/// chmod on POSIX, best-effort elsewhere (Windows has no POSIX modes).
-Future<void> _chmod(String path, int mode) async {
-  if (io.Platform.isWindows) return;
-  try {
-    final perms = mode & 0xFFF;
-    final r = await io.Process.run(
-      'chmod',
-      [perms.toRadixString(8), path],
-    );
-    // Ignore launcher/exit failures: best-effort.
-    if (r.exitCode != 0) return;
-  } catch (_) {}
-}
-
 /// Keep the source file's mtime and mode on a copy.
 /// Skips the chmod fork when the mode already matches.
 Future<void> _preserveFileMeta(String from, String to) async {
@@ -659,35 +686,11 @@ Future<void> _preserveFileMeta(String from, String to) async {
     try {
       final dst = await io.FileStat.stat(to);
       if ((dst.mode & 0xFFF) != (st.mode & 0xFFF)) {
-        await _chmod(to, st.mode & 0xFFF);
+        await posix.chmod(to, st.mode & 0xFFF);
       }
     } catch (_) {
-      await _chmod(to, st.mode & 0xFFF);
+      await posix.chmod(to, st.mode & 0xFFF);
     }
-  } catch (_) {}
-}
-
-/// Set a folder's mtime (dart:io has no Directory.setLastModified):
-/// `touch` on POSIX, no-op on Windows. Best-effort (sub-second kept where
-/// the platform allows: Linux `@secs.frac`, macOS seconds).
-Future<void> _setDirMtime(String path, DateTime mtime) async {
-  if (io.Platform.isWindows) return;
-  try {
-    final List<String> args;
-    if (io.Platform.isMacOS) {
-      String two(int n) => n.toString().padLeft(2, '0');
-      final t =
-          '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
-      args = ['-t', t, path];
-    } else {
-      final secs = mtime.millisecondsSinceEpoch / 1000;
-      args = [
-        '-d',
-        '@${secs.toStringAsFixed(3)}',
-        path,
-      ];
-    }
-    await io.Process.run('touch', args);
   } catch (_) {}
 }
 
@@ -713,6 +716,9 @@ String _strip(String path) {
   return path;
 }
 
+/// In-process tree copy: the Windows path (no `cp -pPR`, no POSIX modes)
+/// and the fallback when `cp` is missing or the destination already exists
+/// (merging would nest under `cp`, so an existing tree merges here).
 Future<void> _copyDir(String from, String to) async {
   // Throws-before-writes for file<->dir collisions: walk first.
   await _checkDirCollisions(from, to);
@@ -753,10 +759,12 @@ Future<void> _copyDir(String from, String to) async {
   }
   // Folders keep modes AND mtimes: set the folder mtime after its contents
   // are copied (writing children bumps it), and chmod to the source mode.
+  // Both are no-ops on Windows; mtime precision differs per OS (macOS whole
+  // seconds, Linux sub-seconds) and the docs say so.
   try {
     final st = await io.FileStat.stat(from);
-    await _setDirMtime(to, st.modified);
-    await _chmod(to, st.mode & 0xFFF);
+    await posix.setDirMtime(to, st.modified);
+    await posix.chmod(to, st.mode & 0xFFF);
   } catch (_) {}
 }
 

@@ -7,8 +7,9 @@
 /// ```
 ///
 /// Public surface is exactly: [Shell], [Output].
-/// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe].
-/// - [Output] supports `exitCode` `errorText` (plus [Reader] over stdout).
+/// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe],
+///   `Shell.openInDefaultApp()` opens a URL or path with the OS.
+/// - [Output] supports `exitCode` `stderrText` (plus [Reader] over stdout).
 /// Everything else is private.
 library;
 
@@ -21,24 +22,33 @@ import 'core.dart';
 export 'core.dart';
 
 /// Entry point: run a program, make one a filter, or open with the OS.
+/// The only OS branch in this facade is which launcher [openInDefaultApp]
+/// uses; launching itself is per-OS by nature.
 abstract final class Shell {
   /// Run [command] directly (no shell), with stdin closed. Waits for the exit
   /// and returns an [Output]. A program that can't start throws
   /// [io.ProcessException]. A non-zero exit is an [Output], never a throw.
+  ///
+  /// With [live], the child's stdout/stderr tee to ours while it runs (for
+  /// build steps a human watches); the output is still captured and returned
+  /// as the [Output]. [env] overlays the parent environment; a null value
+  /// unsets the variable for the child.
   static Future<Output> run(
     List<String> command, {
     String? workingDir,
-    Map<String, String>? env,
+    Map<String, String?>? env,
+    bool live = false,
   }) async {
     _checkCommand(command);
+    if (live) return _runLive(command, workingDir: workingDir, env: env);
     io.ProcessResult r;
     try {
       r = await io.Process.run(
         command[0],
         command.sublist(1),
         workingDirectory: workingDir,
-        environment:
-            env == null ? null : {...io.Platform.environment, ...env},
+        environment: _resolveEnv(env),
+        includeParentEnvironment: env == null,
         stdoutEncoding: null,
         stderrEncoding: null,
       );
@@ -57,24 +67,104 @@ abstract final class Shell {
     );
   }
 
+  /// [run] with `live: true`: `Process.start` plus a stdout/stderr tee.
+  static Future<Output> _runLive(
+    List<String> command, {
+    String? workingDir,
+    Map<String, String?>? env,
+  }) async {
+    io.Process proc;
+    try {
+      proc = await io.Process.start(
+        command[0],
+        command.sublist(1),
+        workingDirectory: workingDir,
+        environment: _resolveEnv(env),
+        includeParentEnvironment: env == null,
+      );
+    } on io.ProcessException catch (e) {
+      throw io.ProcessException(
+        command[0],
+        command.sublist(1),
+        'cannot start ${command[0]}: ${e.message}',
+        e.errorCode,
+      );
+    }
+    try {
+      await proc.stdin.close();
+    } catch (_) {}
+    final out = BytesBuilder(copy: false);
+    final err = BytesBuilder(copy: false);
+    Future<void> tee(
+        Stream<List<int>> src, BytesBuilder buf, io.IOSink dst) async {
+      await for (final chunk in src) {
+        buf.add(chunk);
+        dst.add(chunk);
+      }
+    }
+
+    try {
+      await Future.wait([
+        tee(proc.stdout, out, io.stdout),
+        tee(proc.stderr, err, io.stderr),
+      ]);
+    } catch (_) {
+      proc.kill(io.ProcessSignal.sigkill);
+      rethrow;
+    } finally {
+      try {
+        await io.stdout.flush();
+      } catch (_) {}
+      try {
+        await io.stderr.flush();
+      } catch (_) {}
+    }
+    final code = await proc.exitCode;
+    return Output._(
+      code,
+      out.takeBytes(),
+      utf8.decode(err.takeBytes(), allowMalformed: true),
+    );
+  }
+
+  /// The child environment: null inherits as-is; otherwise the parent
+  /// overlaid with [env], where a null value unsets the variable. (The
+  /// `includeParentEnvironment` default already merges, but offers no unset,
+  /// so a provided map is resolved exactly and passed with
+  /// `includeParentEnvironment: false`.)
+  static Map<String, String>? _resolveEnv(Map<String, String?>? env) {
+    if (env == null) return null;
+    final merged = Map<String, String>.of(io.Platform.environment);
+    env.forEach((key, value) {
+      if (value == null) {
+        merged.remove(key);
+      } else {
+        merged[key] = value;
+      }
+    });
+    return merged;
+  }
+
   /// A process as a [Pipe]: the stream goes to its stdin, stdout comes out.
   /// stderr is collected; a non-zero exit fails the run with a
-  /// [io.ProcessException] carrying the code and stderr.
+  /// [io.ProcessException] carrying the code and stderr. [env] overlays the
+  /// parent environment; a null value unsets the variable for the child.
   static Pipe filter(
     List<String> command, {
     String? workingDir,
-    Map<String, String>? env,
+    Map<String, String?>? env,
   }) {
     _checkCommand(command);
     return _Filter(command, workingDir: workingDir, env: env);
   }
 
   /// Open [target] (a URL or path) in the default app: `open` on macOS,
-  /// `xdg-open` on Linux, `start` on Windows. Returns once launched
-  /// (it does not wait for the app to close). An empty [target] is an
-  /// [ArgumentError]; a launcher that cannot start or exits non-zero throws
-  /// [io.ProcessException].
-  static Future<void> open(String target) async {
+  /// `xdg-open` on Linux, `rundll32 url.dll,FileProtocolHandler` on Windows
+  /// (no shell parsing, so `&`, `|` and `^` in a URL can't inject commands).
+  /// Returns once launched (it does not wait for the app to close). An empty
+  /// [target] is an [ArgumentError]; a launcher that cannot start or exits
+  /// non-zero throws [io.ProcessException] carrying the first 4 KB of stderr.
+  static Future<void> openInDefaultApp(String target) async {
     if (target.isEmpty) {
       throw ArgumentError.value(target, 'target', 'must not be empty');
     }
@@ -82,7 +172,7 @@ abstract final class Shell {
     if (io.Platform.isMacOS) {
       cmd = ['open', target];
     } else if (io.Platform.isWindows) {
-      cmd = ['cmd', '/c', 'start', '', target];
+      cmd = ['rundll32', 'url.dll,FileProtocolHandler', target];
     } else {
       cmd = ['xdg-open', target];
     }
@@ -90,6 +180,15 @@ abstract final class Shell {
     try {
       proc = await io.Process.start(cmd[0], cmd.sublist(1));
     } on io.ProcessException catch (e) {
+      if (cmd[0] == 'xdg-open' && _isMissing(e)) {
+        throw io.ProcessException(
+          cmd[0],
+          cmd.sublist(1),
+          'cannot open $target: xdg-open is not installed '
+          '(install the xdg-utils package)',
+          e.errorCode,
+        );
+      }
       throw io.ProcessException(
         cmd[0],
         cmd.sublist(1),
@@ -103,6 +202,19 @@ abstract final class Shell {
     // A launcher should exit quickly (it hands off to the app). Wait briefly
     // so `xdg-open` failures are visible instead of zombieing; the target app
     // itself is not waited on.
+    unawaited(proc.stdout.drain<void>().catchError((_) {}));
+    // Keep the first 4 KB of stderr for the exception below; keep draining
+    // past the cap so a chatty launcher can never block on a full pipe.
+    final errBuf = BytesBuilder(copy: false);
+    final errDone = () async {
+      try {
+        await for (final chunk in proc.stderr) {
+          final room = 4096 - errBuf.length;
+          if (room <= 0) continue;
+          errBuf.add(chunk.length <= room ? chunk : chunk.sublist(0, room));
+        }
+      } catch (_) {}
+    }();
     bool exited = false;
     int code = 0;
     try {
@@ -110,18 +222,26 @@ abstract final class Shell {
       exited = true;
     } on TimeoutException {
       // Still running: assumed handed off; leave it (no zombie: outputs
-      // drained below, exitCode future kept by the VM until it exits).
+      // drained above, exitCode future kept by the VM until it exits).
     }
-    unawaited(proc.stdout.drain<void>().catchError((_) {}));
-    unawaited(proc.stderr.drain<void>().catchError((_) {}));
-    if (exited && code != 0) {
-      String err = '';
+    if (exited) {
       try {
-        // Best-effort: stderr was drained above; report the code.
+        await errDone.timeout(const Duration(seconds: 2));
       } catch (_) {}
-      throw io.ProcessException(cmd[0], cmd.sublist(1),
-          'cannot open $target: exit $code $err', code);
     }
+    if (exited && code != 0) {
+      final err = utf8.decode(errBuf.takeBytes(), allowMalformed: true);
+      throw io.ProcessException(cmd[0], cmd.sublist(1),
+          'cannot open $target: exit $code${err.isEmpty ? '' : ' $err'}',
+          code);
+    }
+  }
+
+  /// A launcher that never started: "not found" (missing `xdg-open` on a
+  /// headless box) as opposed to "started but failed".
+  static bool _isMissing(io.ProcessException e) {
+    if (e.errorCode == 2) return true;
+    return e.message.toLowerCase().contains('no such file');
   }
 
   static void _checkCommand(List<String> command) {
@@ -130,10 +250,11 @@ abstract final class Shell {
     }
   }
 
-  static List<int> _resultBytes(Object? out) {
-    if (out is List<int>) return out;
-    if (out is String) return utf8.encode(out);
-    return const [];
+  static Uint8List _resultBytes(Object? out) {
+    if (out is Uint8List) return out;
+    if (out is List<int>) return Uint8List.fromList(out);
+    if (out is String) return Uint8List.fromList(utf8.encode(out));
+    return Uint8List(0);
   }
 
   static String _resultText(Object? out) {
@@ -148,17 +269,17 @@ final class Output with Reader {
   Output._(this._exitCode, this._out, this._err);
 
   final int _exitCode;
-  final List<int> _out;
+  final Uint8List _out;
   final String _err;
 
   /// The exit code. Never throws.
   int exitCode() => _exitCode;
 
   /// Stderr, decoded as UTF-8.
-  String errorText() => _err;
+  String stderrText() => _err;
 
   @override
-  Stream<List<int>> stream() => Stream.value(_out);
+  Stream<List<int>> stream() => Stream.value(_out.asUnmodifiableView());
 
   /// Stdout as text, dropping ONE trailing newline (`\n` or `\r\n`), as
   /// `$(…)` does in a shell. [bytes]/[stream] stay verbatim.
@@ -173,14 +294,15 @@ final class Output with Reader {
     return s;
   }
 
+  /// Stdout as bytes: an unmodifiable view, O(1), no copy.
   @override
-  Future<List<int>> bytes() async => List<int>.from(_out);
+  Future<List<int>> bytes() async => _out.asUnmodifiableView();
 }
 
 /// Future mirrors (rule 6). The extension name is import-only; never reference it.
 extension OutputFuture on Future<Output> {
   Future<int> exitCode() async => (await this).exitCode();
-  Future<String> errorText() async => (await this).errorText();
+  Future<String> stderrText() async => (await this).stderrText();
 }
 
 final class _Filter implements Pipe {
@@ -188,7 +310,14 @@ final class _Filter implements Pipe {
 
   final List<String> _command;
   final String? _workingDir;
-  final Map<String, String>? _env;
+  final Map<String, String?>? _env;
+
+  @override
+  void abort(Object error) {
+    // Nothing started yet (Reader.writeTo aborts without listening), so
+    // there is no child to kill. A mid-run failure tears the generator down
+    // via its finally, which already kills the child.
+  }
 
   @override
   Stream<List<int>> transform(Stream<List<int>> input) async* {
@@ -198,8 +327,8 @@ final class _Filter implements Pipe {
         _command[0],
         _command.sublist(1),
         workingDirectory: _workingDir,
-        environment:
-            _env == null ? null : {...io.Platform.environment, ..._env},
+        environment: Shell._resolveEnv(_env),
+        includeParentEnvironment: _env == null,
       );
     } on io.ProcessException catch (e) {
       throw io.ProcessException(
@@ -309,39 +438,18 @@ final class _Filter implements Pipe {
     }
   }
 
-  /// EPIPE / broken pipe on the child's stdin: SocketException errno 32,
-  /// or an OSError naming the broken pipe. Only Socket/OSError counts —
-  /// an upstream `StateError('broken pipe')` is a real error, not early-close.
+  /// EPIPE / broken pipe on the child's stdin: errno 32 (`EPIPE`), 109
+  /// (`ERROR_BROKEN_PIPE`) or 232 (`ERROR_NO_DATA`, Windows). Only
+  /// Socket/OSError codes count — an upstream `StateError('broken pipe')`
+  /// is a real error, not early-close.
   static bool _isEpipe(Object e) {
     if (e is io.SocketException) {
       final code = e.osError?.errorCode;
-      if (code == 32 || code == 109) return true;
-      final m = e.message.toLowerCase();
-      if (m.contains('broken pipe') ||
-          m.contains('epipe') ||
-          m.contains('pipe has been ended') ||
-          m.contains('pipe is being closed')) {
-        return true;
-      }
-      final os = e.osError?.message.toLowerCase() ?? '';
-      if (os.contains('broken pipe') ||
-          os.contains('epipe') ||
-          os.contains('pipe has been ended') ||
-          os.contains('pipe is being closed')) {
-        return true;
-      }
-      return false;
+      return code == 32 || code == 109 || code == 232;
     }
     if (e is io.OSError) {
-      if (e.errorCode == 32 || e.errorCode == 109) return true;
-      final m = e.message.toLowerCase();
-      if (m.contains('broken pipe') ||
-          m.contains('epipe') ||
-          m.contains('pipe has been ended') ||
-          m.contains('pipe is being closed')) {
-        return true;
-      }
-      return false;
+      final code = e.errorCode;
+      return code == 32 || code == 109 || code == 232;
     }
     return false;
   }

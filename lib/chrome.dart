@@ -1,9 +1,9 @@
 /// Browser automation. Thin facade over `package:puppeteer`.
 ///
 /// ```dart
-/// final browser = await Chrome.launch(profile: '.chrome');
-/// final page = await browser.open('https://example.com/login', block: ['image', 'font'])
-///     .fill('#user', name).fill('#pass', password).click('button[type=submit]').wait('.dashboard');
+/// final browser = await Chrome.launch(profileDir: '.chrome');
+/// final page = await browser.open('https://example.com/login', blockResources: ['image', 'font'])
+///     .fill('#user', name).fill('#pass', password).click('button[type=submit]').waitFor('.dashboard');
 /// await (page.screenshot(fullPage: true) > Fs.file('orders.png'));
 /// await browser.close();
 /// ```
@@ -11,22 +11,27 @@
 /// Public surface is exactly: [Chrome], [Browser], [Page], [Download].
 /// - `Chrome.launch/connect()` open a browser.
 /// - [Browser] supports `open` `pages`.
-/// - [Page] supports `goto` `back` `reload` `url` `html` `text` `eval`
-///   `cookies` `click` `fill` `press` `select` `upload` `scroll` `wait`
-///   `waitIdle` `screenshot` `pdf` `download`.
-/// - [Download] supports `name` (plus [Reader]).
+/// - [Page] supports `goTo` `goBack` `reload` `url` `html` `text` `evaluate`
+///   `cookieHeader` `click` `fill` `press` `selectOption` `attachFile`
+///   `scrollToBottom` `scrollIntoView` `waitFor` `waitForNetworkIdle`
+///   `screenshot` `pdf` `clickToDownload`.
+/// - [Download] supports `fileName` (plus [Reader]).
 /// Everything else is private.
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' as io;
 
-import 'package:dart_toolkit/html.dart';
-import 'package:dart_toolkit/json.dart';
 import 'package:path/path.dart' as p;
 import 'package:puppeteer/protocol/browser.dart' as proto;
 import 'package:puppeteer/puppeteer.dart' as pp;
+
+import 'html.dart';
+import 'json.dart';
+import 'src/cache.dart' as cache;
+import 'src/exit.dart' as exit;
+import 'src/keys.dart' as keys;
+import 'src/origin.dart' as origin;
 
 export 'core.dart';
 export 'html.dart';
@@ -37,53 +42,60 @@ const Duration _defaultTimeout = Duration(seconds: 30);
 /// Entry point: launch or attach a browser.
 abstract final class Chrome {
   /// Launch Chromium. Downloads it into the user cache on first use, unless
-  /// [executable] names a Chrome or Chromium binary. [profile] keeps cookies
-  /// and logins between runs; without it, every launch starts fresh in a
-  /// temp profile deleted on [close]. [proxy] routes every request
+  /// [chromePath] names a Chrome or Chromium binary. [profileDir] keeps
+  /// cookies and logins between runs; without it, every launch starts fresh
+  /// in a temp profile deleted on [close]. [proxy] routes every request
   /// (`http://host:port`, `socks5://host:port`). Throws when the browser
   /// can't start.
-  static Future<Browser> launch({bool headless = true, String? executable, String? profile, String? proxy}) async {
-    var exe = executable;
+  static Future<Browser> launch({bool headless = true, String? chromePath, String? profileDir, String? proxy}) async {
+    var exe = chromePath;
     exe ??= await _cachedExecutable();
     final args = <String>[if (proxy != null) '--proxy-server=$proxy'];
-    final browser = await pp.puppeteer.launch(
-      headless: headless,
-      executablePath: exe,
-      userDataDir: profile,
-      args: args.isEmpty ? null : args,
-    );
-    return Browser._(browser, owned: true);
+    final temp = profileDir == null ? await io.Directory.systemTemp.createTemp('puppeteer_dev_profile-') : null;
+    final pp.Browser browser;
+    try {
+      browser = await pp.puppeteer.launch(
+        headless: headless,
+        executablePath: exe,
+        userDataDir: profileDir ?? temp!.path,
+        args: args.isEmpty ? null : args,
+      );
+    } catch (_) {
+      try {
+        await temp?.delete(recursive: true);
+      } catch (_) {}
+      rethrow;
+    }
+    final pid = browser.process?.pid;
+    final dog = pid != null && pid > 1 && !io.Platform.isWindows ? await _watchdog(pid, temp?.path) : null;
+    return Browser._(browser, owned: true, dog: dog, temp: temp);
+  }
+
+  /// A child that blocks on its stdin, which hits EOF when this VM dies for
+  /// any reason (even an uncaught throw), then kills Chromium and removes the
+  /// temp profile. The pid and dir are arguments, never interpolated.
+  /// POSIX only; Windows has no watchdog yet.
+  static Future<io.Process?> _watchdog(int pid, String? dir) async {
+    try {
+      return await io.Process.start('/bin/sh', [
+        '-c',
+        'cat >/dev/null; kill -9 "\$1" 2>/dev/null; sleep 1; [ -z "\$2" ] || rm -rf -- "\$2"',
+        '_',
+        '$pid',
+        dir ?? '',
+      ]);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The machine-wide Chromium under `<user cache>/dart_toolkit/chrome`
   /// (one download per machine, not one per project). Downloads it on first
   /// use.
   static Future<String> _cachedExecutable() async {
-    final cache = p.join(_userCache(), 'dart_toolkit', 'chrome');
-    final info = await pp.downloadChrome(cachePath: cache);
+    final dir = p.join(cache.userCacheDir(), 'dart_toolkit', 'chrome');
+    final info = await pp.downloadChrome(cachePath: dir);
     return info.executablePath;
-  }
-
-  /// The OS user cache directory.
-  static String _userCache() {
-    final env = io.Platform.environment;
-    if (io.Platform.isMacOS) {
-      final home = env['HOME'];
-      if (home != null && home.isNotEmpty) {
-        return p.join(home, 'Library', 'Caches');
-      }
-    } else if (io.Platform.isWindows) {
-      final local = env['LOCALAPPDATA'];
-      if (local != null && local.isNotEmpty) return local;
-    } else {
-      final xdg = env['XDG_CACHE_HOME'];
-      if (xdg != null && xdg.isNotEmpty) return xdg;
-      final home = env['HOME'];
-      if (home != null && home.isNotEmpty) {
-        return p.join(home, '.cache');
-      }
-    }
-    return io.Directory.systemTemp.path;
   }
 
   /// Attach to a running browser (`http://localhost:9222` or a `ws://` URL).
@@ -103,10 +115,18 @@ abstract final class Chrome {
 /// `ctrl+c` key) is left to the app.
 final class Browser implements Closeable {
   // ignore: prefer_initializing_formals – the public argument stays `owned`.
-  Browser._(this._browser, {required bool owned}) : _owned = owned {
+  Browser._(this._browser, {required bool owned, this._dog, this._temp}) : _owned = owned {
     if (owned) {
-      _live.add(this);
-      _watchSignals();
+      // The single signal owner (src/exit.dart): the first hook installs the
+      // watchers, the last removal cancels them so the VM may exit. Fixes
+      // the never-exits-after-close hang (a live ProcessSignal.watch keeps
+      // the VM alive) and the orphaned-Chromium race (one owner runs hooks
+      // in reverse order, awaited and bounded, then exits once).
+      _exitToken = exit.onExit(() async {
+        try {
+          await close();
+        } catch (_) {}
+      });
     }
   }
 
@@ -114,6 +134,13 @@ final class Browser implements Closeable {
 
   /// Whether [close] stops the process (launched) or disconnects (connected).
   final bool _owned;
+
+  /// Orphan watchdog (see [Chrome.launch]) and the temp profile it removes.
+  final io.Process? _dog;
+  final io.Directory? _temp;
+
+  /// Token for the exit hook above; removed in [close].
+  Object? _exitToken;
 
   /// One cached [Page] wrapper per engine target: every `pages()` call for
   /// the same tab returns the same wrapper, so its dialog/traffic
@@ -126,50 +153,9 @@ final class Browser implements Closeable {
   String? _downloadDir;
   var _closed = false;
 
-  /// Serializes download begins so concurrent `download()` calls don't share
-  /// one `onDownloadWillBegin.first`.
+  /// Serializes download begins so concurrent `clickToDownload()` calls don't
+  /// share one `onDownloadWillBegin.first`.
   Future<void> _dlPrev = Future.value();
-
-  static final _live = <Browser>{};
-  static bool _watching = false;
-
-  static void _watchSignals() {
-    if (_watching) return;
-    _watching = true;
-    void watch(io.ProcessSignal signal, int code, {required bool sigint}) {
-      try {
-        signal.watch().listen((_) async {
-          if (sigint) {
-            // Raw terminal (TUI active): SIGINT is a key, not termination.
-            try {
-              if (!io.stdin.echoMode) return;
-            } catch (_) {}
-          }
-          for (final b in List<Browser>.of(_live)) {
-            try {
-              await b.close();
-            } catch (_) {}
-          }
-          if (sigint) {
-            // Cooked Ctrl-C once behaved as termination; keep that.
-            io.exit(130);
-          } else {
-            io.exit(code);
-          }
-        });
-      } catch (_) {}
-    }
-
-    watch(io.ProcessSignal.sigint, 130, sigint: true);
-    if (!io.Platform.isWindows) {
-      try {
-        watch(io.ProcessSignal.sigterm, 143, sigint: false);
-      } catch (_) {}
-      try {
-        watch(io.ProcessSignal.sighup, 129, sigint: false);
-      } catch (_) {}
-    }
-  }
 
   /// Wrap an engine page, reusing the cached wrapper for its target.
   Page _wrap(pp.Page page) {
@@ -183,11 +169,11 @@ final class Browser implements Closeable {
 
   /// Open a new tab and wait for the load event. Tab setup goes here, before
   /// the first request: [headers] are extra request headers for everything
-  /// the tab loads (`user-agent` also sets the UA string), [block] aborts
-  /// requests by resource type (`'image'`, `'font'`, `'media'`,
+  /// the tab loads (`user-agent` also sets the UA string), [blockResources]
+  /// aborts requests by resource type (`'image'`, `'font'`, `'media'`,
   /// `'stylesheet'`), [width]/[height] set the viewport.
   /// [timeout] bounds the navigation. Dialogs are always dismissed.
-  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async {
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? blockResources, int? width, int? height, Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     final page = await _browser.newPage();
     final wrap = _wrap(page);
@@ -215,8 +201,8 @@ final class Browser implements Closeable {
       if (extra != null) {
         await page.setExtraHTTPHeaders(extra);
       }
-      if (block != null && block.isNotEmpty) {
-        await _block(page, wrap, block);
+      if (blockResources != null && blockResources.isNotEmpty) {
+        await _block(page, wrap, blockResources);
       }
       try {
         await page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -238,6 +224,8 @@ final class Browser implements Closeable {
 
   /// Close every tab and the process it launched (or disconnect a connected
   /// browser, leaving it running). Removes downloaded copies. Idempotent.
+  /// Removes the exit hook; when the last hook goes the signal subscriptions
+  /// are cancelled so the script may exit.
   @override
   Future<void> close() async {
     if (_closed) return;
@@ -261,7 +249,12 @@ final class Browser implements Closeable {
         } catch (_) {}
       }
       if (_owned) {
+        // Kill the watchdog first so its kill step can never hit a reused pid.
+        _dog?.kill();
         await _browser.close();
+        try {
+          await _temp?.delete(recursive: true);
+        } catch (_) {}
       } else {
         _browser.disconnect();
       }
@@ -271,7 +264,13 @@ final class Browser implements Closeable {
     }
     _closed = true;
     _known.clear();
-    _live.remove(this);
+    final token = _exitToken;
+    _exitToken = null;
+    if (token != null) {
+      try {
+        exit.offExit(token);
+      } catch (_) {}
+    }
   }
 
   /// The shared download folder, created on first use.
@@ -292,7 +291,7 @@ final class Browser implements Closeable {
       if (!_allowedBlock.contains(lower)) {
         throw ArgumentError.value(
           block,
-          'block',
+          'blockResources',
           'unknown resource type "$b" (image, font, media, stylesheet)',
         );
       }
@@ -332,10 +331,23 @@ final class Page implements Closeable {
   /// since the browser reads them at submit, not at `uploadFile`.
   final _stagedDirs = <io.Directory>[];
 
-  /// Requests in flight (for [waitIdle]): +1 on request, −1 on
-  /// finished/failed.
+  /// Requests in flight (for [waitForNetworkIdle]): +1 on request, −1 on
+  /// finished/failed. Both sides count the same URLs (see [_countable]), so
+  /// `data:`/`ws:` URLs never enter the count on either side.
   var _inflight = 0;
+
+  /// Completed on every 1→0 transition so [waitForNetworkIdle] wakes without
+  /// polling the wall clock.
+  Completer<void>? _idleNotified;
+
+  /// When the in-flight count last dropped to zero, on [_clock].
+  final _clock = Stopwatch()..start();
+  var _settledAt = Duration.zero;
+
   var _closed = false;
+
+  /// Idle when no request has been in flight for this long.
+  static const _quietPeriod = Duration(milliseconds: 500);
 
   void _dismiss() {
     _dialogSub = _page.onDialog.listen((dialog) async {
@@ -346,39 +358,45 @@ final class Page implements Closeable {
   }
 
   void _trackTraffic() {
-    bool countable(String? url) {
-      if (url == null) return true;
-      final lower = url.toLowerCase();
-      // No network to go idle: data URLs, websockets, SSE streams.
-      if (lower.startsWith('data:') ||
-          lower.startsWith('ws:') ||
-          lower.startsWith('wss:')) {
-        return false;
-      }
-      return true;
-    }
-
     _trafficSubs.addAll([
       _page.onRequest.listen((req) {
-        try {
-          // ignore: avoid_dynamic_calls
-          final url = (req as dynamic).url as String?;
-          if (!countable(url)) return;
-        } catch (_) {}
+        if (!_countable(req.url)) return;
         _inflight++;
       }, onError: (_) {}),
-      _page.onResponse.listen((_) {}, onError: (_) {}),
-      _page.onRequestFinished.listen((_) {
-        if (_inflight > 0) _inflight--;
+      _page.onRequestFinished.listen((req) {
+        if (!_countable(req.url)) return;
+        _noteSettled();
       }, onError: (_) {}),
-      _page.onRequestFailed.listen((_) {
-        if (_inflight > 0) _inflight--;
+      _page.onRequestFailed.listen((req) {
+        if (!_countable(req.url)) return;
+        _noteSettled();
       }, onError: (_) {}),
     ]);
   }
 
+  /// Whether [url] touches the network. `data:` URLs, websockets and `wss:`
+  /// never go idle, so neither side of the in-flight count sees them.
+  static bool _countable(String url) {
+    final lower = url.toLowerCase();
+    if (lower.startsWith('data:') ||
+        lower.startsWith('ws:') ||
+        lower.startsWith('wss:')) {
+      return false;
+    }
+    return true;
+  }
+
+  void _noteSettled() {
+    if (_inflight > 0) _inflight--;
+    if (_inflight == 0) {
+      _settledAt = _clock.elapsed;
+      _idleNotified?.complete();
+      _idleNotified = null;
+    }
+  }
+
   /// Re-navigate this tab; waits for the load event. Returns this page.
-  Future<Page> goto(String url, {Duration? timeout}) async {
+  Future<Page> goTo(String url, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
       await _page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -389,7 +407,7 @@ final class Page implements Closeable {
   }
 
   /// Go back; waits for the load event. Returns this page.
-  Future<Page> back({Duration? timeout}) async {
+  Future<Page> goBack({Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
       await _page.goBack(wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -422,25 +440,26 @@ final class Page implements Closeable {
 
   /// Evaluate [js], awaiting it if it is a promise, reading the result
   /// with the `Json.value<T>()` rules (`null` for `null`, `undefined`, or
-  /// a result that is not a `T`, so `??` gives the default; collections
-  /// read as `List<Object?>`/`Map<String, Object?>`).
-  Future<T?> eval<T>(String js) async {
+  /// a result that is not a `T`, so `??` gives the default; integral numbers
+  /// read as both `int` and `double`). Collections read per element through
+  /// [Json.listOf]/[Json.mapOf] on [Json.of]:
+  ///
+  /// ```dart
+  /// final title = await page.evaluate<String>('document.title') ?? '';
+  /// final tags = Json.of(await page.evaluate<dynamic>('["a", "b"]')).listOf<String>() ?? [];
+  /// ```
+  ///
+  /// The decoded value is wrapped directly (`Json.of`): no `jsonEncode`
+  /// round trip, no transient string.
+  Future<T?> evaluate<T>(String js) async {
     final v = await _page.evaluate<dynamic>(js);
-    if (v == null) return null;
-    // Route through Json so numbers, lists and maps read with the same
-    // coercions as everywhere else (integral doubles as int and double,
-    // per-element collection checks).
-    try {
-      return Json.parse(jsonEncode(v)).value<T>();
-    } catch (_) {
-      return null;
-    }
+    return Json.of(v).value<T>();
   }
 
   /// The `Cookie` header value for the current URL, ready for [Http],
   /// or `null` when there are no cookies. Names/values with `;`, `=`,
   /// space or `"` are quoted.
-  Future<String?> cookies() async {
+  Future<String?> cookieHeader() async {
     String part(String name, String value) {
       if (name.contains(RegExp(r'[;=\s"]')) ||
           value.contains(RegExp(r'[;=\s"]'))) {
@@ -456,40 +475,45 @@ final class Page implements Closeable {
   }
 
   /// Click the first match of [selector], waiting until it is actionable
-  /// (up to [timeout]). Returns this page.
+  /// (up to [timeout]). The returned handle is clicked directly: no
+  /// re-query between the wait and the click. Returns this page.
   Future<Page> click(String selector, {Duration? timeout}) async {
-    await _actionable(selector, timeout: timeout);
-    await _page.click(selector);
+    final handle = await _actionable(selector, timeout: timeout);
+    try {
+      await handle.click();
+    } catch (e) {
+      throw StateError('click $selector: $e');
+    }
     return this;
   }
 
   /// Replace the field's value keystroke by keystroke (firing `input` and
   /// `change`), waiting until it is actionable. Always clears first, so an
   /// empty [value] empties the field. Returns this page.
+  ///
+  /// Stays one CDP call per character on purpose: frameworks listen for key
+  /// events, and an `insertText`-style bulk set would fire no `keydown`.
   Future<Page> fill(String selector, String value, {Duration? timeout}) async {
-    await _actionable(selector, timeout: timeout);
-    await _page.focus(selector);
-    await _page.evaluate<void>(
-      '(s) => { const el = document.querySelector(s);'
-      ' if (el) { el.focus(); el.value = "";'
-      ' el.dispatchEvent(new Event("input", {bubbles: true})); } }',
-      args: [selector],
+    final handle = await _actionable(selector, timeout: timeout);
+    await handle.focus();
+    await handle.evaluate<void>(
+      '(el) => { el.value = "";'
+      ' el.dispatchEvent(new Event("input", {bubbles: true})); }',
     );
     if (value.isNotEmpty) {
-      await _page.type(selector, value);
+      await handle.type(value);
     }
-    await _page.evaluate<void>(
-      '(s) => { const el = document.querySelector(s);'
-      ' if (el) el.dispatchEvent(new Event("change", {bubbles: true})); }',
-      args: [selector],
+    await handle.evaluate<void>(
+      '(el) => { el.dispatchEvent(new Event("change", {bubbles: true})); }',
     );
     return this;
   }
 
-  /// Send a key or a chord, with the key names shared with `Screen.pressed`
+  /// Send a key or a chord, with the key names shared with `Console`/`Tui`
   /// (`'enter'`, `'tab'`, `'down'`, `'ctrl+a'`; a single printable
-  /// character is typed; `'wheelup'`/`'wheeldown'` scroll). An unknown name
-  /// is an [ArgumentError].
+  /// character is typed; `'wheelup'`/`'wheeldown'` scroll). Aliases (`'esc'`,
+  /// `'cmd'`, `'control'`) canonicalize to the shared table; an unknown name
+  /// is an [ArgumentError], never a silent mis-hit.
   /// Returns this page.
   Future<Page> press(String key) async {
     final lower = key.toLowerCase();
@@ -503,38 +527,33 @@ final class Page implements Closeable {
       } catch (_) {}
       return this;
     }
-    if (key == '+') {
+    // One key-name table (src/keys.dart, shared with console/tui):
+    // canonicalize throws ArgumentError on unknown names.
+    final canonical = keys.canonicalize(key);
+    if (canonical == '+') {
       await _page.keyboard.type('+');
       return this;
     }
-    final parts = key.split('+');
+    final parts = canonical.split('+');
     if (parts.length == 1) {
-      final single = _resolveKey(parts[0], key);
-      if (single != null) {
-        await _page.keyboard.press(single);
-      } else if (parts[0].length == 1) {
-        await _page.keyboard.type(parts[0]);
+      final single = parts[0];
+      if (single.length == 1) {
+        await _page.keyboard.type(single);
       } else {
-        throw ArgumentError.value(key, 'key', 'unknown key: $key');
+        await _page.keyboard.press(_toKey(single));
       }
       return this;
     }
-    final mods = <pp.Key>[];
-    for (var i = 0; i < parts.length - 1; i++) {
-      mods.add(_modifier(parts[i], key));
-    }
+    final mods = <pp.Key>[for (var i = 0; i < parts.length - 1; i++) _toModifier(parts[i])];
     for (final m in mods) {
       await _page.keyboard.down(m);
     }
     try {
       final main = parts.last;
-      final named = _resolveKey(main, key);
-      if (named != null) {
-        await _page.keyboard.press(named);
-      } else if (main.length == 1) {
+      if (main.length == 1) {
         await _page.keyboard.type(main);
       } else {
-        throw ArgumentError.value(key, 'key', 'unknown key: $key');
+        await _page.keyboard.press(_toKey(main));
       }
     } finally {
       for (final m in mods.reversed) {
@@ -544,22 +563,11 @@ final class Page implements Closeable {
     return this;
   }
 
-  /// A key name to the engine key, or null when it is not a named key.
-  /// Case-insensitive (`'Enter'`, `'esc'` work). Single characters are
-  /// never named: the caller types them.
-  static pp.Key? _resolveKey(String name, String key) {
-    if (name.length == 1) return null;
-    final lower = name.toLowerCase();
-    if (lower == 'esc') return pp.Key.escape;
-    if (lower == 'space') return pp.Key.space;
-    return _key(lower);
-  }
-
   /// Pick the `<option>` by its value, waiting until actionable.
   /// Throws [TimeoutException] when the option is missing. Returns this page.
-  Future<Page> select(String selector, String value, {Duration? timeout}) async {
-    await _actionable(selector, timeout: timeout);
-    final picked = await _page.select(selector, [value]);
+  Future<Page> selectOption(String selector, String value, {Duration? timeout}) async {
+    final handle = await _actionable(selector, timeout: timeout);
+    final picked = await handle.select([value]);
     if (!picked.contains(value)) {
       throw TimeoutException(
         'no option "$value" in $selector',
@@ -569,12 +577,13 @@ final class Page implements Closeable {
     return this;
   }
 
-  /// Set a file input from a [Reader]. A `File` keeps its name; any other
-  /// reader is staged under the name `upload`. File inputs are usually
+  /// Set a file input from a [Reader]: the name and path come from the
+  /// typed `file.origin()` (a `File` keeps its name; any other reader is
+  /// staged under its origin name, else `upload`). File inputs are usually
   /// hidden, so this waits for *attached*, not visible. Staged copies are
   /// retained until this tab closes (the browser reads them at submit).
   /// Fires `input`/`change` so frameworks see the files. Returns this page.
-  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async {
+  Future<Page> attachFile(String selector, Reader file, {Duration? timeout}) async {
     final staged = await _stage(file);
     final tmp = staged.tmpDir;
     if (tmp != null) _stagedDirs.add(tmp);
@@ -583,11 +592,9 @@ final class Page implements Closeable {
       await handle.uploadFile([staged.file]);
       // Like fill: frameworks listen for input/change, not just the file list.
       try {
-        await _page.evaluate<void>(
-          '(s) => { const el = document.querySelector(s);'
-          ' if (el) { el.dispatchEvent(new Event("input", {bubbles: true}));'
-          ' el.dispatchEvent(new Event("change", {bubbles: true})); } }',
-          args: [selector],
+        await handle.evaluate<void>(
+          '(el) => { el.dispatchEvent(new Event("input", {bubbles: true}));'
+          ' el.dispatchEvent(new Event("change", {bubbles: true})); }',
         );
       } catch (_) {}
     } catch (_) {
@@ -603,46 +610,48 @@ final class Page implements Closeable {
     return this;
   }
 
-  /// Without a selector, go to the bottom of the page (what infinite lists
-  /// need); with one, bring that element into view, waiting until it is
-  /// attached first. Returns this page.
-  Future<Page> scroll([String? selector, Duration? timeout]) async {
-    if (selector == null) {
-      await _page.evaluate<void>('window.scrollTo(0, document.body.scrollHeight)');
-      return this;
-    }
-    await _actionable(selector, timeout: timeout);
-    try {
-      await (await _page.$(selector)).scrollIntoViewIfNeeded();
-    } catch (e) {
-      throw StateError('no element to scroll: $selector ($e)');
-    }
+  /// Go to the bottom of the page (what infinite lists need).
+  /// Returns this page.
+  Future<Page> scrollToBottom() async {
+    await _page.evaluate<void>('window.scrollTo(0, document.body.scrollHeight)');
+    return this;
+  }
+
+  /// Bring the first match of [selector] into view, waiting until it is
+  /// attached first. Throws [TimeoutException] when it never attaches.
+  /// Returns this page.
+  Future<Page> scrollIntoView(String selector, {Duration? timeout}) async {
+    final handle = await _attached(selector, timeout: timeout);
+    await handle.scrollIntoViewIfNeeded();
     return this;
   }
 
   /// Wait until [selector] is visible. Returns this page.
-  Future<Page> wait(String selector, {Duration? timeout}) async {
+  Future<Page> waitFor(String selector, {Duration? timeout}) async {
     await _visible(selector, timeout: timeout);
     return this;
   }
 
   /// Wait until there has been no request in flight for 500 ms.
-  /// Returns this page.
-  Future<Page> waitIdle({Duration? timeout}) async {
+  /// Wakes on each 1→0 in-flight transition (a [Stopwatch] measures the
+  /// quiet period; no wall-clock polling). Returns this page.
+  Future<Page> waitForNetworkIdle({Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
-    final deadline = DateTime.now().add(limit);
-    var quietSince = DateTime.now();
+    final start = _clock.elapsed;
     for (;;) {
-      if (_inflight > 0) {
-        quietSince = DateTime.now();
-      } else if (DateTime.now().difference(quietSince) >=
-          const Duration(milliseconds: 500)) {
-        return this;
-      }
-      if (DateTime.now().isAfter(deadline)) {
+      final now = _clock.elapsed;
+      final quiet = now - _settledAt;
+      if (_inflight == 0 && quiet >= _quietPeriod) return this;
+      final left = limit - (now - start);
+      if (left <= Duration.zero) {
         throw TimeoutException('network never idle for $limit: ${await url()}', limit);
       }
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      var wait = left;
+      if (_inflight == 0 && _quietPeriod - quiet < wait) wait = _quietPeriod - quiet;
+      final notified = _idleNotified ??= Completer<void>();
+      // A 1→0 transition, the quiet period end, or the deadline —
+      // whichever comes first — re-checks the condition above.
+      await notified.future.timeout(wait, onTimeout: () {});
     }
   }
 
@@ -662,65 +671,70 @@ final class Page implements Closeable {
   /// Click [selector] and wait for the download it starts to finish.
   /// Returns a [Download]: a [Reader] of the file plus the name the site
   /// suggested. Downloads share one folder per browser and are told apart
-  /// by their DevTools `guid`, so concurrent downloads don't clash. Begins
-  /// are serialized; the whole call shares one [timeout] deadline. The
+  /// by their DevTools `guid`, so concurrent downloads don't clash. The
+  /// begin event is filtered on this tab's frame, so a download started by
+  /// another tab inside the gate is never credited here. Begins are
+  /// serialized; the whole call shares one [timeout] deadline. The
   /// browser's copies are removed when the browser closes.
-  Future<Download> download(String selector, {Duration? timeout}) async {
+  Future<Download> clickToDownload(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
-    final deadline = DateTime.now().add(limit);
-    Duration remaining() => deadline.difference(DateTime.now());
     // Wait for the trigger first: on a missing selector this throws before
-    // any download future exists that could fail unhandled later.
-    await _actionable(selector, timeout: timeout);
+    // any download future exists that could fail unhandled later. The
+    // returned handle is clicked directly: no re-query in between.
+    final handle = await _actionable(selector, timeout: timeout);
+    final elapsed = Stopwatch()..start();
+    Duration left() {
+      final rest = limit - elapsed.elapsed;
+      return rest.isNegative ? Duration.zero : rest;
+    }
+
+    final frameId = _page.mainFrame.id;
     // Serialize begins: only one willBegin.first at a time.
     final prev = _browser._dlPrev;
     final gate = Completer<void>();
     _browser._dlPrev = gate.future;
+    final String dir;
+    final proto.DownloadWillBeginEvent begun;
     try {
-      await prev;
-    } catch (_) {}
-    final dir = await _browser._downloads();
-    await _page.devTools.browser.setDownloadBehavior('allow', downloadPath: dir, eventsEnabled: true);
-    final willBegin = _page.devTools.browser.onDownloadWillBegin.first.timeout(
-      remaining().isNegative ? Duration.zero : remaining(),
-      onTimeout: () => throw TimeoutException('no download from $selector for $limit', limit),
-    );
-    // Guard the future until it is awaited below: without this, a click
-    // that starts no download surfaces an unhandled TimeoutException.
-    unawaited(willBegin.then((_) {}, onError: (_) {}));
-    await _page.click(selector);
-    late final proto.DownloadWillBeginEvent begun;
-    try {
+      await prev.timeout(left());
+      dir = await _browser._downloads();
+      await _page.devTools.browser.setDownloadBehavior('allow', downloadPath: dir, eventsEnabled: true);
+      // Browser-wide event, so filter on this tab's frame.
+      final willBegin = _page.devTools.browser.onDownloadWillBegin
+          .where((e) => e.frameId == frameId)
+          .first
+          .timeout(
+            left(),
+            onTimeout: () => throw TimeoutException('no download from $selector for $limit', limit),
+          );
+      // Guard the future until it is awaited below: without this, a click
+      // that starts no download surfaces an unhandled TimeoutException.
+      unawaited(willBegin.then((_) {}, onError: (_) {}));
+      await handle.click();
       begun = await willBegin;
     } finally {
       gate.complete();
     }
-    try {
-      final terminal = _page.devTools.browser.onDownloadProgress
-          .where((e) => e.guid == begun.guid)
-          .firstWhere((e) =>
-              e.state == proto.DownloadProgressEventState.completed ||
-              e.state == proto.DownloadProgressEventState.canceled)
-          .timeout(
-            remaining().isNegative ? Duration.zero : remaining(),
-            onTimeout: () => throw TimeoutException('download never finished: ${begun.suggestedFilename}', limit),
-          );
-      // Same guard: a download that never completes must not fail
-      // unhandled after this call already threw elsewhere.
-      unawaited(terminal.then((_) {}, onError: (_) {}));
-      final finished = await terminal;
-      if (finished.state != proto.DownloadProgressEventState.completed) {
-        throw StateError(
-            'download ${finished.state.name}: ${begun.suggestedFilename}');
-      }
-      final path = finished.filePath ?? '$dir/${begun.suggestedFilename}';
-      final left = remaining();
-      final file = await _stableFile(
-          path, left.isNegative ? Duration.zero : left, begun.suggestedFilename);
-      return Download._(file, begun.suggestedFilename);
-    } catch (_) {
-      rethrow;
+    final terminal = _page.devTools.browser.onDownloadProgress
+        .where((e) => e.guid == begun.guid)
+        .firstWhere((e) =>
+            e.state == proto.DownloadProgressEventState.completed ||
+            e.state == proto.DownloadProgressEventState.canceled)
+        .timeout(
+          left(),
+          onTimeout: () => throw TimeoutException('download never finished: ${begun.suggestedFilename}', limit),
+        );
+    // Same guard: a download that never completes must not fail
+    // unhandled after this call already threw elsewhere.
+    unawaited(terminal.then((_) {}, onError: (_) {}));
+    final finished = await terminal;
+    if (finished.state != proto.DownloadProgressEventState.completed) {
+      throw StateError(
+          'download ${finished.state.name}: ${begun.suggestedFilename}');
     }
+    // The completed event fires when the file is final: no size polling.
+    final path = finished.filePath ?? p.join(dir, begun.suggestedFilename);
+    return Download._(io.File(path), begun.suggestedFilename);
   }
 
   /// Close this tab. Idempotent.
@@ -771,104 +785,102 @@ final class Page implements Closeable {
     _trafficSubs.clear();
   }
 
-  Future<pp.ElementHandle> _attached(String selector, {Duration? timeout}) async {
-    await _checkSelector(selector);
+  Future<pp.ElementHandle> _attached(String selector, {Duration? timeout}) async =>
+      _ready(selector, _ReadyMode.attached, timeout: timeout);
+
+  Future<pp.ElementHandle> _visible(String selector, {Duration? timeout}) async =>
+      _ready(selector, _ReadyMode.visible, timeout: timeout);
+
+  Future<pp.ElementHandle> _actionable(String selector, {Duration? timeout}) async =>
+      _ready(selector, _ReadyMode.actionable, timeout: timeout);
+
+  /// One `waitForFunction` predicate (selector valid, attached, and — unless
+  /// [mode] is attached-only — visible and enabled), polled on
+  /// `requestAnimationFrame`, returning the [pp.ElementHandle] the action
+  /// then uses: 1–2 CDP round trips per action instead of 4–6, with no
+  /// TOCTOU gap between the check and the use. An invalid selector resolves
+  /// fast with [FormatException], not a full-timeout wait.
+  Future<pp.ElementHandle> _ready(String selector, _ReadyMode mode, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
+    final want = switch (mode) {
+      _ReadyMode.attached => 'attached',
+      _ReadyMode.visible => 'visible',
+      _ReadyMode.actionable => 'action',
+    };
+    final kind = switch (mode) {
+      _ReadyMode.attached => 'attached',
+      _ReadyMode.visible => 'visible',
+      _ReadyMode.actionable => 'actionable',
+    };
+    late final pp.JsHandle resolved;
     try {
-      final handle = await _page.waitForSelector(selector, timeout: limit).timeout(limit);
-      if (handle == null) {
-        throw TimeoutException('no attached $selector for $limit', limit);
-      }
-      return handle;
-    } on TimeoutException catch (e) {
-      throw TimeoutException('no attached $selector for $limit ($e)', limit);
+      resolved = await _page
+          .waitForFunction(
+            _readyPredicate,
+            args: [selector, want],
+            timeout: limit,
+            polling: pp.Polling.everyFrame,
+          )
+          .timeout(limit);
+    } on TimeoutException {
+      throw TimeoutException('no $kind $selector for $limit', limit);
     } catch (e) {
-      throw TimeoutException('no attached $selector for $limit ($e)', limit);
+      throw StateError('$kind $selector: $e');
     }
-  }
-
-  Future<pp.ElementHandle> _visible(String selector, {Duration? timeout}) async {
-    await _checkSelector(selector);
-    final limit = timeout ?? _defaultTimeout;
+    final element = resolved.asElement;
+    if (element != null) return element;
+    // The predicate resolves a non-element only for an invalid selector.
     try {
-      final handle = await _page.waitForSelector(selector, visible: true, timeout: limit).timeout(limit);
-      if (handle == null) {
-        throw TimeoutException('no visible $selector for $limit', limit);
+      if (await resolved.jsonValue == _invalidSelector) {
+        throw FormatException("invalid selector '$selector'");
       }
-      return handle;
-    } on TimeoutException catch (e) {
-      throw TimeoutException('no visible $selector for $limit ($e)', limit);
-    } catch (e) {
-      throw TimeoutException('no visible $selector for $limit ($e)', limit);
-    }
+    } on FormatException {
+      rethrow;
+    } catch (_) {}
+    throw TimeoutException('no $kind $selector for $limit', limit);
   }
 
-  /// Throw [FormatException] fast for a selector the engine rejects;
-  /// otherwise waiting would burn the full timeout.
-  Future<void> _checkSelector(String selector) async {
-    bool ok = true;
-    try {
-      await _page.evaluate<bool>(
-        '(s) => { try { document.querySelector(s); return true; }'
-        ' catch (_) { return false; } }',
-        args: [selector],
-      ).then((v) => ok = v);
-    } catch (_) {
-      ok = true;
-    }
-    if (!ok) {
-      throw FormatException("invalid selector '$selector'");
-    }
+  /// The-ready predicate: valid selector, attached, visible, enabled.
+  /// Returns the element itself (truthy, so the wait resolves with its
+  /// handle) or `false`; an invalid selector resolves the sentinel string.
+  static const _readyPredicate = '''
+(selector, mode) => {
+  let el;
+  try {
+    el = document.querySelector(selector);
+  } catch (_) {
+    return 'invalid-selector';
   }
+  if (!el) return false;
+  if (mode === 'attached') return el;
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return false;
+  const style = getComputedStyle(el);
+  if (style.visibility === 'hidden' || style.display === 'none') return false;
+  if (mode === 'visible') return el;
+  if (el.disabled || (el.getAttribute && el.getAttribute('aria-disabled') === 'true')) return false;
+  return el;
+}
+''';
 
-  Future<void> _actionable(String selector, {Duration? timeout}) async {
-    // One deadline for the whole action: visibility plus enabled, so a
-    // call never takes up to 2x timeout.
-    final limit = timeout ?? _defaultTimeout;
-    final deadline = DateTime.now().add(limit);
-    Duration remaining() => deadline.difference(DateTime.now());
-    var left = remaining();
-    if (left <= Duration.zero) {
-      throw TimeoutException('no actionable $selector for $limit', limit);
-    }
-    await _visible(selector, timeout: left);
-    for (;;) {
-      final enabled = await _page.evaluate<bool>(
-        '(s) => { const el = document.querySelector(s);'
-        ' return !!el && !el.disabled'
-        ' && el.getAttribute("aria-disabled") !== "true"; }',
-        args: [selector],
-      );
-      if (enabled) return;
-      if (DateTime.now().isAfter(deadline)) {
-        throw TimeoutException('no actionable $selector for $limit', limit);
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-  }
+  /// Sentinel the predicate resolves when `querySelector` rejects the
+  /// selector; kept next to the predicate it must match.
+  static const _invalidSelector = 'invalid-selector';
 
   Future<_Staged> _stage(Reader file) async {
-    String name = 'upload';
-    try {
-      // ignore: avoid_dynamic_calls
-      final n = (file as dynamic).name() as String?;
-      if (n != null && n.isNotEmpty) {
-        final base = n.split(RegExp(r'[\\/]')).last;
-        if (base.isNotEmpty) name = base;
-      }
-    } catch (_) {}
-    String? keep;
-    try {
-      // ignore: avoid_dynamic_calls
-      keep = (file as dynamic).path() as String?;
-    } catch (_) {}
+    // Typed origin only: name/path come from Reader.origin(), never probed.
+    final o = file.origin();
+    var name = o.name();
+    if (name != null && name.isNotEmpty) name = origin.stripPath(name);
+    if (name == null || name.isEmpty) name = 'upload';
+    final keep = o.path();
     if (keep != null) {
-      return _Staged(io.File(keep), keep: true, tmpDir: null);
+      return _Staged(io.File(keep), tmpDir: null);
     }
     final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_up');
-    final staged = io.File('${tmp.path}/$name');
+    final staged = io.File(p.join(tmp.path, name));
     try {
-      await file.to(_FileWriter(staged));
+      await file.writeTo(_FileWriter(staged));
     } catch (_) {
       // Don't leak the staging dir when the reader fails mid-write.
       try {
@@ -876,71 +888,55 @@ final class Page implements Closeable {
       } catch (_) {}
       rethrow;
     }
-    return _Staged(staged, keep: false, tmpDir: tmp);
+    return _Staged(staged, tmpDir: tmp);
   }
 
-  static Future<io.File> _stableFile(String path, Duration limit, String name) async {
-    final deadline = DateTime.now().add(limit);
-    var last = -2;
-    while (DateTime.now().isBefore(deadline)) {
-      final f = io.File(path);
-      if (await f.exists()) {
-        final size = await f.length();
-        if (size == last && size >= 0) return f;
-        last = size;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    throw TimeoutException('download never finished: $name', limit);
-  }
+  /// A canonical key name (see `src/keys.dart`) to the engine key.
+  /// Canonicalize throws first on unknown names; the throw below is
+  /// defensive and unreachable through [press].
+  static pp.Key _toKey(String name) => switch (name) {
+        'enter' => pp.Key.enter,
+        'tab' => pp.Key.tab,
+        'escape' => pp.Key.escape,
+        'backspace' => pp.Key.backspace,
+        'up' => pp.Key.arrowUp,
+        'down' => pp.Key.arrowDown,
+        'left' => pp.Key.arrowLeft,
+        'right' => pp.Key.arrowRight,
+        'home' => pp.Key.home,
+        'end' => pp.Key.end,
+        'pageup' => pp.Key.pageUp,
+        'pagedown' => pp.Key.pageDown,
+        'delete' => pp.Key.delete,
+        'insert' => pp.Key.insert,
+        'space' => pp.Key.space,
+        'f1' => pp.Key.f1,
+        'f2' => pp.Key.f2,
+        'f3' => pp.Key.f3,
+        'f4' => pp.Key.f4,
+        'f5' => pp.Key.f5,
+        'f6' => pp.Key.f6,
+        'f7' => pp.Key.f7,
+        'f8' => pp.Key.f8,
+        'f9' => pp.Key.f9,
+        'f10' => pp.Key.f10,
+        'f11' => pp.Key.f11,
+        'f12' => pp.Key.f12,
+        _ => throw ArgumentError.value(name, 'key', 'unknown key: $name'),
+      };
 
-  static pp.Key? _key(String name) => switch (name) {
-    'enter' => pp.Key.enter,
-    'tab' => pp.Key.tab,
-    'escape' => pp.Key.escape,
-    'backspace' => pp.Key.backspace,
-    'up' => pp.Key.arrowUp,
-    'down' => pp.Key.arrowDown,
-    'left' => pp.Key.arrowLeft,
-    'right' => pp.Key.arrowRight,
-    'home' => pp.Key.home,
-    'end' => pp.Key.end,
-    'pageup' => pp.Key.pageUp,
-    'pagedown' => pp.Key.pageDown,
-    'delete' => pp.Key.delete,
-    'insert' => pp.Key.insert,
-    'shift' => pp.Key.shift,
-    'control' => pp.Key.control,
-    'ctrl' => pp.Key.control,
-    'alt' => pp.Key.alt,
-    'meta' => pp.Key.meta,
-    'f1' => pp.Key.f1,
-    'f2' => pp.Key.f2,
-    'f3' => pp.Key.f3,
-    'f4' => pp.Key.f4,
-    'f5' => pp.Key.f5,
-    'f6' => pp.Key.f6,
-    'f7' => pp.Key.f7,
-    'f8' => pp.Key.f8,
-    'f9' => pp.Key.f9,
-    'f10' => pp.Key.f10,
-    'f11' => pp.Key.f11,
-    'f12' => pp.Key.f12,
-    ' ' => pp.Key.space,
-    _ => null,
-  };
-
-  static pp.Key _modifier(String name, String key) {
-    final lower = name.toLowerCase();
-    if (lower == 'ctrl' || lower == 'control') return pp.Key.control;
-    if (lower == 'alt') return pp.Key.alt;
-    if (lower == 'shift') return pp.Key.shift;
-    if (lower == 'meta' || lower == 'cmd' || lower == 'command') {
-      return pp.Key.meta;
-    }
-    throw ArgumentError.value(key, 'key', 'unknown modifier: $name');
-  }
+  /// A canonical chord modifier to the engine key.
+  static pp.Key _toModifier(String name) => switch (name) {
+        'ctrl' => pp.Key.control,
+        'alt' => pp.Key.alt,
+        'shift' => pp.Key.shift,
+        'meta' => pp.Key.meta,
+        _ => throw ArgumentError.value(name, 'key', 'unknown modifier: $name'),
+      };
 }
+
+/// What [_Page._ready] waits for: attached, visible, or visible + enabled.
+enum _ReadyMode { attached, visible, actionable }
 
 /// A finished browser download: a [Reader] of the file.
 final class Download with Reader {
@@ -950,7 +946,10 @@ final class Download with Reader {
   final String _name;
 
   /// The file name the site suggested.
-  String name() => _name;
+  String fileName() => _name;
+
+  @override
+  Origin origin() => Origin(name: _name, path: _file.path);
 
   @override
   Stream<List<int>> stream() => _file.openRead();
@@ -958,48 +957,51 @@ final class Download with Reader {
 
 /// Future mirrors (rule 6). The extension name is import-only; never reference it.
 extension BrowserFuture on Future<Browser> {
-  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async =>
-      (await this).open(url, headers: headers, block: block, width: width, height: height, timeout: timeout);
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? blockResources, int? width, int? height, Duration? timeout}) async =>
+      (await this).open(url, headers: headers, blockResources: blockResources, width: width, height: height, timeout: timeout);
   Future<List<Page>> pages() async => (await this).pages();
 }
 
 /// Future mirrors for [Page].
 extension PageFuture on Future<Page> {
-  Future<Page> goto(String url, {Duration? timeout}) async => (await this).goto(url, timeout: timeout);
-  Future<Page> back({Duration? timeout}) async => (await this).back(timeout: timeout);
+  Future<Page> goTo(String url, {Duration? timeout}) async => (await this).goTo(url, timeout: timeout);
+  Future<Page> goBack({Duration? timeout}) async => (await this).goBack(timeout: timeout);
   Future<Page> reload({Duration? timeout}) async => (await this).reload(timeout: timeout);
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
-  Future<T?> eval<T>(String js) async => (await this).eval<T>(js);
-  Future<String?> cookies() async => (await this).cookies();
+  Future<T?> evaluate<T>(String js) async => (await this).evaluate<T>(js);
+  Future<String?> cookieHeader() async => (await this).cookieHeader();
   Future<Page> click(String selector, {Duration? timeout}) async => (await this).click(selector, timeout: timeout);
   Future<Page> fill(String selector, String value, {Duration? timeout}) async =>
       (await this).fill(selector, value, timeout: timeout);
   Future<Page> press(String key) async => (await this).press(key);
-  Future<Page> select(String selector, String value, {Duration? timeout}) async =>
-      (await this).select(selector, value, timeout: timeout);
-  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async =>
-      (await this).upload(selector, file, timeout: timeout);
-  Future<Page> scroll([String? selector, Duration? timeout]) async => (await this).scroll(selector, timeout);
-  Future<Page> wait(String selector, {Duration? timeout}) async => (await this).wait(selector, timeout: timeout);
-  Future<Page> waitIdle({Duration? timeout}) async => (await this).waitIdle(timeout: timeout);
+  Future<Page> selectOption(String selector, String value, {Duration? timeout}) async =>
+      (await this).selectOption(selector, value, timeout: timeout);
+  Future<Page> attachFile(String selector, Reader file, {Duration? timeout}) async =>
+      (await this).attachFile(selector, file, timeout: timeout);
+  Future<Page> scrollToBottom() async => (await this).scrollToBottom();
+  Future<Page> scrollIntoView(String selector, {Duration? timeout}) async =>
+      (await this).scrollIntoView(selector, timeout: timeout);
+  Future<Page> waitFor(String selector, {Duration? timeout}) async =>
+      (await this).waitFor(selector, timeout: timeout);
+  Future<Page> waitForNetworkIdle({Duration? timeout}) async =>
+      (await this).waitForNetworkIdle(timeout: timeout);
   Reader screenshot({bool fullPage = false}) => _FutureShot(this, fullPage: fullPage);
   Reader pdf() => _FutureShot(this, pdf: true);
-  Future<Download> download(String selector, {Duration? timeout}) async =>
-      (await this).download(selector, timeout: timeout);
+  Future<Download> clickToDownload(String selector, {Duration? timeout}) async =>
+      (await this).clickToDownload(selector, timeout: timeout);
 }
 
 /// Future mirrors for [Download].
 extension DownloadFuture on Future<Download> {
-  Future<String> name() async => (await this).name();
+  Future<String> fileName() async => (await this).fileName();
 }
 
 final class _Staged {
-  _Staged(this.file, {required this.keep, required this.tmpDir});
+  _Staged(this.file, {required this.tmpDir});
 
   final io.File file;
-  final bool keep;
   final io.Directory? tmpDir;
 }
 

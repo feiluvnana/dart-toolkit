@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/src/charset.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -19,10 +22,66 @@ void main() {
     });
   });
 
+  group('Charset', () {
+    test('single-byte legacy codecs decode', () {
+      expect(Charset.decode([0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2], contentType: 'text/html; charset=windows-1251'), 'Привет');
+      expect(Charset.decode([0xF0, 0xD2, 0xC9, 0xD7, 0xC5, 0xD4], contentType: 'text/html; charset=koi8-r'), 'Привет');
+      expect(Charset.decode([0xB1, 0xE6], contentType: 'text/html; charset=iso-8859-2'), 'ąć');
+    });
+
+    test('an unknown header charset falls through to the meta hint', () {
+      final page = [...utf8.encode('<meta charset="windows-1251">'), 0xCF, 0xF0];
+      expect(Charset.decode(page, contentType: 'text/html; charset=x-made-up'), endsWith('Пр'));
+    });
+
+    test('utf-8 decodes whole, skips the BOM, replaces bad bytes', () {
+      expect(Charset.decode([0xEF, 0xBB, 0xBF, ...utf8.encode('é')]), 'é');
+      expect(Charset.decode(utf8.encode('é').followedBy([0xFF]).toList()), 'é\uFFFD');
+      expect(Charset.decode([0xFF, 0xFE, 0x41, 0x00]), 'A');
+    });
+
+    test('a meta utf-16 label means utf-8', () {
+      final page = utf8.encode('<meta charset="utf-16"><p>héllo</p>');
+      expect(Charset.decode(page), '<meta charset="utf-16"><p>héllo</p>');
+    });
+  });
+
+  test('text() separates table cells', () {
+    final t = Html.parse('<table><tr><th>Name</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr></table>');
+    expect(t.text(), 'Name Price\nA 1');
+  });
+
+  group('base href', () {
+    test('a document <base> wins over the page URL', () {
+      final doc = Html.parse(
+        '<!doctype html><head><base href="https://cdn.e.com/a/"></head>'
+        '<body><a href="x">t</a></body>',
+        baseUrl: 'https://e.com/d/',
+      );
+      expect(doc.$('a')[0].attr('href'), 'https://cdn.e.com/a/x');
+    });
+
+    test('a relative <base> resolves against the page URL', () {
+      final doc = Html.parse(
+        '<html><head><base href="/s/"></head><body><a href="x">t</a></body></html>',
+        baseUrl: 'https://e.com/d/',
+      );
+      expect(doc.$('a')[0].attr('href'), 'https://e.com/s/x');
+    });
+  });
+
   group('Reader.html', () {
     test('parses bytes', () async {
       final doc = await _Mem('<p>hi</p>').html();
       expect(doc.$('p').text(), 'hi');
+    });
+
+    test('a piped Future<Reader> keeps its origin for links', () async {
+      final src = _Mem('<a href="b.html">x</a>', const Origin(url: 'https://e.com/d/'));
+      final doc = await (Future<Reader>.value(src) | null).html();
+      expect(doc.$('a')[0].attr('href'), 'https://e.com/d/b.html');
+      final piped = await (Future<Reader>.value(src) | _Id()).html();
+      expect(piped.$('a')[0].attr('href'), 'https://e.com/d/b.html');
     });
 
     test('mirror on Future<Reader>', () async {
@@ -118,12 +177,20 @@ void main() {
       expect(doc.$('p').map((e) => e.text()), ['Hello link', 'Two']);
     });
 
+    test('texts() pairs text/texts like attr/attrs', () {
+      expect(doc.$('p').texts(), ['Hello link', 'Two']);
+      expect(doc.$('.missing').texts(), isEmpty);
+      final linked = Html.parse('<a href="/1">a</a><a href="/2">b</a>');
+      expect(linked.$('a').texts(), ['a', 'b']);
+    });
+
     test('Future mirrors match', () async {
       final f = Future.value(doc);
       expect((await f.$('p')).length, 2);
       expect(await f.$('li')[0].text(), '1');
       expect((await f.without('ul')).$('li'), isEmpty);
       expect(await f.$('li').text(), '1');
+      expect(await f.$('li').texts(), ['1', '2']);
       expect(await f.$('a').attr('href'), '/');
       expect(await f.$('a').attrs('href'), ['/']);
     });
@@ -241,6 +308,15 @@ void main() {
       expect(frag.$('p').length, 1);
     });
 
+    test('matches sees the root element itself', () {
+      // Exercises the engine-internal `matches` on a root (not just
+      // descendants): without it a lone root never matches itself.
+      final frag = Html.parse('<p class="x">hi</p>');
+      expect(frag.$('p.x').length, 1);
+      expect(frag.$('p.x').text(), 'hi');
+      expect(frag.$('.x').texts(), ['hi']);
+    });
+
     test('chained queries include the element itself', () {
       final doc = Html.parse('<div class="o"><p>x</p></div><span>y</span>');
       expect(doc.$('div, span').$('div.o').length, 1);
@@ -297,8 +373,16 @@ void main() {
 }
 
 final class _Mem with Reader {
-  _Mem(String text) : _data = text;
+  _Mem(String text, [this._origin = const Origin()]) : _data = text;
   final String _data;
+  final Origin _origin;
+  @override
+  Origin origin() => _origin;
   @override
   Stream<List<int>> stream() => Stream.value(_data.codeUnits);
+}
+
+final class _Id with Pipe {
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input;
 }

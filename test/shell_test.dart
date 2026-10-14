@@ -27,16 +27,50 @@ void main() {
       expect(out.exitCode(), 3);
     });
 
-    test('errorText carries stderr', () async {
+    test('stderrText carries stderr', () async {
       final out = await Shell.run(['sh', '-c', 'echo oops >&2']);
-      expect(out.errorText(), contains('oops'));
+      expect(out.stderrText(), contains('oops'));
     });
 
-    test('workingDir and env', () async {
+    test('env overlays the parent; null unsets', () async {
       final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'],
           workingDir: '/tmp', env: {'MARK': 'here'});
       expect(await out.text(), contains('/tmp'));
       expect(await out.text(), contains('here'));
+    });
+
+    test('a null env value unsets the variable', () async {
+      // HOME is set in any real parent; null must hide it from the child.
+      final unset = await Shell.run(['sh', '-c', 'echo "[\$HOME]"'],
+          env: {'HOME': null});
+      expect(await unset.text(), '[]');
+      final kept = await Shell.run(['sh', '-c', 'echo "[\$MARK]"'],
+          env: {'MARK': 'here'});
+      expect(await kept.text(), '[here]');
+    });
+
+    test('live tees to our stdout/stderr while capturing', () async {
+      final out = await Shell.run(
+          ['sh', '-c', 'echo live-out; echo live-err >&2'],
+          live: true);
+      expect(out.exitCode(), 0);
+      expect(await out.text(), 'live-out');
+      expect(out.stderrText(), contains('live-err'));
+      final failing =
+          await Shell.run(['sh', '-c', 'exit 3'], live: true);
+      expect(failing.exitCode(), 3);
+    });
+
+    test('bytes() is a view, not a copy', () async {
+      final out = await Shell.run(['printf', 'abc']);
+      final a = await out.bytes();
+      final b = await out.bytes();
+      expect(a, [97, 98, 99]);
+      expect(b, [97, 98, 99]);
+      expect(
+        () => a.add(0),
+        throwsUnsupportedError,
+      );
     });
 
     test('a program that cannot start throws ProcessException', () async {
@@ -54,7 +88,7 @@ void main() {
     test('Future mirrors match', () async {
       final f = Shell.run(['sh', '-c', 'echo e; echo w >&2']);
       expect(await f.exitCode(), 0);
-      expect(await f.errorText(), contains('w'));
+      expect(await f.stderrText(), contains('w'));
       expect((await f.text()).trim(), 'e');
     });
   });
