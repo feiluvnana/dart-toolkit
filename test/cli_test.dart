@@ -1,7 +1,7 @@
-import 'dart:io';
-
 import 'package:dart_toolkit/cli.dart';
 import 'package:test/test.dart';
+
+import 'support/child.dart';
 
 void main() {
   group('options', () {
@@ -364,22 +364,16 @@ void main() {
 
   group('suggestions', () {
     test('L1: short options suggest only the case-swapped letter', () async {
-      final dir = Directory.systemTemp.createTempSync('cli_l1');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final script = File('${dir.path}/m.dart')..writeAsStringSync('''
+      const script = '''
 import 'dart:io';
 import 'package:dart_toolkit/cli.dart';
 Future<void> main(List<String> a) async {
   final v = Flag('verbose', 'V.', short: 'v');
   exitCode = await Command('app', 'X.', params: [v], handler: (_) {}).run(a);
 }
-''');
+''';
       Future<String> err(String arg) async {
-        final r = await Process.run(Platform.resolvedExecutable, [
-          '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-          script.path,
-          arg,
-        ]);
+        final r = await runDart(script, args: [arg]);
         expect(r.exitCode, 64);
         return r.stderr as String;
       }

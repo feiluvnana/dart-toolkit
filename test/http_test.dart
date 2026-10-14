@@ -6,6 +6,8 @@ import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 /// Python-generated fixtures (codecs with the same names): `python3 -c
 /// "open('x','wb').write('…'.encode('euc-kr'))"`, bytes pasted as literals so
 /// the suite needs no python at test time.
@@ -552,8 +554,7 @@ void abortTests() {
     });
 
     test('a script that aborts a slow download exits by itself', () async {
-      final script = File('.dart_tool/abort_probe_$pid.dart');
-      script.writeAsStringSync('''
+      final r = await runDart('''
 import 'package:dart_toolkit/http.dart';
 Future<void> main(List<String> a) async {
   final res = await Http.get(a[0]);
@@ -561,17 +562,8 @@ Future<void> main(List<String> a) async {
   await Future<void>.delayed(const Duration(milliseconds: 200));
   Http.abort();
 }
-''');
-      addTearDown(() => script.deleteSync());
-      final p = await Process.start(Platform.resolvedExecutable,
-          ['run', script.path, '$url/slow'],
-          workingDirectory: Directory.current.path);
-      final code = await p.exitCode.timeout(const Duration(seconds: 20),
-          onTimeout: () {
-        p.kill();
-        return -1;
-      });
-      expect(code, 0);
+''', args: ['$url/slow'], timeout: const Duration(seconds: 20));
+      expect(r.exitCode, 0, reason: '${r.stderr}');
     });
   });
 }

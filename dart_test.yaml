@@ -1,0 +1,9 @@
+# `dart test` runs everything. `dart test -P quick` skips the tests that
+# drive a real pty or Chromium (each takes seconds) for a fast inner loop.
+tags:
+  pty: {}
+  chrome: {}
+
+presets:
+  quick:
+    exclude_tags: pty || chrome

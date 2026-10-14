@@ -8,6 +8,8 @@ import 'dart:isolate';
 import 'package:dart_toolkit/pool.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 int doubleIt(int x) => x * 2;
 
 Future<int> slowDouble(int x) async {
@@ -219,10 +221,7 @@ void main() {
     });
 
     test('close during a running job leaves a script that exits', () async {
-      final dir = Directory.systemTemp.createTempSync('pool_h4');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final script = File('${dir.path}/s.dart')
-        ..writeAsStringSync('''
+      final r = await runDart('''
 import 'dart:async';
 import 'package:dart_toolkit/pool.dart';
 Future<void> main() async {
@@ -233,21 +232,8 @@ Future<void> main() async {
   print(await Pool.run(() => 1));
 }
 ''');
-      final p = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        script.path,
-      ]);
-      final out = p.stdout.transform(const SystemEncoding().decoder).join();
-      unawaited(p.stderr.drain<void>());
-      final code = await p.exitCode.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {
-          p.kill();
-          return -999;
-        },
-      );
-      expect(code, 0);
-      expect((await out).trim(), '1');
+      expect(r.exitCode, 0);
+      expect('${r.stdout}'.trim(), '1');
     });
 
     test('core is re-exported', () {

@@ -19,4 +19,33 @@ void main() {
       expect(h('plain.txt'), 'plain.txt');
     });
   });
+
+  group('content-disposition', () {
+    String? d(String h) => dispositionName(h);
+
+    test('filename* (RFC 8187) wins and decodes its charset', () {
+      expect(d("attachment; filename=\"a.txt\"; filename*=UTF-8''na%C3%AFve%20x.txt"), 'naïve x.txt');
+      expect(d("attachment; filename*=iso-8859-1'en'caf%E9.txt"), 'café.txt');
+      expect(d('attachment; filename*="UTF-8\'\'q%2Eu.txt"'), 'q.u.txt');
+      expect(d("attachment; filename*=UTF-8''..%2F..%2Fetc%2Fpasswd"), 'passwd');
+    });
+
+    test('plain filename: quoted, bare, percent runs, absent', () {
+      expect(d('inline; filename=report.pdf'), 'report.pdf');
+      expect(d("attachment; filename='x y.zip'"), 'x y.zip');
+      expect(d('attachment; FILENAME="up.TXT"'), 'up.TXT');
+      expect(dispositionName(null), isNull);
+      expect(d('attachment'), isNull);
+      expect(d('attachment; filename=""'), isNull);
+    });
+
+    test('an empty filename* falls back to filename', () {
+      expect(d("attachment; filename*=UTF-8''; filename=b.txt"), 'b.txt');
+    });
+
+    test('fileName falls back to the URL tail, decoded', () {
+      expect(fileName(url: 'https://x/a/b%20c.tar.gz?q=1'), 'b c.tar.gz');
+      expect(fileName(url: 'https://x/'), 'download');
+    });
+  });
 }

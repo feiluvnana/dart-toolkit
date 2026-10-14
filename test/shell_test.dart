@@ -5,6 +5,8 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/shell.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 void main() {
   group('Shell.run', () {
     test('runs a program and returns stdout', () async {
@@ -51,15 +53,18 @@ void main() {
     });
 
     test('live tees to our stdout/stderr while capturing', () async {
-      final out = await Shell.run(
-          ['sh', '-c', 'echo live-out; echo live-err >&2'],
-          live: true);
-      expect(out.code(), 0);
-      expect(await out.text(), 'live-out');
-      expect(out.err(), contains('live-err'));
-      final failing =
-          await Shell.run(['sh', '-c', 'exit 3'], live: true);
-      expect(failing.code(), 3);
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  final out = await Shell.run(['sh', '-c', 'echo live-out; echo live-err >&2'], live: true);
+  stdout.writeln('[\${await out.text()}|\${out.err().trim()}]');
+  exitCode = (await Shell.run(['sh', '-c', 'exit 3'], live: true)).code();
+}
+''');
+      expect(r.exitCode, 3);
+      expect(r.stdout, 'live-out\n[live-out|live-err]\n');
+      expect(r.stderr, 'live-err\n');
     });
 
     test('bytes() is a view, not a copy', () async {

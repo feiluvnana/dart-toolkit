@@ -7,7 +7,7 @@ import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
-import 'support/in_dir.dart';
+import 'support/child.dart';
 
 List<int> _tarBlock(String name, int size, int typeflag) {
   final b = List<int>.filled(512, 0);

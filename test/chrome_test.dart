@@ -1,5 +1,6 @@
 // Launching Chromium is slow on a cold cache: allow minutes overall.
 @Timeout(Duration(minutes: 5))
+@Tags(['chrome'])
 library;
 
 import 'dart:async';

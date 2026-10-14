@@ -15,5 +15,6 @@ Each one is self-contained and covers its whole field; run them one at a time, s
 | DOCS.md | bring VISION.md, doc comments and examples in line with the code |
 | DOGFOOD.md | build real scripts on the library and record every friction point |
 | RELEASE.md | check pub.dev readiness: pubspec, score, changelog, versioning |
+| NOBRAIN.md | run all of the above, in order, as one autonomous pipeline with gates |
 
 Every prompt starts with the same base rules (Context), so they agree with each other.

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
-import 'support/in_dir.dart';
+import 'support/child.dart';
 
 void main() {
   late Directory tmp;
@@ -115,6 +115,37 @@ void main() {
         throwsA(isA<FileSystemException>()),
       );
       expect(await Fs.entry(p('dst.txt')), isNull);
+    });
+
+    test('dir copy into an existing tree merges, replacing files and links', () async {
+      await Fs.file(p('src/a.txt')).write('new');
+      await Fs.file(p('src/nested/b.txt')).write('b');
+      await Fs.link(p('src/lnk')).create('a.txt');
+      await Fs.file(p('dst/a.txt')).write('old');
+      await Fs.file(p('dst/keep.txt')).write('k');
+      await Fs.file(p('outside.txt')).write('o');
+      await Fs.link(p('dst/lnk')).create(p('outside.txt'));
+      await Fs.dir(p('src')).copy(p('dst'));
+      expect(await Fs.file(p('dst/a.txt')).text(), 'new');
+      expect(await Fs.file(p('dst/nested/b.txt')).text(), 'b');
+      expect(await Fs.file(p('dst/keep.txt')).text(), 'k');
+      expect(await Fs.link(p('dst/lnk')).target(), 'a.txt');
+      expect(await Fs.file(p('outside.txt')).text(), 'o');
+    });
+
+    test('dir copy over a file/folder collision throws before writing', () async {
+      await Fs.file(p('src/a.txt')).write('a');
+      await Fs.file(p('src/x')).write('file');
+      await Fs.dir(p('dst/x')).create();
+      await expectLater(Fs.dir(p('src')).copy(p('dst')), throwsA(isA<FileSystemException>()));
+      expect(await Fs.entry(p('dst/a.txt')), isNull);
+    });
+
+    test('a dir is not a file: copy and move check the kind', () async {
+      await Fs.dir(p('d')).create();
+      await expectLater(Fs.file(p('d')).copy(p('e')), throwsA(isA<FileSystemException>()));
+      await expectLater(Fs.dir(p('missing')).move(p('e')), throwsA(isA<FileSystemException>()));
+      expect(await Fs.entry(p('e')), isNull);
     });
 
     test('F16: dir copy keeps folder modes and mtimes', () async {

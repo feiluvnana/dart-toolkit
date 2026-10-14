@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:io' as io;
 
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/scrape.dart';
 import 'package:test/test.dart';
+
+import 'support/child.dart';
 
 void main() {
   late HttpServer server;
@@ -261,10 +262,7 @@ void main() {
     });
 
     test('cancelling a crawl lets the process exit', () async {
-      final dir = await Directory.systemTemp.createTemp('scrape_cancel');
-      try {
-        final script = io.File('${dir.path}/c.dart');
-        await script.writeAsString('''
+      final res = await runDart('''
 import 'package:dart_toolkit/scrape.dart';
 Future<void> main(List<String> args) async {
   final base = args.single;
@@ -274,17 +272,9 @@ Future<void> main(List<String> args) async {
   }).first;
   print(first);
 }
-''');
-        final res = await Process.run(Platform.resolvedExecutable, [
-          '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-          script.path,
-          base,
-        ]).timeout(const Duration(seconds: 8));
-        expect(res.stdout, contains('hit'));
-        expect(res.exitCode, 0);
-      } finally {
-        await dir.delete(recursive: true);
-      }
+''', args: [base], timeout: const Duration(seconds: 8));
+      expect(res.stdout, contains('hit'));
+      expect(res.exitCode, 0);
     });
 
     test('bad limit is an ArgumentError', () {
@@ -334,6 +324,6 @@ Future<void> main(List<String> args) async {
       } finally {
         await browser.close();
       }
-    });
+    }, tags: ['chrome']);
   });
 }
