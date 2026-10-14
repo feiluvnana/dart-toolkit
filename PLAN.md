@@ -42,7 +42,19 @@ In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <t
 - M29: `dart test test/archive_test.dart -n M29`.
 - H14: Ctrl-Z suspend is POSIX only; check that the Windows Tui still gets Ctrl-C through `claimInterrupt`.
 
+### W7. Console close runs the exit hooks
+`lib/src/exit.dart` `_install` returns after SIGINT on Windows, but Dart delivers `sighup` there when the console window closes. Move the `sighup` block above `if (io.Platform.isWindows) return;`, and on Windows cut the per-hook timeout in `_handle` from 5 s to 2 s (Windows allows ~5 s after a close). Check: a script blocked in `await (slowReader > Fs.file('x'))` whose console window is closed leaves no `.x.tmp*` beside `x`.
+
+### W8. UTF-8 glyphs in Windows Terminal and VS Code
+`TerminalCaps.of` (`lib/src/terminal.dart`) decides `ascii` from `LC_ALL`/`LC_CTYPE`/`LANG`, which Windows rarely sets, so every Windows terminal gets the ASCII theme. Add a named parameter `bool? windows` (default `io.Platform.isWindows`) and, when true, set `ascii = !locale.contains('utf') && !(env.containsKey('WT_SESSION') || env['TERM_PROGRAM'] == 'vscode' || env.containsKey('ConEmuANSI'))`. Test in `test/terminal_keys_test.dart`: `TerminalCaps.of({'WT_SESSION': '1'}, hasTerminal: true, windows: true).ascii` is false, `TerminalCaps.of({}, hasTerminal: true, windows: true).ascii` is true. Then check by eye: Windows Terminal shows `━` bars, conhost shows `#`.
+
+### W9. Rename retries for Defender and the indexer
+`_renameOver` in `lib/fs.dart` retries 3 × 50 ms; `File.move`, `Dir.move`, `Link.create` and `_Unpacker._moveInto` (`lib/archive.dart`) do not retry. Add `Future<T> renameRetry<T>(Future<T> Function() op)` to `lib/src/posix.dart`: on Windows retry on `osError.errorCode` 5, 32 or 33 with waits of 20, 40, 80 … ms up to 1 s in total; elsewhere call `op()` once. Route the five sites through it. Test (Windows only): open the target from a second isolate for 300 ms, then `Fs.file(t).write('x')` succeeds after the handle closes.
+
 ## §2 Linux
 
-### L1. M11: `Shell.openInDefaultApp` keeps the script alive
-In `lib/shell.dart` (~176), replace `['xdg-open', target]` with `['/bin/sh', '-c', 'xdg-open "$1" </dev/null >/dev/null 2>&1', '_', target]`. Treat `sh` exit 127 as "xdg-open missing". Verify on Linux: a script that calls `openInDefaultApp` exits while the app stays open.
+### L1. M11: `Shell.open` with a foreground launcher keeps the script alive
+The launcher's stdio is now released (fixed on POSIX), but `xdg-open` in generic mode runs `$BROWSER` in the foreground, and the plain `Process.start` child still holds the VM until it exits. In `lib/shell.dart` `open`, for the Linux branch start `['/bin/sh', '-c', 'xdg-open "\$1" </dev/null >/dev/null; echo "\$?"', '_', target]` with `mode: io.ProcessStartMode.detachedWithStdio`; read stdout with the existing 10 s timeout and parse the status: `127` → `ProcessException('xdg-open is not installed (install xdg-utils)')`, other non-zero → throw with the first 4 KB of stderr, no status by the timeout → handed off. Cancel both subscriptions. Check on Linux with `XDG_CURRENT_DESKTOP` unset and `BROWSER=firefox`: a script calling `Shell.open('https://example.com')` exits within 10 s and Firefox stays open.
+
+### L2. `Chrome.launch()` on linux-arm64 and windows-arm64
+puppeteer's downloader throws `FormatException: Unknown 'linux_arm64' from Platform.version` (Docker on Apple Silicon, Raspberry Pi). In `lib/chrome.dart` `_cachedExecutable`, read the arch from `io.Platform.version` (`linux_arm64`/`windows_arm64`). On `linux_arm64` use the first of `chromium`, `chromium-browser`, `google-chrome-stable` found on PATH, else throw `UnsupportedError('no Chromium download for linux_arm64: apt install chromium, or pass path:')`. On `windows_arm64` throw the same error naming the platform (x64 emulation would need puppeteer's `src/` enum). Check on an arm64 box: `dart test test/chrome_test.dart` launches the system Chromium or fails with that message.

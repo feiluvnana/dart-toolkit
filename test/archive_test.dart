@@ -286,6 +286,23 @@ void main() {
       expect((await Fs.dir(p('out')).list()).map((e) => e.name()), ['._notes', 'a.txt']);
     });
 
+    test('NFC and NFD spellings of one name fail where the filesystem folds them', () async {
+      const nfc = 'caf\u00e9.txt', nfd = 'cafe\u0301.txt';
+      List<int> member(String name, String body) =>
+          [..._tarBlock(String.fromCharCodes(utf8.encode(name)), body.length, 0x30), ..._tarBody(body.codeUnits)];
+      final tar = [...member(nfc, 'nfc'), ...member(nfd, 'nfd'), ...List.filled(1024, 0)];
+      final probe = Directory(p('probe'))..createSync();
+      io.File('${probe.path}/$nfc').writeAsStringSync('x');
+      final folds = io.File('${probe.path}/$nfd').existsSync();
+      if (folds) {
+        await expectLater(Archive.unpack(p('out')).consume(Stream.value(tar)), throwsFormatException);
+      } else {
+        await Archive.unpack(p('out')).consume(Stream.value(tar));
+        expect(await Fs.file(p('out/$nfc')).text(), 'nfc');
+        expect(await Fs.file(p('out/$nfd')).text(), 'nfd');
+      }
+    });
+
     test('an old-style folder (type 0, trailing slash) is a folder', () async {
       final tar = [
         ..._tarBlock('d/', 0, 0x30),

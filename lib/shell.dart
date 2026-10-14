@@ -19,6 +19,8 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'core.dart';
+
+import 'src/exit.dart' as exit;
 export 'core.dart';
 
 /// Entry point: run a program, make one a filter, or open with the OS.
@@ -40,39 +42,6 @@ abstract final class Shell {
     bool live = false,
   }) async {
     _checkCommand(command);
-    if (live) return _runLive(command, dir: dir, env: env);
-    io.ProcessResult r;
-    try {
-      r = await io.Process.run(
-        command[0],
-        command.sublist(1),
-        workingDirectory: dir,
-        environment: _resolveEnv(env),
-        includeParentEnvironment: env == null,
-        stdoutEncoding: null,
-        stderrEncoding: null,
-      );
-    } on io.ProcessException catch (e) {
-      throw io.ProcessException(
-        command[0],
-        command.sublist(1),
-        'cannot start ${command[0]}: ${e.message}',
-        e.errorCode,
-      );
-    }
-    return Output._(
-      r.exitCode,
-      _resultBytes(r.stdout),
-      _resultText(r.stderr),
-    );
-  }
-
-  /// [run] with `live: true`: `Process.start` plus a stdout/stderr tee.
-  static Future<Output> _runLive(
-    List<String> command, {
-    String? dir,
-    Map<String, String?>? env,
-  }) async {
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -90,41 +59,46 @@ abstract final class Shell {
         e.errorCode,
       );
     }
+    // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child too,
+    // instead of leaving it orphaned under init.
+    final token = exit.onExit(() => proc.kill());
     try {
-      await proc.stdin.close();
-    } catch (_) {}
-    final out = BytesBuilder(copy: false);
-    final err = BytesBuilder(copy: false);
-    Future<void> tee(
-        Stream<List<int>> src, BytesBuilder buf, io.IOSink dst) async {
-      await for (final chunk in src) {
-        buf.add(chunk);
-        dst.add(chunk);
+      try {
+        await proc.stdin.close();
+      } catch (_) {}
+      final out = BytesBuilder(copy: false);
+      final err = BytesBuilder(copy: false);
+      // With [live] each chunk also tees to our stdout/stderr.
+      Future<void> collect(Stream<List<int>> src, BytesBuilder buf, io.IOSink? tee) async {
+        await for (final chunk in src) {
+          buf.add(chunk);
+          tee?.add(chunk);
+        }
       }
-    }
 
-    try {
-      await Future.wait([
-        tee(proc.stdout, out, io.stdout),
-        tee(proc.stderr, err, io.stderr),
-      ]);
-    } catch (_) {
-      proc.kill(io.ProcessSignal.sigkill);
-      rethrow;
+      try {
+        await Future.wait([
+          collect(proc.stdout, out, live ? io.stdout : null),
+          collect(proc.stderr, err, live ? io.stderr : null),
+        ]);
+      } catch (_) {
+        proc.kill(io.ProcessSignal.sigkill);
+        rethrow;
+      } finally {
+        if (live) {
+          try {
+            await io.stdout.flush();
+          } catch (_) {}
+          try {
+            await io.stderr.flush();
+          } catch (_) {}
+        }
+      }
+      final code = await proc.exitCode;
+      return Output._(code, out.takeBytes(), utf8.decode(err.takeBytes(), allowMalformed: true));
     } finally {
-      try {
-        await io.stdout.flush();
-      } catch (_) {}
-      try {
-        await io.stderr.flush();
-      } catch (_) {}
+      exit.offExit(token);
     }
-    final code = await proc.exitCode;
-    return Output._(
-      code,
-      out.takeBytes(),
-      utf8.decode(err.takeBytes(), allowMalformed: true),
-    );
   }
 
   /// The child environment: null inherits as-is; otherwise the parent
@@ -258,18 +232,6 @@ abstract final class Shell {
     }
   }
 
-  static Uint8List _resultBytes(Object? out) {
-    if (out is Uint8List) return out;
-    if (out is List<int>) return Uint8List.fromList(out);
-    if (out is String) return Uint8List.fromList(utf8.encode(out));
-    return Uint8List(0);
-  }
-
-  static String _resultText(Object? out) {
-    if (out is String) return out;
-    if (out is List<int>) return utf8.decode(out, allowMalformed: true);
-    return '';
-  }
 }
 
 /// A finished program: a [Reader] of stdout.
@@ -350,6 +312,10 @@ final class _Filter implements Pipe {
         e.errorCode,
       );
     }
+    // A signal that ends this script ends the child too; the hook goes
+    // when the child exits.
+    final token = exit.onExit(() => proc.kill());
+    unawaited(proc.exitCode.then((_) => exit.offExit(token)));
     // A downstream cancel tears this generator down without an error, so
     // track normal completion and kill in the finally: without this the
     // child outlives a failed run.

@@ -137,10 +137,12 @@ void sortByRelative<T>(List<T> items, String Function(T) path, String from) {
 }
 
 /// Unique temp sibling for [target]: `p.join(dir, '.base.tmp…')` so Windows
-/// never mixes separators.
+/// never mixes separators; long names are cut so the temp still fits.
 String tmpPath(String target) {
   final dir = p.dirname(target);
-  final base = p.basename(target);
+  // At most 32 runes (128 bytes) of the name: the suffix adds ~40, and a
+  // 255-byte name must still get a temp under NAME_MAX.
+  final base = String.fromCharCodes(p.basename(target).runes.take(32));
   final rand = Random().nextInt(1 << 32);
   return p.join(
     dir,

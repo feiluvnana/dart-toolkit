@@ -100,6 +100,27 @@ Future<void> main() => Shell.open('https://example.com');
       expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
     });
 
+    test('a SIGTERM that ends the script ends its running child', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX signals');
+      final dir = await Directory.systemTemp.createTemp('shell_orphan');
+      addTearDown(() => dir.delete(recursive: true));
+      await Fs.file('${dir.path}/main.dart').write('''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  await Shell.run(['sh', '-c', r'echo \$\$; exec sleep 20'], live: true);
+}
+''');
+      final p = await Process.start(Platform.resolvedExecutable,
+          ['--packages=${Directory.current.path}/.dart_tool/package_config.json', '${dir.path}/main.dart']);
+      final first = await p.stdout.transform(const SystemEncoding().decoder).first;
+      final child = first.trim();
+      p.kill(); // SIGTERM to the script we spawned
+      expect(await p.exitCode.timeout(const Duration(seconds: 10)), 143);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final ps = await Process.run('ps', ['-p', child, '-o', 'pid=']);
+      expect('${ps.stdout}'.trim(), isEmpty, reason: 'sleep $child outlived the script');
+    });
+
     test('bytes() is a view, not a copy', () async {
       final out = await Shell.run(['printf', 'abc']);
       final a = await out.bytes();

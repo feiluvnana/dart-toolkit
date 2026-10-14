@@ -67,6 +67,11 @@ abstract final class Console {
   /// on, plus styling. Implies [_styled].
   static bool get _animated => term.TerminalCaps.current.animated;
 
+  /// Glyphs, ASCII where the locale is not UTF-8 (`LANG=C`), as in the Tui.
+  static bool get _ascii => term.TerminalCaps.current.ascii;
+  static String get _okMark => _ascii ? '+' : '✓';
+  static String get _failMark => _ascii ? 'x' : '✗';
+
   static int _columns() {
     try {
       final cols = io.stderr.terminalColumns;
@@ -386,16 +391,18 @@ abstract final class Console {
     if (!_animated) {
       return work.then((v) {
         live._free();
-        io.stderr.writeln('✓ $label');
+        io.stderr.writeln('$_okMark $label');
         return v;
       }, onError: (Object e, StackTrace st) {
         live._free();
-        io.stderr.writeln('✗ $label');
+        io.stderr.writeln('$_failMark $label');
         throw e;
       });
     }
     var i = 0;
-    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    final frames = _ascii
+        ? const ['-', '\\', '|', '/']
+        : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     final timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
       io.stderr.write('\r${fit(frames[i % frames.length], label)}\x1b[K');
       i++;
@@ -404,12 +411,12 @@ abstract final class Console {
     return work.then((v) async {
       timer.cancel();
       live._free();
-      io.stderr.writeln('\r${fit('✓', label)}\x1b[K');
+      io.stderr.writeln('\r${fit(_okMark, label)}\x1b[K');
       return v;
     }, onError: (Object e, StackTrace st) async {
       timer.cancel();
       live._free();
-      io.stderr.writeln('\r${fit('✗', label)}\x1b[K');
+      io.stderr.writeln('\r${fit(_failMark, label)}\x1b[K');
       throw e;
     });
   }
@@ -684,7 +691,7 @@ abstract final class Console {
       final current = start + r == selected;
       final choice = term.truncateWidth(choices[start + r], width);
       final row =
-          '${current ? '❯' : ' '}${choice.isEmpty ? '' : ' $choice'}';
+          '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
       if (_styled && current) {
         io.stderr.writeln(accent == null
             ? '$_bold$row$_reset\x1b[K'
@@ -976,9 +983,9 @@ final class Bar extends _Live implements Pipe, Closeable {
     if (_closed) return;
     _closed = true;
     if (Console._animated) {
-      io.stderr.writeln('${'\r✗ ${_label ?? ''}'.trimRight()}\x1b[K');
+      io.stderr.writeln('${'\r${Console._failMark} ${_label ?? ''}'.trimRight()}\x1b[K');
     } else {
-      io.stderr.writeln('✗ ${_label ?? ''}'.trimRight());
+      io.stderr.writeln('${Console._failMark} ${_label ?? ''}'.trimRight());
     }
     Console._release(this);
   }
@@ -1027,7 +1034,10 @@ final class Bar extends _Live implements Pipe, Closeable {
     // Only reached when animated, which implies styling is on; piped output
     // stays plain.
     final on = Console._accentOn;
-    io.stderr.write('\r$on$line${on.isEmpty ? '' : _reset}\x1b[K');
+    // cols - 1: a line that fills the last column leaves a pending wrap, and
+    // the next '\r' would return to the wrapped row (stacking lines).
+    final fitted = term.truncateWidth(line, _cols - 1);
+    io.stderr.write('\r$on$fitted${on.isEmpty ? '' : _reset}\x1b[K');
   }
 
   /// One live line for byte and item bars alike: `label bar counts rate`.
@@ -1091,7 +1101,7 @@ final class Bar extends _Live implements Pipe, Closeable {
     final cells = frac * width;
     final full = cells.floor();
     final half = cells - full >= 0.5 && full < width;
-    const on = '━', mid = '╸', off = '─';
+    final (on, mid, off) = Console._ascii ? ('#', '>', '-') : ('━', '╸', '─');
     return '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
   }
 

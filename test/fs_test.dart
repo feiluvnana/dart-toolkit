@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/fs.dart';
@@ -231,6 +232,15 @@ void main() {
 
     test('reading a missing file throws', () async {
       expect(Fs.file(p('missing')).text(), throwsA(isA<FileSystemException>()));
+    });
+
+    test('a 250-byte name writes, links and unpacks (the temp name fits)', () async {
+      final name = 'a' * 250;
+      await Fs.file(p(name)).write('x');
+      expect(await Fs.file(p(name)).text(), 'x');
+      await Fs.link(p('l' * 250)).create(p(name));
+      await (Reader.of(utf8.encode('hello')) > Fs.file(p('b' * 230)));
+      expect(await Fs.file(p('b' * 230)).text(), 'hello');
     });
 
     test('as a Writer it stores atomically', () async {

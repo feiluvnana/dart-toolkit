@@ -315,6 +315,9 @@ final class _Session<S> implements term.TuiBridge {
     if (!io.stdout.hasTerminal) {
       throw const io.StdoutException('no terminal for the TUI');
     }
+    if (term.TerminalCaps.isDumb(io.Platform.environment)) {
+      throw const io.StdoutException('TERM=dumb takes no escape sequences: no TUI (use Console)');
+    }
     // Handlers run in the redraw zone; the loop itself stays outside it, or
     // its own timers and awaits would wake it forever and starve I/O.
     runZoned(() => _zone = Zone.current, zoneSpecification: _spec());
@@ -1318,6 +1321,8 @@ final class _Session<S> implements term.TuiBridge {
       _h = math.max(1, h);
     } catch (_) {}
     _grid = List.generate(_h, (_) => List.filled(_w, _Cell.blank));
+    // Keys come from the terminal even when stdin is a pipe (`ls | app`).
+    term.ttyInput = true;
     _modes = term.captureModes();
     term.setRawModes(_modes, false);
     _listenStdin();
@@ -1417,6 +1422,7 @@ final class _Session<S> implements term.TuiBridge {
     }));
     _subs.clear();
     _restoreTerminal();
+    term.ttyInput = false;
     try {
       await io.stdout.flush();
     } catch (_) {}

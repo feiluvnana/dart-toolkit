@@ -25,6 +25,22 @@ void main() {
       }
     }, timeout: const Timeout(Duration(seconds: 90)));
 
+    test('a bar on an 8-column terminal never fills the last column', () async {
+      final term = await _ptyBar(cols: 8);
+      for (final chunk in term.split('\r')) {
+        expect(_cells(chunk.split('\x1b[').first), lessThanOrEqualTo(7), reason: chunk);
+      }
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    test('LC_ALL=C gets ASCII glyphs; NO_COLOR keeps the motion', () async {
+      final ascii = await _ptyBar(cols: 40, mode: 'spin', env: {'LC_ALL': 'C'});
+      expect(ascii, contains('+ working'));
+      expect(ascii, isNot(contains('⠋')));
+      final plain = await _ptyBar(cols: 40, mode: 'spin', env: {'NO_COLOR': '1'});
+      expect(plain, contains('⠋'));
+      expect(plain, isNot(contains('\x1b[3')));
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
     test('no accent by default: bar, spinner and choose emit no colour codes; accent restores it',
         () async {
       if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
@@ -174,7 +190,7 @@ int _cells(String line) {
 }
 
 /// Run the bar probe under a 40-column pty; return the terminal bytes.
-Future<String> _ptyBar({required int cols}) async {
+Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, String>? env}) async {
   if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
   final root = Directory.current;
   try {
@@ -188,8 +204,9 @@ Future<String> _ptyBar({required int cols}) async {
     '--size', '24', '$cols',
     '--', Platform.resolvedExecutable,
     '${root.path}/test/console_pty/probe.dart',
-    '${Directory.systemTemp.path}/probe_nosuch.log', 'bar',
-  ], workingDirectory: root.path, stdoutEncoding: null);
+    '${Directory.systemTemp.path}/probe_nosuch.log', mode,
+  ], workingDirectory: root.path, stdoutEncoding: null,
+      environment: {'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color', ...?env});
   if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
   return utf8.decode(res.stdout as List<int>, allowMalformed: true);
 }

@@ -255,7 +255,12 @@ final class _Unpacker implements Writer {
 
     // Sandbox-checks [name] and returns its path in the temp folder, with
     // parents created; null for a bare root entry.
-    Future<String?> prepare(String name) async {
+    // Every file this unpack wrote: an existing file under a path not in
+    // here means the filesystem folded two member names into one (macOS
+    // normalises NFC and NFD café.txt to the same file).
+    final written = <String>{};
+
+    Future<String?> prepare(String name, {bool file = false}) async {
       _checkMember(name, folded);
       // Split on both separators so member names work on every platform.
       final relParts =
@@ -263,6 +268,9 @@ final class _Unpacker implements Writer {
       if (relParts.isEmpty) return null;
       final dest = p.joinAll([tmpDir.path, ...relParts]);
       await io.Directory(p.dirname(dest)).create(recursive: true);
+      if (file && written.add(dest) && await io.File(dest).exists()) {
+        throw FormatException('archive members collide on this filesystem: $name');
+      }
       return dest;
     }
 
@@ -272,7 +280,7 @@ final class _Unpacker implements Writer {
       required bool isDir,
       Uint8List? data,
     }) async {
-      final dest = await prepare(name);
+      final dest = await prepare(name, file: !isDir);
       if (dest == null) return;
       if (isDir) {
         await io.Directory(dest).create(recursive: true);
@@ -347,7 +355,7 @@ final class _Unpacker implements Writer {
                 dest = null;
                 break;
               }
-              dest = await prepare(ev.name);
+              dest = await prepare(ev.name, file: !ev.isDir);
               if (dest == null) break;
               if (ev.isDir) {
                 await io.Directory(dest).create(recursive: true);
@@ -366,7 +374,7 @@ final class _Unpacker implements Writer {
                   skipping = true;
                   break;
                 }
-                dest = await prepare(pending);
+                dest = await prepare(pending, file: true);
                 if (dest != null) out = await io.File(dest).open(mode: io.FileMode.write);
               }
               await out?.writeFrom(ev.bytes);
@@ -374,7 +382,7 @@ final class _Unpacker implements Writer {
               final empty = appleDouble;
               if (empty != null) {
                 appleDouble = null;
-                dest = await prepare(empty);
+                dest = await prepare(empty, file: true);
                 if (dest != null) await io.File(dest).writeAsBytes(const []);
               }
               await out?.close();
