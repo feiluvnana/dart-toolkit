@@ -24,72 +24,73 @@ void main() {
 
   group('Hasher', () {
     test('one-shot matches known digests', () {
-      expect(Hash.md5().add('hello').hex(), '5d41402abc4b2a76b9719d911017c592');
+      expect(Hash.md5().add('hello').hexDigest(), '5d41402abc4b2a76b9719d911017c592');
       expect(
-        Hash.sha1().add('hello').hex(),
+        Hash.sha1().add('hello').hexDigest(),
         'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d',
       );
       expect(
-        Hash.sha256().add('hello').hex(),
+        Hash.sha256().add('hello').hexDigest(),
         '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
       );
-      expect(Hash.sha512().add('hello').hex().length, 128);
+      expect(Hash.sha512().add('hello').hexDigest().length, 128);
     });
 
     test('add is incremental and returns the hasher', () {
       final h = Hash.sha256();
       expect(identical(h.add('hel'), h), isTrue);
       h.add('lo');
-      expect(h.hex(), Hash.sha256().add('hello').hex());
+      expect(h.hexDigest(), Hash.sha256().add('hello').hexDigest());
     });
 
-    test('add takes bytes too', () {
+    test('addBytes feeds raw bytes identically to utf8 text', () {
       expect(
-        Hash.sha256().add(utf8.encode('hello')).hex(),
-        Hash.sha256().add('hello').hex(),
+        Hash.sha256().addBytes(utf8.encode('hello')).hexDigest(),
+        Hash.sha256().add('hello').hexDigest(),
       );
     });
 
-    test('wrong data type is an ArgumentError', () {
-      expect(() => Hash.sha256().add(42), throwsArgumentError);
+    test('add and addBytes chain incrementally', () {
+      final h = Hash.sha256().add('hel').addBytes(utf8.encode('lo'));
+      expect(h.hexDigest(), Hash.sha256().add('hello').hexDigest());
     });
 
-    test('hex() again returns the same digest', () {
+    test('hexDigest() again returns the same digest', () {
       final h = Hash.sha256().add('x');
-      expect(h.hex(), h.hex());
+      expect(h.hexDigest(), h.hexDigest());
     });
 
-    test('add after hex is a StateError', () {
+    test('add after hexDigest is a StateError', () {
       final h = Hash.sha256().add('x');
-      h.hex();
+      h.hexDigest();
       expect(() => h.add('y'), throwsStateError);
     });
 
     test('as a Writer it digests the stream', () async {
       final h = Hash.sha256();
       await (_Mem('hello') > h);
-      expect(h.hex(), Hash.sha256().add('hello').hex());
+      expect(h.hexDigest(), Hash.sha256().add('hello').hexDigest());
     });
 
     test('as a Pipe it forwards unchanged and digests', () async {
       final h = Hash.sha256();
       final out = await (_Mem('hello') | h).bytes();
       expect(out, utf8.encode('hello'));
-      expect(h.hex(), Hash.sha256().add('hello').hex());
+      expect(h.hexDigest(), Hash.sha256().add('hello').hexDigest());
     });
 
     test('a failed run poisons the hasher instead of a partial hex',
         () async {
       final h = Hash.sha256();
       await expectLater(_Boom() | h > null, throwsStateError);
-      expect(() => h.hex(), throwsStateError);
+      expect(() => h.hexDigest(), throwsStateError);
       expect(() => h.add('more'), throwsStateError);
       expect(_Boom() | h > null, throwsStateError);
     });
 
     test('a finished hasher cannot take another pipeline', () async {
       final h = Hash.sha256().add('x');
-      h.hex();
+      h.hexDigest();
       // Pipelines are lazy: the StateError surfaces when the run starts.
       expect(_Mem('y') > h, throwsStateError);
       expect(_Mem('y').pipe(h).bytes(), throwsStateError);
@@ -104,7 +105,7 @@ void main() {
         throwsA(isA<ArgumentError>()),
       );
       // Not the empty-input digest: the run never delivered the bytes.
-      expect(() => h.hex(), throwsStateError);
+      expect(() => h.hexDigest(), throwsStateError);
     });
   });
 }

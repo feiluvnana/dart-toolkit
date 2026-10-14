@@ -189,19 +189,17 @@ abstract final class Http {
   // head, delete, options: the same; post, put, patch add {Object? body, Object? json}
 }
 final class Response with Reader implements Closeable {
-  int status();  bool ok();  String? header(String name);  String url();
-  int? size();                                   // content-length, null when unknown
-  String name();                                 // content-disposition filename, else the URL's last segment
+  int statusCode();  bool isSuccess();  String? header(String name);  String finalUrl();
+  int? contentLength();                          // content-length, null when unknown
+  String fileName();                             // content-disposition filename, else the URL's last segment
 }
 ```
 
 - A verb completes when the headers arrive; the body streams. A non-2xx status is still a
-  `Response`, and `ok()` is `status` in 200–299.
+  `Response`, and `isSuccess()` is `statusCode` in 200–299.
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
-  and 307/308 keep the method and resend an in-memory body. `url()` is the final URL.
-- `body` is a `String` (`text/plain; charset=utf-8` unless `content-type` is given), a
-  `List<int>`, a `Reader` (streamed), or a `Map<String, String>` (a URL-encoded form).
-  `json:` sends `Json.encode(value)` as `application/json`. Giving both is an `ArgumentError`.
+  and 307/308 keep the method and resend an in-memory body. `finalUrl()` is the final URL.
+- `body` is a `Body` (`Body.text`, `Body.bytes`, `Body.json`, `Body.form`, `Body.stream`).
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws `HttpException` naming the status
   and URL, so `await (Http.get(u) > Fs.file(f))` never saves an error page. The readings
   (`text()`, `json()`, `html()`) work on any status, and a `json()`/`html()` that fails on an
@@ -214,21 +212,21 @@ final class Response with Reader implements Closeable {
 - `text()` uses the charset from `content-type`, then `<meta charset>`, then UTF-8. It decodes
   UTF-8, Latin-1/ASCII and the WHATWG legacy CJK encodings (EUC-KR, Shift_JIS, EUC-JP,
   GBK/GB18030, Big5) with an in-house decoder. An unknown charset falls back to UTF-8, and bad
-  bytes become `�`. `text()`/`bytes()` cache;
+  bytes become ``. `text()`/`bytes()` cache;
   a piped body can't be read again (`StateError`).
 - `close()` drops an unread body. A body read or piped to the end releases the connection by
-  itself. The `Future<Response>` mirrors allow inspecting metadata (`status()`, `ok()`, `header()`,
-  `url()`, `size()`, `name()`) without destroying the unread body, closing automatically only when
-  the response is fully consumed or explicitly closed.
+  itself. The `Future<Response>` mirrors close the response after every mirror read (closing
+  is right for one-liners like `Http.get(u).statusCode()`). To read metadata and keep the body,
+  await the `Response` first.
 - Engine errors arrive as `SocketException`/`HttpException`/`TimeoutException`. A failed or
   timed-out upload never hangs.
 
 ```dart
-final res = await Http.post('$api/items', json: item);
-if (!res.ok()) throw StateError('create failed: ${res.status()} ${await res.text()}');
-final form = await Http.post('$base/ajax', body: {'action': 'decode', 'p': '$id'}).json();
+final res = await Http.post('$api/items', body: Body.json(item));
+if (!res.isSuccess()) throw StateError('create failed: ${res.statusCode()} ${await res.text()}');
+final form = await Http.post('$base/ajax', body: Body.form({'action': 'decode', 'p': '$id'})).json();
 final img = await Http.get(src, retries: 2);
-await (img > Fs.dir('imgs').file(img.name()));       // a 404 throws instead of saving junk
+await (img > Fs.dir('imgs').file(img.fileName()));       // a 404 throws instead of saving junk
 ```
 
 ### 4.3 chrome
@@ -495,11 +493,13 @@ exitCode = await Command('fetch', 'Fetch pages.', values: [verbose, out], comman
 abstract final class Console {
   static Future<String> ask(String question, {bool secret = false});
   static Future<bool> confirm(String question);
-  static Future<String> choose(String question, List<String> choices);
-  static Future<T> spin<T>(String label, Future<T> Function() work);
-  static Bar bar(int? total, {String? label});         // null = unknown
+  static Future<T> choose<T>(String question, List<T> items, {required String Function(T) label, T? initial, Map<String, T>? keys});
+  static Future<String> readKey({String? prompt});
+  static Future<T> withSpinner<T>(String label, Future<T> Function() work);
+  static ProgressBar progressBar(int? total, {String? label}); // null = unknown
+  static void clearScreen();
 }
-final class Bar implements Pipe, Closeable { Bar tick([int count = 1]); }
+final class ProgressBar implements Pipe, Closeable { ProgressBar tick([int count = 1]); }
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
@@ -507,14 +507,14 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]); }
   prompt restores the terminal and exits with 130.
 - `confirm` takes y/yes/n/no, and Enter means no. On a terminal, `choose` uses the arrow keys,
   scrolling when the choices outnumber the rows. Piped, it reads a number.
-- **The live line** (one `spin` or `bar` at a time; a second is a `StateError` before anything is
+- **The live line** (one `withSpinner` or `progressBar` at a time; a second is a `StateError` before anything is
   drawn):
   - It always fits the terminal width, which is re-read on resize. The label is cut with `…`, the
     bar shrinks, and every redraw clears to the end of the line.
   - It redraws at most every 80 ms.
-- **A bar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
+- **A progressBar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
   `tick()`, it counts items (`12/40  3.1/s`). A `null` total shows a count and a rate, with no
-  bar, so `Console.bar(res.size())` just works. The bar renders as a clean line track (`━━╸──`),
+  bar, so `Console.progressBar(res.contentLength())` just works. The bar renders as a clean line track (`━━╸──`),
   matching the `tui` aesthetic. `close()` prints the final line.
 - A bar takes the live line on first use and gives it back when it closes, or when its pipeline
   fails at any point.
@@ -526,42 +526,42 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]); }
 ```dart
 abstract final class Tui {
   static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen,
-      {bool fullscreen = true, Color accent = .orange});
+      {bool fullscreen = true, Color accent = Color.orange});
 }
 final class App<S> {
-  S state();  void go(S state);  void say(String message);
-  void print(void Function(Region r) draw);   // inline: commit above the live area, into scrollback
-  void notify(String message);                // OSC 9/777, bell fallback; no-op while focused
-  void copy(String text);                     // OSC 52
-  void quit();                                // run() returns state()
+  S state();  void goTo(S state);  void showStatus(String message);
+  void printAbove(void Function(Region r) draw);   // inline: commit above the live area, into scrollback
+  void notify(String message);                     // OSC 9/777, bell fallback; no-op while focused
+  void copyToClipboard(String text);               // OSC 52
+  void quit();                                     // run() returns state()
 }
 final class Screen {
-  Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Bind> keys = const {}});
+  Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}});
 }
-typedef Bind = (String label, FutureOr<void> Function() action);
-final class Pick<T> {                          // a list's items and selection
-  Pick([List<T> items = const []]);
-  List<T> items();  int index();  T? selected();  Pick<T> set(List<T> items);  Pick<T> select(int index);
-  Pick<T> add(T item);  Pick<T> addAll(Iterable<T> items);  Pick<T> remove(T item);  Pick<T> removeWhere(bool Function(T item) test);
+typedef Binding = (String label, FutureOr<void> Function() action);
+final class Selection<T> {                       // a list's items and selection; O(1) amortised append
+  Selection([List<T> items = const []]);
+  List<T> items();  int index();  T? selected();  Selection<T> setItems(List<T> items);  Selection<T> select(int index);
+  Selection<T> add(T item);  Selection<T> addAll(Iterable<T> items);  Selection<T> remove(T item);  Selection<T> removeWhere(bool Function(T item) test);
 }
-final class Field {                            // an editor's text, cursor and history
-  Field({String text = '', List<String> history = const []});
-  String text();  List<String> history();  Field set(String text);  String submit();
+final class TextField {                          // an editor's text, cursor and history
+  TextField({String text = '', List<String> history = const []});
+  String text();  List<String> history();  TextField setText(String text);  String submit();
 }
-final class Scroll { Scroll({bool follow = true}); }
+final class ScrollPosition { ScrollPosition({bool follow = true}); }
 final class Region {
   int width();  int height();  bool hovered();  bool focused();
   Region write(String text, {Color? color, Color? background, Set<Style> style = const {}, String? link});
   Region markdown(String source);  Region diff(String before, String after);
-  Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
-  Region tabs<T>(Pick<T> tabs, String Function(T tab) label);  Region scroll(Scroll scroll);
+  Region box(String title);  List<Region> splitRows(List<int> sizes);  List<Region> splitColumns(List<int> sizes);
+  Region tabs<T>(Selection<T> tabs, String Function(T tab) label);  Region scroll(ScrollPosition scroll);
   Region popup(String title, {int width = 40, int height = 10});
-  Region on(Map<String, Bind> events);
-  Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''});
-  Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
-  Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
+  Region bind(Map<String, Binding> events);
+  Region list<T>(Selection<T> selection, String Function(T item) label, {String empty = ''});
+  Region table<T>(Selection<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
+  Region input(TextField field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
-  Region bar(int done, int? total, {String? label});  Region spin(String label);
+  Region progressBar(int done, int? total, {String? label});  Region spin(String label);
 }
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
   const factory Color.index(int index);  const factory Color.rgb(int r, int g, int b);
@@ -573,13 +573,13 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 
 - **Unified Aesthetic.** `Console` and `Tui` share one uncustomizable, elegant design language:
   - **Borders:** `Region.box` uses smooth rounded corners `╭ ╮ ╰ ╯` (`\u256D \u256E \u2570 \u256F`). Focused cards have `accent` borders with a `●` focus dot in the title; unfocused cards use `dim` Slate Gray.
-  - **Selection:** `Region.list` and `table` match `Console.choose`: selected rows start with `❯ ` in `accent` Cyan (dim chevron when unfocused) rather than full-width reverse video.
-  - **Bars & Spinners:** Progress bars in `Console.bar` and `Region.bar` are drawn with sleek lines (`━━╸──`: heavy line `━` for filled track in cyan, `╸` for the leading edge, and thin line `─` for the remaining track in dim gray), never blocky bars or solid blocks. Spinners use Braille `⠋..⠏` and finish with `✓` / `✗`.
-  - **Status Line:** Key help uses badges `[key] action` in cyan and dim gray.
+  - **Selection:** `Region.list` and `table` match `Console.choose`: selected rows start with `❯ ` in `accent` muted orange (xterm 173, `\x1b[38;5;173m`) rather than full-width reverse video.
+  - **Bars & Spinners:** Progress bars in `Console.progressBar` and `Region.progressBar` are drawn with sleek lines (`━━╸──`: heavy line `━` for filled track in orange, `╸` for the leading edge, and thin line `─` for the remaining track in dim gray), never blocky bars or solid blocks. Spinners use Braille `⠋..⠏` and finish with `✓` / `✗`.
+  - **Status Line:** Key help uses badges `[key] action` in orange and dim gray.
 - **State-driven.** The state is the app's own value, usually a sealed class with one subclass per
   view, so `screen` is an exhaustive `switch`. `screen` runs on every redraw, only describes the
-  screen and never blocks. Widget state lives in `Pick`/`Field`/`Scroll` objects held by the
-  state, so `app.go(previous)` brings back the query, selection, scroll and focus.
+  screen and never blocks. Widget state lives in `Selection`/`TextField`/`ScrollPosition` objects held by the
+  state, so `app.goTo(previous)` brings back the query, selection, scroll and focus.
 - **Redraws are event-driven**, coalesced to 60 fps, writing only changed cells: after each input
   event, on `go`/`say`/`print`, on resize, and whenever work started by a handler (timer, future,
   stream event) delivers, since handlers run in a zone. Spinners animate at 80 ms while visible.
@@ -660,21 +660,21 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 ```dart
 typedef Hit = ({String title, String url});
 sealed class Page {}
-final class Search extends Page { final query = Field(); final hits = Pick<Hit>(); }
-final class Series extends Page { Series(this.back, this.hit); final Search back; final Hit hit; final chapters = Pick<String>(); }
+final class Search extends Page { final query = TextField(); final hits = Selection<Hit>(); }
+final class Series extends Page { Series(this.back, this.hit); final Search back; final Hit hit; final chapters = Selection<String>(); }
 
 await Tui.run<Page>(Search(), (page, app) => switch (page) {
   Search s => Screen(title: 'search', (r) {
-      final [body, foot] = r.rows([0, 3]);
+      final [body, foot] = r.splitRows([0, 3]);
       body.list(s.hits, (h) => h.title, empty: 'type a title, press enter');
       foot.box('query').input(s.query);
     }, keys: {
-      'enter': ('search', () async => s.hits.set(await Console.spin('searching', () => search(s.query.text())))),
-      'ctrl+o': ('open', () => app.go(Series(s, s.hits.selected()!))),
+      'enter': ('search', () async => s.hits.setItems(await Console.withSpinner('searching', () => search(s.query.text())))),
+      'ctrl+o': ('open', () => app.goTo(Series(s, s.hits.selected()!))),
       'escape': ('quit', app.quit),
     }),
   Series c => Screen(title: c.hit.title, (r) => r.list(c.chapters, (t) => t), keys: {
-      'b escape': ('back', () => app.go(c.back)),
+      'b escape': ('back', () => app.goTo(c.back)),
     }),
 });
 ```
@@ -703,25 +703,25 @@ extension on Reader { Future<Image> image(); }
 
 ```dart
 abstract final class Scrape {
-  static Stream<T> run<T>(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler, {
-    int limit = 4, Duration? delay, int retries = 2, String? cache,
+  static Stream<T> crawl<T>(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler, {
+    int concurrency = 4, Duration? perHostDelay, int retries = 2, String? cacheDir,
     Map<String, String>? headers, Duration? timeout, Browser? browser,
     void Function(String url, Object error)? onError});
 }
 final class Visit<T> with Reader {
-  String url();  int status();  String name();   // name() as on Response
+  String finalUrl();  int statusCode();  String fileName();   // fileName() via shared origin()
   Visit<T> follow(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler);
   Visit<T> emit(T item);
 }
 ```
 
-- This module is the crawl around `Http.get(u).html()`: a deduplicated queue, `limit` in flight,
-  a per-host `delay`, and `retries`. Retries cover network errors, timeouts, 5xx and 429, with
+- This module is the crawl around `Http.get(u).html()`: a deduplicated queue, `concurrency` in flight,
+  a per-host `perHostDelay`, and `retries`. Retries cover network errors, timeouts, 5xx and 429, with
   backoff or `Retry-After`.
-- `cache` is a folder of bodies by URL, so a rerun is offline.
+- `cacheDir` is a folder of bodies by URL, so a rerun is offline.
 - Routing is by function: `follow(urls, handler)`. URLs are made absolute and their fragments
   dropped, non-http(s) links (`mailto:`, `javascript:`…) are skipped, and each URL is visited once.
-- `run` returns a stream of the emitted records. It completes when the queue is drained.
+- `crawl` returns a stream of the emitted records. It completes when the queue is drained.
   Cancelling it stops the crawl.
 - A `Visit` is a `Reader` of the body, decoded like `Response.text()`: `html()` uses the final URL
   as its base, and `json()` and `> file` work too. A 404 reaches its handler.
@@ -730,13 +730,13 @@ final class Visit<T> with Reader {
 - With `browser`, visits are tabs, `html()` is the rendered DOM, and the handlers are unchanged.
 
 ```dart
-final albums = await Scrape.run<Album>([listUrl], listing, delay: Duration(milliseconds: 250), cache: '.cache').toList();
+final albums = await Scrape.crawl<Album>([listUrl], listing, perHostDelay: Duration(milliseconds: 250), cacheDir: '.cache').toList();
 Future<void> listing(Visit<Album> v) async {
   final doc = await v.html();
   v.follow(doc.$('a.album').attrs('href'), album).follow(doc.$('a.next').attrs('href'), listing);
 }
 Future<void> album(Visit<Album> v) async =>
-    v.emit((title: (await v.html()).$('h1').text(), url: v.url()));
+    v.emit((title: (await v.html()).$('h1').text(), url: v.finalUrl()));
 ```
 
 ## 5. Errors

@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -95,26 +96,26 @@ void main() {
       await page.close();
     });
 
-    test('open applies headers, block, viewport', () async {
+    test('open applies headers, blockResources, viewport', () async {
       final page = await browser.open(
         '$base/echo-header',
         headers: {'x-test': 'hi'},
-        block: ['image'],
+        blockResources: ['image'],
         width: 800,
         height: 600,
       );
       expect(await page.text(), contains('hi'));
-      expect(await page.eval<int>('window.innerWidth'), 800);
+      expect(await page.evaluate<int>('window.innerWidth'), 800);
       await page.close();
       expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
     });
 
-    test('block aborts image requests', () async {
-      await browser.open('$base/imgpage', block: ['image']).then((p) => p.close());
+    test('blockResources aborts image requests', () async {
+      await browser.open('$base/imgpage', blockResources: ['image']).then((p) => p.close());
       expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
-      // Without block the image loads (settled via waitIdle).
+      // Without block the image loads (settled via waitForNetworkIdle).
       final page = await browser.open('$base/imgpage');
-      await page.waitIdle();
+      await page.waitForNetworkIdle();
       await page.close();
       expect(hits.any((h) => h.endsWith('/img.png')), isTrue);
     });
@@ -130,12 +131,12 @@ void main() {
   });
 
   group('Page navigation', () {
-    test('goto/back/reload return the page', () async {
+    test('goTo/goBack/reload return the page', () async {
       final page = await browser.open(dataUrl('<title>One</title>'));
-      expect((await page.goto(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
-      await page.goto(dataUrl('<title>One</title>'));
-      await page.goto(dataUrl('<title>Two</title>'));
-      await page.back();
+      expect((await page.goTo(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
+      await page.goTo(dataUrl('<title>One</title>'));
+      await page.goTo(dataUrl('<title>Two</title>'));
+      await page.goBack();
       expect((await page.html()).$('title').text(), 'One');
       await page.reload();
       expect((await page.html()).$('title').text(), 'One');
@@ -166,32 +167,35 @@ void main() {
       await page.close();
     });
 
-    test('eval<T>() evaluates, awaits, and nulls mistypes', () async {
+    test('evaluate<T>() evaluates, awaits, and nulls mistypes', () async {
       final page = await browser.open(dataUrl(testHtml));
-      expect(await page.eval<String>('document.title'), 'T');
-      expect(await page.eval<int>('1 + 1'), 2);
-      expect(await page.eval<String>('1 + 1'), isNull);
-      expect(await page.eval<String>('null'), isNull);
-      expect(await page.eval<String>('undefined'), isNull);
-      expect(await page.eval<String>('document.title'), 'T');
+      expect(await page.evaluate<String>('document.title'), 'T');
+      expect(await page.evaluate<int>('1 + 1'), 2);
+      expect(await page.evaluate<String>('1 + 1'), isNull);
+      expect(await page.evaluate<String>('null'), isNull);
+      expect(await page.evaluate<String>('undefined'), isNull);
+      expect(await page.evaluate<String>('document.title'), 'T');
       await page.close();
     });
 
-    test('B5: eval coerces numbers and collections like Json.value', () async {
+    test('B5: evaluate coerces numbers like Json.value; collections read via listOf', () async {
       final page = await browser.open(dataUrl(testHtml));
-      expect(await page.eval<double>('1.0'), 1.0);
-      expect(await page.eval<int>('1.0'), 1);
-      expect(await page.eval<List<String>>('["a", "b"]'), ['a', 'b']);
+      expect(await page.evaluate<double>('1.0'), 1.0);
+      expect(await page.evaluate<int>('1.0'), 1);
       expect(
-        await page.eval<Map<String, Object?>>('({"x": 1})'),
+        Json.of(await page.evaluate<dynamic>('["a", "b"]')).listOf<String>(),
+        ['a', 'b'],
+      );
+      expect(
+        await page.evaluate<Map<String, Object?>>('({"x": 1})'),
         {'x': 1},
       );
       await page.close();
     });
 
-    test('cookies() feeds Http', () async {
+    test('cookieHeader() feeds Http', () async {
       final page = await browser.open('$base/cookie');
-      expect(await page.cookies(), contains('tok=abc'));
+      expect(await page.cookieHeader(), contains('tok=abc'));
       await page.close();
     });
   });
@@ -200,7 +204,7 @@ void main() {
     test('click drives the page', () async {
       final page = await browser.open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'));
       await page.click('#b');
-      expect(await page.eval<String>('document.title'), 'C');
+      expect(await page.evaluate<String>('document.title'), 'C');
       await page.close();
     });
 
@@ -216,14 +220,14 @@ void main() {
     test('fill replaces the value with keystrokes', () async {
       final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', 'hi');
-      expect(await page.eval<String>("document.querySelector('#q').value"), 'hi');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), 'hi');
       await page.close();
     });
 
     test('B5: fill with an empty value clears the field', () async {
       final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', '');
-      expect(await page.eval<String>("document.querySelector('#q').value"), '');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), '');
       await page.close();
     });
 
@@ -238,11 +242,11 @@ void main() {
       await page.click('#q');
       await page.press('a');
       await page.press('b');
-      expect(await page.eval<String>("document.querySelector('#q').value"), 'ab');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), 'ab');
       await page.press('ctrl+a');
-      expect(await page.eval<String>('JSON.stringify(window.ks)'), contains('a|true'));
+      expect(await page.evaluate<String>('JSON.stringify(window.ks)'), contains('a|true'));
       await page.press('backspace');
-      expect(await page.eval<String>("document.querySelector('#q').value"), 'a');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), 'a');
       await page.press('enter');
       await page.close();
     });
@@ -252,10 +256,10 @@ void main() {
       final page = await browser.open(dataUrl('<input id="q">'));
       await page.click('#q');
       await page.press('Enter');
-      expect(await page.eval<String>("document.querySelector('#q').value"), '');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), '');
       await page.press('esc');
       await page.press('+');
-      expect(await page.eval<String>("document.querySelector('#q').value"), '+');
+      expect(await page.evaluate<String>("document.querySelector('#q').value"), '+');
       expect(
         page.press('frobnicate'),
         throwsA(isA<ArgumentError>()),
@@ -263,58 +267,58 @@ void main() {
       await page.close();
     });
 
-    test('select picks the option by value', () async {
+    test('selectOption picks the option by value', () async {
       final page = await browser.open(
         dataUrl(
           '<select id="s"><option value="a">A</option>'
           '<option value="b">B</option></select>',
         ),
       );
-      await page.select('#s', 'b');
-      expect(await page.eval<String>("document.querySelector('#s').value"), 'b');
+      await page.selectOption('#s', 'b');
+      expect(await page.evaluate<String>("document.querySelector('#s').value"), 'b');
       await page.close();
     });
 
-    test('upload sets a file input from a Reader', () async {
+    test('attachFile sets a file input from a Reader', () async {
       final page = await browser.open(dataUrl('<input type="file" id="f">'));
       final dir = await Directory.systemTemp.createTemp('chrome_up');
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
-        await page.upload('#f', Fs.file('${dir.path}/note.txt'));
-        expect(await page.eval<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+        await page.attachFile('#f', Fs.file('${dir.path}/note.txt'));
+        expect(await page.evaluate<String>("document.querySelector('#f').files[0].name"), 'note.txt');
       } finally {
         await dir.delete(recursive: true);
       }
       await page.close();
     });
 
-    test('B4: upload works on hidden file inputs', () async {
+    test('B4: attachFile works on hidden file inputs', () async {
       final page = await browser.open(
           dataUrl('<input type="file" id="f" style="display:none">'));
       final dir = await Directory.systemTemp.createTemp('chrome_up');
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
-        await page.upload('#f', Fs.file('${dir.path}/note.txt'));
-        expect(await page.eval<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+        await page.attachFile('#f', Fs.file('${dir.path}/note.txt'));
+        expect(await page.evaluate<String>("document.querySelector('#f').files[0].name"), 'note.txt');
       } finally {
         await dir.delete(recursive: true);
       }
       await page.close();
     });
 
-    test('scroll goes to the bottom, or an element into view', () async {
+    test('scrollToBottom goes to the bottom, scrollIntoView brings an element into view', () async {
       final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
-      await page.scroll();
-      expect(await page.eval<bool>('window.scrollY > 0'), isTrue);
-      await page.scroll('#bottom');
+      await page.scrollToBottom();
+      expect(await page.evaluate<bool>('window.scrollY > 0'), isTrue);
+      await page.scrollIntoView('#bottom');
       await page.close();
     });
 
-    test('B6: scroll on a missing selector times out, not StateError',
+    test('B6: scrollIntoView on a missing selector times out, not StateError',
         () async {
       final page = await browser.open(dataUrl(testHtml));
       expect(
-        page.scroll('#missing', const Duration(milliseconds: 500)),
+        page.scrollIntoView('#missing', timeout: const Duration(milliseconds: 500)),
         throwsA(isA<TimeoutException>()),
       );
       await page.close();
@@ -322,39 +326,39 @@ void main() {
   });
 
   group('Page waiting', () {
-    test('wait resolves when the selector appears', () async {
+    test('waitFor resolves when the selector appears', () async {
       final page = await browser.open(
         dataUrl(
           '<script>setTimeout(() => document.body.innerHTML = '
           '"<p class=late>now</p>", 300)</script>',
         ),
       );
-      await page.wait('.late');
+      await page.waitFor('.late');
       expect((await page.html()).$('.late').text(), 'now');
       await page.close();
     });
 
-    test('wait times out naming the selector', () async {
+    test('waitFor times out naming the selector', () async {
       final page = await browser.open(dataUrl(testHtml));
       expect(
-        page.wait('.never', timeout: const Duration(milliseconds: 300)),
+        page.waitFor('.never', timeout: const Duration(milliseconds: 300)),
         throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('.never'))),
       );
       await page.close();
     });
 
-    test('waitIdle returns on a quiet page', () async {
+    test('waitForNetworkIdle returns on a quiet page', () async {
       final page = await browser.open(dataUrl(testHtml));
-      await page.waitIdle();
+      await page.waitForNetworkIdle();
       await page.close();
     });
 
-    test('B2: waitIdle waits for requests in flight', () async {
+    test('B2: waitForNetworkIdle waits for requests in flight', () async {
       // The image starts after load (open already returned): at the
-      // waitIdle call it is still in flight for ~1.5 s.
+      // waitForNetworkIdle call it is still in flight for ~1.5 s.
       final page = await browser.open('$base/trigger');
       final sw = Stopwatch()..start();
-      await page.waitIdle();
+      await page.waitForNetworkIdle();
       sw.stop();
       expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(1000));
       await page.close();
@@ -390,14 +394,14 @@ void main() {
       await page.close();
     });
 
-    test('download clicks and returns the file plus its name', () async {
+    test('clickToDownload clicks and returns the file plus its name', () async {
       final page = await browser.open(dataUrl('<a id="d" href="$base/file">get it</a>'));
-      final download = await page.download('#d');
-      expect(download.name(), 'hello.txt');
+      final download = await page.clickToDownload('#d');
+      expect(download.fileName(), 'hello.txt');
       expect(await download.text(), 'download-me');
       final dir = await Directory.systemTemp.createTemp('chrome_dl');
       try {
-        await (download > Fs.file('${dir.path}/${download.name()}'));
+        await (download > Fs.file('${dir.path}/${download.fileName()}'));
         expect(await Fs.file('${dir.path}/hello.txt').text(), 'download-me');
       } finally {
         await dir.delete(recursive: true);
@@ -405,11 +409,11 @@ void main() {
       await page.close();
     });
 
-    test('B1: download on a missing selector throws, never crashes',
+    test('B1: clickToDownload on a missing selector throws, never crashes',
         () async {
       final page = await browser.open(dataUrl(testHtml));
       await expectLater(
-        page.download('#missing', timeout: const Duration(seconds: 2)),
+        page.clickToDownload('#missing', timeout: const Duration(seconds: 2)),
         throwsA(isA<TimeoutException>()),
       );
       await page.close();
@@ -419,8 +423,8 @@ void main() {
       final page = await browser
           .open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'))
           .click('#b')
-          .waitIdle();
-      expect(await page.eval<String>('document.title'), 'C');
+          .waitForNetworkIdle();
+      expect(await page.evaluate<String>('document.title'), 'C');
       expect(await browser.open(dataUrl(testHtml)).html().$('p').text(), 'Hi L');
       await page.close();
     });

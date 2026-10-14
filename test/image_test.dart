@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dart_toolkit/image.dart';
+import 'package:image/image.dart' as img;
 import 'package:test/test.dart';
 
 List<int> get tinyPng => base64Decode(
@@ -107,6 +109,39 @@ void main() {
       expect((await f.resize(width: 2)).width(), 2);
       expect((await f.crop(0, 0, 1, 1)).height(), 1);
       expect(await f.encode(ImageFormat.png).bytes(), isNotEmpty);
+    });
+  });
+
+  group('large images', () {
+    test('decode/resize/encode above ~1MP go through a worker isolate',
+        () async {
+      // Deterministic noise: flat fills compress below the isolate
+      // threshold, so thumbnails would never exercise the offload path.
+      final noisy = img.Image(width: 1200, height: 1000);
+      var s = 123456789;
+      for (var y = 0; y < noisy.height; y++) {
+        for (var x = 0; x < noisy.width; x++) {
+          s = (s * 1103515245 + 12345) & 0x7fffffff;
+          noisy.setPixelRgb(x, y, s & 255, (s >> 8) & 255, (s >> 16) & 255);
+        }
+      }
+      final bytes = Uint8List.fromList(img.encodePng(noisy));
+      // The proxy for ~1MP on decode: inputs above 1 MiB must arrive here,
+      // or the test would pass without ever leaving the main isolate.
+      expect(bytes.length, greaterThan(1 << 20));
+
+      final image = await _Mem(bytes).image();
+      expect(image.width(), 1200);
+      expect(image.height(), 1000);
+
+      final small = await Future.value(image).resize(width: 120);
+      expect(small.width(), 120);
+      expect(small.height(), 100);
+
+      final encoded =
+          await image.encode(ImageFormat.jpg, quality: 80).bytes();
+      expect(encoded.sublist(0, 2), [0xff, 0xd8]);
+      expect(Image.decode(encoded).width(), 1200);
     });
   });
 }

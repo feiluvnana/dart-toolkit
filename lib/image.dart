@@ -11,10 +11,17 @@
 /// - [Image] supports `width` `height` `resize` `crop` `encode`.
 /// - `region.picture(image)` draws it in a `Tui` (here, so `tui` doesn't
 ///   load the codecs).
-/// CPU-bound batches go through [Pool]. Everything else is private.
+/// Small images convert inline. Above [_isolatePixels] (decode is proxied by
+/// [_isolateBytes] of input, since the pixel count is only known after
+/// decoding) the work goes through [Isolate.run] — whose result comes back
+/// through [Isolate.exit] without a copy — so a large photo never freezes
+/// the event loop under a `Console` spinner or a `Tui` frame.
+/// CPU-bound batches go through Pool.computeAll (see pool.dart).
+/// Everything else is private.
 library;
 
-import 'dart:math' as math;
+import 'dart:async';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -22,6 +29,14 @@ import 'package:image/image.dart' as img;
 import 'core.dart';
 import 'src/tui.dart' show Region, drawPicture;
 export 'core.dart';
+
+/// Above this many pixels, decode/resize/encode run on a worker isolate via
+/// [Isolate.run] instead of blocking the event loop.
+const _isolatePixels = 1000000;
+
+/// Above this many input bytes, decoding goes through [Isolate.run]: the
+/// pixel count is only known after decoding, so the byte size is the proxy.
+const _isolateBytes = 1 << 20;
 
 /// Encodable image formats. WebP decodes but the engine cannot encode it,
 /// so it is not listed.
@@ -36,11 +51,16 @@ final class Image {
   /// Decode [bytes] (PNG, JPEG, GIF first frame, BMP, WebP, TIFF, ICO).
   /// Applies the EXIF orientation, so [width]/[height] are the size as
   /// displayed. An unknown format is a [FormatException].
+  ///
+  /// Inline, on this isolate: for a large photo prefer `Reader.image()`,
+  /// which decodes off the main isolate.
   static Image decode(List<int> bytes) {
     img.Image? decoded;
     try {
       // frame: 0 keeps GIF to its first frame (an animated GIF otherwise
       // decodes every frame and re-encodes as animated).
+      // Inputs arrive as Uint8List through the zero-copy readers, so this
+      // takes them as is; anything else is converted once.
       final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
       decoded = img.decodeImage(raw, frame: 0);
     } catch (e) {
@@ -60,7 +80,12 @@ final class Image {
 
   /// A resized copy. Keeps the aspect ratio when only one side is given,
   /// sets the exact size when both are. Neither, or a non-positive size,
-  /// is an [ArgumentError].
+  /// is an [ArgumentError]. Shrinking averages the source area (nearest
+  /// neighbour aliases); enlarging uses cubic interpolation.
+  ///
+  /// Inline, on this isolate: batch resizes go through Pool.computeAll
+  /// (see pool.dart), and the `Future<Image>` mirror below offloads large
+  /// images to a worker isolate.
   Image resize({int? width, int? height}) {
     if (width == null && height == null) {
       throw ArgumentError('resize needs a width, a height, or both');
@@ -72,15 +97,18 @@ final class Image {
         'must be >= 1',
       );
     }
-    final res = img.copyResize(_inner, width: width, height: height);
-    if (res.width < 1 || res.height < 1) {
-      return Image._(img.copyResize(
-        _inner,
-        width: width ?? math.max(1, (height! * (_inner.width / _inner.height)).round()),
-        height: height ?? math.max(1, (width! * (_inner.height / _inner.width)).round()),
-      ));
-    }
-    return Image._(res);
+    final targetWidth =
+        width ?? (height! * _inner.width / _inner.height).round();
+    final targetHeight =
+        height ?? (width! * _inner.height / _inner.width).round();
+    final shrinking =
+        targetWidth * targetHeight < _inner.width * _inner.height;
+    return Image._(img.copyResize(_inner,
+        width: width,
+        height: height,
+        interpolation: shrinking
+            ? img.Interpolation.average
+            : img.Interpolation.cubic));
   }
 
   /// A cut-out copy. A bad size is an [ArgumentError]; a region leaving
@@ -107,9 +135,10 @@ final class Image {
     );
   }
 
-  /// A [Reader] of the encoded image, encoded when read. Store it with
-  /// `> Fs.file(…)`, hash it, or upload it with `body:`. [quality] applies
-  /// to JPEG (1–100, else [ArgumentError]).
+  /// A [Reader] of the encoded image, encoded when read (lazily: nothing
+  /// runs until the reader is stored). Large images encode on a worker
+  /// isolate. Store it with `> Fs.file(…)`, hash it, or upload it.
+  /// [quality] applies to JPEG (1–100, else [ArgumentError]).
   Reader encode(ImageFormat format, {int quality = 90}) {
     if (quality < 1 || quality > 100) {
       throw ArgumentError.value(quality, 'quality', 'must be 1..100');
@@ -118,13 +147,46 @@ final class Image {
   }
 }
 
+/// Decode on a worker isolate when the input looks like a large image.
+Future<Image> _decodeAsync(Uint8List bytes) {
+  if (bytes.lengthInBytes <= _isolateBytes) {
+    return Future.value(Image.decode(bytes));
+  }
+  return Isolate.run(() => Image.decode(bytes));
+}
+
+/// Resize on a worker isolate for large images.
+Future<Image> _resizeAsync(Image image, {int? width, int? height}) {
+  if (image._inner.width * image._inner.height <= _isolatePixels) {
+    return Future.value(image.resize(width: width, height: height));
+  }
+  return Isolate.run(() => image.resize(width: width, height: height));
+}
+
+/// Encode on a worker isolate for large images.
+Future<List<int>> _encodeAsync(Image image, ImageFormat format, int quality) {
+  if (image._inner.width * image._inner.height <= _isolatePixels) {
+    return Future.value(_encode(image, format, quality));
+  }
+  return Isolate.run(() => _encode(image, format, quality));
+}
+
+/// The stream's bytes as a [Uint8List] without copying: core's readers
+/// already hand over [Uint8List] chunks.
+Future<Uint8List> _readBytes(Reader reader) async {
+  final bytes = await reader.bytes();
+  return bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+}
+
 /// Bytes → a value.
 extension ReaderImage on Reader {
-  Future<Image> image() async => Image.decode(await bytes());
+  /// Decode the stream; large inputs decode on a worker isolate.
+  Future<Image> image() async => _decodeAsync(await _readBytes(this));
 }
 
 /// Same, from an async reader.
 extension ReaderFutureImage on Future<Reader> {
+  /// Decode the stream; large inputs decode on a worker isolate.
   Future<Image> image() async => (await this).image();
 }
 
@@ -132,8 +194,10 @@ extension ReaderFutureImage on Future<Reader> {
 extension ImageFuture on Future<Image> {
   Future<int> width() async => (await this).width();
   Future<int> height() async => (await this).height();
+
+  /// Resize; large images resize on a worker isolate.
   Future<Image> resize({int? width, int? height}) async =>
-      (await this).resize(width: width, height: height);
+      _resizeAsync(await this, width: width, height: height);
   Future<Image> crop(int x, int y, int width, int height) async =>
       (await this).crop(x, y, width, height);
   Reader encode(ImageFormat format, {int quality = 90}) {
@@ -153,7 +217,7 @@ final class _Encoded with Reader {
 
   @override
   Stream<List<int>> stream() async* {
-    yield _encode(_image, _format, quality);
+    yield await _encodeAsync(_image, _format, quality);
   }
 }
 
@@ -166,7 +230,8 @@ final class _FutureEncoded with Reader {
 
   @override
   Stream<List<int>> stream() async* {
-    yield _encode(await _future, _format, quality);
+    final image = await _future;
+    yield await _encodeAsync(image, _format, quality);
   }
 }
 

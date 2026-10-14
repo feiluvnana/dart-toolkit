@@ -29,7 +29,7 @@ void main() {
       await (Fs.file(p('s.zip')) > Archive.unpack(p('out')));
       expect(await Fs.file(p('out/index.html')).text(), '<h1>hi</h1>');
       expect(await Fs.file(p('out/a/b.txt')).text(), 'bee');
-      expect(await Fs.entry(p('out/site')), isNull);
+      expect(await Fs.lookup(p('out/site')), isNull);
     });
 
     test('tar round-trips', () async {
@@ -58,7 +58,7 @@ void main() {
       await (Archive.pack(p('site'), ArchiveFormat.zip) > Fs.file(p('s.zip')));
       // Corrupt the member name by hand: rewrite the zip is overkill;
       // instead feed garbage and expect a FormatException.
-      await Fs.file(p('bad.zip')).write([1, 2, 3, 4]);
+      await (Reader.of([1, 2, 3, 4]) > Fs.file(p('bad.zip')));
       expect(
         Fs.file(p('bad.zip')) > Archive.unpack(p('out')),
         throwsFormatException,
@@ -66,12 +66,12 @@ void main() {
     });
 
     test('a failed run leaves no half-unpacked tree', () async {
-      await Fs.file(p('bad.zip')).write([1, 2, 3, 4]);
+      await (Reader.of([1, 2, 3, 4]) > Fs.file(p('bad.zip')));
       await expectLater(
         Fs.file(p('bad.zip')) > Archive.unpack(p('out')),
         throwsFormatException,
       );
-      expect(await Fs.entry(p('out')), isNull);
+      expect(await Fs.lookup(p('out')), isNull);
     });
 
     test('F1: unpacking merges, never deletes the target', () async {
@@ -158,7 +158,7 @@ void main() {
     });
 
     test('bad gzip data fails with a FormatException', () async {
-      await Fs.file(p('nope.gz')).write([1, 2, 3]);
+      await (Reader.of([1, 2, 3]) > Fs.file(p('nope.gz')));
       expect(
         Fs.file(p('nope.gz')) | Archive.gunzip() > Fs.file(p('o.txt')),
         throwsFormatException,
@@ -169,8 +169,8 @@ void main() {
       await Fs.file(p('big.txt')).write('x' * 100000);
       await (Fs.file(p('big.txt')) | Archive.gzip() > Fs.file(p('big.gz')));
       final full = await Fs.file(p('big.gz')).bytes();
-      await Fs.file(p('half.gz'))
-          .write(full.sublist(0, full.length ~/ 2));
+      await (Reader.of(full.sublist(0, full.length ~/ 2)) >
+          Fs.file(p('half.gz')));
       await expectLater(
         Fs.file(p('half.gz')) | Archive.gunzip() > Fs.file(p('o.txt')),
         throwsFormatException,

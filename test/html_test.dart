@@ -118,12 +118,20 @@ void main() {
       expect(doc.$('p').map((e) => e.text()), ['Hello link', 'Two']);
     });
 
+    test('texts() pairs text/texts like attr/attrs', () {
+      expect(doc.$('p').texts(), ['Hello link', 'Two']);
+      expect(doc.$('.missing').texts(), isEmpty);
+      final linked = Html.parse('<a href="/1">a</a><a href="/2">b</a>');
+      expect(linked.$('a').texts(), ['a', 'b']);
+    });
+
     test('Future mirrors match', () async {
       final f = Future.value(doc);
       expect((await f.$('p')).length, 2);
       expect(await f.$('li')[0].text(), '1');
       expect((await f.without('ul')).$('li'), isEmpty);
       expect(await f.$('li').text(), '1');
+      expect(await f.$('li').texts(), ['1', '2']);
       expect(await f.$('a').attr('href'), '/');
       expect(await f.$('a').attrs('href'), ['/']);
     });
@@ -239,6 +247,15 @@ void main() {
       final frag = Html.parse('<p>hi</p>');
       expect(frag.$('div p'), isEmpty);
       expect(frag.$('p').length, 1);
+    });
+
+    test('matches sees the root element itself', () {
+      // Exercises the engine-internal `matches` on a root (not just
+      // descendants): without it a lone root never matches itself.
+      final frag = Html.parse('<p class="x">hi</p>');
+      expect(frag.$('p.x').length, 1);
+      expect(frag.$('p.x').text(), 'hi');
+      expect(frag.$('.x').texts(), ['hi']);
     });
 
     test('chained queries include the element itself', () {

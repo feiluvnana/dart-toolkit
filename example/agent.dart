@@ -18,7 +18,7 @@ import 'package:dart_toolkit/tui.dart';
 sealed class Turn {}
 
 final class Chat extends Turn {
-  final prompt = Field();
+  final prompt = TextField();
   var reply = '', mode = 0, last = '';
   DateTime? since;
   StreamSubscription<String>? stream;
@@ -54,7 +54,7 @@ Future<void> main() async {
           'enter': ('send', () => _send(c, app)),
           if (c.stream != null) 'escape': ('interrupt', () => _done(c, app)),
           'shift+tab': ('mode', () => c.mode = (c.mode + 1) % _modes.length),
-          'ctrl+y': ('', () => app.copy(c.last)),
+          'ctrl+y': ('', () => app.copyToClipboard(c.last)),
         },
       ),
     },
@@ -65,7 +65,7 @@ void _send(Chat c, App<Turn> app) {
   if (c.stream != null || c.prompt.text().trim().isEmpty) return;
   final text = c.prompt.submit();
   if (text == '/quit') return app.quit();
-  app.print((r) => r.write('> $text', color: .gray));
+  app.printAbove((Region r) => r.write('> $text', color: Color.gray));
   c
     ..reply = ''
     ..since = DateTime.now();
@@ -81,7 +81,7 @@ void _send(Chat c, App<Turn> app) {
 void _done(Chat c, App<Turn> app) {
   c.stream?.cancel();
   final text = c.last = c.reply;
-  app.print((r) => r.markdown(text)); // into scrollback; the live area shrinks back to the prompt
+  app.printAbove((Region r) => r.markdown(text)); // into scrollback; the live area shrinks back to the prompt
   c
     ..stream = null
     ..since = null

@@ -868,6 +868,18 @@ final class TerminalCaps {
   final bool animated;
 }
 
+/// The one shared accent for live progress and selections: xterm 256-colour
+/// index 173, a muted orange.
+///
+/// `Console` live lines (bars, spinners, the `choose` menu) and the Tui
+/// selection, tabs and title all use this. VISION §4.12 names cyan and the
+/// Tui engine previously defaulted to 208 (bright orange); 173 is the value
+/// the console pass already shipped for its live lines, readable on dark and
+/// light terminals, so the engine adopts it here and `Color.orange` carries
+/// this index. The console pass keeps its own private escape until it adopts
+/// this constant; VISION's cyan remains aspirational for a future theme pass.
+const tuiAccent256 = 173;
+
 /// Windows key input (unverified — needs `dart run tool/keylog.dart` on a
 /// Windows PC before it lands).
 ///

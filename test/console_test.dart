@@ -7,81 +7,100 @@ import 'package:test/test.dart';
 
 void main() {
   group('Console.choose', () {
-    test('empty choices is an ArgumentError', () {
-      expect(Console.choose('Pick', []), throwsArgumentError);
+    test('empty items is an ArgumentError', () {
+      expect(
+        Console.choose('Pick', <String>[], label: (s) => s),
+        throwsArgumentError,
+      );
+    });
+
+    test('an unknown keys binding is an ArgumentError, before any prompt',
+        () {
+      expect(
+        Console.choose('Pick', ['a', 'b'],
+            label: (s) => s, keys: {'notakey-xyz': 'a'}),
+        throwsArgumentError,
+      );
+    });
+
+    test('an initial that is not an item is an ArgumentError', () {
+      expect(
+        Console.choose('Pick', ['a', 'b'], label: (s) => s, initial: 'z'),
+        throwsArgumentError,
+      );
     });
   });
 
-  group('Console.spin', () {
+  group('Console.withSpinner', () {
     test('returns the work result', () async {
-      expect(await Console.spin('Work', () async => 42), 42);
+      expect(await Console.withSpinner('Work', () async => 42), 42);
     });
 
     test('rethrows the work error', () async {
       expect(
-        Console.spin<void>('Work', () => throw StateError('bad')),
+        Console.withSpinner<void>('Work', () => throw StateError('bad')),
         throwsStateError,
       );
     });
   });
 
-  group('Bar', () {
+  group('ProgressBar', () {
     test('tick counts and stops at the total, returns the bar', () async {
-      final bar = Console.bar(3, label: 'T');
+      final bar = Console.progressBar(3, label: 'T');
       expect(identical(bar.tick(), bar), isTrue);
       bar.tick(5);
       await bar.close();
     });
 
     test('null total means unknown, like 0', () async {
-      final bar = Console.bar(null, label: 'U');
+      final bar = Console.progressBar(null, label: 'U');
       bar.tick(11);
       await bar.close();
     });
 
     test('K2: a pipeline that fails before the bar runs frees the line',
         () async {
-      final bar = Console.bar(5, label: 'stuck?');
+      final bar = Console.progressBar(5, label: 'stuck?');
       await expectLater(
         _Mem('hello') | bar > _ThrowBeforeRead(),
         throwsA(isA<ArgumentError>()),
       );
       // The line must be free: the next bar builds without StateError.
-      final next = Console.bar(1, label: 'free');
+      final next = Console.progressBar(1, label: 'free');
       await next.close();
     });
 
     test('unknown totals count up', () async {
-      final bar = Console.bar(0);
+      final bar = Console.progressBar(0);
       bar.tick();
       bar.tick(10);
       await bar.close();
     });
 
     test('close is idempotent', () async {
-      final bar = Console.bar(1);
+      final bar = Console.progressBar(1);
       await bar.close();
       await bar.close();
     });
 
     test('a second live line is a StateError', () async {
-      final bar = Console.bar(1);
-      expect(() => Console.bar(2), throwsStateError);
-      expect(() => Console.spin('x', () async {}), throwsStateError);
+      final bar = Console.progressBar(1);
+      expect(() => Console.progressBar(2), throwsStateError);
+      expect(() => Console.withSpinner('x', () async {}), throwsStateError);
       await bar.close();
-      final ok = Console.bar(1);
+      final ok = Console.progressBar(1);
       await ok.close();
     });
 
     test('as a Pipe it counts bytes and closes itself', () async {
-      final bar = Console.bar(5, label: 'P');
+      final bar = Console.progressBar(5, label: 'P');
       final out = await (_Mem('hello') | bar).bytes();
       expect(out, utf8.encode('hello'));
       await bar.close(); // already closed by the pipe: no-op
     });
 
     test('a failed run prints and rethrows', () async {
-      final bar = Console.bar(5);
+      final bar = Console.progressBar(5);
       await expectLater(
         _Mem('x') | bar | _Boom() > null,
         throwsStateError,
@@ -92,8 +111,8 @@ void main() {
       final file = File('${Directory.systemTemp.path}/bar_pipe.bin');
       try {
         final hash = Hash.sha256();
-        await (_Mem('0123456789') | Console.bar(10) | hash > _Writer(file));
-        expect(hash.hex().length, 64);
+        await (_Mem('0123456789') | Console.progressBar(10) | hash > _Writer(file));
+        expect(hash.hexDigest().length, 64);
       } finally {
         if (await file.exists()) await file.delete();
       }

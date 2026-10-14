@@ -135,11 +135,6 @@ Future<void> _handle(int code, {required bool isSigint}) async {
     try {
       if (_interruptClaim?.call() == true) return;
     } catch (_) {}
-    // Legacy cooked-terminal check: raw mode (echo off) means the tui owns
-    // SIGINT as a key even without an explicit claim.
-    try {
-      if (!io.stdin.echoMode) return;
-    } catch (_) {}
   }
   _exiting = true;
   // Reverse order: last registered (browser) first? No — terminal restore

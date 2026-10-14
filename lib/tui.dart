@@ -4,12 +4,12 @@
 /// ```dart
 /// sealed class Page {}
 /// final class Search extends Page {
-///   final query = Field();
-///   final hits = Pick<Hit>();
+///   final query = TextField();
+///   final hits = Selection<Hit>();
 /// }
 /// await Tui.run<Page>(Search(), (page, app) => switch (page) {
 ///   Search s => Screen(title: 'demo', (r) {
-///       final [body, foot] = r.rows([0, 3]);
+///       final [body, foot] = r.splitRows([0, 3]);
 ///       body.list(s.hits, (h) => h.title, empty: 'type, press enter');
 ///       foot.box('search').input(s.query);
 ///     }, keys: {
@@ -19,16 +19,34 @@
 /// });
 /// ```
 ///
-/// Public surface is exactly: [Tui], [App], [Screen], [Bind], [Pick],
-/// [Field], [Scroll], [Region], [Color], [Style].
+/// Public surface is exactly: [Tui], [App], [Screen], [Binding],
+/// [Selection], [TextField], [ScrollPosition], [Region], [Color], [Style],
+/// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
+/// (method carriers from the `src/tui/` split: importing this library
+/// applies them to [Region] automatically, never reference them by name).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
 ///   the screen for a state and never blocks.
-/// - [App] supports `state` `go` `say` `print` `notify` `copy` `quit`.
-/// - Widget state lives in [Pick], [Field] and [Scroll] objects held by the
-///   app's state, so focus, selection and scroll survive `go` and back.
-/// - While `run` is active, `Console.spin`/`bar` draw in the status row and
-///   `Console.ask`/`confirm`/`choose` open a popup.
+/// - [App] supports `state` `goTo` `showStatus` `printAbove` `notify`
+///   `copyToClipboard` `quit`.
+/// - Widget state lives in [Selection], [TextField] and [ScrollPosition]
+///   objects held by the app's state, so focus, selection and scroll survive
+///   `goTo` and back.
+/// - While `run` is active, `Console.withSpinner`/`progressBar` draw in the
+///   status row and `Console.ask`/`confirm`/`choose` open a popup.
 library;
 
 export 'src/tui.dart'
-    show Tui, App, Screen, Bind, Pick, Field, Scroll, Region, Color, Style;
+    show
+        Tui,
+        App,
+        Screen,
+        Binding,
+        Selection,
+        TextField,
+        ScrollPosition,
+        Region,
+        RegionWidgets,
+        RegionMarkdown,
+        RegionDiff,
+        Color,
+        Style;

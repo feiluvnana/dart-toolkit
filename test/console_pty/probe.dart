@@ -15,7 +15,7 @@ Future<void> main(List<String> args) async {
   final mode = args[1];
   switch (mode) {
     case 'bar':
-      final bar = Console.bar(
+      final bar = Console.progressBar(
         100,
         label: 'a very long label that must be cut somewhere along the way',
       );
@@ -25,7 +25,8 @@ Future<void> main(List<String> args) async {
       }
       await bar.close();
     case 'choose':
-      final pick = await Console.choose('Pick', ['red', 'green', 'blue']);
+      final pick = await Console.choose('Pick', ['red', 'green', 'blue'],
+          label: (s) => s);
       await log.writeAsString('pick=$pick\n');
     case 'ask':
       final answer = await Console.ask('Name?');
