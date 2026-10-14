@@ -134,8 +134,11 @@ abstract final class Http {
   /// hold is open, the idle close is suppressed; closing the
   /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
   static Closeable hold() {
+    // Build the pools first: one created after the count rises would start
+    // with this hold already counted and then count it again.
+    final pools = _pools.toList();
     _holdCount++;
-    for (final pool in _pools) {
+    for (final pool in pools) {
       pool._hold();
     }
     return _Hold._();
@@ -914,6 +917,11 @@ Future<Response> _send(
   final limit = timeout ?? Http._defaultTimeout;
   if (retries < 0) {
     throw ArgumentError.value(retries, 'retries', 'must not be negative');
+  }
+  if (retries > 0 && body is _StreamBody) {
+    // A streamed body is read once; silently sending one attempt would
+    // hide the caller's request for retries.
+    throw ArgumentError.value(retries, 'retries', 'a Body.stream cannot be resent: use Body.bytes(await reader.bytes()) to retry');
   }
   late final Uri first;
   try {

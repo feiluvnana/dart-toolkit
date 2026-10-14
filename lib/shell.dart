@@ -36,7 +36,9 @@ abstract final class Shell {
   /// With [live], the child's stdout/stderr tee to ours while it runs (for
   /// build steps a human watches); the output is still captured and returned
   /// as the [Output]. [env] overlays the parent environment; a null value
-  /// unsets the variable for the child. With [check] a non-zero exit throws
+  /// unsets the variable for the child. [onLine] gets each line of stdout
+  /// and stderr as it arrives (a dashboard pane, a log), and the [Output]
+  /// still holds both. With [check] a non-zero exit throws
   /// [io.ProcessException] carrying the exit code and stderr (as `check:`
   /// does for a non-2xx response).
   static Future<Output> run(
@@ -45,6 +47,7 @@ abstract final class Shell {
     Map<String, String?>? env,
     bool live = false,
     bool check = false,
+    void Function(String line)? onLine,
   }) async {
     _checkCommand(command);
     io.Process proc;
@@ -75,10 +78,16 @@ abstract final class Shell {
       final err = BytesBuilder(copy: false);
       // With [live] each chunk also tees to our stdout/stderr.
       Future<void> collect(Stream<List<int>> src, BytesBuilder buf, io.IOSink? tee) async {
+        final lines = onLine == null
+            ? null
+            : const Utf8Decoder(allowMalformed: true)
+                .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
         await for (final chunk in src) {
           buf.add(chunk);
           tee?.add(chunk);
+          lines?.add(chunk);
         }
+        lines?.close();
       }
 
       try {
@@ -440,4 +449,13 @@ final class _Filter implements Pipe {
     }
     return false;
   }
+}
+
+final class _LineSink implements Sink<String> {
+  _LineSink(this._onLine);
+  final void Function(String line) _onLine;
+  @override
+  void add(String line) => _onLine(line);
+  @override
+  void close() {}
 }

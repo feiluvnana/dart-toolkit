@@ -153,6 +153,18 @@ void main() {
       expect(seen, [null, 'text/html']);
     });
 
+    test('follow under: stays inside a prefix; skip: drops without a request; onProgress counts', () async {
+      hits.clear();
+      final progress = <(int, int)>[];
+      final got = await Scrape.crawl<String>(['$base/'], (v) async {
+        v.follow(['$base/a', '$base/b', 'http://elsewhere.invalid/x'], (w) async => w.emit(w.url()),
+            under: '$base/', skip: (u) => u.endsWith('/b'));
+      }, onProgress: (d, t) => progress.add((d, t))).toList();
+      expect(got, ['$base/a']);
+      expect(hits.where((h) => h.endsWith('/b')), isEmpty);
+      expect(progress.last, (3, 3)); // the start page, /a, /b (skipped)
+    });
+
     test('a paused consumer pauses the crawl', () async {
       final urls = [for (var i = 0; i < 20; i++) '$base/slow?$i'];
       final done = Completer<void>();

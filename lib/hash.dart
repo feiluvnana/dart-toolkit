@@ -3,15 +3,14 @@
 /// ```dart
 /// final id = Hash.md5().add(url).hex();
 /// final h = Hash.sha256().addBytes(header).add(name);
-/// final check = Hash.sha256();
-/// await (Http.get(isoUrl) | check > Fs.file('disc.iso'));
-/// if (check.hex() != expected) await Fs.file('disc.iso').delete();
+/// await (Http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
+/// final digest = await Hash.sha256().of(Fs.file('disc.iso'));
 /// ```
 ///
 /// Public surface is exactly: [Hash], [Hasher].
 /// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher].
 /// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
-///   (finish). As a [Writer] it digests a stream; as a [Pipe] it forwards
+///   (finish) `of` (digest a [Reader]); `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
 ///   unchanged and digests, so `reader | hasher > file` stores and checksums
 ///   in one pass.
 /// Everything else is private.
@@ -24,19 +23,23 @@ import 'package:crypto/crypto.dart' as c;
 import 'core.dart';
 export 'core.dart';
 
-/// Entry point: one method per algorithm.
+/// Entry point: one method per algorithm. With [expect] (hex) the hasher
+/// checks itself at the end of a run: a mismatch fails the pipeline with a
+/// [FormatException] before the writer commits, so
+/// `Http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
+/// never unpacks a bad download.
 abstract final class Hash {
   /// MD5 hasher.
-  static Hasher md5() => Hasher._(c.md5);
+  static Hasher md5({String? expect}) => Hasher._(c.md5, 'md5', expect);
 
   /// SHA-1 hasher.
-  static Hasher sha1() => Hasher._(c.sha1);
+  static Hasher sha1({String? expect}) => Hasher._(c.sha1, 'sha1', expect);
 
   /// SHA-256 hasher.
-  static Hasher sha256() => Hasher._(c.sha256);
+  static Hasher sha256({String? expect}) => Hasher._(c.sha256, 'sha256', expect);
 
   /// SHA-512 hasher.
-  static Hasher sha512() => Hasher._(c.sha512);
+  static Hasher sha512({String? expect}) => Hasher._(c.sha512, 'sha512', expect);
 }
 
 /// The lifecycle of a [Hasher]. Three booleans could encode eight states, of
@@ -58,11 +61,15 @@ enum _State {
 
 /// A hash in progress: a [Writer] you feed, a [Pipe] that passes through.
 final class Hasher implements Writer, Pipe {
-  Hasher._(this._hash) : _capture = _DigestCapture() {
+  Hasher._(this._hash, this._name, String? expect)
+      : _expect = expect?.trim().toLowerCase(),
+        _capture = _DigestCapture() {
     _in = _hash.startChunkedConversion(_capture);
   }
 
   final c.Hash _hash;
+  final String _name;
+  final String? _expect;
   final _DigestCapture _capture;
   late final ByteConversionSink _in;
   var _state = _State.idle;
@@ -123,6 +130,21 @@ final class Hasher implements Writer, Pipe {
     return _capture.digest.toString();
   }
 
+  /// Read [source] to the end and return the digest (a [Reader] of a file,
+  /// a response, an archive): `await Hash.sha256().of(Fs.file(p))`.
+  Future<String> of(Reader source) async {
+    await (source > this);
+    return hex();
+  }
+
+  /// With `expect:`, a finished digest that differs is a FormatException.
+  void _check() {
+    final want = _expect;
+    if (want == null) return;
+    final got = _capture.digest.toString();
+    if (got != want) throw FormatException('$_name mismatch: got $got, expected $want');
+  }
+
   @override
   Future<void> consume(Stream<List<int>> input) async {
     _guard('consume');
@@ -141,6 +163,7 @@ final class Hasher implements Writer, Pipe {
     }
     _in.close();
     _state = _State.done;
+    _check();
   }
 
   @override
@@ -162,6 +185,7 @@ final class Hasher implements Writer, Pipe {
       _in.close();
       _state = _State.done;
       ok = true;
+      _check(); // fails the run at its end, before the writer commits
     } finally {
       if (_state == _State.running) _state = _State.idle;
       // Input failure or downstream cancel (including Reader.to's

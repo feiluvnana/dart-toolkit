@@ -39,3 +39,9 @@
 - Done: `.tar.xz` in unarchive, `Reader.lines()`, `query:` on the verbs, `Fs.sanitize(name)` (named at the user's request), GET/HEAD `retries: 2` + `Pool.map` `limit: 4`, `Opt(env:)`, `Console.notify/copy` (App's removed), a 100 ms idle grace (20 → 1 connections for a sequential download loop), a process cookie jar (form login now works), `Pool.runAll` on `Isolate.run` (worker_manager, `Pool.run`, `Pool.close` dropped; pool startup 0.32 → 0.18 s).
 - From here every commit is also pushed (user's request); gh switched back to feiluvnana once.
 - Deferred: `Http.send` merge (skipped: `Http.put` is easier to find), `Reader.from(stream)`, `Console.table`, `Fs.temp`, `Entry.modified`, `Shell.run(timeout:)`, prefer an installed Chrome.
+
+## 8. DOGFOOD (B1 fix..DOGFOOD.md, 9 commits + DOGFOOD.md)
+- Five scripts (mirror, sync CLI, Tui dashboard, listing scrape, release install) on the library alone; code lines 248 → 204 after the fixes.
+- Bugs fixed: `Http.hold()` as a script's first call kept it alive 15 s (every crawl; my stage-6 regression); tgz unarchive stopped at the tar marker (truncated .tar.gz extracted, hashes upstream incomplete); `retries:` + `Body.stream` silently one try.
+- Added: `Hash.sha256(expect:)` + `Hasher.of`, `Shell.run(onLine:)`, `follow(under:, skip:)`, `crawl(onProgress:)`, `path(from:)` (always `/`).
+- Deferred: `Console.table`, `Pool.map(onError:)`, a missing JSON file reading as null, hash mismatch naming its subject, `Bar` wiring for `onProgress`; not doable: `Json.encode` of records; kept: `exitCode` set by the caller.

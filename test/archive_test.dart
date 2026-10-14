@@ -447,16 +447,15 @@ void main() {
       expect(mode & 0x100, isNot(0));
     });
 
-    test('H8: unpack cancels its source, even with padding after the end',
-        () async {
+    test('unarchive reads to the end: padding after the marker, then a gzip trailer', () async {
       await seed();
       final tar = await Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tar).bytes();
-      var cancelled = false;
-      final c = StreamController<List<int>>(onCancel: () => cancelled = true);
-      c.add([...tar, ...List.filled(4096, 0)]);
-      await Archive.unarchive(p('out')).consume(c.stream);
-      expect(cancelled, isTrue);
+      await Archive.unarchive(p('out')).consume(Stream.value([...tar, ...List.filled(4096, 0)]));
       expect(await Fs.file(p('out/a/b.txt')).text(), 'bee');
+      final tgz = await Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tgz).bytes();
+      // The gzip trailer cut off: the tar inside is whole, the stream is not.
+      await expectLater(Reader.of(tgz.sublist(0, tgz.length - 8)) > Archive.unarchive(p('trunc')), throwsFormatException);
+      expect(await Fs.entry(p('trunc')), isNull);
     });
 
     test('H8: unpack cancels its source when the archive is corrupt',

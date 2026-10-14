@@ -77,8 +77,10 @@ sealed class Entry {
 
   final String _path;
 
-  /// The string as given, without trailing separators.
-  String path() => _path;
+  /// The string as given, without trailing separators; with [from], the
+  /// path relative to that folder, always with `/` (`a/b.txt` under `site`,
+  /// on Windows too: it becomes manifest keys and URL paths).
+  String path({Dir? from}) => from == null ? _path : p.relative(_path, from: from._path).replaceAll(r'\', '/');
 
   /// The last segment.
   String name() => p.basename(_path);
@@ -518,7 +520,7 @@ final class Link extends Entry {
 /// Future mirrors (rule 4). The extension name is import-only; never reference it. Sync members come back as Futures.
 /// [Reader]/[Writer]/[Closeable] members come from `Future<Reader>`.
 extension EntryFuture on Future<Entry> {
-  Future<String> path() async => (await this).path();
+  Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -529,7 +531,7 @@ extension EntryFuture on Future<Entry> {
 
 /// Future mirrors for [File].
 extension FileFuture on Future<File> {
-  Future<String> path() async => (await this).path();
+  Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -543,7 +545,7 @@ extension FileFuture on Future<File> {
 
 /// Future mirrors for [Dir].
 extension DirFuture on Future<Dir> {
-  Future<String> path() async => (await this).path();
+  Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -559,7 +561,7 @@ extension DirFuture on Future<Dir> {
 
 /// Future mirrors for [Link].
 extension LinkFuture on Future<Link> {
-  Future<String> path() async => (await this).path();
+  Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();

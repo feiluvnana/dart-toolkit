@@ -62,6 +62,12 @@ void main() {
   });
 
   group('Entry', () {
+    test('path(from:) is relative to a folder', () async {
+      final root = Fs.dir(p('site'));
+      expect(root.dir('a').file('b.txt').path(from: root), 'a/b.txt');
+      expect(await Future.value(root.file('c.txt')).path(from: root), 'c.txt');
+    });
+
     test('path/name/parent', () async {
       final f = Fs.file(p('a.txt'));
       expect(f.path(), p('a.txt'));

@@ -62,7 +62,8 @@ abstract final class Scrape {
   /// lifetime (see [Http.hold]); in browser mode [limit] tabs are kept
   /// and reused with `go` instead of opening one tab per URL. [cache] is a
   /// folder that replays pages on a rerun, keyed by URL and the credentials
-  /// sent; a folder the crawl creates is private (0700).
+  /// sent; a folder the crawl creates is private (0700). [onProgress] gets
+  /// (visits done, URLs seen so far) after each visit, for a `Console.bar`.
   static Stream<T> crawl<T>(
     Iterable<String> urls,
     Future<void> Function(Visit<T> visit) handler, {
@@ -74,6 +75,7 @@ abstract final class Scrape {
     Duration? timeout,
     TabHost? browser,
     void Function(String url, Object error)? onError,
+    void Function(int done, int total)? onProgress,
   }) {
     if (limit < 1) {
       throw ArgumentError.value(
@@ -92,6 +94,7 @@ abstract final class Scrape {
       timeout: timeout,
       browser: browser,
       onError: onError,
+      onProgress: onProgress,
       out: controller,
     );
     controller.onListen = () {
@@ -164,10 +167,15 @@ final class Visit<T> with Reader {
   /// this visit's URL and their fragment is dropped; an already-queued URL
   /// is skipped, whichever handler queued it. Bad URLs are skipped, like
   /// non-http(s). Returns this visit.
+  /// [under] keeps only URLs starting with it (stay inside a site); [skip]
+  /// is asked once per new URL when its turn comes (`(u) => local(u).exists()`
+  /// on a rerun) and a true answer drops it without a request.
   Visit<T> follow(
     Iterable<String> urls,
-    Future<void> Function(Visit<T> visit) handler,
-  ) {
+    Future<void> Function(Visit<T> visit) handler, {
+    String? under,
+    FutureOr<bool> Function(String url)? skip,
+  }) {
     for (final u in urls) {
       String? normalized;
       try {
@@ -176,7 +184,8 @@ final class Visit<T> with Reader {
         // One bad href must not kill the crawl.
         continue;
       }
-      _crawl.enqueue(normalized, handler);
+      if (normalized == null || (under != null && !normalized.startsWith(under))) continue;
+      _crawl.enqueue(normalized, handler, skip);
     }
     return this;
   }
@@ -210,10 +219,11 @@ final class Visit<T> with Reader {
 }
 
 final class _Task<T> {
-  _Task(this.url, this.handler);
+  _Task(this.url, this.handler, [this.skip]);
 
   final String url;
   final Future<void> Function(Visit<T> visit) handler;
+  final FutureOr<bool> Function(String url)? skip;
 }
 
 /// Pooled browser tabs: at most [size] tabs (one per worker) are ever open;
@@ -294,6 +304,7 @@ final class _Crawl<T> {
     required this.timeout,
     required this.browser,
     required this.onError,
+    required this.onProgress,
     required this.out,
   }) : _clock = Stopwatch();
 
@@ -305,7 +316,9 @@ final class _Crawl<T> {
   final Duration? timeout;
   final TabHost? browser;
   final void Function(String url, Object error)? onError;
+  final void Function(int done, int total)? onProgress;
   final StreamController<T> out;
+  var _done = 0;
 
   /// Monotonic clock for per-host delays (no wall-clock jumps).
   final Stopwatch _clock;
@@ -408,12 +421,13 @@ final class _Crawl<T> {
 
   void enqueue(
     String? url,
-    Future<void> Function(Visit<T> visit) handler,
-  ) {
+    Future<void> Function(Visit<T> visit) handler, [
+    FutureOr<bool> Function(String url)? skip,
+  ]) {
     if (url == null) return;
     if (_cancelled || _failure != null) return;
     if (!_seen.add(url)) return;
-    _queue.add(_Task(url, handler));
+    _queue.add(_Task(url, handler, skip));
     _notify();
   }
 
@@ -469,6 +483,10 @@ final class _Crawl<T> {
         }
       } finally {
         _active--;
+        _done++;
+        try {
+          onProgress?.call(_done, _seen.length);
+        } catch (_) {}
         _notify();
       }
     }
@@ -506,6 +524,8 @@ final class _Crawl<T> {
   }
 
   Future<void> _visit(_Task<T> task) async {
+    final skip = task.skip;
+    if (skip != null && await skip(task.url)) return;
     final uri = Uri.parse(task.url);
     // Cache first: hits skip the delay and the network.
     final hit = cache == null ? null : await _readCache(task.url);

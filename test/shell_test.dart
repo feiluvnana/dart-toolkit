@@ -42,6 +42,14 @@ void main() {
       expect(await out.text(), contains('here'));
     });
 
+    test('onLine gets stdout and stderr lines as they arrive', () async {
+      final seen = <String>[];
+      final out = await Shell.run(['sh', '-c', 'echo one; echo two >&2; sleep 0.2; echo three'], onLine: seen.add);
+      expect(seen..sort(), ['one', 'three', 'two']);
+      expect(await out.text(), 'one\nthree');
+      expect(out.err().trim(), 'two');
+    });
+
     test('check: a non-zero exit throws with the code and stderr', () async {
       await expectLater(Shell.run(['sh', '-c', 'echo bad >&2; exit 4'], check: true),
           throwsA(isA<ProcessException>()

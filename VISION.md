@@ -137,7 +137,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `fs`      | `Fs.entry` `file` `dir` `link` · `Entry` `path` `name` `parent` `exists` `delete` `copy` `move` · `File` `write` `append` `size` · `Dir` `file` `dir` `list` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
 | `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
-| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` · `Hasher` `add` `addBytes` `hex`                                                                                        | `package:crypto`      |
+| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`) · `Hasher` `add` `addBytes` `hex` `of`                                                                                        | `package:crypto`      |
 | `pool`    | `Pool.map` `runAll`                                                                                                                          | `dart:isolate`      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
 | `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `notify` `copy` `clear` · `Bar` `tick` `setTotal`                                                                                      | in-house              |
@@ -328,7 +328,7 @@ abstract final class Fs {
   static String sanitize(String name);   // an untrusted title as one portable file name; never leaves its folder
 }
 sealed class Entry {
-  String path();  String name();  Dir parent();
+  String path({Dir? from});  String name();  Dir parent();   // path(from: dir) is relative to dir
   Future<bool> exists();  Future<void> delete();
   Future<Entry> copy(String to);  Future<Entry> move(String to);   // subtypes narrow the return type
 }
@@ -365,7 +365,7 @@ final class Link extends Entry {
 
 ```dart
 abstract final class Shell {
-  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false});
+  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false, void Function(String line)? onLine}); // onLine: stdout and stderr lines as they arrive
   static Pipe filter(List<String> command, {String? dir, Map<String, String>? env});
   static Future<void> open(String target);    // URL or path, in the default app
 }
@@ -421,8 +421,9 @@ await Http.put(uploadUrl, body: Archive.archive(['.'], dir: 'site', format: .zip
 ### 4.8 hash
 
 ```dart
-abstract final class Hash { static Hasher md5(); static Hasher sha1(); static Hasher sha256(); static Hasher sha512(); }
-final class Hasher implements Writer, Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex(); }
+abstract final class Hash { static Hasher md5({String? expect}); static Hasher sha1({String? expect}); static Hasher sha256({String? expect}); static Hasher sha512({String? expect}); }
+final class Hasher implements Writer, Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  Future<String> of(Reader source); }
+// expect: (hex) fails the run at its end, before the writer commits: Http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')
 ```
 
 - One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a
@@ -723,11 +724,12 @@ abstract final class Scrape {
   static Stream<T> crawl<T>(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler, {
     int limit = 4, Duration? delay, int retries = 2, String? cache,
     Map<String, String>? headers, Duration? timeout, Browser? browser,
-    void Function(String url, Object error)? onError});
+    void Function(String url, Object error)? onError, void Function(int done, int total)? onProgress});
 }
 final class Visit<T> with Reader {
   String url();  int status();  bool ok();  int size();  String name();   // name() via shared origin()
-  Visit<T> follow(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler);
+  Visit<T> follow(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler,
+      {String? under, FutureOr<bool> Function(String url)? skip});   // stay inside a site; skip what a rerun has
   Visit<T> emit(T item);
 }
 ```

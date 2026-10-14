@@ -283,10 +283,8 @@ void main() {
       );
     });
 
-    test('a streamed body is sent once, never retried', () async {
-      // A stream cannot be resent: resendable is false by type, so even
-      // with retries a failure surfaces instead of hanging or resending.
-      // Covered by the type (Body.stream) + the H1 timeout above.
+    test('retries with a streamed body is an ArgumentError, not silently one try', () async {
+      expect(() => Http.put('$base/upload', body: Body.stream(_Mem('x')), retries: 2), throwsArgumentError);
     });
   });
 
@@ -828,6 +826,20 @@ Future<void> main() async {
       expect(await Http.get('$url/home', headers: {'cookie': 'sid=x'}).text(), 'sid=x');
       await Http.get('$url/logout').status();
       expect(await Http.get('$url/home').status(), 401);
+    });
+
+    test('a script whose first call is Http.hold() exits once it closes', () async {
+      final sw = Stopwatch()..start();
+      final r = await runDart('''
+import 'package:dart_toolkit/http.dart';
+Future<void> main(List<String> a) async {
+  final hold = Http.hold();
+  print(await Http.get(a[0]).text());
+  await hold.close();
+}
+''', args: ['$url/hello'], timeout: const Duration(seconds: 25));
+      expect(r.stdout, 'hello\n');
+      expect(sw.elapsed, lessThan(const Duration(seconds: 6)));
     });
 
     test('two reads at once share one body', () async {

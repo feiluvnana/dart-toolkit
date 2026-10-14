@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:io' hide File;
 
+import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:test/test.dart';
 
@@ -19,6 +22,36 @@ void main() {
 
     test('sha512 makes a Hasher', () {
       expect(Hash.sha512(), isA<Hasher>());
+    });
+  });
+
+  group('expect and of', () {
+    const abc = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+    late Directory tmp;
+    setUp(() async => tmp = await Directory.systemTemp.createTemp('hash_expect'));
+    tearDown(() => tmp.delete(recursive: true));
+
+    test('of() digests a reader', () async {
+      expect(await Hash.sha256().of(Reader.of(utf8.encode('abc'))), abc);
+    });
+
+    test('a matching expect: passes through; a mismatch never lands', () async {
+      final ok = Fs.file('${tmp.path}/ok');
+      await (Reader.of(utf8.encode('abc')) | Hash.sha256(expect: abc.toUpperCase()) > ok);
+      expect(await ok.text(), 'abc');
+      final bad = Fs.file('${tmp.path}/bad');
+      await expectLater(Reader.of(utf8.encode('abd')) | Hash.sha256(expect: abc) > bad,
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('sha256 mismatch'))));
+      expect(await bad.exists(), isFalse);
+      await expectLater(Reader.of(utf8.encode('abd')) > Hash.sha256(expect: abc), throwsFormatException);
+    });
+
+    test('a mismatched archive is never unarchived', () async {
+      final src = Fs.dir('${tmp.path}/src');
+      await src.file('a.txt').write('a');
+      final tgz = await Archive.archive(['.'], dir: src.path(), format: ArchiveFormat.tgz).bytes();
+      await expectLater(Reader.of(tgz) | Hash.sha256(expect: abc) > Archive.unarchive('${tmp.path}/out'), throwsFormatException);
+      expect(await Fs.entry('${tmp.path}/out'), isNull);
     });
   });
 

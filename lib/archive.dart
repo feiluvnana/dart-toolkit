@@ -856,7 +856,12 @@ Stream<_TarEvent> _parseTar(
     metaFlag = 0;
   }
 
+  // After the end marker the rest is read and dropped, not cancelled: a
+  // gzip trailer (or a hash checking at end of stream) runs only at EOF, so
+  // a truncated .tar.gz fails instead of extracting.
+  var ended = false;
   await for (final raw in input) {
+    if (ended) continue;
     final c = raw is Uint8List ? raw : Uint8List.fromList(raw);
     var i = 0;
     while (i < c.length) {
@@ -891,7 +896,10 @@ Stream<_TarEvent> _parseTar(
       i += n;
       if (head.length < 512) continue;
       final h = head.takeBytes();
-      if (h.every((b) => b == 0)) return;
+      if (h.every((b) => b == 0)) {
+        ended = true;
+        break;
+      }
       if (!_tarChecksumOk(h, 0)) {
         fail('corrupt archive: bad tar header', notTar: true);
       }
@@ -945,7 +953,7 @@ Stream<_TarEvent> _parseTar(
       }
     }
   }
-  if (head.length != 0 || remaining != 0 || pad != 0) {
+  if (!ended && (head.length != 0 || remaining != 0 || pad != 0)) {
     fail(
       'corrupt archive: truncated tar',
       notTar: true,
