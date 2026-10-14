@@ -26,6 +26,7 @@ import 'core.dart';
 export 'core.dart';
 
 import 'src/charset.dart' as charset;
+import 'src/origin.dart' as origin;
 
 /// Entry point: one method per HTTP verb. A verb completes when the headers
 /// arrive; the body streams as a [Reader].
@@ -226,6 +227,15 @@ final class Response with Reader implements Closeable {
     contentDisposition: header('content-disposition'),
   );
 
+  /// Typed provenance: replaces `(reader as dynamic).url()`/`.status()`/
+  /// `.name()` probes in `html`/`json`/`chrome`.
+  @override
+  Origin origin() => Origin(
+        url: _url,
+        status: _resp.statusCode,
+        name: name(),
+      );
+
   /// The body as text (see the class doc for the charset rules). Reads into
   /// memory and caches, so calling again (or [bytes]) is free. Works on any
   /// status.
@@ -408,112 +418,9 @@ extension ResponseFuture on Future<Response> {
 }
 
 /// A file name for a response body. Kept as one helper so `Visit.name()`
-/// can share it later.
-String _fileName({required String url, String? contentDisposition}) {
-  final fromHeader = _dispositionName(contentDisposition);
-  if (fromHeader != null) return fromHeader;
-  final uri = Uri.tryParse(url);
-  final segments =
-      uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
-  if (segments.isNotEmpty) {
-    final last = segments.last;
-    try {
-      final decoded = Uri.decodeComponent(last);
-      if (decoded.isNotEmpty) return decoded;
-    } catch (_) {
-      if (last.isNotEmpty) return last;
-    }
-  }
-  return 'download';
-}
-
-/// The `content-disposition` filename, or null when absent or empty.
-/// `filename*=` (RFC 6266/8187) wins over `filename=`; paths are stripped.
-String? _dispositionName(String? header) {
-  if (header == null) return null;
-  final star = RegExp(
-    r'''filename\*\s*=\s*([^;]+)''',
-    caseSensitive: false,
-  ).firstMatch(header);
-  if (star != null) {
-    var value = star.group(1)!.trim();
-    if (value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'")))) {
-      value = value.substring(1, value.length - 1);
-    }
-    String decoded;
-    final first = value.indexOf("'");
-    final second = first < 0 ? -1 : value.indexOf("'", first + 1);
-    if (first > 0 && second > first) {
-      final encoding = charset.Charset.canonical(value.substring(0, first));
-      final raw = value.substring(second + 1);
-      final decoder = charset.IncrementalDecoder(encoding);
-      decoded = decoder.add(_percentDecode(raw)) + decoder.finish();
-    } else {
-      decoded = _percentDecodeString(value);
-    }
-    final name = _stripPath(decoded.trim());
-    if (name.isNotEmpty) return name;
-  }
-  final plain = RegExp(
-    r'''filename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]+))''',
-    caseSensitive: false,
-  ).firstMatch(header);
-  if (plain != null) {
-    // `filename=` cannot match inside `filename*=` (the `*` breaks it).
-    final name = _stripPath(
-      (plain.group(1) ?? plain.group(2) ?? plain.group(3) ?? '').trim(),
-    );
-    if (name.isNotEmpty) return name;
-  }
-  return null;
-}
-
-String _stripPath(String name) {
-  final parts = name.split(RegExp(r'[\\/]'));
-  return parts.isEmpty ? name : parts.last;
-}
-
-List<int> _percentDecode(String s) {
-  final out = <int>[];
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
-      if (v != null) {
-        out.add(v);
-        i += 2;
-        continue;
-      }
-    }
-    if (c < 0x80) {
-      out.add(c);
-    } else {
-      out.addAll(utf8.encode(String.fromCharCode(c)));
-    }
-  }
-  return out;
-}
-
-String _percentDecodeString(String s) {
-  // A bare `filename=` is already text; only unescape percent runs so
-  // `%20` reads as a space while other bytes stay as they are.
-  final out = StringBuffer();
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
-      if (v != null && v >= 0x20 && v < 0x7F) {
-        out.writeCharCode(v);
-        i += 2;
-        continue;
-      }
-    }
-    out.writeCharCode(c);
-  }
-  return out.toString();
-}
+/// can share it later. Delegates to `src/origin.dart` (the single owner).
+String _fileName({required String url, String? contentDisposition}) =>
+    origin.fileName(url: url, contentDisposition: contentDisposition);
 
 /// Retryable send failure, caught inside [_send] only.
 final class _Retryable {

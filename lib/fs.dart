@@ -185,6 +185,9 @@ final class File extends Entry with Reader implements Writer {
   Future<int> size() => io.File(_path).length();
 
   @override
+  Origin origin() => Origin(path: _path, name: p.basename(_path));
+
+  @override
   Stream<List<int>> stream() => io.File(_path).openRead();
 
   @override

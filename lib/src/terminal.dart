@@ -793,3 +793,94 @@ bool _wideEmoji(int rune) =>
     (rune >= 0x1f7e0 && rune <= 0x1f7eb) ||
     (rune >= 0x1f90c && rune <= 0x1f9ff) ||
     (rune >= 0x1fa70 && rune <= 0x1faff);
+
+/// Terminal capabilities for one run, shared by `console` and `tui`.
+///
+/// One detector (was: `Console._styled` checked only `hasTerminal` +
+/// `NO_COLOR`; `tui` had its own `_Caps`). `FORCE_COLOR`/`NO_COLOR` follow
+/// the env conventions: `NO_COLOR` (any value) drops styling, `FORCE_COLOR`
+/// (`1`/`true`, case-insensitive) forces it even piped. Motion (live
+/// spinners/bars, menu repaints) still needs a real terminal.
+final class TerminalCaps {
+  const TerminalCaps({
+    required this.truecolor,
+    required this.color256,
+    required this.noColor,
+    required this.ascii,
+    required this.styled,
+    required this.animated,
+  });
+
+  /// Detect from [env] plus whether stderr/stdout are terminals.
+  /// [hasTerminal] is stderr's (console) or stdout's (tui) terminal check;
+  /// pass the stream the facade draws on.
+  static TerminalCaps of(
+    Map<String, String> env, {
+    required bool hasTerminal,
+  }) {
+    final noColor = env['NO_COLOR'] != null;
+    final force = env['FORCE_COLOR']?.toLowerCase();
+    final forced = force == '1' || force == 'true' || force == 'always';
+    final colorterm = (env['COLORTERM'] ?? '').toLowerCase();
+    final tm = (env['TERM'] ?? '').toLowerCase();
+    final locale = [
+      env['LC_ALL'],
+      env['LC_CTYPE'],
+      env['LANG'],
+    ].firstWhere((v) => v != null && v.isNotEmpty, orElse: () => '')!.toLowerCase();
+    final truecolor =
+        colorterm.contains('truecolor') || colorterm.contains('24bit');
+    final color256 = truecolor || tm.contains('256color');
+    final ascii = !locale.contains('utf');
+    final styled = !noColor && (forced || hasTerminal);
+    final animated = hasTerminal && !noColor;
+    return TerminalCaps(
+      truecolor: truecolor,
+      color256: color256,
+      noColor: noColor,
+      ascii: ascii,
+      styled: styled,
+      animated: animated,
+    );
+  }
+
+  /// Detect from the process environment and [io.stderr] (console default).
+  static TerminalCaps get current => of(
+        io.Platform.environment,
+        hasTerminal: () {
+          try {
+            return io.stderr.hasTerminal;
+          } catch (_) {
+            return false;
+          }
+        }(),
+      );
+
+  final bool truecolor;
+  final bool color256;
+  final bool noColor;
+  final bool ascii;
+
+  /// Colour codes may be emitted.
+  final bool styled;
+
+  /// Live redraw may animate (needs a terminal plus styling).
+  final bool animated;
+}
+
+/// Windows key input (unverified — needs `dart run tool/keylog.dart` on a
+/// Windows PC before it lands).
+///
+/// Today `io.stdin` is read directly in raw mode, but those flags don't turn
+/// on virtual-terminal input, so arrows produce no character and are dropped
+/// before Dart sees them. The decoder's `0x00`/`0xE0` branch is the C runtime
+/// `_getch()` format, which Dart's stdin probably never produces.
+///
+/// Proposal: a helper child on the same pattern as `cat -u /dev/tty` — a
+/// PowerShell process reading `[Console]::ReadKey($true)` and writing VT
+/// bytes — started by [sharedStdin] on Windows instead of stdin itself. It
+/// costs a few hundred ms of startup per input session. Alternative: FFI
+/// `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_INPUT)` (rule 14 excludes it).
+/// This stub documents the contract; the implementation waits for keylog
+/// evidence.
+String? windowsReadKeyHelper() => null;

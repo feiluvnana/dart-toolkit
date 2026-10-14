@@ -26,7 +26,13 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 
+// Direct dependency on core (Origin/Reader) even though chrome.dart
+// re-exports it.
+// ignore: unnecessary_import
+import 'core.dart';
+
 import 'src/charset.dart' as charset;
+import 'src/origin.dart' as names;
 
 export 'core.dart';
 export 'html.dart';
@@ -122,21 +128,12 @@ final class Visit<T> with Reader {
   int? size() => _body.length;
 
   /// A file name for the body: the final URL's last segment, else 'download'.
-  String name() {
-    final uri = Uri.tryParse(_url);
-    final segments =
-        uri?.pathSegments.where((s) => s.isNotEmpty).toList() ?? const [];
-    if (segments.isNotEmpty) {
-      final last = segments.last;
-      try {
-        final decoded = Uri.decodeComponent(last);
-        if (decoded.isNotEmpty) return decoded;
-      } catch (_) {
-        if (last.isNotEmpty) return last;
-      }
-    }
-    return 'download';
-  }
+  /// Shares `src/origin.dart` with `Response` (content-disposition arrives
+  /// in a later pass; the URL-tail rule already agrees today).
+  String name() => names.fileName(url: _url);
+
+  @override
+  Origin origin() => Origin(url: _url, status: _status, name: name());
 
   /// Queue [urls] to be handled by [handler]. URLs are made absolute against
   /// this visit's URL and their fragment is dropped; an already-queued URL

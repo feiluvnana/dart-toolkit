@@ -63,9 +63,17 @@ final class Hasher implements Writer, Pipe {
   /// Poison the hasher: a later [hex]/[add] throws instead of returning a
   /// partial or empty-input digest. Called when the run failed anywhere,
   /// including a writer that failed before this stage was read (wired via
-  /// [Reader.to]'s cancel-on-writer-error, which tears down the pipe stream
-  /// and lands in [_tee]'s finally / [consume]'s catch).
+  /// [Reader.writeTo]'s abort walk, which calls [abort] without starting
+  /// the pipeline, and via [_tee]'s finally / [consume]'s catch mid-run).
   void _abort(Object e) {
+    abort(e);
+  }
+
+  /// [Pipe.abort]: poison so a later `hex()` throws instead of returning a
+  /// wrong digest. Covers broadcast sources too (the old listen-cancel probe
+  /// skipped them).
+  @override
+  void abort(Object error) {
     _poisoned = true;
   }
 

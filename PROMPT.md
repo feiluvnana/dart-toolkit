@@ -36,6 +36,8 @@ replacing with good syntax is always OK, even if it breaks existing call sites.
 - Examine the codebase first: entry points, the import/export graph, the
   public surface of each module, error handling, resource lifetimes, and the
   real example scripts.
+- Fix ambiguous names: a name says what the call does (`waitFor`, not `wait`), with no
+  abbreviations. Brevity comes from fewer calls and parameters, never from shorter names.
 - Prefer the best syntax over compatibility: keep the good ideas of the
   current API, but replace freely wherever the new design is cleaner — no
   need to keep old call sites compiling, no forwarders, no deprecation path.

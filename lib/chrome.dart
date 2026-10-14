@@ -28,6 +28,13 @@ import 'package:path/path.dart' as p;
 import 'package:puppeteer/protocol/browser.dart' as proto;
 import 'package:puppeteer/puppeteer.dart' as pp;
 
+// Direct dependency on core (Origin/Reader/Closeable/Writer) even though
+// html.dart re-exports it; per-folder rule the facade imports core
+// relatively instead of relying on transitives.
+// ignore: unnecessary_import
+import 'core.dart';
+import 'src/exit.dart' as exit;
+
 export 'core.dart';
 export 'html.dart';
 
@@ -106,7 +113,16 @@ final class Browser implements Closeable {
   Browser._(this._browser, {required bool owned}) : _owned = owned {
     if (owned) {
       _live.add(this);
-      _watchSignals();
+      // The single signal owner (src/exit.dart): the first hook installs the
+      // watchers, the last removal cancels them so the VM may exit. Fixes
+      // the never-exits-after-close hang (a live ProcessSignal.watch keeps
+      // the VM alive) and the orphaned-Chromium race (one owner runs hooks
+      // in reverse order, awaited and bounded, then exits once).
+      _exitToken = exit.onExit(() async {
+        try {
+          await close();
+        } catch (_) {}
+      });
     }
   }
 
@@ -114,6 +130,9 @@ final class Browser implements Closeable {
 
   /// Whether [close] stops the process (launched) or disconnects (connected).
   final bool _owned;
+
+  /// Token for the exit hook above; removed in [close].
+  Object? _exitToken;
 
   /// One cached [Page] wrapper per engine target: every `pages()` call for
   /// the same tab returns the same wrapper, so its dialog/traffic
@@ -131,45 +150,6 @@ final class Browser implements Closeable {
   Future<void> _dlPrev = Future.value();
 
   static final _live = <Browser>{};
-  static bool _watching = false;
-
-  static void _watchSignals() {
-    if (_watching) return;
-    _watching = true;
-    void watch(io.ProcessSignal signal, int code, {required bool sigint}) {
-      try {
-        signal.watch().listen((_) async {
-          if (sigint) {
-            // Raw terminal (TUI active): SIGINT is a key, not termination.
-            try {
-              if (!io.stdin.echoMode) return;
-            } catch (_) {}
-          }
-          for (final b in List<Browser>.of(_live)) {
-            try {
-              await b.close();
-            } catch (_) {}
-          }
-          if (sigint) {
-            // Cooked Ctrl-C once behaved as termination; keep that.
-            io.exit(130);
-          } else {
-            io.exit(code);
-          }
-        });
-      } catch (_) {}
-    }
-
-    watch(io.ProcessSignal.sigint, 130, sigint: true);
-    if (!io.Platform.isWindows) {
-      try {
-        watch(io.ProcessSignal.sigterm, 143, sigint: false);
-      } catch (_) {}
-      try {
-        watch(io.ProcessSignal.sighup, 129, sigint: false);
-      } catch (_) {}
-    }
-  }
 
   /// Wrap an engine page, reusing the cached wrapper for its target.
   Page _wrap(pp.Page page) {
@@ -238,6 +218,8 @@ final class Browser implements Closeable {
 
   /// Close every tab and the process it launched (or disconnect a connected
   /// browser, leaving it running). Removes downloaded copies. Idempotent.
+  /// Removes the exit hook; when the last hook goes the signal subscriptions
+  /// are cancelled so the script may exit.
   @override
   Future<void> close() async {
     if (_closed) return;
@@ -272,6 +254,13 @@ final class Browser implements Closeable {
     _closed = true;
     _known.clear();
     _live.remove(this);
+    final token = _exitToken;
+    _exitToken = null;
+    if (token != null) {
+      try {
+        exit.offExit(token);
+      } catch (_) {}
+    }
   }
 
   /// The shared download folder, created on first use.
@@ -713,7 +702,7 @@ final class Page implements Closeable {
         throw StateError(
             'download ${finished.state.name}: ${begun.suggestedFilename}');
       }
-      final path = finished.filePath ?? '$dir/${begun.suggestedFilename}';
+      final path = finished.filePath ?? p.join(dir, begun.suggestedFilename);
       final left = remaining();
       final file = await _stableFile(
           path, left.isNegative ? Duration.zero : left, begun.suggestedFilename);
@@ -848,27 +837,43 @@ final class Page implements Closeable {
   }
 
   Future<_Staged> _stage(Reader file) async {
+    // Typed origin first (no dynamic); dynamic fallback for custom Readers
+    // that still expose name()/path() without overriding origin().
+    String? fromOriginName;
+    String? fromOriginPath;
+    try {
+      final o = file.origin();
+      fromOriginName = o.name;
+      fromOriginPath = o.path;
+    } catch (_) {}
     String name = 'upload';
-    try {
-      // ignore: avoid_dynamic_calls
-      final n = (file as dynamic).name() as String?;
-      if (n != null && n.isNotEmpty) {
-        final base = n.split(RegExp(r'[\\/]')).last;
-        if (base.isNotEmpty) name = base;
-      }
-    } catch (_) {}
-    String? keep;
-    try {
-      // ignore: avoid_dynamic_calls
-      keep = (file as dynamic).path() as String?;
-    } catch (_) {}
+    if (fromOriginName != null && fromOriginName.isNotEmpty) {
+      final base = fromOriginName.split(RegExp(r'[\\/]')).last;
+      if (base.isNotEmpty) name = base;
+    } else {
+      try {
+        // ignore: avoid_dynamic_calls
+        final n = (file as dynamic).name() as String?;
+        if (n != null && n.isNotEmpty) {
+          final base = n.split(RegExp(r'[\\/]')).last;
+          if (base.isNotEmpty) name = base;
+        }
+      } catch (_) {}
+    }
+    String? keep = fromOriginPath;
+    if (keep == null) {
+      try {
+        // ignore: avoid_dynamic_calls
+        keep = (file as dynamic).path() as String?;
+      } catch (_) {}
+    }
     if (keep != null) {
       return _Staged(io.File(keep), keep: true, tmpDir: null);
     }
     final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_up');
-    final staged = io.File('${tmp.path}/$name');
+    final staged = io.File(p.join(tmp.path, name));
     try {
-      await file.to(_FileWriter(staged));
+      await file.writeTo(_FileWriter(staged));
     } catch (_) {
       // Don't leak the staging dir when the reader fails mid-write.
       try {
@@ -951,6 +956,9 @@ final class Download with Reader {
 
   /// The file name the site suggested.
   String name() => _name;
+
+  @override
+  Origin origin() => Origin(name: _name, path: _file.path);
 
   @override
   Stream<List<int>> stream() => _file.openRead();

@@ -191,6 +191,13 @@ final class _Filter implements Pipe {
   final Map<String, String>? _env;
 
   @override
+  void abort(Object error) {
+    // Nothing started yet (Reader.writeTo aborts without listening), so
+    // there is no child to kill. A mid-run failure tears the generator down
+    // via its finally, which already kills the child.
+  }
+
+  @override
   Stream<List<int>> transform(Stream<List<int>> input) async* {
     io.Process proc;
     try {

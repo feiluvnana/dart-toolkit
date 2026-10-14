@@ -504,6 +504,11 @@ final class _GzipPipe implements Pipe {
   final bool compress;
 
   @override
+  void abort(Object error) {
+    // Stateless: nothing to poison or release.
+  }
+
+  @override
   Stream<List<int>> transform(Stream<List<int>> input) {
     if (compress) {
       try {

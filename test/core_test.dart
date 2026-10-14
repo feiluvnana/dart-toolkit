@@ -175,6 +175,9 @@ final class _Tap implements Pipe {
       yield c;
     }
   }
+
+  @override
+  void abort(Object error) {}
 }
 
 final class _Boom implements Pipe {
@@ -184,6 +187,9 @@ final class _Boom implements Pipe {
       throw StateError('boom');
     }
   }
+
+  @override
+  void abort(Object error) {}
 }
 
 final class _Sink implements Writer {

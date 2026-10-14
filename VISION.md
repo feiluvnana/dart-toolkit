@@ -24,7 +24,7 @@ release scripts, file shufflers, terminal apps. These are not servers or Flutter
 the library is set by real scripts (`example/`): every workaround a script needs is a gap in the
 library.
 
-**Priorities, in order:** correct → fast (startup and throughput) → short at the call site → small
+**Priorities, in order:** correct → fast (startup and throughput) → short at the call site (fewer steps, not clipped names) → small
 surface. A member stays only when a real script needs it, and an addition must delete more code
 at its call sites than it adds to the surface.
 
@@ -34,7 +34,7 @@ at its call sites than it adds to the surface.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type. |
 | 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. Each library doc says `Public surface is exactly: …`.                     |
-| 3   | **Short names.** One word, or two when the second removes doubt (`exitCode`, `fullPage`). The same idea has the same name everywhere (§3). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into).          |
+| 3   | **Clear names over short names.** A name says what the call does, at whatever length that takes: `waitFor` not `wait`, `isSuccess` not `ok`, `hexDigest` not `hex`, and no abbreviations (`evaluate`, not `eval`). One word is right only when it can't be misread (`get`, `pack`, `text`). Brevity comes from fewer calls, steps and parameters, never from clipping a name until it reads two ways. The same idea has the same name everywhere (§3). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). Renames still pending: PROPOSAL.md §Naming. |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name. |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                      |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                         |

@@ -887,15 +887,45 @@ final class Bar extends _Live implements Pipe, Closeable {
   @override
   void _free() => Console._release(this);
 
+  /// [Pipe.abort]: the run failed (possibly before this stage was ever
+  /// read). Print ✗ and release the live line without starting anything.
+  /// Covers broadcast sources too. Synchronous: the line is free before
+  /// [Reader.writeTo] rethrows, so the next bar builds (K2).
+  @override
+  void abort(Object error) {
+    final bridge = _bridge;
+    final id = _bridgeId;
+    if (bridge != null && id != null) {
+      if (_closed) return;
+      _closed = true;
+      bridge.barEnded(id, false);
+      Console._release(this);
+      return;
+    }
+    if (_closed) return;
+    _closed = true;
+    // Cancel the resize watch in the background; release the line now.
+    final w = _sigwinch;
+    _sigwinch = null;
+    if (w != null) {
+      unawaited(w.cancel().catchError((_) {}));
+    }
+    if (Console._animated) {
+      io.stderr.writeln('${'\r✗ ${_label ?? ''}'.trimRight()}\x1b[K');
+    } else {
+      io.stderr.writeln('✗ ${_label ?? ''}'.trimRight());
+    }
+    Console._release(this);
+  }
+
   @override
   Stream<List<int>> transform(Stream<List<int>> input) async* {
     // async* (not a hand-rolled controller) so the stream's backpressure
     // survives: a slow writer pauses this loop at yield, keeping memory at
     // a few chunks whatever the size of the data.
-    // A pipeline that fails before this pipe is ever listened to still
-    // releases the line: core's writer-error path listens-then-cancels the
-    // stream, which starts this generator and tears it down, running the
-    // finally below.
+    // A pipeline that fails after this pipe started tears this generator
+    // down, running the finally below; a writer-first failure never starts
+    // it and is handled by [abort] above (no listen-then-cancel probe).
     _piped = true;
     final bridge = _bridge;
     final id = _bridgeId;

@@ -278,6 +278,9 @@ final class _Boom implements Pipe {
       throw StateError('boom');
     }
   }
+
+  @override
+  void abort(Object error) {}
 }
 
 final class _Writer implements Writer {
