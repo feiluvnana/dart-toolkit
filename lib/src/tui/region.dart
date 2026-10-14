@@ -97,6 +97,11 @@ final class Region {
     }
     return this;
   }
+  /// The rest of the region as half-block cells (`▀`) showing [image] (an
+  /// `Image` from `image.dart`), scaled down to fit with the aspect kept.
+  /// Returns the receiver.
+  Region picture(Pixels image) => _drawPicture(this, image.width(), image.height(), image.pixel);
+
   /// Border the rest of the region, with [title] when given; return the
   /// inside.
   Region box([String title = '']) {
@@ -539,7 +544,7 @@ final class _Popup {
 /// [pixel] returns `(r, g, b)` at `(x, y)`. The engine half of
 /// `image.dart`'s `Region.picture`, kept out of `tui` so it doesn't load
 /// the image codecs.
-Region drawPicture(
+Region _drawPicture(
     Region r, int iw, int ih, (int, int, int) Function(int x, int y) pixel) {
   final y = r._gy + r._cursor;
   final h = r._h - r._cursor;

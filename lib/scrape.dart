@@ -24,9 +24,9 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'chrome.dart';
 import 'fs.dart';
 import 'hash.dart';
+import 'html.dart';
 import 'http.dart';
 
 // Direct dependency on core (Origin/Reader) even though chrome.dart
@@ -39,6 +39,7 @@ import 'src/charset.dart' as charset;
 import 'src/origin.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/retry.dart' as retry;
+import 'src/tabs.dart';
 
 export 'core.dart';
 export 'html.dart';
@@ -71,7 +72,7 @@ abstract final class Scrape {
     String? cache,
     Map<String, String>? headers,
     Duration? timeout,
-    Browser? browser,
+    TabHost? browser,
     void Function(String url, Object error)? onError,
   }) {
     if (limit < 1) {
@@ -223,15 +224,15 @@ final class _Task<T> {
 final class _TabPool {
   _TabPool(this._browser, this._size, {this.headers, this.timeout});
 
-  final Browser _browser;
+  final TabHost _browser;
   final int _size;
   final Map<String, String>? headers;
   final Duration? timeout;
-  final _idle = <Page>[];
+  final _idle = <TabView>[];
   var _total = 0;
   var _closed = false;
 
-  Future<Page> open(String url) async {
+  Future<TabView> open(String url) async {
     final idle = _idle;
     if (idle.isNotEmpty) {
       final page = idle.removeLast();
@@ -257,7 +258,7 @@ final class _TabPool {
     }
   }
 
-  void release(Page page) {
+  void release(TabView page) {
     if (_closed) {
       unawaited(page.close().then<void>((_) {}, onError: (_) {}));
       return;
@@ -266,14 +267,14 @@ final class _TabPool {
   }
 
   /// Drop a tab that broke mid-visit so the next acquire opens fresh.
-  void drop(Page page) {
+  void drop(TabView page) {
     _total--;
     unawaited(page.close().then<void>((_) {}, onError: (_) {}));
   }
 
   Future<void> close() async {
     _closed = true;
-    final pages = List<Page>.of(_idle);
+    final pages = List<TabView>.of(_idle);
     _idle.clear();
     for (final page in pages) {
       try {
@@ -302,7 +303,7 @@ final class _Crawl<T> {
   final String? cache;
   final Map<String, String>? headers;
   final Duration? timeout;
-  final Browser? browser;
+  final TabHost? browser;
   final void Function(String url, Object error)? onError;
   final StreamController<T> out;
 
@@ -509,7 +510,7 @@ final class _Crawl<T> {
     // Cache first: hits skip the delay and the network.
     final hit = cache == null ? null : await _readCache(task.url);
     Visit<T> visit;
-    Page? page;
+    TabView? page;
     if (hit != null) {
       visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this,
           hit.contentType, hit.disposition);
@@ -636,7 +637,7 @@ final class _Crawl<T> {
 
   Future<_Fetched<T>> _fetchTab(String url) async {
     final pool = _tabs!;
-    Page page;
+    TabView page;
     try {
       // open() carries the timeout inside, so a late tab is closed by
       // open itself instead of orphaned by an outer .timeout().
@@ -750,7 +751,7 @@ final class _Fetched<T> {
   final Visit<T> visit;
   final int status;
   final String? retryAfter;
-  final Page? page;
+  final TabView? page;
 }
 
 final class _Hit {

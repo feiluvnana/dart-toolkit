@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'exit.dart' as exit;
 import 'keys.dart' as keys;
+import 'pixels.dart';
 import 'terminal.dart' as term;
 import 'terminal.dart' show Color;
 

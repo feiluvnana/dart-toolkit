@@ -22,3 +22,9 @@
 - Handed off: PLAN §1 W7 (console close hooks), W8 (UTF-8 glyphs on Windows), W9 (rename retries); §2 L1 rewritten (foreground xdg-open), L2 (Chromium on arm64). W3 already covers .bat quoting.
 - Matrix: macOS fs/archive/shell/terminal ok after fixes; Linux shell L1 + chrome arm64 handed off, BusyBox `touch -d @s.frac` unknown; Windows exit/caps/rename handed off, winconsole unknown (W1).
 - Deferred: `exit()` inside a handler leaves the tty broken (doc it in DOCS); Console prompts invisible when only stderr is redirected; Tui ASCII mode still leaks ✗ ❯ • …; ctrl/shift+F1-F4 (`CSI 1;5P`), rxvt `ESC ESC [A`, paste end search O(n²).
+
+## 5. ARCHITECTURE (3213082..ebffb90, 8 commits + ARCHITECTURE.md)
+- ARCHITECTURE.md: import graph (no cycles), startup per module, dependency table, 10 findings, migration order.
+- Startup (A/B): scrape 1.77 s → 0.82 s (no chrome import; `src/tabs.dart`), image 1.12 s → 0.99 s (`Region.picture` via `src/pixels.dart`, adds `Image.pixel`), archive 0.53 s → 0.24 s (in-house zip, package:archive dropped; zip pack also 15% faster), cli 0.23 s → 0.19 s (`src/sanitize.dart`).
+- Pure refactors: one tree copy (`src/tree.dart`) for fs and archive; `_Unpacker.consume` split into `_Extraction`. Unused `http` dependency dropped.
+- Deferred: an in-house HTML parser (~0.7 s off every scrape/chrome script; L, own stage), splitting `tui/session.dart`, pinning html/csslib.

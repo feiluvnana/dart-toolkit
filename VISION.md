@@ -583,7 +583,7 @@ final class Color {                            // black red green yellow blue ma
 enum Style { bold, dim, italic, underline, strike, reverse }
 ```
 
-`image` adds `Region.picture(Image)` (half-block cells), so `tui` doesn't load the codecs.
+`Region.picture(image)` draws any `Image` (half-block cells); `tui` and `image` never load each other (Image implements a private pixel interface).
 
 - **One look for `Console` and `Tui`**, not customizable:
   - `Region.box` draws `┌ ┐ └ ┘` lines with the title after the top edge. `Console.choose` marks the

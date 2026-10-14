@@ -1,8 +1,8 @@
 /// Archives and gzip.
 ///
-/// Zip goes through `package:archive` and stays in memory (its central
-/// directory sits at the end; the docs say so). Tar and tgz stream one
-/// member at a time through an in-house tar coder (~150 lines) plus the
+/// Zip is in-house (`src/zip.dart`, on the SDK's raw deflate) and stays in
+/// memory (its central directory sits at the end; the docs say so). Tar and
+/// tgz stream one member at a time through an in-house tar coder plus the
 /// SDK's gzip, so `pack`/`unpack` hold the largest member, not the archive.
 ///
 /// ```dart
@@ -23,7 +23,6 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart' as a;
 import 'package:path/path.dart' as p;
 
 import 'core.dart';
@@ -31,6 +30,8 @@ export 'core.dart';
 
 import 'src/exit.dart' as exit;
 import 'src/posix.dart' as posix;
+import 'src/tree.dart' as tree;
+import 'src/zip.dart' as zip;
 
 /// Archive formats for [Archive.pack].
 enum ArchiveFormat { zip, tar, tgz }
@@ -75,7 +76,7 @@ final class _Packed with Reader {
   }
 
   Future<List<int>> _buildZip() async {
-    final archive = a.Archive();
+    final members = <(String, int, List<int>)>[];
     final normalizedDir = p.normalize(_dir);
     final root = io.Directory(normalizedDir);
     if (!await root.exists()) {
@@ -92,29 +93,24 @@ final class _Packed with Reader {
       rel = rel.replaceAll('\\', '/');
       if (t == io.FileSystemEntityType.directory) {
         if (rel.isNotEmpty) {
-          final af = a.ArchiveFile('$rel/', 0, const []);
+          var mode = 0;
           try {
-            final st = await io.FileStat.stat(e.path);
-            af.mode = st.mode & 0x1FF;
-            if (af.mode != 0 && (af.mode & 0x49) == 0) {
-              af.mode |= 0x49;
-            }
+            mode = (await io.FileStat.stat(e.path)).mode & 0x1FF;
+            if (mode != 0 && (mode & 0x49) == 0) mode |= 0x49;
           } catch (_) {}
-          archive.addFile(af);
+          members.add(('$rel/', mode, const <int>[]));
         }
         continue;
       }
       if (t != io.FileSystemEntityType.file) continue;
       final data = await io.File(e.path).readAsBytes();
-      final af = a.ArchiveFile(rel, data.length, data);
+      var mode = 0;
       try {
-        final st = await io.FileStat.stat(e.path);
-        final m = st.mode & 0x1FF;
-        if (m != 0) af.mode = m;
+        mode = (await io.FileStat.stat(e.path)).mode & 0x1FF;
       } catch (_) {}
-      archive.addFile(af);
+      members.add((rel, mode, data));
     }
-    return a.ZipEncoder().encode(archive);
+    return zip.writeZip(members);
   }
 
   /// Streams a tar of [dir]: one 512-byte header per member, file bytes
@@ -205,6 +201,178 @@ final class _Packed with Reader {
   }
 }
 
+/// One unpack's temp tree: members land here sandbox-checked, then merge
+/// into the target. Holds the modes to apply after the merge.
+final class _Extraction {
+  _Extraction(this.tmp);
+
+  final io.Directory tmp;
+
+  // Modes collected during extraction: one `chmod <mode> p1 p2 …` per
+  // distinct mode afterwards (usually 2–3 forks per archive, not one per
+  // member), chunked under ARG_MAX inside `chmodBatched`.
+  final _paths = <String>[];
+  final _modes = <int>[];
+  final _folded = <String, String>{};
+
+  // Every file this unpack wrote: an existing file under a path not in
+  // here means the filesystem folded two member names into one (macOS
+  // normalises NFC and NFD café.txt to the same file).
+  final _written = <String>{};
+
+  var _umask = 0x12; // 022 until the temp folder tells us
+  io.RandomAccessFile? _out; // the tar file member being written
+
+  Future<void> start() async {
+    await tmp.create(recursive: true);
+    // A fresh folder is 0777 & ~umask: read the umask off it.
+    _umask = posix.isPosix ? ~(await tmp.stat()).mode & 0x1FF : 0;
+  }
+
+  void _keepMode(String path, int mode, {required bool isDir}) {
+    var m = mode & 0x1FF;
+    if (m == 0) return;
+    if (isDir) m |= 0x40; // never leave a folder untraversable (S_IXUSR)
+    _paths.add(path);
+    _modes.add(m);
+  }
+
+  /// Sandbox-checks [name] and returns its path in the temp folder, with
+  /// parents created; null for a bare root entry.
+  Future<String?> _prepare(String name, {bool file = false}) async {
+    _Unpacker._checkMember(name, _folded);
+    // Split on both separators so member names work on every platform.
+    final relParts = name.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty);
+    if (relParts.isEmpty) return null;
+    final dest = p.joinAll([tmp.path, ...relParts]);
+    await io.Directory(p.dirname(dest)).create(recursive: true);
+    if (file && _written.add(dest) && await io.File(dest).exists()) {
+      throw FormatException('archive members collide on this filesystem: $name');
+    }
+    return dest;
+  }
+
+  Future<void> _writeMember(String name, int mode, {required bool isDir, Uint8List? data}) async {
+    final dest = await _prepare(name, file: !isDir);
+    if (dest == null) return;
+    if (isDir) {
+      await io.Directory(dest).create(recursive: true);
+    } else {
+      await io.File(dest).writeAsBytes(data ?? Uint8List(0));
+    }
+    _keepMode(dest, mode, isDir: isDir);
+  }
+
+  /// Zip stays in memory: its directory sits at the end.
+  Future<void> zip(Stream<List<int>> input) async {
+    final acc = BytesBuilder(copy: false);
+    await for (final chunk in input) {
+      acc.add(chunk);
+    }
+    final entries = _Unpacker._decodeZip(acc.takeBytes());
+    // Check every member before writing anything.
+    for (final f in entries) {
+      _Unpacker._checkMember(f.name, _folded);
+      if (f.isLink) throw FormatException('archive member is a link: ${f.name}');
+    }
+    for (final f in entries) {
+      // One member inflated at a time.
+      await _writeMember(f.name, f.mode, isDir: f.isDir, data: f.isDir ? null : f.data());
+    }
+  }
+
+  /// Stream tar events to the temp tree.
+  Future<void> tar(Stream<_TarEvent> events) async {
+    String? dest;
+    var mode = 0;
+    // macOS tar adds an AppleDouble `._name` (xattrs) beside members; one
+    // is decided on its first bytes and dropped, as bsdtar does.
+    String? appleDouble;
+    var skipping = false;
+    await for (final ev in events) {
+      switch (ev) {
+        case _TarHeader():
+          mode = ev.mode;
+          skipping = false;
+          if (!ev.isDir && p.posix.basename(ev.name).startsWith('._')) {
+            appleDouble = ev.name;
+            dest = null;
+            break;
+          }
+          dest = await _prepare(ev.name, file: !ev.isDir);
+          if (dest == null) break;
+          if (ev.isDir) {
+            await io.Directory(dest).create(recursive: true);
+            _keepMode(dest, mode, isDir: true);
+            dest = null;
+          } else {
+            _out = await io.File(dest).open(mode: io.FileMode.write);
+          }
+        case _TarBody() when skipping:
+          break;
+        case _TarBody():
+          final pending = appleDouble;
+          if (pending != null) {
+            appleDouble = null;
+            if (_isAppleDouble(ev.bytes)) {
+              skipping = true;
+              break;
+            }
+            dest = await _prepare(pending, file: true);
+            if (dest != null) _out = await io.File(dest).open(mode: io.FileMode.write);
+          }
+          await _out?.writeFrom(ev.bytes);
+        case _TarEnd():
+          final empty = appleDouble;
+          if (empty != null) {
+            appleDouble = null;
+            dest = await _prepare(empty, file: true);
+            if (dest != null) await io.File(dest).writeAsBytes(const []);
+          }
+          await _out?.close();
+          _out = null;
+          if (dest != null) _keepMode(dest, mode, isDir: false);
+          dest = null;
+      }
+    }
+  }
+
+  /// Never delete the target (F1): create it and merge each top-level
+  /// member in (rename, copy fallback). Existing files are kept. Every
+  /// file/folder collision fails before the first rename, so a failed
+  /// unpack leaves the target as it was.
+  Future<void> merge(String d) async {
+    final existing = await _Unpacker._checkCollisions(tmp.path, d);
+    await io.Directory(d).create(recursive: true);
+    await for (final e in tmp.list(recursive: false, followLinks: false)) {
+      await _Unpacker._moveInto(e.path, p.join(d, p.basename(e.path)));
+    }
+    // Modes go on the final paths after the merge (a read-only member
+    // folder applied in the temp tree would refuse the merge's renames),
+    // only on what this unpack made (an archive never re-modes a folder
+    // that was already there), and through the umask like `tar` does.
+    final mask = ~_umask & 0x1FF;
+    final finalPaths = <String>[];
+    final finalModes = <int>[];
+    for (var i = 0; i < _paths.length; i++) {
+      final path = p.join(d, p.relative(_paths[i], from: tmp.path));
+      if (existing.contains(path)) continue;
+      finalPaths.add(path);
+      finalModes.add(_modes[i] & mask);
+    }
+    await posix.chmodBatched(posix.groupByMode(finalPaths, finalModes));
+  }
+
+  Future<void> dispose() async {
+    try {
+      await _out?.close();
+    } catch (_) {}
+    try {
+      if (await tmp.exists()) await tmp.delete(recursive: true);
+    } catch (_) {}
+  }
+}
+
 final class _Unpacker implements Writer {
   _Unpacker(this._dir);
 
@@ -229,205 +397,30 @@ final class _Unpacker implements Writer {
       throw const FormatException('corrupt archive: unknown format');
     }
     final isGzip = head[0] == 0x1f && head[1] == 0x8b;
-    final isZip =
-        !isGzip && head[0] == 0x50 && head[1] == 0x4b;
+    final isZip = !isGzip && head[0] == 0x50 && head[1] == 0x4b;
     // Normalise the target; the temp folder is a SIBLING of the target,
     // never inside it (F2). Use the absolute path so '.' (whose dirname is
     // '.') still gets a sibling outside itself.
     final d = p.normalize(_dir);
-    final abs = p.normalize(p.absolute(d));
-    final tmp = posix.tmpPath(abs);
-    final tmpDir = io.Directory(tmp);
-    // Modes collected during extraction: one `chmod <mode> p1 p2 …` per
-    // distinct mode afterwards (usually 2–3 forks per archive, not one per
-    // member), chunked under ARG_MAX inside `chmodBatched`.
-    final paths = <String>[];
-    final modes = <int>[];
-    final folded = <String, String>{};
-
-    void keepMode(String path, int mode, {required bool isDir}) {
-      var m = mode & 0x1FF;
-      if (m == 0) return;
-      if (isDir) m |= 0x40; // never leave a folder untraversable (S_IXUSR)
-      paths.add(path);
-      modes.add(m);
-    }
-
-    // Sandbox-checks [name] and returns its path in the temp folder, with
-    // parents created; null for a bare root entry.
-    // Every file this unpack wrote: an existing file under a path not in
-    // here means the filesystem folded two member names into one (macOS
-    // normalises NFC and NFD café.txt to the same file).
-    final written = <String>{};
-
-    Future<String?> prepare(String name, {bool file = false}) async {
-      _checkMember(name, folded);
-      // Split on both separators so member names work on every platform.
-      final relParts =
-          name.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty);
-      if (relParts.isEmpty) return null;
-      final dest = p.joinAll([tmpDir.path, ...relParts]);
-      await io.Directory(p.dirname(dest)).create(recursive: true);
-      if (file && written.add(dest) && await io.File(dest).exists()) {
-        throw FormatException('archive members collide on this filesystem: $name');
-      }
-      return dest;
-    }
-
-    Future<void> writeMember(
-      String name,
-      int mode, {
-      required bool isDir,
-      Uint8List? data,
-    }) async {
-      final dest = await prepare(name, file: !isDir);
-      if (dest == null) return;
-      if (isDir) {
-        await io.Directory(dest).create(recursive: true);
-      } else {
-        await io.File(dest).writeAsBytes(data ?? Uint8List(0));
-      }
-      keepMode(dest, mode, isDir: isDir);
-    }
-
-    io.RandomAccessFile? out; // the tar file member being written
-    var umask = 0x12; // 022 until the temp folder tells us
-
+    final x = _Extraction(io.Directory(posix.tmpPath(p.normalize(p.absolute(d)))));
     // An interrupt skips `finally`: the exit hook removes the temp folder.
     final token = exit.onExit(() async {
       try {
-        await tmpDir.delete(recursive: true);
+        await x.tmp.delete(recursive: true);
       } catch (_) {}
     });
     try {
-      await tmpDir.create(recursive: true);
-      // A fresh folder is 0777 & ~umask: read the umask off it.
-      umask = posix.isPosix ? ~(await tmpDir.stat()).mode & 0x1FF : 0;
+      await x.start();
       if (isZip) {
-        // Zip stays in memory: its directory sits at the end.
-        final acc = BytesBuilder(copy: false);
-        await for (final chunk in rest()) {
-          acc.add(chunk);
-        }
-        final archive = _decodeZip(acc.takeBytes());
-        // Check every member before writing anything.
-        for (final f in archive.files) {
-          _checkMember(f.name, folded);
-          if (f.isSymbolicLink || (f.mode & 0xF000) == 0xA000) {
-            throw FormatException('archive member is a link: ${f.name}');
-          }
-        }
-        for (final f in archive.files) {
-          // Names ending in '/' are folders (tar emits explicit dir
-          // entries); the engine does not always clear isFile on them.
-          if (f.name.endsWith('/')) {
-            await writeMember(f.name, f.mode, isDir: true);
-          } else if (f.isFile) {
-            await writeMember(
-              f.name,
-              f.mode,
-              isDir: false,
-              data: Uint8List.fromList(f.content as List<int>),
-            );
-          } else {
-            await writeMember(f.name, f.mode, isDir: true);
-          }
-        }
+        await x.zip(rest());
       } else {
         // Tar and gzip-compressed tar stream straight to the temp sibling:
-        // links, escapes and truncation fail here, before the merge below.
-        final tar = isGzip
-            ? _parseTar(_gunzipChecked(rest()), fromGzip: true)
-            : _parseTar(rest(), fromGzip: false);
-        String? dest;
-        var mode = 0;
-        // macOS tar adds an AppleDouble `._name` (xattrs) beside members;
-        // one is decided on its first bytes and dropped, as bsdtar does.
-        String? appleDouble;
-        var skipping = false;
-        await for (final ev in tar) {
-          switch (ev) {
-            case _TarHeader():
-              mode = ev.mode;
-              skipping = false;
-              if (!ev.isDir && p.posix.basename(ev.name).startsWith('._')) {
-                appleDouble = ev.name;
-                dest = null;
-                break;
-              }
-              dest = await prepare(ev.name, file: !ev.isDir);
-              if (dest == null) break;
-              if (ev.isDir) {
-                await io.Directory(dest).create(recursive: true);
-                keepMode(dest, mode, isDir: true);
-                dest = null;
-              } else {
-                out = await io.File(dest).open(mode: io.FileMode.write);
-              }
-            case _TarBody() when skipping:
-              break;
-            case _TarBody():
-              final pending = appleDouble;
-              if (pending != null) {
-                appleDouble = null;
-                if (_isAppleDouble(ev.bytes)) {
-                  skipping = true;
-                  break;
-                }
-                dest = await prepare(pending, file: true);
-                if (dest != null) out = await io.File(dest).open(mode: io.FileMode.write);
-              }
-              await out?.writeFrom(ev.bytes);
-            case _TarEnd():
-              final empty = appleDouble;
-              if (empty != null) {
-                appleDouble = null;
-                dest = await prepare(empty, file: true);
-                if (dest != null) await io.File(dest).writeAsBytes(const []);
-              }
-              await out?.close();
-              out = null;
-              if (dest != null) keepMode(dest, mode, isDir: false);
-              dest = null;
-          }
-        }
+        // links, escapes and truncation fail here, before the merge.
+        await x.tar(isGzip ? _parseTar(_gunzipChecked(rest()), fromGzip: true) : _parseTar(rest(), fromGzip: false));
       }
-      // Never delete the target (F1): create it and merge each top-level
-      // member in (rename, copy fallback). Existing files are kept. Every
-      // file/folder collision fails before the first rename, so a failed
-      // unpack leaves the target as it was.
-      final existing = await _checkCollisions(tmpDir.path, d);
-      await io.Directory(d).create(recursive: true);
-      await for (final e in tmpDir.list(
-        recursive: false,
-        followLinks: false,
-      )) {
-        final dest = p.join(d, p.basename(e.path));
-        await _moveInto(e.path, dest);
-      }
-      // Modes go on the final paths after the merge (a read-only member
-      // folder applied in the temp tree would refuse the merge's renames),
-      // only on what this unpack made (an archive never re-modes a folder
-      // that was already there), and through the umask like `tar` does.
-      final mask = ~umask & 0x1FF;
-      final finalPaths = <String>[];
-      final finalModes = <int>[];
-      for (var i = 0; i < paths.length; i++) {
-        final path = p.join(d, p.relative(paths[i], from: tmpDir.path));
-        if (existing.contains(path)) continue;
-        finalPaths.add(path);
-        finalModes.add(modes[i] & mask);
-      }
-      await posix.chmodBatched(posix.groupByMode(finalPaths, finalModes));
+      await x.merge(d);
     } finally {
-      try {
-        await out?.close();
-      } catch (_) {}
-      try {
-        if (await tmpDir.exists()) {
-          await tmpDir.delete(recursive: true);
-        }
-      } catch (_) {}
+      await x.dispose();
       exit.offExit(token);
       await it.cancel();
     }
@@ -507,69 +500,19 @@ final class _Unpacker implements Writer {
       // (permissions) is the caller's error, not a reason to copy.
       if (!posix.isCrossDevice(e)) rethrow;
       if (srcType == io.FileSystemEntityType.directory) {
-        await _copyTree(src, dest);
+        await tree.copyTree(src, dest);
         await io.Directory(src).delete(recursive: true);
       } else {
         await io.File(src).copy(dest);
-        try {
-          final st = await io.FileStat.stat(src);
-          try {
-            await io.File(dest).setLastModified(st.modified);
-          } catch (_) {}
-          await posix.chmod(dest, st.mode & 0xFFF);
-        } catch (_) {}
+        await tree.preserveFileMeta(src, dest);
         await io.File(src).delete();
       }
     }
   }
 
-  static Future<void> _copyTree(String from, String to) async {
-    await io.Directory(to).create(recursive: true);
-    await for (final e in io.Directory(
-      from,
-    ).list(recursive: false, followLinks: false)) {
-      final dest = p.join(to, p.basename(e.path));
-      final t = await io.FileSystemEntity.type(e.path, followLinks: false);
-      if (t == io.FileSystemEntityType.link) {
-        // Preserve links (fs._copyDir does); dropping them loses data.
-        // Replace an existing dest entry, never follow it.
-        try {
-          final dt = await io.FileSystemEntity.type(dest, followLinks: false);
-          if (dt != io.FileSystemEntityType.notFound) {
-            try {
-              await io.Link(dest).delete();
-            } catch (_) {
-              await io.File(dest).delete();
-            }
-          }
-        } catch (_) {}
-        final target = await io.Link(e.path).target();
-        await io.Link(dest).create(target, recursive: true);
-      } else if (t == io.FileSystemEntityType.directory) {
-        await _copyTree(e.path, dest);
-      } else if (t == io.FileSystemEntityType.file) {
-        await io.File(e.path).copy(dest);
-        try {
-          final st = await io.FileStat.stat(e.path);
-          try {
-            await io.File(dest).setLastModified(st.modified);
-          } catch (_) {}
-          await posix.chmod(dest, st.mode & 0xFFF);
-        } catch (_) {}
-      }
-    }
+  static List<zip.ZipEntry> _decodeZip(Uint8List bytes) {
     try {
-      final st = await io.FileStat.stat(from);
-      await posix.setDirMtime(to, st.modified);
-      await posix.chmod(to, st.mode & 0xFFF);
-    } catch (_) {}
-  }
-
-  static a.Archive _decodeZip(List<int> bytes) {
-    try {
-      return a.ZipDecoder().decodeBytes(bytes);
-    } on a.ArchiveException catch (e) {
-      throw FormatException('corrupt archive: $e');
+      return zip.readZip(bytes);
     } on FormatException {
       rethrow;
     } catch (e) {

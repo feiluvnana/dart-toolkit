@@ -21,7 +21,7 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math';
 
-import 'src/terminal.dart' as term;
+import 'src/sanitize.dart' as term;
 
 /// A schema definition, read back with `context(param)` as a `T`. Sealed:
 /// the only inhabitants are [Flag], [Opt], [Multi] and [Arg],

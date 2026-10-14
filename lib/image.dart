@@ -6,12 +6,12 @@
 /// await (avatar.resize(width: 64).encode(ImageFormat.png) > Fs.file('icon.png'));
 /// ```
 ///
-/// Public surface is exactly: [Image], [ImageFormat], [RegionPicture].
+/// Public surface is exactly: [Image], [ImageFormat].
 /// - `Image.decode()` decodes bytes, `Reader.image()` reads a stream.
 /// - `Image.sniff()` names the format from the header bytes.
-/// - [Image] supports `width` `height` `resize` `crop` `encode`.
-/// - `region.picture(image)` draws it in a `Tui` (here, so `tui` doesn't
-///   load the codecs).
+/// - [Image] supports `width` `height` `pixel` `resize` `crop` `encode`.
+/// - `region.picture(image)` draws it in a `Tui` (neither module loads the
+///   other).
 /// Small images convert inline. Above [_isolatePixels] (decode reads the
 /// size from the header) the work goes through [Isolate.run] — whose result comes back
 /// through [Isolate.exit] without a copy — so a large photo never freezes
@@ -27,7 +27,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import 'core.dart';
-import 'src/tui.dart' show Region, drawPicture;
+import 'src/pixels.dart';
 export 'core.dart';
 
 /// Above this many pixels, decode/resize/encode run on a worker isolate via
@@ -42,7 +42,7 @@ const _maxPixels = 100000000;
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico }
 
 /// An image value.
-final class Image {
+final class Image implements Pixels {
   Image._(this._inner);
 
   final img.Image _inner;
@@ -110,10 +110,23 @@ final class Image {
   }
 
   /// Width in pixels, as displayed.
+  @override
   int width() => _inner.width;
 
   /// Height in pixels, as displayed.
+  @override
   int height() => _inner.height;
+
+  /// The colour at ([x], [y]) as 8-bit (r, g, b).
+  @override
+  (int, int, int) pixel(int x, int y) {
+    final p = _inner.getPixel(x, y);
+    return (
+      (p.rNormalized * 255).round().clamp(0, 255),
+      (p.gNormalized * 255).round().clamp(0, 255),
+      (p.bNormalized * 255).round().clamp(0, 255),
+    );
+  }
 
   /// A resized copy. Keeps the aspect ratio when only one side is given,
   /// sets the exact size when both are. Neither, or a non-positive size,
@@ -316,22 +329,5 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
         );
       }
       return img.encodeIco(inner);
-  }
-}
-
-/// Draws an [Image] in a `Tui` region.
-extension RegionPicture on Region {
-  /// The rest of the region as half-block cells (`▀`), scaled down to fit
-  /// with the aspect kept. Returns the receiver.
-  Region picture(Image image) {
-    final inner = image._inner;
-    return drawPicture(this, inner.width, inner.height, (x, y) {
-      final p = inner.getPixel(x, y);
-      return (
-        (p.rNormalized * 255).round().clamp(0, 255),
-        (p.gNormalized * 255).round().clamp(0, 255),
-        (p.bNormalized * 255).round().clamp(0, 255),
-      );
-    });
   }
 }

@@ -32,6 +32,7 @@ import 'src/cache.dart' as cache;
 import 'src/exit.dart' as exit;
 import 'src/keys.dart' as keys;
 import 'src/origin.dart' as origin;
+import 'src/tabs.dart';
 
 export 'core.dart';
 export 'html.dart';
@@ -113,7 +114,7 @@ abstract final class Chrome {
 /// cooked-terminal SIGINT/Ctrl-C) can still close Chromium and delete temp
 /// profiles instead of orphaning them. A raw-terminal SIGINT (the TUI's
 /// `ctrl+c` key) is left to the app.
-final class Browser implements Closeable {
+final class Browser implements Closeable, TabHost {
   // ignore: prefer_initializing_formals – the public argument stays `owned`.
   Browser._(this._browser, {required bool owned, this._dog, this._temp}) : _owned = owned {
     if (owned) {
@@ -177,6 +178,7 @@ final class Browser implements Closeable {
   /// aborts requests by resource type (`'image'`, `'font'`, `'media'`,
   /// `'stylesheet'`), [width]/[height] set the viewport.
   /// [timeout] bounds the navigation. Dialogs are always dismissed.
+  @override
   Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     final page = await _browser.newPage();
@@ -335,7 +337,7 @@ final class Browser implements Closeable {
 }
 
 /// An open tab. Read it, drive it, wait on it, take content out of it.
-final class Page implements Closeable {
+final class Page implements Closeable, TabView {
   Page._(this._page, this._browser) {
     _dismiss();
     _trackTraffic();
@@ -417,6 +419,7 @@ final class Page implements Closeable {
   }
 
   /// Re-navigate this tab; waits for the load event. Returns this page.
+  @override
   Future<Page> go(String url, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
@@ -450,6 +453,7 @@ final class Page implements Closeable {
   }
 
   /// The current URL.
+  @override
   Future<String> url() async => _page.url ?? '';
 
   /// The rendered DOM as [Elements], with the page's URL as the base.
@@ -472,6 +476,7 @@ final class Page implements Closeable {
   ///
   /// The decoded value is wrapped directly (`Json.of`): no `jsonEncode`
   /// round trip, no transient string.
+  @override
   Future<T?> run<T>(String js) async {
     final v = await _page.evaluate<dynamic>(js);
     return Json.of(v).value<T>();

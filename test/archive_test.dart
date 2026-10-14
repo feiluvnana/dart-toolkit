@@ -63,6 +63,56 @@ void main() {
     await Fs.file(p('site/a/b.txt')).write('bee');
   }
 
+  group('zip interop', () {
+    Future<bool> has(String tool) async {
+      try {
+        return (await Process.run('which', [tool])).exitCode == 0;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    test('our zip passes unzip -t and keeps modes and unicode names', () async {
+      if (!await has('unzip')) markTestSkipped('needs unzip');
+      await Fs.file(p('src/run.sh')).write('#!/bin/sh\n');
+      await Process.run('chmod', ['755', p('src/run.sh')]);
+      await Fs.file(p('src/d/café.txt')).write('x' * 5000);
+      await (Archive.pack(p('src'), ArchiveFormat.zip) > Fs.file(p('a.zip')));
+      expect((await Process.run('unzip', ['-tq', p('a.zip')])).exitCode, 0);
+      await Process.run('unzip', ['-q', p('a.zip'), '-d', p('out')]);
+      expect(await Fs.file(p('out/d/café.txt')).text(), 'x' * 5000);
+      expect((await FileStat.stat(p('out/run.sh'))).mode & 0x1ff, 0x1ed);
+    });
+
+    test('zips from zip -r, zip -fz (zip64) and ditto unpack', () async {
+      if (!await has('zip')) markTestSkipped('needs zip');
+      await Fs.file(p('src/a.txt')).write('a' * 3000);
+      await Fs.file(p('src/sub/b.bin')).write('b');
+      final makers = <String, List<String>>{
+        'r.zip': ['zip', '-qr', p('r.zip'), '.'],
+        'z64.zip': ['zip', '-qr', '-fz', p('z64.zip'), '.'],
+        if (await has('ditto')) 'ditto.zip': ['ditto', '-c', '-k', '--norsrc', '.', p('ditto.zip')],
+      };
+      for (final MapEntry(key: name, value: cmd) in makers.entries) {
+        final made = await Process.run(cmd.first, cmd.sublist(1), workingDirectory: p('src'));
+        expect(made.exitCode, 0, reason: '$name: ${made.stderr}');
+        await (Fs.file(p(name)) > Archive.unpack(p('out_$name')));
+        expect(await Fs.file(p('out_$name/a.txt')).text(), 'a' * 3000, reason: name);
+        expect(await Fs.file(p('out_$name/sub/b.bin')).text(), 'b', reason: name);
+      }
+    });
+
+    test('an encrypted or truncated zip is a FormatException', () async {
+      if (!await has('zip')) markTestSkipped('needs zip');
+      await Fs.file(p('src/a.txt')).write('secret');
+      await Process.run('zip', ['-q', '-P', 'pw', p('enc.zip'), 'a.txt'], workingDirectory: p('src'));
+      await expectLater(Fs.file(p('enc.zip')) > Archive.unpack(p('o1')),
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('encrypted'))));
+      final bytes = await Fs.file(p('enc.zip')).bytes();
+      await expectLater(Reader.of(bytes.sublist(0, bytes.length - 30)) > Archive.unpack(p('o2')), throwsFormatException);
+    });
+  });
+
   group('Archive.pack', () {
     test('zip round-trips folder contents, not the folder', () async {
       await seed();
