@@ -20,6 +20,18 @@ void main() {
   String p(String name) => '${tmp.path}/$name';
 
   group('Fs', () {
+    test('sanitize makes one portable name that never leaves its folder', () {
+      expect(Fs.sanitize('Re:Zero / 第1話 <raw>?'), 'Re_Zero _ 第1話 _raw__');
+      expect(Fs.sanitize('../../etc/passwd'), '_.._.._etc_passwd');
+      expect(Fs.sanitize('CON.txt'), '_CON.txt');
+      expect(Fs.sanitize('-rf'), '_-rf');
+      expect(Fs.sanitize('name. '), 'name');
+      expect(Fs.sanitize('  '), '_');
+      final long = Fs.sanitize('話' * 200);
+      expect(utf8.encode(long).length, lessThanOrEqualTo(255));
+      expect(long, '話' * 85);
+    });
+
     test('entry tells file, folder, link and nothing apart', () async {
       await Fs.file(p('a.txt')).write('x');
       await Fs.dir(p('sub')).create();

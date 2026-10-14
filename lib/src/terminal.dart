@@ -13,6 +13,7 @@ import 'dart:io' as io;
 
 import 'winconsole.dart' as win;
 
+import 'sanitize.dart';
 export 'sanitize.dart';
 
 /// Terminal input for `Tui.run` and the prompts, as a broadcast stream that
@@ -159,6 +160,8 @@ abstract class TuiBridge {
   void barEnded(Object id, bool ok);
   void barTotal(Object id, int? total);
   void log(String line);
+  void notify(String message);
+  void copy(String text);
 
   /// Prompts resolve null when the popup is cancelled (Escape, Ctrl-C).
   Future<String?> promptAsk(String question, {required bool secret});
@@ -1072,3 +1075,13 @@ int rgbTo256(int r, int g, int b) {
   return 16 + 36 * c(r) + 6 * c(g) + c(b);
 }
 
+/// A desktop notification as escape codes: OSC 9 (iTerm2, WezTerm,
+/// Windows Terminal), OSC 777 (rxvt-likes, kitty, foot) and a bell for the
+/// rest. Controls in [message] are dropped (an OSC payload cannot show `�`).
+String notifyCodes(String message) {
+  final m = plainLabel(message).replaceAll('\uFFFD', '');
+  return '\x1b]9;$m\x07\x1b]777;notify;$m\x07\x07';
+}
+
+/// Clipboard copy as OSC 52 (base64, so [text] cannot break out).
+String copyCodes(String text) => '\x1b]52;c;${base64.encode(utf8.encode(text))}\x1b\\';

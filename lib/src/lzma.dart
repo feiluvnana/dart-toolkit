@@ -288,3 +288,27 @@ final class _Lzma {
     return dist & 0xFFFFFFFF;
   }
 }
+
+/// The unpacked size of the LZMA2 stream starting at [start] of [input],
+/// read off its chunk headers, and where the stream ends (after its end
+/// marker): xz blocks often store no sizes.
+(int, int) lzma2Extent(Uint8List input, int start) {
+  var i = start, size = 0;
+  while (true) {
+    if (i >= input.length) _bad('LZMA2 stream ends without its end marker');
+    final control = input[i++];
+    if (control == 0) return (size, i);
+    if (i + 2 > input.length) _bad('truncated LZMA2 chunk');
+    if (control == 1 || control == 2) {
+      final n = (input[i] << 8 | input[i + 1]) + 1;
+      size += n;
+      i += 2 + n;
+      continue;
+    }
+    if (control < 0x80) _bad('bad LZMA2 control byte $control');
+    if (i + 4 > input.length) _bad('truncated LZMA2 chunk');
+    size += ((control & 0x1F) << 16 | input[i] << 8 | input[i + 1]) + 1;
+    final packed = (input[i + 2] << 8 | input[i + 3]) + 1;
+    i += 4 + (control >> 5 & 3 >= 2 ? 1 : 0) + packed;
+  }
+}

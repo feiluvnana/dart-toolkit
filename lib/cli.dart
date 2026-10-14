@@ -112,12 +112,13 @@ final class Opt<T> extends Param<T> {
       {String? short,
       T? or,
       bool required = false,
+      String? env,
       T Function(String)? parse})
       : this._withReader(name, help, _resolve<T>(name, parse),
-            short: short, or: or, required: required);
+            short: short, or: or, required: required, env: env);
 
   Opt._withReader(String name, String help, _Reader<T> reader,
-      {String? short, required T? or, required bool required})
+      {String? short, required T? or, required bool required, this._env})
       : _or = or,
         super._(
             name: name,
@@ -135,6 +136,10 @@ final class Opt<T> extends Param<T> {
   }
 
   final T? _or;
+
+  /// The environment variable read when the option is not given (a token,
+  /// an endpoint): the command line wins, then [_env], then `or`.
+  final String? _env;
 }
 
 /// A repeatable option definition, read back as `List<T>` ([or] when
@@ -665,6 +670,7 @@ _Parsed _mergeParent(
         : 'option "--${key._name}"/"-$s"';
     merged[key] = key._mergeMany!(e.value, what, merged[key]);
   }
+  _fromEnv(root, merged);
   // Required checks run at every level, parent included (skipped for --help).
   if (!child.help) {
     for (final v in root._params) {
@@ -965,6 +971,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
       extraArgs.clear();
     }
   }
+  _fromEnv(root, params);
   // Required valued checks (before the handler runs; skipped for --help).
   if (!help) {
     for (final v in root._params) {
@@ -980,6 +987,17 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
     }
   }
   return _Parsed(root, chain, params, List.of(extraArgs), help);
+}
+
+/// Options not given fall back to their environment variable.
+void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
+  for (final v in root._params) {
+    if (v is Opt<Object?> && !params.containsKey(v)) {
+      final name = v._env;
+      final raw = name == null ? null : io.Platform.environment[name];
+      if (raw != null && raw.isNotEmpty) params[v] = v._readOne!(raw, 'environment variable \$$name');
+    }
+  }
 }
 
 bool _isShortish(String t) =>
@@ -1092,6 +1110,7 @@ List<(String, String)> _optionRows(Command cmd) {
         final left =
             '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
+        if (v._env != null) right = '${right.isEmpty ? '' : '$right '}[env: ${v._env}]';
         if (v._or != null) {
           right =
               '${right.isEmpty ? '' : '$right '}[default: ${v._or}]';

@@ -6,6 +6,12 @@ import 'package:test/test.dart';
 
 void main() {
   group('Reader', () {
+    test('lines() splits on LF, CRLF and CR, across chunks, for futures too', () async {
+      final r = _TextChunks(['one\r', '\ntwo\nthr', 'ee\rfour']);
+      expect(await r.lines().toList(), ['one', 'two', 'three', 'four']);
+      expect(await Future<Reader>.value(Reader.of('a\nb'.codeUnits)).lines().toList(), ['a', 'b']);
+    });
+
     test('stream is the one member to implement', () async {
       expect(await _Mem([1, 2]).bytes(), [1, 2]);
     });
@@ -303,4 +309,11 @@ final class _CloseReader with Reader implements Closeable {
 final class _ThrowFirst implements Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async => throw StateError('no');
+}
+
+final class _TextChunks with Reader {
+  _TextChunks(this._parts);
+  final List<String> _parts;
+  @override
+  Stream<List<int>> stream() => Stream.fromIterable(_parts.map((p) => p.codeUnits));
 }

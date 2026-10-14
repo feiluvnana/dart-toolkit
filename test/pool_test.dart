@@ -19,12 +19,6 @@ Future<int> slowDouble(int x) async {
 
 int boom(int x) => throw StateError('bad $x');
 
-/// Blocks its worker; used to prove close() fails in-flight jobs instead
-/// of leaving them hanging. Top-level so it crosses isolates. Parks on the
-/// event loop (never completing) rather than a native sleep, so killing the
-/// worker takes effect immediately instead of at the end of the sleep.
-Future<int> hold(int x) => Completer<int>().future;
-
 /// Slow enough that a serial run is unmistakable, fast enough to keep the
 /// suite quick. Top-level so it crosses isolates.
 int quarterSecond(int x) {
@@ -33,26 +27,6 @@ int quarterSecond(int x) {
 }
 
 void main() {
-  tearDownAll(Pool.close);
-
-  group('Pool.run', () {
-    test('runs one job and returns its result', () async {
-      expect(await Pool.run(() => 40 + 2), 42);
-    });
-
-    test('an error in the job is rethrown', () async {
-      expect(Pool.run(() => throw StateError('nope')), throwsStateError);
-    });
-
-    test('a job capturing a non-sendable value is an ArgumentError', () async {
-      final port = ReceivePort();
-      try {
-        expect(Pool.run(() => port.hashCode), throwsArgumentError);
-      } finally {
-        port.close();
-      }
-    });
-  });
 
   group('Pool.runAll', () {
     test('maps in input order', () async {
@@ -172,89 +146,19 @@ void main() {
     });
   });
 
-  group('Pool.close', () {
-    test('the pool restarts on the next call', () async {
-      await Pool.close();
-      expect(await Pool.run(() => 1), 1);
-    });
-
-    test('concurrent first calls share one init (no double-init warning)', () async {
-      await Pool.close();
-      final lines = <String>[];
-      await runZoned(
-        () async {
-          await Future.wait([Pool.run(() => 1), Pool.run(() => 2)]);
-        },
-        zoneSpecification: ZoneSpecification(
-          print: (self, parent, zone, line) {
-            lines.add(line);
-          },
-        ),
-      );
-      expect(lines.where((l) => l.contains('already warmed up')), isEmpty);
-    });
-
-    test('close fails an in-flight job with StateError', () async {
-      final pending = Pool.run(() => hold(0));
-      // Let the job reach a worker; even queued it is covered, but a running
-      // job is the case that used to hang forever.
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      await Pool.close();
-      await expectLater(pending, throwsA(isA<StateError>().having((e) => e.message, 'message', 'pool closed')));
-    });
-
-    test('close fails in-flight lanes with StateError', () async {
-      final pending = Pool.map([1, 2, 3], (_) => Completer<int>().future);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      await Pool.close();
-      await expectLater(pending, throwsA(isA<StateError>().having((e) => e.message, 'message', 'pool closed')));
-    });
-
-    test('run then close is a no-op; the pool restarts after', () async {
-      // The engine shuts itself down when no job is left (F5), so this
-      // close must find nothing to stop and must not throw. Process exit
-      // itself is checked manually with a scratch script (see report).
-      expect(await Pool.run(() => 7), 7);
-      await Pool.close();
-      await Pool.close();
-      expect(await Pool.run(() => 8), 8);
-    });
-
-    test('a call made while close() runs completes on a fresh pool', () async {
-      for (final us in [0, 200, 700, 1500]) {
-        final first = Pool.runAll([1, 2, 3], _slow);
-        await Future<void>.delayed(Duration(microseconds: us));
-        unawaited(Pool.close());
-        final late = Pool.run(() => 2);
-        await first.then((_) {}, onError: (_) {});
-        expect(await late.timeout(const Duration(seconds: 5)), 2, reason: 'after ${us}us');
-      }
-    });
-
-    test('close during a running job leaves a script that exits', () async {
-      final r = await runDart('''
-import 'dart:async';
-import 'package:dart_toolkit/pool.dart';
-Future<void> main() async {
-  final slow = Pool.run(() => Completer<int>().future);
-  slow.ignore();
-  await Future<void>.delayed(const Duration(milliseconds: 500));
-  await Pool.close();
-  print(await Pool.run(() => 1));
-}
-''');
-      expect(r.exitCode, 0);
-      expect('${r.stdout}'.trim(), '1');
-    });
-
+  group('Pool', () {
     test('core is re-exported', () {
       final readers = <Reader>[];
       expect(readers, isEmpty);
     });
+    test('a script that used workers exits by itself', () async {
+      final r = await runDart('''
+import 'package:dart_toolkit/pool.dart';
+int sq(int x) => x * x;
+Future<void> main() async => print(await Pool.runAll([1, 2, 3], sq));
+''');
+      expect(r.exitCode, 0);
+      expect('${r.stdout}'.trim(), '[1, 4, 9]');
+    });
   });
-}
-
-int _slow(int x) {
-  sleep(const Duration(milliseconds: 30));
-  return x;
 }

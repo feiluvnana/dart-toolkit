@@ -449,14 +449,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.1"
-  worker_manager:
-    dependency: "direct main"
-    description:
-      name: worker_manager
-      sha256: "887587eb97e517bca88dea761bea96edc495513ec91e4c489dcf110967ba79ff"
-      url: "https://pub.dev"
-    source: hosted
-    version: "7.2.9"
   yaml:
     dependency: transitive
     description:

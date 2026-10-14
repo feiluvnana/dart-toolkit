@@ -9,6 +9,7 @@ library;
 import 'dart:convert';
 
 import 'charset.dart' as charset;
+import 'names.dart';
 
 /// A file name for a body: the `content-disposition` filename
 /// (`filename*=` wins over `filename=`, paths stripped), else the final
@@ -76,20 +77,12 @@ String? dispositionName(String? header) {
   return null;
 }
 
-/// A name safe to create on Linux, macOS and Windows: the last path segment
-/// of `a/b\c`, reserved characters replaced by `_`, trailing dots and spaces
-/// dropped, reserved device names (`CON`, `NUL`, ...) and names starting
-/// with `.` or `-` (a dotfile, an option to the next command) prefixed with `_`.
-/// Empty when nothing usable is left (callers fall back to `download`/`upload`).
+/// The last path segment of `a/b\\c`, made portable by [safeName]. Empty
+/// when nothing usable is left (callers fall back to `download`/`upload`).
 /// Used for header filenames and upload staging alike.
 String stripPath(String name) {
   final parts = name.split(RegExp(r'[\\/]'));
-  final last = (parts.isEmpty ? name : parts.last)
-      .replaceAll(RegExp(r'[<>:"|?*\x00-\x1f]'), '_')
-      .replaceAll(RegExp(r'[. ]+$'), '');
-  final reserved = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$',
-      caseSensitive: false);
-  return reserved.hasMatch(last) || last.startsWith('.') || last.startsWith('-') ? '_$last' : last;
+  return safeName(parts.isEmpty ? name : parts.last);
 }
 
 List<int> percentDecode(String s) {

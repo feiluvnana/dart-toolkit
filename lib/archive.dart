@@ -3,7 +3,7 @@
 /// | format | archive | unarchive |
 /// |---|---|---|
 /// | zip | ✓ (AES-256 with `password:`) | ✓ (AES, legacy ZipCrypto) |
-/// | tar, tgz | ✓ (streamed) | ✓ (streamed) |
+/// | tar, tgz | ✓ (streamed) | ✓ (streamed; `.tar.xz` too) |
 /// | 7z | ✓ (Deflate; AES-256 hides names) | ✓ (LZMA, LZMA2, PPMd, Deflate, BCJ, AES) |
 /// | RAR4, RAR5 | — (the compressor is proprietary) | ✓ (solid, filters, PPMd, AES) |
 ///
@@ -39,6 +39,7 @@ import 'src/posix.dart' as posix;
 import 'src/rar.dart' as rarlib;
 import 'src/sevenzip.dart' as sevenzip;
 import 'src/tree.dart' as tree;
+import 'src/xz.dart' as xz;
 import 'src/zip.dart' as zip;
 
 /// Formats [Archive.archive] writes. [Archive.unarchive] reads these and
@@ -432,6 +433,7 @@ final class _Unpacker implements Writer {
     final isZip = !isGzip && head[0] == 0x50 && head[1] == 0x4b;
     final is7z = sevenzip.isSevenZip(head);
     final isRar = rarlib.isRar(head);
+    final isXz = xz.isXz(head);
     // Normalise the target; the temp folder is a SIBLING of the target,
     // never inside it (F2). Use the absolute path so '.' (whose dirname is
     // '.') still gets a sibling outside itself.
@@ -451,6 +453,13 @@ final class _Unpacker implements Writer {
         await x.sevenZip(rest(), _password);
       } else if (isRar) {
         await x.rar(rest(), _password);
+      } else if (isXz) {
+        // .tar.xz: decoded whole (xz has no member boundaries), then the tar.
+        final acc = BytesBuilder(copy: false);
+        await for (final chunk in rest()) {
+          acc.add(chunk);
+        }
+        await x.tar(_parseTar(Stream.value(xz.xzDecode(acc.takeBytes())), fromGzip: true));
       } else {
         // Tar and gzip-compressed tar stream straight to the temp sibling:
         // links, escapes and truncation fail here, before the merge.

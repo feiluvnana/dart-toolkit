@@ -41,13 +41,6 @@ final class App<S> {
   /// A status-row message until the next [status] or error.
   void status(String message) => _s._say(message);
 
-  /// A desktop notification (OSC 9/777, bell fallback). Silent while the
-  /// terminal reports focus; always sent when it never reports focus.
-  void notify(String message) => _s._notify(message);
-
-  /// Copy text to the clipboard (OSC 52).
-  void copy(String text) => _s._copy(text);
-
   /// Return the state from [Tui.run] (pending handlers keep running).
   void quit() => _s._quit();
 }
@@ -432,22 +425,6 @@ final class _Session<S> implements term.TuiBridge {
     _dirtyAndWake();
   }
 
-  void _notify(String message) {
-    // Silent only while the terminal reports that it has focus.
-    if (_focusReported && _termFocused) return;
-    // Controls (C1 0x9c ends an OSC too) are dropped, not shown: an OSC
-    // payload has nowhere to draw `�`.
-    String esc(String s) => term.plainLabel(s).replaceAll('\uFFFD', '');
-    out('\x1b]9;${esc(message)}\x07');
-    out('\x1b]777;notify;${esc(message)}\x07');
-    out('\x07');
-  }
-
-  void _copy(String text) {
-    final b64 = base64.encode(utf8.encode(text));
-    out('\x1b]52;c;$b64\x1b\\');
-  }
-
   void _quit() {
     _quitFlag = true;
     _cancelPrompts();
@@ -462,6 +439,18 @@ final class _Session<S> implements term.TuiBridge {
     }
     _prompts.clear();
   }
+
+  /// `Console.notify` while the app runs: silent while the terminal reports
+  /// that it has focus; always sent when it never reports focus.
+  @override
+  void notify(String message) {
+    if (_focusReported && _termFocused) return;
+    out(term.notifyCodes(message));
+  }
+
+  /// `Console.copy` while the app runs.
+  @override
+  void copy(String text) => out(term.copyCodes(text));
 
   // --- term.TuiBridge (Console-in-Tui routing) -----------------------------
 

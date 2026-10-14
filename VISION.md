@@ -56,6 +56,7 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   Stream<List<int>> stream();
   Future<List<int>> bytes();
   Future<String> text();                          // UTF-8, malformed bytes replaced
+  Stream<String> lines();                         // the same, line by line as it arrives
   Reader pipe(Pipe? pipe);       Reader operator |(Pipe? pipe);         // lazy; null = skip
   Future<void> to(Writer? w);    Future<void> operator >(Writer? w);    // run; null = discard
   Origin origin();                                // where the bytes came from (the base for `html()`)
@@ -137,10 +138,10 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` · `Hasher` `add` `addBytes` `hex`                                                                                        | `package:crypto`      |
-| `pool`    | `Pool.run` `runAll` `map` `close`                                                                                                                          | `worker_manager`      |
+| `pool`    | `Pool.map` `runAll`                                                                                                                          | `dart:isolate`      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
-| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `clear` · `Bar` `tick` `setTotal`                                                                                      | in-house              |
-| `tui`     | `Tui.run` · `App` `state` `go` `status` `log` `notify` `copy` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below) · `Color` · `Style` | in-house              |
+| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `notify` `copy` `clear` · `Bar` `tick` `setTotal`                                                                                      | in-house              |
+| `tui`     | `Tui.run` · `App` `state` `go` `status` `log` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below) · `Color` · `Style` | in-house              |
 | `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
 | `scrape`  | `Scrape.crawl` · `Visit` `url` `status` `ok` `size` `name` `follow` `emit`                                                                                             | http + html + chrome  |
 
@@ -187,7 +188,7 @@ final links = await Http.get(url).html().$('a.item').attrs('href');
 
 ```dart
 abstract final class Http {
-  static Future<Response> get(String url, {Map<String, String>? headers, Duration? timeout, int retries = 0, List<String> insecure = const [], bool check = false});
+  static Future<Response> get(String url, {Map<String, String?>? query, Map<String, String>? headers, Duration? timeout, int retries = 2, List<String> insecure = const [], bool check = false});
   // head, delete, options: the same; post, put, patch add {Body? body}
   static Closeable hold();                       // keep the shared client open (a crawl)
   static void abort();                           // cancel every in-flight request, no retries (quitting a UI)
@@ -209,7 +210,9 @@ final class Response with Reader implements Closeable {
   and URL, so `await (Http.get(u) > Fs.file(f))` never saves an error page. The readings
   (`text()`, `json()`, `html()`) work on any status, and a `json()`/`html()` that fails on an
   error page says the status in its `FormatException`.
-- `retries` (0 by default, opt-in on every verb, POST included) re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
+- Cookies persist for the process, per host and path, redirect hops included (a form login keeps its
+  session); a `cookie` header passed by the caller replaces the jar for that call.
+- `retries` (2 for GET and HEAD, as Scrape; 0 for the verbs that change something, opt-in there) re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
   or the server's `Retry-After`. It applies only when the body is in memory. Scrape uses the same
   logic.
 - `timeout` (30 s) bounds the wait for the headers, then any stall in the body. A
@@ -322,6 +325,7 @@ extension on Reader { Future<Json> json(); }
 abstract final class Fs {
   static Future<Entry?> entry(String path);   // what is on disk, links not followed
   static File file(String path);  static Dir dir(String path);  static Link link(String path);  // no I/O
+  static String sanitize(String name);   // an untrusted title as one portable file name; never leaves its folder
 }
 sealed class Entry {
   String path();  String name();  Dir parent();
@@ -430,22 +434,18 @@ final class Hasher implements Writer, Pipe { Hasher add(String text);  Hasher ad
 
 ```dart
 abstract final class Pool {
-  static Future<R> run<R>(FutureOr<R> Function() job);                        // on a worker
-  static Future<List<R>> runAll<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, void Function(R result)? onResult});                       // on the workers
-  static Future<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, void Function(R result)? onResult});                       // on this isolate, for I/O
-  static Future<void> close();
+  static Future<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job, {int? limit, void Function(R result)? onResult});
+  static Future<List<R>> runAll<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job, {int? limit, void Function(R result)? onResult});
 }
 ```
 
-- One process-wide pool starts lazily, with `max(1, cores − 1)` workers that are reused. A job is
-  a top-level or static function, or a closure that captures only sendable values.
-- `runAll` and `map` return results in input order; `runAll` runs the jobs on the workers (CPU-bound,
-  sendable), `map` on this isolate, so a job may capture a client or a bar and I/O fans out. `limit` defaults to the worker count. `onResult` runs on
-  the caller's isolate (progress goes there). The first error stops new jobs and is rethrown.
-- **Idle workers never keep the script alive;** the pool shuts itself down when no job is left.
-  `close()` stops the workers now, and jobs still in flight fail with `StateError`.
+- `map` runs async lanes on this isolate (I/O: the job may capture a client or a bar; `limit`
+  defaults to 4). `runAll` runs each job in a fresh worker isolate (`Isolate.run`; CPU work:
+  the job and items must be sendable, else `ArgumentError`; `limit` defaults to the core count).
+  Results come in input order, `onResult` runs on the caller's isolate, and the first error stops
+  new jobs and is rethrown.
+- Nothing stays running between calls, so there is nothing to close. One job is the SDK's
+  `Isolate.run`.
 
 ```dart
 final bar = Console.bar(urls.length, label: 'pages');
@@ -457,7 +457,7 @@ await Pool.map(urls, fetch, onResult: (_) => bar.tick()); // the bar closes itse
 ```dart
 sealed class Param<T> {}                                   // read back with context(param) as a T
 final class Flag extends Param<bool> { Flag(String name, String help, {String? short, bool or = false}); }
-final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, T Function(String)? parse}); }
+final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse}); } // env: the variable read when the flag is absent
 final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse}); }
 final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse}); }
 final class Command {
@@ -513,6 +513,8 @@ abstract final class Console {
   static Future<T> spin<T>(String label, Future<T> work);
   static Bar bar(int? total, {String? label});   // null = unknown
   static void log(String line);                    // prints above a live spinner or bar
+  static void notify(String message);              // OSC 9/777 + bell; through the app inside Tui.run (silent while focused)
+  static void copy(String text);                   // OSC 52; through the app inside Tui.run
   static void clear();
 }
 final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar setTotal(int? total); }
@@ -549,8 +551,6 @@ abstract final class Tui {
 }
 final class App<S> {
   S state();  void go(S state);  void status(String message);
-  void notify(String message);                     // OSC 9/777, bell fallback; no-op while focused
-  void copy(String text);               // OSC 52
   void quit();                                     // run() returns state()
 }
 final class Screen {
@@ -714,7 +714,7 @@ extension on Reader { Future<Image> image(); }
 - `resize` keeps the aspect ratio when one side is given. A missing or non-positive size is an
   `ArgumentError`. `crop` outside the image is a `RangeError`.
 - `encode` is a lazy `Reader`. `quality` applies to JPEG, and `.ico` above 256 px is an
-  `ArgumentError`. The work is CPU-bound, so batches go through `Pool.map`.
+  `ArgumentError`. The work is CPU-bound, so batches go through `Pool.runAll`.
 
 ### 4.14 scrape
 

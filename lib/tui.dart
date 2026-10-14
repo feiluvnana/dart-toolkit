@@ -26,8 +26,8 @@
 /// applies them to [Region] automatically, never reference them by name).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
 ///   the screen for a state and never blocks.
-/// - [App] supports `state` `go` `status` `notify`
-///   `copy` `quit`.
+/// - [App] supports `state` `go` `status` `quit` (notifications and the
+///   clipboard are `Console.notify`/`copy`, which route here while it runs).
 /// - Widget state lives in [Pick], [Field] and [Scroll]
 ///   objects held by the app's state, so focus, selection and scroll survive
 ///   `go` and back.

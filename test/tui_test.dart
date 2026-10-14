@@ -1015,33 +1015,29 @@ void main() {
 
   group('notify', () {
     test('fires when focus is never reported; silent only while focused', () async {
-      late App<int> app;
       final t = testSession<int>(0, (s, a) {
-        app = a;
         return Screen((r) {});
       });
       await t.pump();
-      app.notify('one');
+      Console.notify('one');
       expect(t.output, contains('\x1b]9;one'));
       t.bytes(utf8.encode('\x1b[I'));
       await t.pump();
-      app.notify('two');
+      Console.notify('two');
       expect(t.output, isNot(contains('two')));
       t.bytes(utf8.encode('\x1b[O'));
       await t.pump();
-      app.notify('three');
+      Console.notify('three');
       expect(t.output, contains('\x1b]9;three'));
       t.close();
     });
 
     test('notify text cannot end its OSC early', () async {
-      late App<int> app;
       final t = testSession<int>(0, (s, a) {
-        app = a;
         return Screen((r) => r.popup('POP\x9b2J', width: 20, height: 4));
       });
       await t.pump();
-      app.notify('N\x9c\x9b2J\x1b]52;c;x\x07');
+      Console.notify('N\x9c\x9b2J\x1b]52;c;x\x07');
       expect(t.output, contains('\x1b]9;N2J]52;c;x\x07'));
       expect(t.output, isNot(contains('\x9b')));
       expect(t.output, isNot(contains('\x9c')));
@@ -2222,19 +2218,17 @@ void main() {
 
   group('App (in-memory)', () {
     test('notify is a no-op while focus is reported, OSC 9/777 after blur', () async {
-      late App<int> app;
       final t = testSession<int>(0, (s, a) {
-        app = a;
         return Screen((r) {});
       });
       await t.pump();
       t.bytes(utf8.encode('\x1b[I'));
       await t.pump();
-      app.notify('done');
+      Console.notify('done');
       expect(t.output, isNot(contains('\x1b]9;')));
       t.bytes(utf8.encode('\x1b[O')); // blur
       await t.pump();
-      app.notify('done');
+      Console.notify('done');
       expect(t.output, contains('\x1b]9;done\x07'));
       expect(t.output, contains('\x1b]777;notify;done\x07'));
       t.close();
@@ -2254,13 +2248,11 @@ void main() {
     });
 
     test('copy writes OSC 52', () async {
-      late App<int> app;
       final t = testSession<int>(0, (s, a) {
-        app = a;
         return Screen((r) {});
       });
       await t.pump();
-      app.copy('hé');
+      Console.copy('hé');
       expect(t.output, contains('\x1b]52;c;${base64.encode(utf8.encode('hé'))}\x1b\\'));
       t.close();
     });

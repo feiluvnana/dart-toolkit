@@ -389,6 +389,26 @@ Future<void> main() async {
     });
   });
 
+  group('environment', () {
+    test('env: fills an option not given; the flag still wins; help names it', () async {
+      const script = '''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  final token = Opt<String?>('token', 'API token.', env: 'APP_TOKEN');
+  final n = Opt('n', 'Count.', or: 1, env: 'APP_N');
+  exitCode = await Command('app', 'X.', params: [token, n], handler: (c) => print('\${c(token)} \${c(n)}')).run(a);
+}
+''';
+      expect((await runDart(script, env: {'APP_TOKEN': 'abc', 'APP_N': '7'})).stdout, 'abc 7\n');
+      expect((await runDart(script, args: ['--token', 'cli'], env: {'APP_TOKEN': 'abc'})).stdout, 'cli 1\n');
+      final bad = await runDart(script, env: {'APP_N': 'x'});
+      expect(bad.exitCode, 64);
+      expect(bad.stderr, contains(r'environment variable $APP_N'));
+      expect((await runDart(script, args: ['--help'])).stdout, contains('[env: APP_TOKEN]'));
+    });
+  });
+
   group('suggestions', () {
     test('L1: short options suggest only the case-swapped letter', () async {
       const script = '''

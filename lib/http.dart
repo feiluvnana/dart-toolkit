@@ -95,9 +95,9 @@ final class _StreamBody extends Body {
 ///
 /// - Connections are pooled on one shared `HttpClient` per certificate mode
 ///   (secure + `insecure`), counted by responses (and requests) in flight.
-///   When the count reaches 0, `close()` is scheduled with `Timer.run`, so a
-///   sequential `for … await` loop still finds the open connection while a
-///   finished script exits without waiting on an idle timeout. Picked over
+///   When the count reaches 0, `close()` runs after a 100 ms grace, so a
+///   sequential `for … await (get > file)` loop keeps one connection (no
+///   handshake per file) while a finished script exits within 100 ms. Picked over
 ///   (a) no reuse and (b) a 1 s `idleTimeout` delaying exit, by A/B.
 ///   [Http.hold] keeps the client open for a whole crawl.
 /// - Redirects are followed for every verb, up to 10 hops: 301/302/303 after
@@ -105,11 +105,16 @@ final class _StreamBody extends Body {
 ///   resend an in-memory body. A 307/308 (or a 301/302 that keeps the method)
 ///   with a [Body.stream] cannot be resent, so it throws [HttpException]
 ///   naming the limitation. `url()` is the final URL.
+/// - Cookies persist for the process: a `set-cookie` (redirect hops too) is
+///   sent back to the host and path it names, so a form login that
+///   redirects keeps its session; a `cookie` in `headers` replaces the jar
+///   for that call.
 /// - `body` is a [Body] (`.text`/`.bytes`/`.form`/`.json`/`.stream`).
 /// - `insecure` lists hosts whose bad certificate is accepted (each with its
 ///   subdomains), for this call only and on every redirect hop: one broken
 ///   CDN chain stays one host, and a redirect elsewhere is checked as usual.
-/// - `retries` (0 by default, so opt-in on every verb) re-sends on network errors, timeouts, 5xx and 429, with
+/// - `retries` (2 for GET and HEAD, as `Scrape`; 0 for the verbs that change
+///   something, opt-in there) re-sends on network errors, timeouts, 5xx and 429, with
 ///   doubling backoff from 1 s or the server's `Retry-After` (see
 ///   `src/retry.dart`; TLS/Handshake errors are permanent and never
 ///   retried). It applies only when the body is in memory (and only to the
@@ -124,8 +129,9 @@ abstract final class Http {
   /// Redirect hops followed per send before failing with [HttpException].
   static const int _maxRedirects = 10;
 
-  /// Hold the shared client open across many requests (a crawl). While the
-  /// hold is open, the idle `Timer.run` close is suppressed; closing the
+  /// Hold the shared client open across many requests that are further
+  /// apart than the 100 ms idle grace (a crawl with `delay:`). While the
+  /// hold is open, the idle close is suppressed; closing the
   /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
   static Closeable hold() {
     _holdCount++;
@@ -152,15 +158,17 @@ abstract final class Http {
   /// GET [url] with optional [headers], [timeout], [retries] and [insecure].
   static Future<Response> get(
     String url, {
+    Map<String, String?>? query,
     Map<String, String>? headers,
     Duration? timeout,
-    int retries = 0,
+    int retries = 2,
     List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
         'GET',
         url,
+        query: query,
         headers: headers,
         timeout: timeout,
         retries: retries,
@@ -171,15 +179,17 @@ abstract final class Http {
   /// HEAD [url] with optional [headers], [timeout], [retries] and [insecure].
   static Future<Response> head(
     String url, {
+    Map<String, String?>? query,
     Map<String, String>? headers,
     Duration? timeout,
-    int retries = 0,
+    int retries = 2,
     List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
         'HEAD',
         url,
+        query: query,
         headers: headers,
         timeout: timeout,
         retries: retries,
@@ -191,6 +201,7 @@ abstract final class Http {
   /// [insecure].
   static Future<Response> delete(
     String url, {
+    Map<String, String?>? query,
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
@@ -200,6 +211,7 @@ abstract final class Http {
       _send(
         'DELETE',
         url,
+        query: query,
         headers: headers,
         timeout: timeout,
         retries: retries,
@@ -211,6 +223,7 @@ abstract final class Http {
   /// [insecure].
   static Future<Response> options(
     String url, {
+    Map<String, String?>? query,
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
@@ -220,6 +233,7 @@ abstract final class Http {
       _send(
         'OPTIONS',
         url,
+        query: query,
         headers: headers,
         timeout: timeout,
         retries: retries,
@@ -230,6 +244,7 @@ abstract final class Http {
   /// POST [url] with a [Body] (`body: .json(item)`).
   static Future<Response> post(
     String url, {
+    Map<String, String?>? query,
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -240,6 +255,7 @@ abstract final class Http {
       _send(
         'POST',
         url,
+        query: query,
         body: body,
         headers: headers,
         timeout: timeout,
@@ -251,6 +267,7 @@ abstract final class Http {
   /// PUT [url] with a [Body] (same as [post]).
   static Future<Response> put(
     String url, {
+    Map<String, String?>? query,
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -261,6 +278,7 @@ abstract final class Http {
       _send(
         'PUT',
         url,
+        query: query,
         body: body,
         headers: headers,
         timeout: timeout,
@@ -272,6 +290,7 @@ abstract final class Http {
   /// PATCH [url] with a [Body] (same as [post]).
   static Future<Response> patch(
     String url, {
+    Map<String, String?>? query,
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -282,6 +301,7 @@ abstract final class Http {
       _send(
         'PATCH',
         url,
+        query: query,
         body: body,
         headers: headers,
         timeout: timeout,
@@ -310,7 +330,7 @@ final class _Hold implements Closeable {
 
 /// One pooled `HttpClient`: shared by every request with the same
 /// certificate mode, counted by requests + live responses + holds. When all
-/// reach 0, `close()` is scheduled with `Timer.run`.
+/// reach 0, `close()` runs after a short grace.
 final class _ClientPool {
   _ClientPool(this._trusted) : _holds = _holdCount;
 
@@ -340,6 +360,8 @@ final class _ClientPool {
   /// A request starts: count it and hand out the shared client.
   HttpClient retain() {
     _active++;
+    _closer?.cancel();
+    _closer = null;
     return _ensure();
   }
 
@@ -347,13 +369,15 @@ final class _ClientPool {
   void release() {
     _active--;
     assert(_active >= 0, 'client pool over-released');
-    if (_active == 0 && _holds == 0) Timer.run(_maybeClose);
+    if (_active == 0 && _holds == 0) _scheduleClose();
   }
 
   /// A [Response] takes ownership of its request's count: it will
   /// [release] when it finishes. Called implicitly by [_attempt].
 
   void _abort() {
+    _closer?.cancel();
+    _closer = null;
     final c = _client;
     _client = null;
     try {
@@ -368,10 +392,22 @@ final class _ClientPool {
   void _unhold() {
     _holds--;
     assert(_holds >= 0, 'client pool hold over-released');
-    if (_active == 0 && _holds == 0) Timer.run(_maybeClose);
+    if (_active == 0 && _holds == 0) _scheduleClose();
+  }
+
+  /// How long an idle client stays open: a loop that awaits a file write
+  /// between requests keeps its connection (no new TCP or TLS handshake),
+  /// for at most this much extra time before a finished script exits.
+  static const _grace = Duration(milliseconds: 100);
+  Timer? _closer;
+
+  void _scheduleClose() {
+    _closer?.cancel();
+    _closer = Timer(_grace, _maybeClose);
   }
 
   void _maybeClose() {
+    _closer = null;
     if (_active != 0 || _holds != 0) return;
     try {
       _client?.close(force: true);
@@ -867,6 +903,7 @@ final class _Retryable {
 Future<Response> _send(
   String method,
   String url, {
+  Map<String, String?>? query,
   Body? body,
   Map<String, String>? headers,
   Duration? timeout,
@@ -880,7 +917,7 @@ Future<Response> _send(
   }
   late final Uri first;
   try {
-    first = Uri.parse(url);
+    first = _withQuery(Uri.parse(url), query);
   } catch (e) {
     throw ArgumentError.value(url, 'url', 'invalid URL: $e');
   }
@@ -936,6 +973,74 @@ Future<Response> _send(
       attempt++;
     }
   }
+}
+
+/// The process's cookies: every response's `set-cookie` (redirect hops
+/// too) is kept and sent back to the hosts and paths it names, so a form
+/// login that redirects keeps its session. A `cookie` header passed by the
+/// caller replaces the jar for that call.
+final _jar = _Jar();
+
+final class _Jar {
+  final _cookies = <String, ({String domain, bool hostOnly, String path, String value, bool secure, DateTime? expires})>{};
+
+  void store(Uri url, HttpClientResponse resp) {
+    List<Cookie> cookies;
+    try {
+      cookies = resp.cookies;
+    } catch (_) {
+      return; // a malformed set-cookie is skipped, as browsers do
+    }
+    final host = url.host.toLowerCase();
+    for (final c in cookies) {
+      var domain = (c.domain ?? '').toLowerCase();
+      if (domain.startsWith('.')) domain = domain.substring(1);
+      final hostOnly = domain.isEmpty;
+      if (hostOnly) domain = host;
+      // A server may only set cookies for itself or a parent domain.
+      if (host != domain && !host.endsWith('.$domain')) continue;
+      var path = c.path ?? '';
+      if (!path.startsWith('/')) {
+        final p = url.path;
+        final slash = p.lastIndexOf('/');
+        path = slash <= 0 ? '/' : p.substring(0, slash);
+      }
+      final expires = c.maxAge != null ? DateTime.now().add(Duration(seconds: c.maxAge!)) : c.expires;
+      final key = '$domain;$path;${c.name}';
+      if (expires != null && !expires.isAfter(DateTime.now())) {
+        _cookies.remove(key);
+        continue;
+      }
+      _cookies[key] = (domain: domain, hostOnly: hostOnly, path: path, value: '${c.name}=${c.value}', secure: c.secure, expires: expires);
+    }
+  }
+
+  String? headerFor(Uri url) {
+    if (_cookies.isEmpty) return null;
+    final host = url.host.toLowerCase();
+    final path = url.path.isEmpty ? '/' : url.path;
+    final now = DateTime.now();
+    final out = <String>[];
+    _cookies.removeWhere((_, c) => c.expires != null && !c.expires!.isAfter(now));
+    for (final c in _cookies.values) {
+      final domainOk = c.hostOnly ? host == c.domain : host == c.domain || host.endsWith('.${c.domain}');
+      final pathOk = path == c.path || path.startsWith(c.path.endsWith('/') ? c.path : '${c.path}/');
+      if (domainOk && pathOk && (!c.secure || url.scheme == 'https')) out.add(c.value);
+    }
+    return out.isEmpty ? null : out.join('; ');
+  }
+}
+
+/// [url] with [query] appended, each value encoded; a null value drops
+/// its key, so optional parameters need no `if`.
+Uri _withQuery(Uri url, Map<String, String?>? query) {
+  if (query == null || query.isEmpty) return url;
+  final added = [
+    for (final MapEntry(:key, :value) in query.entries)
+      if (value != null) '${Uri.encodeQueryComponent(key)}=${Uri.encodeQueryComponent(value)}',
+  ].join('&');
+  if (added.isEmpty) return url;
+  return url.replace(query: url.hasQuery && url.query.isNotEmpty ? '${url.query}&$added' : added);
 }
 
 /// [e] with the request in its message: a refused connection or a bad
@@ -999,6 +1104,7 @@ Future<Response> _attempt(
       } on IOException catch (e) {
         throw _Retryable(e);
       }
+      _jar.store(currentUri, resp);
       final head = currentMethod == 'HEAD';
       if (!_isRedirect(resp.statusCode)) {
         ok = true;
@@ -1126,6 +1232,11 @@ Future<HttpClientResponse> _singleSend(
       throw const HttpException('aborted');
     }
     signal.future.then((_) => req.abort(const HttpException('aborted')));
+  }
+  // The jar's cookies for this hop, unless the caller set its own.
+  if (headers == null || !headers.keys.any((k) => k.toLowerCase() == 'cookie')) {
+    final cookie = _jar.headerFor(uri);
+    if (cookie != null) req.headers.set('cookie', cookie);
   }
   String? lengthHeader;
   if (headers != null) {

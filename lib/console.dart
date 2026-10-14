@@ -345,6 +345,31 @@ abstract final class Console {
   /// Print [line] to stderr above a live spinner or bar, which redraws
   /// beneath it. While a state-driven `Tui.run` is active it goes to the
   /// status row.
+  /// A desktop notification ("done", "needs you"): OSC 9/777 plus a bell,
+  /// for long runs a human walked away from. Inside a running `Tui.run` it
+  /// goes through the app (silent while the terminal has focus).
+  static void notify(String message) {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.notify(message);
+    if (_hasTerminal) io.stderr.write(term.notifyCodes(message));
+  }
+
+  /// Copy [text] to the clipboard (OSC 52; the terminal may ask first or
+  /// refuse). Inside a running `Tui.run` it goes through the app.
+  static void copy(String text) {
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) return bridge.copy(text);
+    if (_hasTerminal) io.stderr.write(term.copyCodes(text));
+  }
+
+  static bool get _hasTerminal {
+    try {
+      return io.stderr.hasTerminal;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static void log(String line) {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.log(line);

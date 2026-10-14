@@ -244,6 +244,28 @@ void main() {
           throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('link'))));
     });
 
+    test('.tar.xz unarchives, with CRC32, CRC64 and SHA-256 checks', () async {
+      await Fs.file(p('src/a.txt')).write('xz ' * 20000);
+      await Fs.file(p('src/d/b.bin')).write('b');
+      for (final check in ['crc32', 'crc64', 'sha256']) {
+        final made = await Process.run('python3', [
+          '-I', '-c',
+          'import tarfile,lzma,io,sys\n'
+              'buf=io.BytesIO()\n'
+              'with tarfile.open(fileobj=buf,mode="w") as t: t.add(sys.argv[1],arcname=".")\n'
+              'open(sys.argv[2],"wb").write(lzma.compress(buf.getvalue(),check=getattr(lzma,"CHECK_"+sys.argv[3].upper())))',
+          p('src'), p('$check.tar.xz'), check,
+        ]);
+        if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+        await (Fs.file(p('$check.tar.xz')) > Archive.unarchive(p('o_$check')));
+        expect(await Fs.file(p('o_$check/a.txt')).text(), 'xz ' * 20000, reason: check);
+        expect(await Fs.file(p('o_$check/d/b.bin')).text(), 'b', reason: check);
+      }
+      final bytes = await Fs.file(p('crc64.tar.xz')).bytes();
+      final flipped = [...bytes]..[bytes.length ~/ 2] ^= 1;
+      await expectLater(Reader.of(flipped) > Archive.unarchive(p('bad')), throwsFormatException);
+    });
+
     test('PPMd: 7z from bsdtar and a RAR4 best-mode archive decode exactly', () async {
       final text = [for (var i = 0; i < 40000; i++) 'word${i % 977} '].join();
       await Fs.file(p('src/t.txt')).write(text);

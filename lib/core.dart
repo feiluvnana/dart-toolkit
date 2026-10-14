@@ -77,6 +77,11 @@ abstract mixin class Reader {
     return out.takeBytes();
   }
 
+  /// The text line by line as it arrives (UTF-8, malformed bytes replaced;
+  /// `\n`, `\r\n` and `\r` end a line): logs, NDJSON, server-sent events,
+  /// a program's progress (`Reader.of(const []) | Shell.filter(cmd)`).
+  Stream<String> lines() => stream().transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter());
+
   /// UTF-8, malformed bytes replaced; types may refine (charset).
   Future<String> text() async =>
       utf8.decode(await bytes(), allowMalformed: true);
@@ -193,6 +198,7 @@ abstract interface class Closeable {
 extension ReaderFuture on Future<Reader> {
   Future<List<int>> bytes() async => (await this).bytes();
   Future<String> text() async => (await this).text();
+  Stream<String> lines() => Stream.fromFuture(this).asyncExpand((r) => r.lines());
   Future<Origin> origin() async {
     final r = await this;
     try {

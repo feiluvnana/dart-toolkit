@@ -1,9 +1,11 @@
 /// Run programs, or use one as a filter. Thin facade over `dart:io`.
 ///
 /// ```dart
-/// final head = (await Shell.run(['git', 'rev-parse', 'HEAD']).text()).trim();
-/// if (await Shell.run(['git', 'diff', '--quiet']).code() != 0) print('dirty');
+/// final head = await Shell.run(['git', 'rev-parse', 'HEAD'], check: true).text();
+/// if (!await Shell.run(['git', 'diff', '--quiet']).ok()) print('dirty');
 /// await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
+/// // A long-running program, line by line as it prints:
+/// await for (final line in (Reader.of(const []) | Shell.filter(['yt-dlp', url])).lines()) { … }
 /// ```
 ///
 /// Public surface is exactly: [Shell], [Output].

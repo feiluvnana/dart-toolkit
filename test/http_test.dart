@@ -637,6 +637,20 @@ void edgeTests() {
             r.response
               ..statusCode = 302
               ..headers.set('location', r.uri.queryParameters['to']!);
+          case '/login':
+            r.response
+              ..statusCode = 302
+              ..headers.set('location', '/home')
+              ..cookies.add(Cookie('sid', 's3cret')..path = '/');
+          case '/home':
+            final sid = r.cookies.where((c) => c.name == 'sid').firstOrNull?.value;
+            r.response
+              ..statusCode = sid == 's3cret' ? 200 : 401
+              ..write('sid=$sid');
+          case '/logout':
+            r.response.cookies.add(Cookie('sid', '')
+              ..path = '/'
+              ..maxAge = 0);
           case '/to-bad':
             r.response
               ..statusCode = 302
@@ -775,8 +789,45 @@ Future<void> main() async {
       final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final port = dead.port;
       await dead.close();
-      await expectLater(Http.get('http://127.0.0.1:$port/thing'),
+      await expectLater(Http.get('http://127.0.0.1:$port/thing', retries: 0),
           throwsA(isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing'))));
+    });
+
+    test('query: appends encoded pairs; a null value drops its key', () async {
+      final seen = <String>[];
+      final echo = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      echo.listen((r) {
+        seen.add(r.uri.query);
+        r.response.close();
+      });
+      addTearDown(() => echo.close(force: true));
+      final u = 'http://127.0.0.1:${echo.port}/s';
+      await Http.get(u, query: {'q': 'a b&c', 'page': '2', 'skip': null}).status();
+      await Http.get('$u?x=1', query: {'y': 'é'}).status();
+      await Http.post(u, query: {'k': 'v'}).status();
+      expect(seen, ['q=a+b%26c&page=2', 'x=1&y=%C3%A9', 'k=v']);
+    });
+
+    test('a sequential loop that awaits between requests keeps one connection', () async {
+      peers.clear();
+      for (var i = 0; i < 5; i++) {
+        await Http.get('$url/hello').text();
+        await Future<void>.delayed(const Duration(milliseconds: 20)); // a file write
+      }
+      expect(peers, hasLength(1));
+    });
+
+    test('cookies: a login that redirects keeps its session, per host', () async {
+      final res = await Http.post('$url/login', body: .form({'user': 'a'}));
+      expect((res.status(), await res.text()), (200, 'sid=s3cret'));
+      expect(await Http.get('$url/home').status(), 200);
+      // Another host (localhost vs 127.0.0.1) never sees it.
+      final other = url.replaceFirst('127.0.0.1', 'localhost');
+      expect(await Http.get('$other/home').status(), 401);
+      // An explicit cookie header replaces the jar for that call.
+      expect(await Http.get('$url/home', headers: {'cookie': 'sid=x'}).text(), 'sid=x');
+      await Http.get('$url/logout').status();
+      expect(await Http.get('$url/home').status(), 401);
     });
 
     test('two reads at once share one body', () async {

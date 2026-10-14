@@ -58,7 +58,7 @@ final class Job {
   int? total;
   final missing = <int>[]; // page indexes to refetch; empty = all
   String? error; // first page-level failure
-  String get dir => 'downloads/${_safe(series.title)}/${_safe(chapter.title)}';
+  String get dir => 'downloads/${Fs.sanitize(series.title)}/${Fs.sanitize(chapter.title)}';
 
   /// Written (with the page count) only once every page is on disk, so a partial chapter is resumed.
   File get marker => Fs.dir(dir).file('.done');
@@ -78,10 +78,10 @@ Future<Slice<Hit>> searchManga(String query, {int limit = 30, int page = 1}) asy
 }
 
 Future<Slice<Hit>> _searchTerm(String term, int limit, int page) async {
-  final q = Uri.encodeQueryComponent(term), paging = 'per_page=$limit&page=$page';
+  final paging = {'search': term, 'per_page': '$limit', 'page': '$page'};
   final [tags, posts] = await Future.wait([
-    _api('tags?search=$q&$paging', page),
-    _api('posts?search=$q&$paging&_embed=wp:featuredmedia', page),
+    _api('tags', paging, page),
+    _api('posts', {...paging, '_embed': 'wp:featuredmedia'}, page),
   ]);
   return (
     items: [
@@ -120,10 +120,9 @@ Future<List<String>> _nativeTitles(String query) => _natives.putIfAbsent(query, 
 Future<Slice<Chapter>> resolveChapters(String url, {int page = 1}) async {
   final slug = Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
   if (slug == null) throw FormatException('bad url', url);
-  final q = Uri.encodeQueryComponent(slug);
 
   Future<Slice<Chapter>> chapters(int tag) async {
-    final r = await _api('posts?tags=$tag&per_page=100&page=$page&_fields=id,link,title', page);
+    final r = await _api('posts', {'tags': '$tag', 'per_page': '100', 'page': '$page', '_fields': 'id,link,title'}, page);
     return (
       items: [for (final p in r.json) (title: _title(p).trim(), url: p.$('link').or(''), postId: p.$('id').or(0))]
           .where((c) => c.postId != 0 && c.url.isNotEmpty && c.title.isNotEmpty)
@@ -132,12 +131,12 @@ Future<Slice<Chapter>> resolveChapters(String url, {int page = 1}) async {
     );
   }
 
-  for (final p in (await _api('posts?slug=$q&_fields=id,tags')).json) {
+  for (final p in (await _api('posts', {'slug': slug, '_fields': 'id,tags'})).json) {
     final ids = p.$('tags').asList<int>();
     if (ids.isEmpty) throw const FormatException('no series tag');
     if (ids.length == 1) return chapters(ids.single);
     // Several tags: the series tag is the one with the most posts.
-    final tags = (await _api('tags?include=${ids.join(',')}&per_page=100')).json;
+    final tags = (await _api('tags', {'include': ids.join(','), 'per_page': '100'})).json;
     return chapters(
       tags.fold((id: ids.first, count: -1), (best, t) {
         final count = t.$('count').or(0);
@@ -145,7 +144,7 @@ Future<Slice<Chapter>> resolveChapters(String url, {int page = 1}) async {
       }).id,
     );
   }
-  for (final t in (await _api('tags?slug=$q&_fields=id')).json) {
+  for (final t in (await _api('tags', {'slug': slug, '_fields': 'id'})).json) {
     if (t.$('id').value<int>() case final id?) return chapters(id);
   }
   throw FormatException('series not found', url);
@@ -166,7 +165,7 @@ Future<List<String?>> chapterImages(int postId) async {
 }
 
 Future<List<String>> _pageIds(int postId) async {
-  final r = await _api('posts/$postId?_fields=excerpt');
+  final r = await _api('posts/$postId', {'_fields': 'excerpt'});
   final ids = _text(r.json.$('excerpt.rendered').or('')).split(RegExp(r'\s+')).where((s) => s.isNotEmpty);
   return ids.every(RegExp(r'^[a-z0-9]{8,16}$').hasMatch) ? ids.toList() : const [];
 }
@@ -214,7 +213,7 @@ Future<void> fetchChapter(Job job) async {
       final e = url == null ? 'p${i + 1} withheld by the site' : await _fetchPage(job, i, url);
       job.done++;
       return e;
-    }, limit: 4);
+    });
     job.error = errors.nonNulls.where((e) => !identical(e, _halted)).firstOrNull;
     job.missing
       ..clear()
@@ -246,7 +245,6 @@ Future<String?> _fetchPage(Job job, int i, String url) async {
     final img = await Http.get(
       url,
       headers: {..._headers, 'referer': '$_base/'},
-      retries: 2,
       insecure: _insecureHosts,
     );
     if (!img.ok()) {
@@ -264,8 +262,8 @@ Future<String?> _fetchPage(Job job, int i, String url) async {
 }
 
 /// A WordPress GET: the parsed body and whether older pages remain (`X-WP-TotalPages`).
-Future<({Json json, bool more})> _api(String path, [int page = 1]) async {
-  final res = await Http.get('$_base/wp-json/wp/v2/$path', headers: _headers, retries: 2, check: true);
+Future<({Json json, bool more})> _api(String path, Map<String, String?> query, [int page = 1]) async {
+  final res = await Http.get('$_base/wp-json/wp/v2/$path', query: query, headers: _headers, check: true);
   final pages = int.tryParse(res.header('x-wp-totalpages') ?? '') ?? 1;
   return (json: await res.json(), more: pages > page);
 }
@@ -274,11 +272,6 @@ String _title(Json item) => _text(item.$('title.rendered').value<String>() ?? it
 
 /// Entities and inline tags out of a WP title; the `<div>` keeps bare text as element content.
 String _text(String html) => html.trim().isEmpty ? '' : Html.parse('<div>$html</div>').text();
-
-String _safe(String s) {
-  final clean = s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-  return clean.isEmpty ? 'manga' : clean.substring(0, clean.length.clamp(0, 80));
-}
 
 String _short(Object e) {
   final line = '$e'.split('\n').first.trim();

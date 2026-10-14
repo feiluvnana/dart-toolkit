@@ -12,7 +12,8 @@
 ///
 /// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link].
 /// - `Fs.entry/file/dir/link()` inspect or build handles (`entry` is the
-///   one call that does I/O; the other three do none).
+///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
+///   an untrusted string a safe file name.
 /// - [Entry] supports `path` `name` `parent` `exists` `delete` `copy` `move`.
 /// - [File] supports `write` `append` `size` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `create`.
@@ -30,6 +31,7 @@ import 'core.dart';
 export 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/tree.dart' as tree;
 
@@ -57,6 +59,16 @@ abstract final class Fs {
 
   /// A link handle. No I/O; the target need not exist.
   static Link link(String path) => Link._(path);
+
+  /// [name] (a scraped title, a header value) as one file name that is safe
+  /// on every OS: `/`, `\\`, `:*?"<>|` and controls become `_`, trailing dots
+  /// and spaces go, `CON`-style device names and a leading `.` or `-` get a
+  /// `_` prefix, at most 255 bytes; `'_'` when nothing is left. It never
+  /// leaves the folder: `dir.file(Fs.sanitize('../../etc/x'))` stays in `dir`.
+  static String sanitize(String name) {
+    final s = names.safeName(name);
+    return s.isEmpty ? '_' : s;
+  }
 }
 
 /// A path on disk: a [File], [Dir], or [Link].

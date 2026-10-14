@@ -15,7 +15,7 @@ archive ──────────── core, src/exit, src/posix, src/tree
 http ─────────────── core, src/abort, src/charset, src/origin, src/retry
 html ─────────────── core, src/origin (+html, csslib)
 image ────────────── core, src/pixels (+image)
-pool ─────────────── core (+worker_manager)
+pool ─────────────── core
 cli ──────────────── src/sanitize
 console ──────────── core, src/exit, src/keys, src/terminal
 tui ──────────────── src/tui (part files) → src/exit, src/keys, src/pixels, src/terminal
@@ -47,7 +47,7 @@ No cycles. Cross-module edges left: `chrome → html, json` (a page's `html()`/`
 | html + csslib | `Html.parse`, `$` selectors | ~710 ms | keep for now; the largest cost a scraping script pays. An in-house parser is the next lever (see 4) |
 | image | decode/encode/resize | ~820 ms | keep: no in-house substitute for the codecs |
 | puppeteer | `chrome` | ~1150 ms | keep: only chrome scripts pay it now |
-| worker_manager | `Pool` isolates | ~110 ms | keep (squadron rejected for codegen) |
+| worker_manager | `Pool` isolates | ~110–150 ms | **dropped**: `runAll` is lanes of `Isolate.run` (A/B: `import pool.dart` 297–337 ms → 157–206 ms) |
 | http | nothing (`http.dart` is on `dart:io`'s client) | — | **dropped**: declared but never imported |
 | archive | zip | ~250 ms | **dropped**: `src/zip.dart`, 230 lines on the SDK's deflate (still in the lock file through `image`) |
 
