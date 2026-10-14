@@ -24,8 +24,8 @@ import 'dart:isolate';
 /// Entry point: lanes here, CPU jobs on worker isolates.
 abstract final class Pool {
   /// Run [job] over every item on async lanes on this isolate, results in
-  /// input order. [limit] caps the lanes in flight (4 by default, as
-  /// `Scrape`: lanes are I/O, so the core count says nothing; raise it for
+  /// input order. [limit] caps the lanes in flight (4 by default:
+  /// lanes are I/O, so the core count says nothing; raise it for
   /// high-latency fan-out).
   /// [onResult] runs as each job finishes.
   /// The first error stops new jobs, waits for the lanes in flight, rethrows.

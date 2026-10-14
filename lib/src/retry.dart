@@ -1,8 +1,7 @@
-/// Retry policy shared by `http` and `scrape`.
+/// Retry policy shared by `http`'s verbs.
 ///
 /// One home for doubling backoff, `Retry-After` parsing and the retryable
-/// test, so a bad certificate is never retried with 1 s, 2 s … backoff and
-/// both crawls agree on what "retryable" means.
+/// test, so a bad certificate is never retried with 1 s, 2 s … backoff.
 library;
 
 import 'dart:async';

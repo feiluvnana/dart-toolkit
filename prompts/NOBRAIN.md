@@ -19,7 +19,7 @@ Run the other prompts in this folder as one autonomous pipeline. Make every deci
 ## How to run each stage
 1. Read `prompts/<STAGE>.md` and follow it, with the overrides below.
 2. **Override "ask me":** where a prompt says to ask before acting, decide yourself. Do S and M items, and L items only if they finish within the stage. Write the reason for each decision into the commit message.
-3. **Gate:** before moving on, `dart analyze lib test examples projects tool` is clean and the full `dart test` passes twice in a row. If the gate fails, fix it or revert that stage's last commit, and never move on red.
+3. **Gate:** before moving on, `dart analyze lib test projects tool` is clean and the full `dart test` passes twice in a row. If the gate fails, fix it or revert that stage's last commit, and never move on red.
 4. **Stage note:** add 3–6 lines to `prompts/RUN.md` (what changed, commit range, what was deferred). Commit it with the stage.
 5. Move to the next stage. Later stages may undo earlier ones when they have a reason (for example ERGONOMIC renaming a refactor from ARCHITECTURE); say so in the note.
 

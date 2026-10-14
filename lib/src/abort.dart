@@ -1,4 +1,4 @@
-/// A per-scope abort signal, carried in a zone value so `scrape` can cancel
+/// A per-scope abort signal, carried in a zone value so a scoped run can cancel
 /// its own requests without the process-wide `Http.abort()` and without a
 /// public parameter. `http` reads [currentAbort] when a send starts.
 library;

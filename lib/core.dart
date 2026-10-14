@@ -40,10 +40,10 @@ final class Origin {
   final String? _name;
   final String? _path;
 
-  /// Final URL after redirects (http response, scrape visit), if any.
+  /// Final URL after redirects (http response), if any.
   String? url() => _url;
 
-  /// HTTP status (response, visit), if any.
+  /// HTTP status (response), if any.
   int? status() => _status;
 
   /// Suggested file name (`content-disposition`, URL tail), if any.

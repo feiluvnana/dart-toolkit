@@ -98,7 +98,7 @@ final class _StreamBody extends Body {
 ///   When the count reaches 0, `close()` runs after a 100 ms grace, so a
 ///   sequential `for … await (get > file)` loop keeps one connection (no
 ///   handshake per file) while a finished script exits within 100 ms.
-///   [Http.hold] keeps the client open for a whole crawl.
+///   [Http.hold] keeps the client open for a whole run.
 /// - Redirects are followed for every verb, up to 10 hops: 301/302/303 after
 ///   a POST become a GET (the body is dropped); 307/308 keep the method and
 ///   resend an in-memory body. A 307/308 (or a 301/302 that keeps the method)
@@ -112,7 +112,7 @@ final class _StreamBody extends Body {
 /// - `insecure` lists hosts whose bad certificate is accepted (each with its
 ///   subdomains), for this call only and on every redirect hop: one broken
 ///   CDN chain stays one host, and a redirect elsewhere is checked as usual.
-/// - `retries` (2 for GET and HEAD, as `Scrape`; 0 for the verbs that change
+/// - `retries` (2 for GET and HEAD; 0 for the verbs that change
 ///   something, opt-in there) re-sends on network errors, timeouts, 5xx and 429, with
 ///   doubling backoff from 1 s or the server's `Retry-After` (see
 ///   `src/retry.dart`; TLS/Handshake errors are permanent and never
@@ -129,9 +129,9 @@ abstract final class Http {
   static const int _maxRedirects = 10;
 
   /// Hold the shared client open across many requests that are further
-  /// apart than the 100 ms idle grace (a crawl with `delay:`). While the
+  /// apart than the 100 ms idle grace (a slow loop over many pages). While the
   /// hold is open, the idle close is suppressed; closing the
-  /// hold releases it. `Scrape.crawl` holds one for its lifetime.
+  /// hold releases it.
   static Closeable hold() {
     // Build the pools first: one created after the count rises would start
     // with this hold already counted and then count it again.
@@ -592,7 +592,7 @@ final class Response with Reader implements Closeable {
 
   /// A file name for the body: the `content-disposition` filename
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
-  /// URL's last segment, else `'download'`. Shared with scrape/chrome via
+  /// URL's last segment, else `'download'`. Shared with chrome via
   /// `src/origin.dart`.
   String name() => names.fileName(url: _url, contentDisposition: header('content-disposition'));
 
@@ -1191,7 +1191,7 @@ Future<HttpClientResponse> _singleSend(
         },
       );
   req.followRedirects = false;
-  // A scoped abort (a cancelled crawl) fails this request and its body.
+  // A scoped abort (a cancelled run) fails this request and its body.
   final signal = abort.currentAbort();
   if (signal != null) {
     if (signal.aborted) {

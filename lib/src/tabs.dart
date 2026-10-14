@@ -1,6 +1,6 @@
-/// What a crawl needs from a browser, so `scrape` never imports `chrome`
-/// (puppeteer is most of a scrape script's startup). `chrome`'s Browser and
-/// Page implement these; a crawl takes any Browser as is.
+/// What a browser-driven run needs from a browser, without importing `chrome`
+/// (puppeteer is most of such a script's startup). `chrome`'s Browser and
+/// Page implement these.
 library;
 
 /// Opens tabs: `chrome`'s Browser.

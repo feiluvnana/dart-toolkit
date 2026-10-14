@@ -15,19 +15,19 @@ import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
-import 'package:dart_toolkit/scrape.dart';
+import 'package:dart_toolkit/pool.dart';
 
 Future<void> main() async {
   // Download, verify and unpack in one pass; a bad checksum never lands.
   await (Http.get('https://example.com/tool.tar.xz') | Hash.sha256(expect: sum) > Archive.unarchive('opt'));
 
-  // Crawl a site into records, staying inside it, with a progress bar.
-  final bar = Console.bar(null, label: 'pages');
-  final titles = await Scrape.crawl<String>(['https://docs.example/'], (v) async {
-    final doc = await v.html();
-    v.emit(doc.$('h1').text());
-    v.follow(doc.$('a').attrs('href'), (w) async => w.emit((await w.html()).$('h1').text()), under: 'https://docs.example/');
-  }, onProgress: (done, total) => bar.setTotal(total).tick()).toList();
+  // Fetch pages in parallel with a progress bar.
+  final bar = Console.bar(urls.length, label: 'pages');
+  final titles = await Pool.map(
+    urls,
+    (u) async => await Http.get(u).html().$('h1').text(),
+    onResult: (_) => bar.tick(),
+  );
 
   // Save, archive with a password, and tell the human.
   await Fs.file('titles.txt').write(titles.join('\n'));
@@ -54,9 +54,8 @@ Future<void> main() async {
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, mouse, markdown, diffs, ASCII and no-colour fallbacks |
 | `image` | decode, resize, encode | off the main isolate when large, EXIF orientation |
 | `chrome` | a real browser | pages, screenshots, PDFs, downloads, evaluated JS |
-| `scrape` | crawls | `Scrape.crawl` with a cache, retries, `follow(under:, skip:)`, browser mode |
 
-Each module is one import and pays only for what it loads (a script that imports `scrape` does not load Chromium's driver). [VISION.md](VISION.md) is the full API with its rules; [ARCHITECTURE.md](ARCHITECTURE.md) has the module graph and startup costs.
+Each module is one import and pays only for what it loads (a script that imports `html` does not load Chromium's driver). [VISION.md](VISION.md) is the full API with its rules; [ARCHITECTURE.md](ARCHITECTURE.md) has the module graph and startup costs.
 
 ## License
 

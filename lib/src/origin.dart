@@ -1,7 +1,7 @@
-/// File-name rules shared by `http`, `scrape` and `chrome`.
+/// File-name rules shared by `http` and `chrome`.
 ///
 /// One home for `content-disposition` parsing and URL-tail fallback, so
-/// `Response.name()`, `Visit.name()` and `chrome` upload staging strips paths the same way.
+/// `Response.name()` and `chrome` upload staging strips paths the same way.
 /// Facades never branch on the rules themselves; they call [fileName].
 library;
 
@@ -181,6 +181,3 @@ bool isSecretHeader(String name) {
 }
 
 final _secretHeader = RegExp(r'token|key|secret|passw|auth|session|credential|signature');
-
-/// `scheme://host:port` of [url], the unit credentials are scoped to.
-String originOf(Uri url) => '${url.scheme}://${url.host}:${url.port}';

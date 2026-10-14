@@ -1,7 +1,7 @@
 # dart_toolkit
 
-**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fourteen
-small modules for command-line automation: fetch, scrape, drive a browser, move files, run
+**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is thirteen
+small modules for command-line automation: fetch, drive a browser, move files, run
 programs, archive, hash, prompt, and draw a terminal UI. Each module is a thin facade over a good pub
 engine, and every module speaks the same four interfaces, so the bytes flow between them like a
 pipe in a shell.
@@ -42,7 +42,7 @@ at its call sites than it adds to the surface.
 | 8   | **Never null for collections, nullable for single lookups.** No match gives an empty `Elements`; a missing attribute, header or option gives `null`.                                                                                     |
 | 9   | **In memory is sync, I/O is async.** There are no sync twins.                                                                                                                                                                        |
 | 10  | **Inputs are positional, options are named and optional** with defaults. There are no option objects, builders, or flags that change the result type. In-memory data is a `String` (UTF-8) or a `List<int>`.                               |
-| 11  | **Types over runtime checks.** Generics carry the value type (`Opt<int>`, `value<T>()`, `Visit<T>`), sealed types make `switch` exhaustive (`Entry`), and `Object` parameters are kept to data and `body:`.                                     |
+| 11  | **Types over runtime checks.** Generics carry the value type (`Opt<int>`, `value<T>()`, `Pool.map<T, R>`), sealed types make `switch` exhaustive (`Entry`), and `Object` parameters are kept to data and `body:`.                                     |
 | 12  | **`close()` releases a resource and is idempotent.** Whatever holds a process, socket, terminal or isolate cleans up on `close()`, on an error, and on Ctrl-C. Nothing keeps a finished script alive.                                    |
 | 13  | **Engines stay private and swappable.** An engine type never appears in a public signature, and engine exceptions are rethrown as Dart's own (§5). Tests use real servers, files, browsers and pseudo-terminals, never the engine, so a swap is proven by the same suite. |
 | 14  | **No code generation, no native code.** Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`).                                                                                                                           |
@@ -70,7 +70,7 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 
 | Type                                     | Reader | Writer | Pipe | Closeable |
 | ---------------------------------------- | :----: | :----: | :--: | :-------: |
-| `Response` (http), `Visit` (scrape)      |   ✓    |        |      | ✓ (http)  |
+| `Response` (http)                              |   ✓    |        |      |    ✓     |
 | `File` (fs)                              |   ✓    |   ✓    |      |           |
 | `Output` (shell), `Download` (chrome)    |   ✓    |        |      |           |
 | `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` | ✓ |  |  |   |
@@ -110,23 +110,23 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | a tree without some parts              | `not(selector)`                    | `Element(s)`                                  |
 | feed data / count progress             | `add(data)` / `tick(n)`                | `Hasher` / `Bar`                              |
 | release / remove from disk / make      | `close()` / `delete()` / `create()`    | `Closeable` / `Entry` / `Dir`, `Link` |
-| final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`          | `Response`, `Visit` (`Page` has `url()`)       |
-| a file name / a size in bytes          | `name()` / `size()`                    | `Entry`, `Download`, `Response`, `Visit` / `File`, `Response`, `Visit` |
+| final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`          | `Response` (`Page` has `url()`)       |
+| a file name / a size in bytes          | `name()` / `size()`                    | `Entry`, `Download`, `Response` / `File`, `Response` |
 | run a program, a job, an app, a CLI    | `run`                                  | `Shell`, `Tui`, `Command` (`Pool.map`/`runAll` for jobs) |
 | a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen` |
 | draw or store into                     | `write`                                | `File`, `Region`                              |
 | dimensions                             | `width()` `height()` / `width:` `height:` | `Image`, `Region` / `open`, `resize`, `popup` |
-| the function that does the work        | `handler`                              | `Command(handler:)`, `Scrape.crawl`, `follow` |
+| the function that does the work        | `handler`                              | `Command(handler:)` |
 | a notification / a bound event         | `on…:` / `on(events)`, `keys:`         | `onResult:`, `onError:` / `Region`, `Screen`  |
 | switch the current state               | `go(state)`                            | `App`                                         |
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
-`json` `pretty` `limit` `delay` `retries` `insecure` `check` `cache` `browser` `onResult` `onError` `short` `or`
+`json` `pretty` `limit` `retries` `insecure` `check` `onResult` `short` `or`
 `required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
-`empty` `header` `follow` `prompt` `onSubmit` `since` `history` `query` `live` `onLine`
-`password` `format` `expect` `under` `skip` `onProgress` `from`.
+`empty` `header` `prompt` `onSubmit` `since` `history` `query` `live` `onLine`
+`password` `format` `expect` `from`.
 
 ## 4. Modules
 
@@ -145,10 +145,9 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `notify` `copy` `clear` `accent` · `Bar` `tick` `setTotal`                                                                                      | in-house              |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below) · `Color` · `Style` | in-house              |
 | `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `pixel` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
-| `scrape`  | `Scrape.crawl` · `Visit` `url` `status` `ok` `size` `name` `follow` `emit`                                                                                             | http + html + chrome  |
 
-A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
-for `Elements` and `json` for the `run<T>` coercion rules, and `scrape`, which composes `http`, `html`, `fs` and `hash` (and drives a `Browser` without importing `chrome`). `console` and `tui`
+A module imports only core and its engine. The exception is `chrome`, which imports `html`
+for `Elements` and `json` for the `run<T>` coercion rules. `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
 ### 4.1 html
@@ -192,7 +191,7 @@ final links = await Http.get(url).html().$('a.item').attrs('href');
 abstract final class Http {
   static Future<Response> get(String url, {Map<String, String?>? query, Map<String, String>? headers, Duration? timeout, int retries = 2, List<String> insecure = const [], bool check = false});
   // head: the same; delete, options: retries = 0; post, put, patch: retries = 0 and add {Body? body}
-  static Closeable hold();                       // keep the shared client open (a crawl)
+  static Closeable hold();                       // keep the shared client open (many requests)
   static void abort();                           // cancel every in-flight request, no retries (quitting a UI)
 }
 sealed class Body {                              // stream: sent once, never retried
@@ -218,9 +217,8 @@ final class Response with Reader implements Closeable {
   error page says the status in its `FormatException`.
 - Cookies persist for the process, per host and path, redirect hops included (a form login keeps its
   session); a `cookie` header passed by the caller replaces the jar for that call.
-- `retries` (2 for GET and HEAD, as Scrape; 0 for the verbs that change something, opt-in there) re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
-  or the server's `Retry-After`. It applies only when the body is in memory. Scrape uses the same
-  logic.
+- `retries` (2 for GET and HEAD; 0 for the verbs that change something, opt-in there) re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
+  or the server's `Retry-After`. It applies only when the body is in memory.
 - `timeout` (30 s) bounds the wait for the headers, then any stall in the body. A
   `TimeoutException` names the URL.
 - `text()` uses the charset from `content-type`, then `<meta charset>`, then UTF-8. It decodes
@@ -723,47 +721,6 @@ extension on Reader { Future<Image> image(); }
   `ArgumentError`. `crop` outside the image is a `RangeError`.
 - `encode` is a lazy `Reader`. `quality` (1–100) applies to JPEG; `.webp` and `.ico` above 256 px are an
   `ArgumentError`. The work is CPU-bound, so batches go through `Pool.runAll`.
-
-### 4.14 scrape
-
-```dart
-abstract final class Scrape {
-  static Stream<T> crawl<T>(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler, {
-    int limit = 4, Duration? delay, int retries = 2, String? cache,
-    Map<String, String>? headers, Duration? timeout, Browser? browser,   // any chrome Browser, typed so scrape never loads puppeteer
-    void Function(String url, Object error)? onError, void Function(int done, int total)? onProgress});
-}
-final class Visit<T> with Reader {
-  String url();  int status();  bool ok();  int size();  String name();   // name() via shared origin()
-  Visit<T> follow(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler,
-      {String? under, FutureOr<bool> Function(String url)? skip});   // stay inside a site; skip what a rerun has
-  Visit<T> emit(T item);
-}
-```
-
-- This module is the crawl around `Http.get(u).html()`: a deduplicated queue, `limit` in flight,
-  a per-host `delay`, and `retries`. Retries cover network errors, timeouts, 5xx and 429, with
-  backoff or `Retry-After`.
-- `cache` is a folder of bodies by URL and credentials, so a rerun is offline.
-- Routing is by function: `follow(urls, handler)`. URLs are made absolute and their fragments
-  dropped, non-http(s) links (`mailto:`, `javascript:`…) are skipped, and each URL is visited once.
-- `crawl` returns a stream of the emitted records. It completes when the queue is drained.
-  Cancelling it stops the crawl.
-- A `Visit` is a `Reader` of the body, decoded like `Response.text()`: `html()` uses the final URL
-  as its base, and `json()` and `> file` work too. A 404 reaches its handler.
-- A failure ends the run (the queue is dropped, visits in flight finish, and the stream errors)
-  unless `onError` is set. Every tab is closed whatever happens. `scrape` re-exports `html`.
-- With `browser`, visits are tabs, `html()` is the rendered DOM, and the handlers are unchanged.
-
-```dart
-final albums = await Scrape.crawl<Album>([listUrl], listing, delay: Duration(milliseconds: 250), cache: '.cache').toList();
-Future<void> listing(Visit<Album> v) async {
-  final doc = await v.html();
-  v.follow(doc.$('a.album').attrs('href'), album).follow(doc.$('a.next').attrs('href'), listing);
-}
-Future<void> album(Visit<Album> v) async =>
-    v.emit((title: (await v.html()).$('h1').text(), url: v.url()));
-```
 
 ## 5. Errors
 
