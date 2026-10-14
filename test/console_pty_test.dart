@@ -80,6 +80,9 @@ void main() {
       expect(pick, 'pick=green');
       final esc = await _ptyChoose(feeds: const [(1.5, r'\x1b')]);
       expect(esc, 'pick=red');
+      // Two keys in one read are two presses.
+      final burst = await _ptyChoose(feeds: const [(1.5, r'\x1b[B\x1b[B'), (2.0, r'\x0d')]);
+      expect(burst, 'pick=blue');
     }, timeout: const Timeout(Duration(seconds: 120)));
 
     test('piped choose reads a number; ask reads a line', () async {

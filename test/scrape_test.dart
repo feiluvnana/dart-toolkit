@@ -277,6 +277,25 @@ Future<void> main(List<String> args) async {
       expect(res.exitCode, 0);
     });
 
+    test('cancelling a crawl stops its retry backoff', () async {
+      final res = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/scrape.dart';
+Future<void> main() async {
+  final s = await HttpServer.bind('127.0.0.1', 0);
+  s.listen((r) => r.response
+    ..statusCode = 503
+    ..headers.set('retry-after', '30')
+    ..close());
+  final sub = Scrape.crawl<String>(['http://127.0.0.1:\${s.port}/'], (v) async {}).listen(null, onError: (_) {});
+  await Future<void>.delayed(const Duration(milliseconds: 300));
+  await sub.cancel();
+  await s.close(force: true);
+}
+''', timeout: const Duration(seconds: 10));
+      expect(res.exitCode, 0, reason: '${res.stderr}');
+    });
+
     test('bad limit is an ArgumentError', () {
       expect(
         () => Scrape.crawl<String>([], (v) async {}, limit: 0),

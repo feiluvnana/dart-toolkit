@@ -459,6 +459,14 @@ abstract final class Console {
   /// event loop. Handles `\n` and `\r`; in secret mode backspace edits by
   /// grapheme (not byte, so multibyte passwords survive).
   static Future<String> _readLine({required bool secret}) {
+    // Piped stdin reads synchronously while nothing has subscribed to it:
+    // a subscription drops lines that arrive between prompts and keeps the
+    // script alive until the writer closes the pipe.
+    if (!io.stdin.hasTerminal && term.stdinUnclaimed && (_linePushback?.isEmpty ?? true)) {
+      final line = io.stdin.readLineSync(encoding: const Utf8Codec(allowMalformed: true));
+      if (line == null) return Future.error(const io.StdinException('stdin is closed'));
+      return Future.value(line);
+    }
     final result = Completer<String>();
     final buf = <int>[...? _linePushback];
     _linePushback = null;
@@ -707,6 +715,9 @@ abstract final class Console {
 /// closing) with no timer at all.
 final class _KeyReader {
   final _pending = <int>[];
+
+  /// Decoded events not yet handed out: one read can hold several keys.
+  final _events = <term.TermEvent>[];
   Completer<void>? _wake;
   var _done = false;
 
@@ -757,13 +768,23 @@ final class _KeyReader {
   /// when stdin closed with nothing left to decode.
   Future<T?> _pump<T>(T? Function(term.TermEvent event) pick) async {
     for (;;) {
+      while (_events.isNotEmpty) {
+        final hit = pick(_events.removeAt(0));
+        if (hit != null) return hit;
+      }
       if (_pending.isNotEmpty) {
         final parsed = term.decodeKeys(_pending);
         if (parsed.consumed > 0) _pending.removeRange(0, parsed.consumed);
+        // Typed runs (keys pressed faster than one read) split into one
+        // key per character; pastes stay whole.
         for (final event in parsed.events) {
-          final hit = pick(event);
-          if (hit != null) return hit;
+          if (event is term.TermType && !event.paste && event.text.runes.length > 1) {
+            _events.addAll([for (final r in event.text.runes) term.TermType(String.fromCharCode(r))]);
+          } else {
+            _events.add(event);
+          }
         }
+        if (_events.isNotEmpty) continue;
         if (_done) {
           // Closed with only skipped or undecodable leftovers: nothing more
           // is coming.

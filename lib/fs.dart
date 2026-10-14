@@ -37,6 +37,8 @@ abstract final class Fs {
   /// What is on disk now: a [File], [Dir], [Link], or null. Never follows
   /// links. The one `Fs.` call that does I/O; `file`/`dir`/`link` don't.
   static Future<Entry?> entry(String path) async {
+    // Strip first: `ln/` makes the OS follow the link to its folder.
+    path = _strip(path);
     final type = await io.FileSystemEntity.type(path, followLinks: false);
     return switch (type) {
       io.FileSystemEntityType.file => File._(path),
@@ -720,18 +722,33 @@ String _strip(String path) {
 /// and the fallback when `cp` is missing or the destination already exists
 /// (merging would nest under `cp`, so an existing tree merges here).
 Future<void> _copyDir(String from, String to) async {
-  // Throws-before-writes for file<->dir collisions: walk first.
+  // Throws-before-writes for file<->dir collisions: one walk up front.
   await _checkDirCollisions(from, to);
+  final dirs = <(String, io.FileStat)>[];
+  await _copyTree(from, to, dirs);
+  // Folders keep modes AND mtimes, applied after every child is written
+  // (writing children bumps them) and batched: one `chmod` per distinct
+  // mode and one `touch` per distinct mtime instead of two forks a folder.
+  // Both are no-ops on Windows; mtime precision differs per OS (macOS whole
+  // seconds, Linux sub-seconds) and the docs say so.
+  final byMode = <int, List<String>>{};
+  for (final (path, st) in dirs) {
+    (byMode[st.mode & 0xFFF] ??= []).add(path);
+  }
+  await posix.setDirMtimes({for (final (path, st) in dirs) path: st.modified});
+  await posix.chmodBatched(byMode);
+}
+
+Future<void> _copyTree(String from, String to, List<(String, io.FileStat)> dirs) async {
   await io.Directory(to).create(recursive: true);
-  await for (final e in io.Directory(from).list(
-    recursive: false,
-    followLinks: false,
-  )) {
-    final name = p.basename(e.path);
-    final dest = p.join(to, name);
-    final t = await io.FileSystemEntity.type(e.path, followLinks: false);
-    if (t == io.FileSystemEntityType.link) {
-      final target = await io.Link(e.path).target();
+  // Files in one folder copy concurrently once the folder is listed (a
+  // future started mid-walk could fail with no listener yet); `list` with
+  // followLinks:false already tells links, folders and files apart.
+  final files = <(String, String)>[];
+  await for (final e in io.Directory(from).list(followLinks: false)) {
+    final dest = p.join(to, p.basename(e.path));
+    if (e is io.Link) {
+      final target = await e.target();
       try {
         await io.Link(dest).create(target, recursive: true);
       } on io.FileSystemException {
@@ -743,29 +760,23 @@ Future<void> _copyDir(String from, String to) async {
         }
         await io.Link(dest).create(target, recursive: true);
       }
-    } else if (t == io.FileSystemEntityType.directory) {
-      await _copyDir(e.path, dest);
-    } else if (t == io.FileSystemEntityType.file) {
-      // Replace a dest link, never follow it outside the tree.
-      try {
-        final dt = await io.FileSystemEntity.type(dest, followLinks: false);
-        if (dt == io.FileSystemEntityType.link) {
-          await io.Link(dest).delete();
-        }
-      } catch (_) {}
-      await io.File(e.path).copy(dest);
-      await _preserveFileMeta(e.path, dest);
+    } else if (e is io.Directory) {
+      await _copyTree(e.path, dest, dirs);
+    } else if (e is io.File) {
+      files.add((e.path, dest));
     }
   }
-  // Folders keep modes AND mtimes: set the folder mtime after its contents
-  // are copied (writing children bumps it), and chmod to the source mode.
-  // Both are no-ops on Windows; mtime precision differs per OS (macOS whole
-  // seconds, Linux sub-seconds) and the docs say so.
+  await Future.wait([for (final (from, to) in files) _copyFile(from, to)]);
   try {
-    final st = await io.FileStat.stat(from);
-    await posix.setDirMtime(to, st.modified);
-    await posix.chmod(to, st.mode & 0xFFF);
+    dirs.add((to, await io.FileStat.stat(from)));
   } catch (_) {}
+}
+
+Future<void> _copyFile(String from, String to) async {
+  // Replace a dest link, never follow it outside the tree.
+  if (await io.FileSystemEntity.isLink(to)) await io.Link(to).delete();
+  await io.File(from).copy(to);
+  await _preserveFileMeta(from, to);
 }
 
 /// Throw before any writes when a source file would land on a dest dir

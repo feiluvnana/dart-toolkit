@@ -25,6 +25,7 @@ import 'dart:typed_data';
 import 'core.dart';
 export 'core.dart';
 
+import 'src/abort.dart' as abort;
 import 'src/charset.dart' as charset;
 import 'src/origin.dart' as names;
 import 'src/retry.dart' as retry;
@@ -375,7 +376,7 @@ var _abortEpoch = 0;
 /// Pending retry backoffs, woken early by [Http.abort] so they cannot keep the VM alive.
 final _sleepers = <({Timer timer, Completer<void> done})>{};
 
-Future<void> _sleep(Duration d) {
+Future<void> _sleep(Duration d, abort.AbortSignal? signal) {
   final done = Completer<void>();
   late final ({Timer timer, Completer<void> done}) w;
   w = (
@@ -386,6 +387,11 @@ Future<void> _sleep(Duration d) {
     done: done,
   );
   _sleepers.add(w);
+  signal?.future.then((_) {
+    w.timer.cancel();
+    _sleepers.remove(w);
+    if (!done.isCompleted) done.complete();
+  });
   return done.future;
 }
 
@@ -408,7 +414,7 @@ final _insecurePool = _ClientPool(insecure: true);
 ///   keeps the code; VISION §4.2 still says mirrors leave the body readable
 ///   and needs the fix, not the code.)
 final class Response with Reader implements Closeable {
-  Response._(this._resp, this._pool, this._timeout, this._url);
+  Response._(this._resp, this._pool, this._timeout, this._url, {this._head = false});
 
   final HttpClientResponse _resp;
   final _ClientPool _pool;
@@ -417,7 +423,11 @@ final class Response with Reader implements Closeable {
   /// The final URL, after redirects.
   final String _url;
 
+  /// A HEAD response: no body follows, whatever `content-length` says.
+  final bool _head;
+
   Uint8List? _cached;
+  Future<Uint8List>? _reading;
   var _streaming = false;
   var _closed = false;
   var _done = false;
@@ -489,19 +499,25 @@ final class Response with Reader implements Closeable {
     }
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
+    // A second read while the first runs shares it.
+    final reading = _reading;
+    if (reading != null) return (await reading).asUnmodifiableView();
     if (_streaming) {
       throw StateError('body already streaming: ${url()}');
     }
     _streaming = true;
+    return (await (_reading = _readAll())).asUnmodifiableView();
+  }
+
+  Future<Uint8List> _readAll() async {
     try {
       final out = BytesBuilder(copy: false);
       await for (final chunk in _bodyStream()) {
         out.add(chunk);
       }
-      final flat = out.takeBytes();
-      _cached = flat;
-      return flat.asUnmodifiableView();
+      return _cached = out.takeBytes();
     } finally {
+      _reading = null;
       _finish();
     }
   }
@@ -560,16 +576,18 @@ final class Response with Reader implements Closeable {
       _releaseOnce();
       return;
     }
-    final len = size();
+    // HEAD, 204 and 304 carry no body whatever content-length says, so the
+    // connection goes straight back to the pool.
+    final empty = _head || status() == 204 || status() == 304;
+    final len = empty ? 0 : size();
     if (len == null || len > 64 * 1024) return _abandon();
     _closed = true;
     try {
-      // Small known-length bodies drain back to the pool for reuse; a
-      // stalled drain detaches the socket.
+      // Small known-length bodies drain back to the pool for reuse. The
+      // drain gets a short budget, not the request timeout: the caller is
+      // done, so a slow body detaches the socket instead of waiting.
       try {
-        await _resp.drain<void>().timeout(_timeout, onTimeout: () {
-          throw TimeoutException('close timed out: $_url', _timeout);
-        });
+        await _resp.drain<void>().timeout(_drainBudget);
       } catch (_) {
         try {
           final socket = await _resp.detachSocket();
@@ -763,11 +781,13 @@ Future<Response> _send(
   final pool = insecure ? _insecurePool : _securePool;
   var attempt = 0;
   final epoch = _abortEpoch;
+  final signal = abort.currentAbort();
+  bool aborted() => epoch != _abortEpoch || (signal?.aborted ?? false);
   Duration? retryAfter;
   while (true) {
     if (attempt > 0) {
-      await _sleep(retry.backoff(attempt - 1, retryAfter));
-      if (epoch != _abortEpoch) throw const HttpException('aborted');
+      await _sleep(retry.backoff(attempt - 1, retryAfter), signal);
+      if (aborted()) throw const HttpException('aborted');
     }
     retryAfter = null;
     try {
@@ -790,7 +810,7 @@ Future<Response> _send(
       }
       return res;
     } on _Retryable catch (e) {
-      if (epoch != _abortEpoch ||
+      if (aborted() ||
           !resendable ||
           attempt >= retries ||
           !retry.isRetryable(e.cause)) {
@@ -849,14 +869,15 @@ Future<Response> _attempt(
       } on IOException catch (e) {
         throw _Retryable(e);
       }
+      final head = currentMethod == 'HEAD';
       if (!_isRedirect(resp.statusCode)) {
         ok = true;
-        return Response._(resp, pool, limit, currentUri.toString());
+        return Response._(resp, pool, limit, currentUri.toString(), head: head);
       }
       final location = _locationOf(resp);
       if (location == null || location.isEmpty) {
         ok = true;
-        return Response._(resp, pool, limit, currentUri.toString());
+        return Response._(resp, pool, limit, currentUri.toString(), head: head);
       }
       if (hop >= Http._maxRedirects) {
         await _detach(resp);
@@ -865,10 +886,14 @@ Future<Response> _attempt(
           uri: currentUri,
         );
       }
-      final next = currentUri.resolve(location);
       // Small redirect bodies drain back to the pool for reuse; a stalled
       // drain detaches instead of holding the next hop.
-      await _discard(resp, limit);
+      await _discard(resp);
+      final parsed = Uri.tryParse(location);
+      final next = parsed == null ? null : currentUri.resolveUri(parsed);
+      if (next == null || (next.scheme != 'http' && next.scheme != 'https') || next.host.isEmpty) {
+        throw HttpException('redirect to an unsupported URL "$location": $currentUri', uri: currentUri);
+      }
       final code = resp.statusCode;
       if ((code == 301 || code == 302) && currentMethod == 'POST') {
         currentMethod = 'GET';
@@ -889,9 +914,9 @@ Future<Response> _attempt(
           uri: currentUri,
         );
       }
-      if (currentUri.hasScheme &&
-          next.hasScheme &&
-          currentUri.origin != next.origin) {
+      if (currentUri.scheme != next.scheme ||
+          currentUri.host != next.host ||
+          currentUri.port != next.port) {
         currentHeaders = _stripSensitiveHeaders(currentHeaders);
       }
       currentUri = next;
@@ -963,6 +988,15 @@ Future<HttpClientResponse> _singleSend(
     throw headerTimeout();
   });
   req.followRedirects = false;
+  // A scoped abort (a cancelled crawl) fails this request and its body.
+  final signal = abort.currentAbort();
+  if (signal != null) {
+    if (signal.aborted) {
+      req.abort(const HttpException('aborted'));
+      throw const HttpException('aborted');
+    }
+    signal.future.then((_) => req.abort(const HttpException('aborted')));
+  }
   String? lengthHeader;
   if (headers != null) {
     for (final entry in headers.entries) {
@@ -992,11 +1026,7 @@ Future<HttpClientResponse> _singleSend(
       }
       req.bufferOutput = false;
       try {
-        await req
-            .addStream(b._reader.stream())
-            .timeout(limit, onTimeout: () {
-          throw TimeoutException('upload stalled for $limit: $uri', limit);
-        });
+        await _upload(req, b._reader.stream(), limit, uri);
       } catch (_) {
         try {
           req.abort();
@@ -1035,8 +1065,8 @@ Future<HttpClientResponse> _singleSend(
         req.headers.set('content-type', contentType);
       } catch (_) {}
     }
-    req.add(encoded.bytes);
     try {
+      await _upload(req, _slices(encoded.bytes), limit, uri);
       return await req.close().timeout(limit, onTimeout: () {
         throw headerTimeout();
       });
@@ -1054,10 +1084,49 @@ Future<HttpClientResponse> _singleSend(
   }
 }
 
-/// Drain a redirect body back to the pool; detach when the drain stalls.
-Future<void> _discard(HttpClientResponse resp, Duration limit) async {
+/// Send [body] on [req], failing only when no chunk moves for [limit]: a
+/// long upload that keeps moving never times out, a server that stops
+/// reading does (backpressure stops the pulls, so the watchdog fires).
+Future<void> _upload(HttpClientRequest req, Stream<List<int>> body, Duration limit, Uri uri) async {
+  final stalled = Completer<void>();
+  Timer? watchdog;
+  void arm() {
+    watchdog?.cancel();
+    watchdog = Timer(limit, () {
+      if (!stalled.isCompleted) stalled.completeError(TimeoutException('upload stalled for $limit: $uri', limit));
+    });
+  }
+
+  arm();
+  final sending = req.addStream(body.map((chunk) {
+    arm();
+    return chunk;
+  }));
+  sending.ignore();
   try {
-    await resp.drain<void>().timeout(limit);
+    await Future.any([sending, stalled.future]);
+  } finally {
+    watchdog?.cancel();
+  }
+}
+
+/// [bytes] as 64 KiB views, so an in-memory upload is watched per chunk too.
+Stream<List<int>> _slices(List<int> bytes) async* {
+  const size = 64 * 1024;
+  for (var i = 0; i < bytes.length; i += size) {
+    final end = i + size > bytes.length ? bytes.length : i + size;
+    yield bytes is Uint8List ? Uint8List.sublistView(bytes, i, end) : bytes.sublist(i, end);
+  }
+}
+
+/// How long a body nobody reads may take to drain back to the pool before
+/// its socket is detached instead.
+const _drainBudget = Duration(milliseconds: 200);
+
+/// Drain a redirect body back to the pool; detach when the drain stalls.
+Future<void> _discard(HttpClientResponse resp) async {
+  try {
+    await resp.drain<void>().timeout(_drainBudget);
   } catch (_) {
     await _detach(resp);
   }

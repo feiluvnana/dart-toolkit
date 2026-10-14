@@ -330,11 +330,21 @@ final class _Unpacker implements Writer {
             : _parseTar(rest(), fromGzip: false);
         String? dest;
         var mode = 0;
+        // macOS tar adds an AppleDouble `._name` (xattrs) beside members;
+        // one is decided on its first bytes and dropped, as bsdtar does.
+        String? appleDouble;
+        var skipping = false;
         await for (final ev in tar) {
           switch (ev) {
             case _TarHeader():
-              dest = await prepare(ev.name);
               mode = ev.mode;
+              skipping = false;
+              if (!ev.isDir && p.posix.basename(ev.name).startsWith('._')) {
+                appleDouble = ev.name;
+                dest = null;
+                break;
+              }
+              dest = await prepare(ev.name);
               if (dest == null) break;
               if (ev.isDir) {
                 await io.Directory(dest).create(recursive: true);
@@ -343,9 +353,27 @@ final class _Unpacker implements Writer {
               } else {
                 out = await io.File(dest).open(mode: io.FileMode.write);
               }
+            case _TarBody() when skipping:
+              break;
             case _TarBody():
+              final pending = appleDouble;
+              if (pending != null) {
+                appleDouble = null;
+                if (_isAppleDouble(ev.bytes)) {
+                  skipping = true;
+                  break;
+                }
+                dest = await prepare(pending);
+                if (dest != null) out = await io.File(dest).open(mode: io.FileMode.write);
+              }
               await out?.writeFrom(ev.bytes);
             case _TarEnd():
+              final empty = appleDouble;
+              if (empty != null) {
+                appleDouble = null;
+                dest = await prepare(empty);
+                if (dest != null) await io.File(dest).writeAsBytes(const []);
+              }
               await out?.close();
               out = null;
               if (dest != null) keepMode(dest, mode, isDir: false);
@@ -353,9 +381,11 @@ final class _Unpacker implements Writer {
           }
         }
       }
-      await posix.chmodBatched(posix.groupByMode(paths, modes));
       // Never delete the target (F1): create it and merge each top-level
-      // member in (rename, copy fallback). Existing files are kept.
+      // member in (rename, copy fallback). Existing files are kept. Every
+      // file/folder collision fails before the first rename, so a failed
+      // unpack leaves the target as it was.
+      await _checkCollisions(tmpDir.path, d);
       await io.Directory(d).create(recursive: true);
       await for (final e in tmpDir.list(
         recursive: false,
@@ -364,6 +394,12 @@ final class _Unpacker implements Writer {
         final dest = p.join(d, p.basename(e.path));
         await _moveInto(e.path, dest);
       }
+      // Modes go on the final paths after the merge: a read-only member
+      // folder applied in the temp tree would refuse the merge's renames.
+      await posix.chmodBatched(posix.groupByMode(
+        [for (final path in paths) p.join(d, p.relative(path, from: tmpDir.path))],
+        modes,
+      ));
     } finally {
       try {
         await out?.close();
@@ -375,6 +411,24 @@ final class _Unpacker implements Writer {
       } catch (_) {}
       exit.offExit(token);
       await it.cancel();
+    }
+  }
+
+  /// Throw when a member would put a file where the target has a folder, or
+  /// a folder where it has a file (a link counts as a file).
+  static Future<void> _checkCollisions(String tmp, String target) async {
+    if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) return;
+    await for (final e in io.Directory(tmp).list(recursive: true, followLinks: false)) {
+      final dest = p.join(target, p.relative(e.path, from: tmp));
+      final dt = await io.FileSystemEntity.type(dest, followLinks: false);
+      if (dt == io.FileSystemEntityType.notFound) continue;
+      final destIsDir = dt == io.FileSystemEntityType.directory;
+      if ((e is io.Directory) != destIsDir) {
+        throw io.FileSystemException(
+          'archive member collides with existing ${destIsDir ? 'directory' : 'file'}',
+          dest,
+        );
+      }
     }
   }
 
@@ -425,9 +479,10 @@ final class _Unpacker implements Writer {
       } else {
         await io.File(src).rename(dest);
       }
-    } on io.FileSystemException {
-      // Rename across devices (or over an existing entry on some
-      // platforms): copy then delete.
+    } on io.FileSystemException catch (e) {
+      // Only a rename across devices copies then deletes; anything else
+      // (permissions) is the caller's error, not a reason to copy.
+      if (!posix.isCrossDevice(e)) rethrow;
       if (srcType == io.FileSystemEntityType.directory) {
         await _copyTree(src, dest);
         await io.Directory(src).delete(recursive: true);
@@ -545,6 +600,9 @@ final class _Unpacker implements Writer {
 // long names (`L`) override the header name; symlinks and hardlinks are
 // refused with a FormatException, the same as zip.
 // ---------------------------------------------------------------------------
+
+/// AppleDouble magic: `00 05 16 07`.
+bool _isAppleDouble(List<int> b) => b.length >= 4 && b[0] == 0 && b[1] == 5 && b[2] == 0x16 && b[3] == 7;
 
 /// Tar typeflags we write and read.
 const _tarFile = 0x30; // '0'
@@ -854,7 +912,8 @@ Stream<_TarEvent> _parseTar(
       if (prefix.isNotEmpty) name = '$prefix/$name';
       name = pendingPath ?? globalPath ?? name;
       pendingPath = null;
-      if (typeflag == 0x35) {
+      // Old (V7) tars mark a folder with a regular type and a trailing '/'.
+      if (typeflag == 0x35 || (typeflag == 0x30 || typeflag == 0) && name.endsWith('/')) {
         seen++;
         emit = false;
         yield _TarHeader(name, _tarOctal(h, 100, 8), isDir: true);

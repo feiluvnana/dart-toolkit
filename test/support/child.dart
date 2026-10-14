@@ -8,11 +8,14 @@ import 'package:test/test.dart';
 /// for tests that check a process exits, owns its stdio or needs its own
 /// working directory. The script lives in a fresh temp dir (never the repo);
 /// [cwd] defaults to that dir. A child still running after [timeout] is
-/// killed and reports exit code -1.
+/// killed and reports exit code -1. [stdin] is written piece by piece, each
+/// after its delay, then closed.
 Future<ProcessResult> runDart(
   String source, {
   List<String> args = const [],
+  List<(Duration, String)> stdin = const [],
   String? cwd,
+  Map<String, String>? env,
   Duration timeout = const Duration(seconds: 30),
 }) async {
   final dir = await Directory.systemTemp.createTemp('child');
@@ -23,7 +26,15 @@ Future<ProcessResult> runDart(
     Platform.resolvedExecutable,
     ['--packages=${Directory.current.path}/.dart_tool/package_config.json', script.path, ...args],
     workingDirectory: cwd ?? dir.path,
+    environment: env,
   );
+  unawaited(() async {
+    for (final (delay, text) in stdin) {
+      await Future<void>.delayed(delay);
+      p.stdin.write(text);
+    }
+    await p.stdin.close();
+  }().catchError((_) {}));
   final out = p.stdout.transform(utf8.decoder).join();
   final err = p.stderr.transform(utf8.decoder).join();
   final code = await p.exitCode.timeout(timeout, onTimeout: () {

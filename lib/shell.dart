@@ -202,33 +202,37 @@ abstract final class Shell {
     // A launcher should exit quickly (it hands off to the app). Wait briefly
     // so `xdg-open` failures are visible instead of zombieing; the target app
     // itself is not waited on.
-    unawaited(proc.stdout.drain<void>().catchError((_) {}));
-    // Keep the first 4 KB of stderr for the exception below; keep draining
+    // Subscriptions, not drains: a launcher that hands its stdio to the app
+    // it starts must not keep this script alive until that app exits.
+    final outSub = proc.stdout.listen(null, onError: (_) {});
+    // Keep the first 4 KB of stderr for the exception below; keep reading
     // past the cap so a chatty launcher can never block on a full pipe.
     final errBuf = BytesBuilder(copy: false);
-    final errDone = () async {
-      try {
-        await for (final chunk in proc.stderr) {
-          final room = 4096 - errBuf.length;
-          if (room <= 0) continue;
-          errBuf.add(chunk.length <= room ? chunk : chunk.sublist(0, room));
-        }
-      } catch (_) {}
-    }();
+    final errDone = Completer<void>();
+    final errSub = proc.stderr.listen(
+      (chunk) {
+        final room = 4096 - errBuf.length;
+        if (room > 0) errBuf.add(chunk.length <= room ? chunk : chunk.sublist(0, room));
+      },
+      onError: (_) {},
+      onDone: errDone.complete,
+    );
     bool exited = false;
     int code = 0;
     try {
       code = await proc.exitCode.timeout(const Duration(seconds: 10));
       exited = true;
     } on TimeoutException {
-      // Still running: assumed handed off; leave it (no zombie: outputs
-      // drained above, exitCode future kept by the VM until it exits).
+      // Still running: assumed handed off; leave it.
     }
-    if (exited) {
+    if (exited && code != 0) {
+      // A failing launcher's message is worth a short wait.
       try {
-        await errDone.timeout(const Duration(seconds: 2));
+        await errDone.future.timeout(const Duration(milliseconds: 500));
       } catch (_) {}
     }
+    await outSub.cancel();
+    await errSub.cancel();
     if (exited && code != 0) {
       final err = utf8.decode(errBuf.takeBytes(), allowMalformed: true);
       throw io.ProcessException(cmd[0], cmd.sublist(1),

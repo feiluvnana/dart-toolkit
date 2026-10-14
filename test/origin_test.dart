@@ -28,6 +28,7 @@ void main() {
       expect(d("attachment; filename*=iso-8859-1'en'caf%E9.txt"), 'café.txt');
       expect(d('attachment; filename*="UTF-8\'\'q%2Eu.txt"'), 'q.u.txt');
       expect(d("attachment; filename*=UTF-8''..%2F..%2Fetc%2Fpasswd"), 'passwd');
+      expect(d("attachment; filename*=UTF-8''a%+1%-1%zz.txt"), 'a%+1%-1%zz.txt');
     });
 
     test('plain filename: quoted, bare, percent runs, absent', () {

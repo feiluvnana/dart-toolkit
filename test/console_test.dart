@@ -5,6 +5,8 @@ import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 void main() {
   group('Console.choose', () {
     test('empty items is an ArgumentError', () {
@@ -28,6 +30,22 @@ void main() {
         Console.choose('Pick', ['a', 'b'], label: (s) => s, or: 'z'),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('piped stdin', () {
+    test('a line that arrives between prompts is kept', () async {
+      final r = await runDart('''
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async {
+  final a = await Console.ask('first?');
+  await Future<void>.delayed(const Duration(milliseconds: 600));
+  final b = await Console.ask('second?');
+  print('a=\$a b=\$b');
+}
+''', stdin: const [(Duration.zero, 'one\n'), (Duration(milliseconds: 200), 'two\n')]);
+      expect(r.stdout, contains('a=one b=two'));
+      expect(r.exitCode, 0);
     });
   });
 

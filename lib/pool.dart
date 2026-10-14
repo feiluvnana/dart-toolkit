@@ -286,20 +286,29 @@ abstract final class Pool {
     final boot = _initFuture;
     _initFuture = null;
     _failInflight();
-    final draining = _shutdownFuture;
-    if (draining != null) await draining;
-    if (boot != null) {
-      // A boot that was in flight when close was called lands now, if ever.
-      try {
-        await boot;
-      } catch (_) {
-        // A stillborn engine needs no close; drop through to sweep.
-      }
-    }
+    // Publish the gate before the first await: a call made while this close
+    // runs must wait for it and boot afresh, not init the dying engine.
+    final previous = _shutdownFuture;
+    final gate = Completer<void>();
+    _shutdownFuture = gate.future;
     try {
-      await _shutdown();
-    } catch (_) {
-      // Teardown itself never fails close().
+      if (previous != null) await previous;
+      if (boot != null) {
+        // A boot that was in flight when close was called lands now, if ever.
+        try {
+          await boot;
+        } catch (_) {
+          // A stillborn engine needs no close; drop through to sweep.
+        }
+      }
+      try {
+        await workerManager.dispose();
+      } catch (_) {
+        // Teardown itself never fails close().
+      }
+    } finally {
+      gate.complete();
+      if (identical(_shutdownFuture, gate.future)) _shutdownFuture = null;
     }
   }
 

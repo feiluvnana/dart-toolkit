@@ -38,6 +38,7 @@ const _cjk = {
 
 void main() {
   abortTests();
+  edgeTests();
   late HttpServer server;
   late String base;
   final hits = <String, int>{};
@@ -566,4 +567,128 @@ Future<void> main(List<String> a) async {
       expect(r.exitCode, 0, reason: '${r.stderr}');
     });
   });
+}
+
+void edgeTests() {
+  group('edges', () {
+    late HttpServer server;
+    late String url;
+    final peers = <int>{};
+
+    setUpAll(() async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      url = 'http://127.0.0.1:${server.port}';
+      server.listen((r) async {
+        peers.add(r.connectionInfo!.remotePort);
+        switch (r.uri.path) {
+          case '/sink':
+            var n = 0;
+            await for (final c in r) {
+              n += c.length;
+            }
+            r.response.write('$n');
+          case '/trickle':
+            r.response.contentLength = 60000;
+            try {
+              for (var i = 0; i < 60000; i++) {
+                r.response.add([65]);
+                await r.response.flush();
+                await Future<void>.delayed(const Duration(milliseconds: 50));
+              }
+            } catch (_) {
+              return; // the client hung up
+            }
+          case '/big-head':
+            r.response.contentLength = 1000000;
+            if (r.method != 'HEAD') r.response.add(List.filled(1000000, 0));
+          case '/to-mailto':
+            r.response
+              ..statusCode = 302
+              ..headers.set('location', 'mailto:x@y');
+          case '/to-bad':
+            r.response
+              ..statusCode = 302
+              ..headers.set('location', 'http://[bad');
+          default:
+            r.response.write('hello');
+        }
+        try {
+          await r.response.close();
+        } catch (_) {}
+      });
+    });
+
+    tearDownAll(() => server.close(force: true));
+
+    test('an upload that keeps moving outlives the timeout', () async {
+      final res = await Http.put('$url/sink',
+          body: Body.stream(_Drip(8, const Duration(milliseconds: 150))), timeout: const Duration(milliseconds: 500));
+      expect(await res.text(), '8');
+    });
+
+    test('a status mirror never waits for a slow small body', () async {
+      final sw = Stopwatch()..start();
+      expect(await Http.get('$url/trickle', timeout: const Duration(seconds: 20)).status(), 200);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+
+    test('HEAD keeps the connection whatever content-length says', () async {
+      final hold = Http.hold();
+      try {
+        peers.clear();
+        for (var i = 0; i < 4; i++) {
+          expect(await Http.head('$url/big-head').ok(), isTrue);
+        }
+        expect(peers, hasLength(1));
+      } finally {
+        await hold.close();
+      }
+    });
+
+    test('a redirect to a non-http or malformed URL is an HttpException', () async {
+      await expectLater(Http.get('$url/to-mailto'), throwsA(isA<HttpException>()));
+      await expectLater(Http.get('$url/to-bad'), throwsA(isA<HttpException>()));
+    });
+
+    test('a writer that never reads still lets the script exit', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/http.dart';
+final class Ignore implements Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async {}
+}
+Future<void> main() async {
+  final s = await HttpServer.bind('127.0.0.1', 0);
+  s.listen((r) => r.response
+    ..contentLength = 1 << 20
+    ..add(List.filled(1 << 20, 0))
+    ..close());
+  await (Http.get('http://127.0.0.1:\${s.port}/') > Ignore());
+  await s.close();
+}
+''', timeout: const Duration(seconds: 10));
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+    });
+
+    test('two reads at once share one body', () async {
+      final res = await Http.get('$url/hello');
+      expect(await Future.wait([res.text(), res.text()]), ['hello', 'hello']);
+    });
+  });
+}
+
+/// [count] one-byte chunks, [gap] apart.
+final class _Drip with Reader {
+  _Drip(this.count, this.gap);
+  final int count;
+  final Duration gap;
+
+  @override
+  Stream<List<int>> stream() async* {
+    for (var i = 0; i < count; i++) {
+      await Future<void>.delayed(gap);
+      yield [65];
+    }
+  }
 }

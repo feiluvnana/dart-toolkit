@@ -105,20 +105,18 @@ extension _SessionPaint on _Session<dynamic> {
         }
       }
       if (link != null) buf.write('\x1b]8;;\x1b\\');
-      if (buf.isEmpty) return null;
-      buf.write('\x1b[0m');
-      var s = '\x1b[?2026h$buf\x1b[?2026l';
       final cur = _cursorPos;
-      if (cur != null &&
-          cur.$2 >= 0 &&
-          cur.$2 < _w &&
-          cur.$1 >= 0 &&
-          cur.$1 < _h) {
-        s += '\x1b[${cur.$1 + 1};${cur.$2 + 1}H\x1b[?25h';
-      } else {
-        s += '\x1b[?25l';
+      final cursor = cur != null && cur.$2 >= 0 && cur.$2 < _w && cur.$1 >= 0 && cur.$1 < _h
+          ? '\x1b[${cur.$1 + 1};${cur.$2 + 1}H\x1b[?25h'
+          : '\x1b[?25l';
+      // A cursor move with no cell change (arrows in an input) still paints.
+      if (buf.isEmpty) {
+        if (cursor == _shownCursor) return null;
+        return _shownCursor = cursor;
       }
-      return s;
+      _shownCursor = cursor;
+      buf.write('\x1b[0m');
+      return '\x1b[?2026h$buf\x1b[?2026l$cursor';
     }
   
     void _paint() {

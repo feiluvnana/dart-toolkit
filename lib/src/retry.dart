@@ -22,8 +22,12 @@ Duration backoff(int attempt, Duration? server) {
 /// Null when absent, unparseable, or in the past.
 Duration? parseRetryAfter(String? value) {
   if (value == null) return null;
-  final seconds = int.tryParse(value.trim());
-  if (seconds != null && seconds >= 0) return Duration(seconds: seconds);
+  final digits = value.trim();
+  if (RegExp(r'^\d+$').hasMatch(digits)) {
+    // Clamp before building the Duration: a huge value overflows to negative.
+    final seconds = digits.length > 9 ? 999999999 : int.parse(digits);
+    return Duration(seconds: seconds);
+  }
   try {
     final date = io.HttpDate.parse(value.trim());
     final wait = date.difference(DateTime.now().toUtc());

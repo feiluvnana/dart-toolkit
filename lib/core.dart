@@ -110,6 +110,10 @@ abstract mixin class Reader {
         return;
       }
       await writer.consume(s);
+      // A writer that returned without reading everything (or anything)
+      // must not leave the source open: a response would keep the VM alive.
+      // Closing a fully read source is a no-op.
+      unawaited(_closeRoot(this));
     } catch (e, st) {
       try {
         _abortChain(this, e);

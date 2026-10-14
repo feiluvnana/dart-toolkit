@@ -23,6 +23,14 @@ List<int> _tarBlock(String name, int size, int typeflag) {
   return b;
 }
 
+/// Recompute the checksum of the header at [at] after editing it.
+void _resum(List<int> tar, int at) {
+  final b = tar.sublist(at, at + 512)..setRange(148, 156, List.filled(8, 0x20));
+  final sum = b.fold<int>(0, (a, c) => a + c);
+  tar.setRange(at + 148, at + 155, sum.toRadixString(8).padLeft(6, '0').codeUnits + [0]);
+  tar[at + 155] = 0x20;
+}
+
 List<int> _tarBody(List<int> body) =>
     [...body, ...List.filled((512 - body.length % 512) % 512, 0)];
 
@@ -201,6 +209,68 @@ void main() {
       ];
       await Archive.unpack(p('out')).consume(Stream.value(tar));
       expect(await Fs.file(p('out/big.bin')).text(), 'hello');
+    });
+
+    test('a collision fails before any member replaces a file', () async {
+      final tar = [
+        for (final n in ['a', 'b', 'c', 'd']) ...[..._tarBlock(n, 3, 0x30), ..._tarBody('NEW'.codeUnits)],
+        ...List.filled(1024, 0),
+      ];
+      for (final n in ['a', 'b', 'd']) {
+        await Fs.file(p('out/$n')).write('OLD');
+      }
+      await Fs.dir(p('out/c')).create();
+      await expectLater(Archive.unpack(p('out')).consume(Stream.value(tar)), throwsA(isA<FileSystemException>()));
+      for (final n in ['a', 'b', 'd']) {
+        expect(await Fs.file(p('out/$n')).text(), 'OLD');
+      }
+    });
+
+    test('a read-only member folder merges into an existing one and leaves no temp', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      final tar = [
+        ..._tarBlock('ro/', 0, 0x35)..setRange(100, 107, '0000555'.codeUnits),
+        ..._tarBlock('ro/f.txt', 1, 0x30),
+        ..._tarBody('f'.codeUnits),
+        ...List.filled(1024, 0),
+      ];
+      // _tarBlock checksums before the mode edit: recompute.
+      _resum(tar, 0);
+      await Fs.file(p('out/ro/old.txt')).write('old');
+      addTearDown(() => Process.run('chmod', ['-R', 'u+w', p('out')]));
+      await Archive.unpack(p('out')).consume(Stream.value(tar));
+      expect(await Fs.file(p('out/ro/f.txt')).text(), 'f');
+      expect(await Fs.file(p('out/ro/old.txt')).text(), 'old');
+      expect((await Directory(p('out/ro')).stat()).mode & 0x1ff, 0x16d);
+      expect((await Fs.dir(tmp.path).list()).map((e) => e.name()).where((n) => n.startsWith('.out')), isEmpty);
+    });
+
+    test('macOS AppleDouble members are dropped; a real ._ file stays', () async {
+      final ad = [0, 5, 0x16, 7, 0, 2, 0, 0];
+      final tar = [
+        ..._tarBlock('._.', ad.length, 0x30),
+        ..._tarBody(ad),
+        ..._tarBlock('./._a.txt', ad.length, 0x30),
+        ..._tarBody(ad),
+        ..._tarBlock('./a.txt', 1, 0x30),
+        ..._tarBody('a'.codeUnits),
+        ..._tarBlock('._notes', 2, 0x30),
+        ..._tarBody('hi'.codeUnits),
+        ...List.filled(1024, 0),
+      ];
+      await Archive.unpack(p('out')).consume(Stream.value(tar));
+      expect((await Fs.dir(p('out')).list()).map((e) => e.name()), ['._notes', 'a.txt']);
+    });
+
+    test('an old-style folder (type 0, trailing slash) is a folder', () async {
+      final tar = [
+        ..._tarBlock('d/', 0, 0x30),
+        ..._tarBlock('d/x', 1, 0x30),
+        ..._tarBody('x'.codeUnits),
+        ...List.filled(1024, 0),
+      ];
+      await Archive.unpack(p('out')).consume(Stream.value(tar));
+      expect(await Fs.file(p('out/d/x')).text(), 'x');
     });
 
     test('H9: a sparse member fails instead of extracting garbage', () async {

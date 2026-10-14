@@ -67,6 +67,23 @@ Future<void> main() async {
       expect(r.stderr, 'live-err\n');
     });
 
+    test('Shell.open returns and exits while the opened app keeps running', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX launchers only');
+      final bin = await Directory.systemTemp.createTemp('fake_open');
+      addTearDown(() => bin.delete(recursive: true));
+      for (final name in ['open', 'xdg-open']) {
+        await Fs.file('${bin.path}/$name').write('#!/bin/sh\nsleep 20 &\nexit 0\n');
+        await Process.run('chmod', ['755', '${bin.path}/$name']);
+      }
+      final sw = Stopwatch()..start();
+      final r = await runDart('''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() => Shell.open('https://example.com');
+''', env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'}, timeout: const Duration(seconds: 15));
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
+    });
+
     test('bytes() is a view, not a copy', () async {
       final out = await Shell.run(['printf', 'abc']);
       final a = await out.bytes();

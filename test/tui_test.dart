@@ -1163,6 +1163,39 @@ void main() {
   });
 
   group('prompts and ctrl+c', () {
+    test('quitting answers open prompts with null so callers finish', () async {
+      final log = <String>[];
+      late App<int> app;
+      final t = testSession<int>(
+        0,
+        (s, a) {
+          app = a;
+          return Screen((r) {}, keys: {
+            'e': (
+              '',
+              () async {
+                try {
+                  log.add('ask=${await Console.ask('name?')}');
+                } finally {
+                  log.add('finally');
+                }
+              },
+            ),
+          });
+        },
+        width: 50,
+        height: 10,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('e'));
+      await t.pump();
+      app.quit();
+      await t.pump();
+      expect(log, ['ask=null', 'finally']);
+      expect(await Console.ask('after'), isNull);
+      t.close();
+    });
+
     test('ctrl+c closes an open prompt like escape', () async {
       var reached = false;
       final t = testSession<int>(
@@ -1289,6 +1322,22 @@ void main() {
   });
 
   group('input (in-memory)', () {
+    test('arrows move the terminal cursor even when no cell changes', () async {
+      String? cursor(String out) {
+        final m = RegExp(r'\x1b\[(\d+);(\d+)H\x1b\[\?25h').allMatches(out);
+        return m.isEmpty ? null : '${m.last.group(1)};${m.last.group(2)}';
+      }
+
+      final f = Field(text: 'abc');
+      final s = testSession<int>(0, (st, app) => Screen((r) => r.input(f)), width: 20, height: 4);
+      await s.pump();
+      expect(cursor(s.output), '1;4');
+      s.bytes(utf8.encode('\x1b[D'));
+      expect(await s.pump(), isTrue);
+      expect(cursor(s.output), '1;3');
+      s.close();
+    });
+
     Future<(TestSession<int>, Field)> field({
       String text = '',
       List<String> history = const [],

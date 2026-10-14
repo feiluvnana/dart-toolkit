@@ -34,6 +34,7 @@ import 'http.dart';
 // ignore: unnecessary_import
 import 'core.dart';
 
+import 'src/abort.dart' as abort;
 import 'src/charset.dart' as charset;
 import 'src/origin.dart' as names;
 import 'src/retry.dart' as retry;
@@ -367,8 +368,13 @@ final class _Crawl<T> {
     g?.complete();
   }
 
+  /// Fired by [cancel]: wakes retry backoffs and aborts requests in flight,
+  /// so a cancelled crawl lets the script exit.
+  final _abort = abort.AbortSignal();
+
   void cancel() {
     _cancelled = true;
+    _abort.abort();
     resume();
     _queue.clear();
     _head = 0;
@@ -547,7 +553,8 @@ final class _Crawl<T> {
     Duration? retryAfter;
     for (var attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) {
-        await Future<void>.delayed(retry.backoff(attempt - 1, retryAfter));
+        await abort.sleep(retry.backoff(attempt - 1, retryAfter), _abort);
+        if (_cancelled) throw const io.HttpException('aborted');
       }
       retryAfter = null;
       try {
@@ -576,8 +583,8 @@ final class _Crawl<T> {
     // Transport retries (and 5xx/429 with backoff) happen inside Http; an
     // exhausted 5xx/429 still comes back as a response and fails the visit
     // here, like any other failure.
-    final res = await Http.get(url,
-        headers: headers, timeout: timeout, retries: retries);
+    final res = await abort.withAbort(
+        _abort, () => Http.get(url, headers: headers, timeout: timeout, retries: retries));
     final status = res.status();
     if (status == 429 || status >= 500) {
       final finalUrl = res.url();

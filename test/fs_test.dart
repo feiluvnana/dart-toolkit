@@ -29,6 +29,12 @@ void main() {
       expect(await Fs.entry(p('missing')), isNull);
     });
 
+    test('a trailing slash never follows a link', () async {
+      await Fs.dir(p('sub')).create();
+      await Fs.link(p('ln')).create(p('sub'));
+      expect(await Fs.entry('${p('ln')}/'), isA<Link>());
+    });
+
     test('handles do no I/O and compare by path', () {
       expect(Fs.file(p('x')), Fs.file(p('x')));
       expect(Fs.file(p('x')), isNot(Fs.dir(p('x'))));
@@ -133,6 +139,18 @@ void main() {
       expect(await Fs.file(p('outside.txt')).text(), 'o');
     });
 
+    test('a merging dir copy keeps nested folder modes and mtimes', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      await Fs.file(p('src/a/b/f.txt')).write('f');
+      await Process.run('chmod', ['700', p('src/a')]);
+      await Process.run('touch', ['-t', '200102030405.06', p('src/a/b'), p('src/a')]);
+      await Fs.dir(p('dst')).create();
+      await Fs.dir(p('src')).copy(p('dst'));
+      expect((await Directory(p('dst/a')).stat()).mode & 0xfff, 448);
+      expect((await Directory(p('dst/a/b')).stat()).modified.year, 2001);
+      expect((await Directory(p('dst/a')).stat()).modified.year, 2001);
+    });
+
     test('dir copy over a file/folder collision throws before writing', () async {
       await Fs.file(p('src/a.txt')).write('a');
       await Fs.file(p('src/x')).write('file');
@@ -146,6 +164,18 @@ void main() {
       await expectLater(Fs.file(p('d')).copy(p('e')), throwsA(isA<FileSystemException>()));
       await expectLater(Fs.dir(p('missing')).move(p('e')), throwsA(isA<FileSystemException>()));
       expect(await Fs.entry(p('e')), isNull);
+    });
+
+    test('an unreadable file fails the copy as a catchable error', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      for (var i = 0; i < 50; i++) {
+        await Fs.file(p('src/d$i/f.txt')).write('x');
+      }
+      await Fs.file(p('src/zz')).write('secret');
+      await Process.run('chmod', ['000', p('src/zz')]);
+      addTearDown(() => Process.run('chmod', ['600', p('src/zz')]));
+      await Fs.dir(p('dst')).create();
+      await expectLater(Fs.dir(p('src')).copy(p('dst')), throwsA(isA<FileSystemException>()));
     });
 
     test('F16: dir copy keeps folder modes and mtimes', () async {

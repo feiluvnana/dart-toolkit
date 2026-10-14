@@ -220,6 +220,17 @@ void main() {
       expect(await Pool.run(() => 8), 8);
     });
 
+    test('a call made while close() runs completes on a fresh pool', () async {
+      for (final us in [0, 200, 700, 1500]) {
+        final first = Pool.runAll([1, 2, 3], _slow);
+        await Future<void>.delayed(Duration(microseconds: us));
+        unawaited(Pool.close());
+        final late = Pool.run(() => 2);
+        await first.then((_) {}, onError: (_) {});
+        expect(await late.timeout(const Duration(seconds: 5)), 2, reason: 'after ${us}us');
+      }
+    });
+
     test('close during a running job leaves a script that exits', () async {
       final r = await runDart('''
 import 'dart:async';
@@ -241,4 +252,9 @@ Future<void> main() async {
       expect(readers, isEmpty);
     });
   });
+}
+
+int _slow(int x) {
+  sleep(const Duration(milliseconds: 30));
+  return x;
 }

@@ -96,7 +96,7 @@ List<int> percentDecode(String s) {
   for (var i = 0; i < s.length; i++) {
     final c = s.codeUnitAt(i);
     if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
+      final v = _hexByte(s, i + 1);
       if (v != null) {
         out.add(v);
         i += 2;
@@ -112,6 +112,19 @@ List<int> percentDecode(String s) {
   return out;
 }
 
+/// The byte spelled by the two hex digits at [i], or null (`int.tryParse`
+/// would also take `+1` and `-1`).
+int? _hexByte(String s, int i) {
+  int digit(int c) => switch (c) {
+        >= 0x30 && <= 0x39 => c - 0x30,
+        >= 0x41 && <= 0x46 => c - 0x37,
+        >= 0x61 && <= 0x66 => c - 0x57,
+        _ => -1,
+      };
+  final hi = digit(s.codeUnitAt(i)), lo = digit(s.codeUnitAt(i + 1));
+  return hi < 0 || lo < 0 ? null : hi << 4 | lo;
+}
+
 String percentDecodeString(String s) {
   // A bare `filename=` is already text; only unescape percent runs so
   // `%20` reads as a space while other bytes stay as they are.
@@ -119,7 +132,7 @@ String percentDecodeString(String s) {
   for (var i = 0; i < s.length; i++) {
     final c = s.codeUnitAt(i);
     if (c == 0x25 && i + 2 < s.length) {
-      final v = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
+      final v = _hexByte(s, i + 1);
       if (v != null && v >= 0x20 && v < 0x7F) {
         out.writeCharCode(v);
         i += 2;

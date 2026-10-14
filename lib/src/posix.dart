@@ -81,23 +81,35 @@ Map<int, List<String>> groupByMode(List<String> paths, List<int> modes) {
 
 /// Set a folder's mtime (`dart:io` has no `Directory.setLastModified`).
 /// No-op on Windows. Best-effort; precision differs per OS (macOS `touch -t`
-/// keeps whole seconds only; Linux `touch -d @s.frac` keeps sub-seconds) and
-/// callers document that.
-Future<void> setDirMtime(String path, DateTime mtime) async {
+/// keeps whole seconds only; Linux `touch -d @s.frac` keeps milliseconds)
+/// and callers document that.
+Future<void> setDirMtime(String path, DateTime mtime) => setDirMtimes({path: mtime});
+
+/// [setDirMtime] for many folders: one `touch` per distinct stamp (at the
+/// precision `touch` keeps) and ~200 paths, not one fork per folder.
+Future<void> setDirMtimes(Map<String, DateTime> mtimes) async {
   if (!isPosix) return;
-  try {
-    final List<String> args;
-    if (io.Platform.isMacOS) {
-      String two(int n) => n.toString().padLeft(2, '0');
-      final t =
-          '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
-      args = ['-t', t, '--', path];
-    } else {
-      final secs = mtime.millisecondsSinceEpoch / 1000;
-      args = ['-d', '@${secs.toStringAsFixed(3)}', '--', path];
+  final byStamp = <String, List<String>>{};
+  for (final MapEntry(key: path, value: mtime) in mtimes.entries) {
+    (byStamp[_touchStamp(mtime)] ??= []).add(path);
+  }
+  for (final MapEntry(key: stamp, value: paths) in byStamp.entries) {
+    for (var i = 0; i < paths.length; i += 200) {
+      final chunk = paths.sublist(i, min(i + 200, paths.length));
+      try {
+        await io.Process.run('touch', [io.Platform.isMacOS ? '-t' : '-d', stamp, '--', ...chunk]);
+      } catch (_) {}
     }
-    await io.Process.run('touch', args);
-  } catch (_) {}
+  }
+}
+
+String _touchStamp(DateTime mtime) {
+  if (!io.Platform.isMacOS) {
+    return '@${(mtime.millisecondsSinceEpoch / 1000).toStringAsFixed(3)}';
+  }
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${mtime.year.toString().padLeft(4, '0')}${two(mtime.month)}${two(mtime.day)}'
+      '${two(mtime.hour)}${two(mtime.minute)}.${two(mtime.second)}';
 }
 
 /// Copy a tree with `cp -pPR` (keeps modes, times, links) on POSIX.

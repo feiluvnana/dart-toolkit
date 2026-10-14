@@ -20,6 +20,9 @@ void main() {
     expect(parseRetryAfter(null), isNull);
     expect(parseRetryAfter(' 7 '), const Duration(seconds: 7));
     expect(parseRetryAfter('-3'), isNull);
+    expect(parseRetryAfter('+5'), isNull);
+    expect(parseRetryAfter('9223372036854775807')! > const Duration(days: 1), isTrue);
+    expect(backoff(0, parseRetryAfter('18446744073709')), const Duration(minutes: 5));
     expect(parseRetryAfter('soon'), isNull);
     final later = HttpDate.format(DateTime.now().toUtc().add(const Duration(minutes: 2)));
     expect(parseRetryAfter(later)!.inSeconds, inInclusiveRange(100, 120));

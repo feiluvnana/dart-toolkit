@@ -37,6 +37,10 @@ var _input = _makeInput();
 io.Process? _tty;
 StreamSubscription<List<int>>? _ttySub;
 Stream<List<int>>? _stdinFallback;
+
+/// True while no listener has taken stdin itself (the piped fallback), so a
+/// synchronous `readLineSync` is still allowed and loses nothing.
+bool get stdinUnclaimed => _stdinFallback == null;
 var _session = 0;
 
 Future<void> _startInput() async {

@@ -170,6 +170,9 @@ final class _Session<S> implements term.TuiBridge {
   var _h = 24;
   List<List<_Cell>> _grid = const [];
   List<List<_Cell>>? _shown;
+
+  /// The cursor escape last written, so a move alone still paints.
+  String? _shownCursor;
   var _repaint = true;
 
   final _pending = <int>[];
@@ -442,7 +445,17 @@ final class _Session<S> implements term.TuiBridge {
 
   void _quit() {
     _quitFlag = true;
+    _cancelPrompts();
     _wake();
+  }
+
+  /// Prompts still open get null, like escape, so their callers resume and
+  /// run their `finally` blocks.
+  void _cancelPrompts() {
+    for (final p in [..._prompts]) {
+      p.cancel();
+    }
+    _prompts.clear();
   }
 
   // --- term.TuiBridge (Console-in-Tui routing) -----------------------------
@@ -510,6 +523,7 @@ final class _Session<S> implements term.TuiBridge {
   @override
   Future<String?> promptAsk(String question, {required bool secret}) {
     final p = _Ask(question, secret: secret);
+    if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
     _prompts.add(p);
     _dirtyAndWake();
     return p.done.future;
@@ -518,6 +532,7 @@ final class _Session<S> implements term.TuiBridge {
   @override
   Future<bool?> promptConfirm(String question, bool or) {
     final p = _Confirm(question, or);
+    if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
     _prompts.add(p);
     _dirtyAndWake();
     return p.done.future;
@@ -529,6 +544,7 @@ final class _Session<S> implements term.TuiBridge {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
     final p = _Choose(question, choices, initial);
+    if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
     _prompts.add(p);
     _dirtyAndWake();
     return p.done.future;
@@ -1389,6 +1405,7 @@ final class _Session<S> implements term.TuiBridge {
   Future<void> _leave() async {
     _done = true;
     _unwatchSignals();
+    _cancelPrompts();
     if (!_entered) return;
     _wake();
     await Future.wait(_subs.map((sub) async {
