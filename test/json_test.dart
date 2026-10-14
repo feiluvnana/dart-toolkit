@@ -109,6 +109,11 @@ void main() {
       expect(Json.parse('3.5').value<int>(), isNull);
       expect(Json.parse('3.5').value<double>(), 3.5);
     });
+
+    test('a double at 2^63 or beyond is not an int', () {
+      expect(Json.parse('9223372036854775808.0').value<int>(), isNull);
+      expect(Json.parse('-9223372036854775808.0').value<int>(), -9223372036854775808);
+    });
   });
 
   group('typed lists and maps (V13)', () {

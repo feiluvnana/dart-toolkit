@@ -148,6 +148,10 @@ final class Browser implements Closeable {
   final _wrappers = Expando<Page>();
   final _known = <Page>[];
 
+  /// Tabs this wrapper opened: a connected browser's [close] closes these
+  /// and leaves the host's own tabs alone.
+  final _opened = <Page>{};
+
   /// One shared download folder per browser; concurrent downloads are told
   /// apart by their DevTools `guid`, so they never clash.
   String? _downloadDir;
@@ -177,6 +181,7 @@ final class Browser implements Closeable {
     final limit = timeout ?? _defaultTimeout;
     final page = await _browser.newPage();
     final wrap = _wrap(page);
+    _opened.add(wrap);
     try {
       if (width != null || height != null) {
         await page.setViewport(pp.DeviceViewport(width: width ?? 1280, height: height ?? 1024));
@@ -222,8 +227,8 @@ final class Browser implements Closeable {
   /// Every open tab, popups included (cached wrappers, one per tab).
   Future<List<Page>> pages() async => [for (final p in await _browser.pages) _wrap(p)];
 
-  /// Close every tab and the process it launched (or disconnect a connected
-  /// browser, leaving it running). Removes downloaded copies. Idempotent.
+  /// Close every tab and the process it launched (for a connected browser:
+  /// close the tabs [open] made, then disconnect, leaving it running). Removes downloaded copies. Idempotent.
   /// Removes the exit hook; when the last hook goes the signal subscriptions
   /// are cancelled so the script may exit.
   @override
@@ -256,6 +261,22 @@ final class Browser implements Closeable {
           await _temp?.delete(recursive: true);
         } catch (_) {}
       } else {
+        // Wait for each target's destroyed event before disconnecting: the
+        // engine still handles them after disconnect and throws from its
+        // closed controller, uncaught.
+        final opened = List<Page>.of(_opened);
+        final gone = [
+          for (final wrap in opened)
+            _browser.onTargetDestroyed
+                .firstWhere((t) => t == wrap._page.target)
+                .timeout(const Duration(seconds: 2), onTimeout: () => wrap._page.target),
+        ];
+        for (final wrap in opened) {
+          await wrap.close();
+        }
+        try {
+          await Future.wait(gone);
+        } catch (_) {}
         _browser.disconnect();
       }
     } catch (_) {
@@ -732,7 +753,8 @@ final class Page implements Closeable {
     }
     // The completed event fires when the file is final: no size polling.
     final path = finished.filePath ?? p.join(dir, begun.suggestedFilename);
-    return Download._(io.File(path), begun.suggestedFilename);
+    final safe = origin.stripPath(begun.suggestedFilename);
+    return Download._(io.File(path), safe.isEmpty ? 'download' : safe);
   }
 
   /// Close this tab. Idempotent.
@@ -743,6 +765,7 @@ final class Page implements Closeable {
     // Prune from the browser's known wrappers so they don't retain stale subs.
     try {
       _browser._known.remove(this);
+      _browser._opened.remove(this);
     } catch (_) {}
     await _detach();
     for (final dir in _stagedDirs) {
@@ -943,7 +966,7 @@ final class Download with Reader {
   final io.File _file;
   final String _name;
 
-  /// The file name the site suggested.
+  /// The file name the site suggested, made safe like `Response.name()`.
   String name() => _name;
 
   @override

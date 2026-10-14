@@ -67,6 +67,22 @@ Future<void> main() async {
       expect(r.stderr, 'live-err\n');
     });
 
+    test('Shell.open never passes a target as a launcher option', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX launchers only');
+      final bin = await Directory.systemTemp.createTemp('fake_open');
+      addTearDown(() => bin.delete(recursive: true));
+      for (final name in ['open', 'xdg-open']) {
+        await Fs.file('${bin.path}/$name').write('#!/bin/sh\nprintf "%s|" "\$@" > "${bin.path}/argv"\n');
+        await Process.run('chmod', ['755', '${bin.path}/$name']);
+      }
+      final r = await runDart('''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
+''', env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'});
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      expect(await Fs.file('${bin.path}/argv').text(), './-a/System/Applications/Calculator.app|');
+    });
+
     test('Shell.open returns and exits while the opened app keeps running', () async {
       if (Platform.isWindows) markTestSkipped('POSIX launchers only');
       final bin = await Directory.systemTemp.createTemp('fake_open');

@@ -495,7 +495,7 @@ final class Response with Reader implements Closeable {
   @override
   Future<List<int>> bytes() async {
     if (_closed) {
-      throw StateError('response is closed: ${url()}');
+      throw StateError('response is closed: ${names.redact(url())}');
     }
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
@@ -503,7 +503,7 @@ final class Response with Reader implements Closeable {
     final reading = _reading;
     if (reading != null) return (await reading).asUnmodifiableView();
     if (_streaming) {
-      throw StateError('body already streaming: ${url()}');
+      throw StateError('body already streaming: ${names.redact(url())}');
     }
     _streaming = true;
     return (await (_reading = _readAll())).asUnmodifiableView();
@@ -525,20 +525,20 @@ final class Response with Reader implements Closeable {
   @override
   Stream<List<int>> stream() {
     if (_closed) {
-      throw StateError('response is closed: ${url()}');
+      throw StateError('response is closed: ${names.redact(url())}');
     }
     final cached = _cached;
     if (cached != null) {
       if (!ok()) {
         throw HttpException(
-          'HTTP ${status()}: ${url()}',
-          uri: Uri.tryParse(url()),
+          'HTTP ${status()}: ${names.redact(url())}',
+          uri: Uri.tryParse(names.redact(url())),
         );
       }
       return Stream.value(cached.asUnmodifiableView());
     }
     if (_streaming) {
-      throw StateError('body already streaming: ${url()}');
+      throw StateError('body already streaming: ${names.redact(url())}');
     }
     if (!ok()) {
       // Only a 2xx body can be piped, so an error page is never saved.
@@ -546,8 +546,8 @@ final class Response with Reader implements Closeable {
       // still work only when the body was never piped.
       unawaited(close());
       throw HttpException(
-        'HTTP ${status()}: ${url()}',
-        uri: Uri.tryParse(url()),
+        'HTTP ${status()}: ${names.redact(url())}',
+        uri: Uri.tryParse(names.redact(url())),
       );
     }
     _streaming = true;
@@ -646,7 +646,7 @@ final class Response with Reader implements Closeable {
         onTimeout: (sink) {
           sink.addError(
             TimeoutException(
-              'body stalled for $_timeout: $_url',
+              'body stalled for $_timeout: ${names.redact(_url)}',
               _timeout,
             ),
           );
@@ -804,8 +804,8 @@ Future<Response> _send(
       if (check && !res.ok()) {
         final snippet = await res._snippet();
         throw HttpException(
-          'HTTP ${res.status()} $method ${res.url()}${snippet.isEmpty ? '' : ': $snippet'}',
-          uri: Uri.tryParse(res.url()),
+          'HTTP ${res.status()} $method ${names.redact(res.url())}${snippet.isEmpty ? '' : ': $snippet'}',
+          uri: Uri.tryParse(names.redact(res.url())),
         );
       }
       return res;
@@ -882,8 +882,8 @@ Future<Response> _attempt(
       if (hop >= Http._maxRedirects) {
         await _detach(resp);
         throw HttpException(
-          'too many redirects (>${Http._maxRedirects}): $currentUri',
-          uri: currentUri,
+          'too many redirects (>${Http._maxRedirects}): ${names.redact(currentUri)}',
+          uri: Uri.parse(names.redact(currentUri)),
         );
       }
       // Small redirect bodies drain back to the pool for reuse; a stalled
@@ -892,7 +892,8 @@ Future<Response> _attempt(
       final parsed = Uri.tryParse(location);
       final next = parsed == null ? null : currentUri.resolveUri(parsed);
       if (next == null || (next.scheme != 'http' && next.scheme != 'https') || next.host.isEmpty) {
-        throw HttpException('redirect to an unsupported URL "$location": $currentUri', uri: currentUri);
+        throw HttpException('redirect to an unsupported URL "${names.redact(location)}": ${names.redact(currentUri)}',
+            uri: Uri.parse(names.redact(currentUri)));
       }
       final code = resp.statusCode;
       if ((code == 301 || code == 302) && currentMethod == 'POST') {
@@ -910,8 +911,8 @@ Future<Response> _attempt(
         // bytes back, but a streamed body is gone. Failing loudly beats
         // silently downgrading to a GET without a body.
         throw HttpException(
-          'redirect $code cannot resend a streamed body: $currentUri',
-          uri: currentUri,
+          'redirect $code cannot resend a streamed body: ${names.redact(currentUri)}',
+          uri: Uri.parse(names.redact(currentUri)),
         );
       }
       if (currentUri.scheme != next.scheme ||
@@ -961,13 +962,12 @@ Map<String, String>? _withoutContent(Map<String, String>? headers) {
   return out;
 }
 
+/// Headers a cross-origin hop must not carry: the standard credentials and
+/// any custom one named like a secret (`X-Api-Key`, `Private-Token`, …).
 Map<String, String>? _stripSensitiveHeaders(Map<String, String>? headers) {
   if (headers == null) return null;
   final out = Map<String, String>.of(headers);
-  out.removeWhere((key, _) {
-    final k = key.toLowerCase();
-    return k == 'authorization' || k == 'cookie' || k == 'proxy-authorization';
-  });
+  out.removeWhere((key, _) => names.isSecretHeader(key));
   return out;
 }
 
@@ -983,7 +983,7 @@ Future<HttpClientResponse> _singleSend(
   Duration limit,
 ) async {
   TimeoutException headerTimeout() =>
-      TimeoutException('no headers for $limit: $uri', limit);
+      TimeoutException('no headers for $limit: ${names.redact(uri)}', limit);
   final req = await client.openUrl(method, uri).timeout(limit, onTimeout: () {
     throw headerTimeout();
   });
@@ -1093,7 +1093,7 @@ Future<void> _upload(HttpClientRequest req, Stream<List<int>> body, Duration lim
   void arm() {
     watchdog?.cancel();
     watchdog = Timer(limit, () {
-      if (!stalled.isCompleted) stalled.completeError(TimeoutException('upload stalled for $limit: $uri', limit));
+      if (!stalled.isCompleted) stalled.completeError(TimeoutException('upload stalled for $limit: ${names.redact(uri)}', limit));
     });
   }
 

@@ -21,6 +21,8 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math';
 
+import 'src/terminal.dart' as term;
+
 /// A schema definition, read back with `context(param)` as a `T`. Sealed:
 /// the only inhabitants are [Flag], [Opt], [Multi] and [Arg],
 /// so the type comes from the definition, not the call site.
@@ -583,7 +585,8 @@ Duration? _parseDuration(String raw) {
   return negative ? -parsed : parsed;
 }
 
-String _oneLine(String s) => s.split('\n').first.trim();
+/// The first line of [s], controls shown as `�`: messages quote argv.
+String _oneLine(String s) => term.plainLabel(s.split('\n').first.trim());
 
 Command? _findSub(List<Command> commands, String token) {
   for (final c in commands) {

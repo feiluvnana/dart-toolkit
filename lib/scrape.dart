@@ -37,6 +37,7 @@ import 'core.dart';
 import 'src/abort.dart' as abort;
 import 'src/charset.dart' as charset;
 import 'src/origin.dart' as names;
+import 'src/posix.dart' as posix;
 import 'src/retry.dart' as retry;
 
 export 'core.dart';
@@ -50,13 +51,17 @@ abstract final class Scrape {
   /// crawl: nothing new starts, visits in flight are dropped.
   ///
   /// Up to [limit] workers fetch at once; [delay] spaces
-  /// requests to one host. Routing is by function: [Visit.follow] queues
+  /// requests to one host. [headers] go with every request, but credential
+  /// headers (Authorization, Cookie, `X-Api-Key`, …) only to the origins of
+  /// [urls]: a followed link elsewhere never carries them. Routing is by function: [Visit.follow] queues
   /// URLs for a handler. Each URL is visited once (absolute, fragment
   /// dropped). A 404 reaches its handler. Failures end the run, rethrown
   /// from the stream, unless [onError] reports the URL and the crawl goes on
   /// without that page. In HTTP mode the shared client is held for the crawl
   /// lifetime (see [Http.hold]); in browser mode [limit] tabs are kept
-  /// and reused with `go` instead of opening one tab per URL.
+  /// and reused with `go` instead of opening one tab per URL. [cache] is a
+  /// folder that replays pages on a rerun, keyed by URL and the credentials
+  /// sent; a folder the crawl creates is private (0700).
   static Stream<T> crawl<T>(
     Iterable<String> urls,
     Future<void> Function(Visit<T> visit) handler, {
@@ -333,7 +338,9 @@ final class _Crawl<T> {
     }
     try {
       for (final u in urls) {
-        enqueue(normalize(null, u), handler);
+        final url = normalize(null, u);
+        if (url != null) _home.add(names.originOf(Uri.parse(url)));
+        enqueue(url, handler);
       }
     } catch (e, st) {
       _fail(null, e, st);
@@ -515,7 +522,8 @@ final class _Crawl<T> {
     }
     // A fetch that finished after a failure or cancel, or that redirected
     // to a URL already visited, is dropped; its tab still goes back.
-    final landed = visit.url();
+    // Dedupe as enqueue does: a Location may carry a #fragment.
+    final landed = Uri.parse(visit.url()).removeFragment().toString();
     if (_cancelled ||
         _failure != null ||
         (landed != task.url && !_seen.add(landed))) {
@@ -562,8 +570,8 @@ final class _Crawl<T> {
         if (fetched.status == 429 || fetched.status >= 500) {
           retryAfter = retry.parseRetryAfter(fetched.retryAfter);
           lastError = io.HttpException(
-            'HTTP ${fetched.status}: $url',
-            uri: Uri.tryParse(url),
+            'HTTP ${fetched.status}: ${names.redact(url)}',
+            uri: Uri.tryParse(names.redact(url)),
           );
           // A 5xx/429 tab is healthy: back to the pool for the retry.
           final tab = fetched.page;
@@ -579,18 +587,29 @@ final class _Crawl<T> {
     throw lastError!;
   }
 
+  /// Origins of the start URLs: the only ones that get credential headers.
+  final _home = <String>{};
+
+  /// [headers] for [url]: a followed link to another origin (a page can
+  /// link anywhere) gets them without the credentials.
+  Map<String, String>? _headersFor(String url) {
+    final h = headers;
+    if (h == null || _home.contains(names.originOf(Uri.parse(url)))) return h;
+    return {for (final e in h.entries) if (!names.isSecretHeader(e.key)) e.key: e.value};
+  }
+
   Future<_Fetched<T>> _fetchHttp(String url) async {
     // Transport retries (and 5xx/429 with backoff) happen inside Http; an
     // exhausted 5xx/429 still comes back as a response and fails the visit
     // here, like any other failure.
     final res = await abort.withAbort(
-        _abort, () => Http.get(url, headers: headers, timeout: timeout, retries: retries));
+        _abort, () => Http.get(url, headers: _headersFor(url), timeout: timeout, retries: retries));
     final status = res.status();
     if (status == 429 || status >= 500) {
       final finalUrl = res.url();
       await res.close();
-      throw io.HttpException('HTTP $status: $finalUrl',
-          uri: Uri.tryParse(finalUrl));
+      throw io.HttpException('HTTP $status: ${names.redact(finalUrl)}',
+          uri: Uri.tryParse(names.redact(finalUrl)));
     }
     List<int> rawBody;
     String? contentType;
@@ -661,7 +680,25 @@ final class _Crawl<T> {
     }
   }
 
-  String _cacheKey(String url) => Hash.md5().add(url).hex();
+  /// The URL plus the credentials sent with it: a crawl with other
+  /// credentials never replays this one's pages.
+  String _cacheKey(String url) {
+    final secrets = [
+      for (final e in (_headersFor(url) ?? const <String, String>{}).entries)
+        if (names.isSecretHeader(e.key)) '${e.key.toLowerCase()}:${e.value}',
+    ]..sort();
+    return Hash.md5().add(secrets.isEmpty ? url : '$url\n${secrets.join('\n')}').hex();
+  }
+
+  /// Creates the cache folder once; a folder the crawl makes is private
+  /// (0700: entries may hold authenticated pages). An existing folder keeps
+  /// its mode.
+  late final Future<void> _cacheDir = () async {
+    final dir = Fs.dir(cache!);
+    if (await dir.exists()) return;
+    await dir.create();
+    await posix.chmod(cache!, 0x1c0);
+  }();
 
   Future<_Hit?> _readCache(String url) async {
     try {
@@ -688,6 +725,7 @@ final class _Crawl<T> {
 
   Future<void> _writeCache(String url, _Fetched<T> fetched) async {
     try {
+      await _cacheDir;
       final dir = cache!;
       final key = _cacheKey(url);
       final visit = fetched.visit;

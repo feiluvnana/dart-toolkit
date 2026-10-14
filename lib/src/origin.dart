@@ -78,7 +78,8 @@ String? dispositionName(String? header) {
 
 /// A name safe to create on Linux, macOS and Windows: the last path segment
 /// of `a/b\c`, reserved characters replaced by `_`, trailing dots and spaces
-/// dropped, reserved device names (`CON`, `NUL`, ...) prefixed with `_`.
+/// dropped, reserved device names (`CON`, `NUL`, ...) and names starting
+/// with `.` or `-` (a dotfile, an option to the next command) prefixed with `_`.
 /// Empty when nothing usable is left (callers fall back to `download`/`upload`).
 /// Used for header filenames and upload staging alike.
 String stripPath(String name) {
@@ -88,7 +89,7 @@ String stripPath(String name) {
       .replaceAll(RegExp(r'[. ]+$'), '');
   final reserved = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$',
       caseSensitive: false);
-  return reserved.hasMatch(last) ? '_$last' : last;
+  return reserved.hasMatch(last) || last.startsWith('.') || last.startsWith('-') ? '_$last' : last;
 }
 
 List<int> percentDecode(String s) {
@@ -158,3 +159,37 @@ String? baseUrlFor({String? url, String? path}) {
   }
   return null;
 }
+
+/// [url] fit for an error message or log: no `user:password@`, and the
+/// values of credential-looking query parameters (`token`, `key`, `sig`,
+/// `password`, …) shown as `***`. Not a URL to request.
+String redact(Object url) {
+  final uri = url is Uri ? url : Uri.tryParse('$url');
+  if (uri == null) return '$url';
+  var out = uri.userInfo.isEmpty ? uri : uri.replace(userInfo: '');
+  if (uri.hasQuery && _secretParam.hasMatch(uri.query)) {
+    final masked = uri.query.split('&').map((pair) {
+      final eq = pair.indexOf('=');
+      if (eq < 0 || !_secretKey.hasMatch(pair.substring(0, eq))) return pair;
+      return '${pair.substring(0, eq)}=***';
+    }).join('&');
+    out = out.replace(query: masked);
+  }
+  return out.toString();
+}
+
+final _secretKey = RegExp(r'(token|key|secret|passw|pwd|auth|sig|session|code|credential)', caseSensitive: false);
+final _secretParam = RegExp(r'(?:^|&)[^=&]*(token|key|secret|passw|pwd|auth|sig|session|code|credential)[^=&]*=', caseSensitive: false);
+
+/// True for a request header that carries credentials: the standard ones
+/// and any custom one named like a secret (`X-Api-Key`, `Private-Token`).
+/// Such headers never leave the origin they were meant for.
+bool isSecretHeader(String name) {
+  final k = name.toLowerCase();
+  return k == 'authorization' || k == 'cookie' || k == 'proxy-authorization' || _secretHeader.hasMatch(k);
+}
+
+final _secretHeader = RegExp(r'token|key|secret|passw|auth|session|credential|signature');
+
+/// `scheme://host:port` of [url], the unit credentials are scoped to.
+String originOf(Uri url) => '${url.scheme}://${url.host}:${url.port}';

@@ -41,6 +41,10 @@ void main() {
         } else {
           request.response.write('recovered');
         }
+      } else if (path == '/rfrag') {
+        request.response
+          ..statusCode = 302
+          ..headers.set('location', '/a#top');
       } else if (path == '/r1' || path == '/r2') {
         request.response
           ..statusCode = HttpStatus.found
@@ -111,6 +115,42 @@ void main() {
       } finally {
         await dir.delete(recursive: true);
       }
+    });
+
+    test('a redirect to a #fragment of a visited page is not a new visit', () async {
+      final got = await Scrape.crawl<String>(['$base/a', '$base/rfrag'], (v) async {
+        v.emit(v.url());
+      }, limit: 1).toList();
+      expect(got, hasLength(1));
+    });
+
+    test('the cache is private and keyed by the credentials sent', () async {
+      final root = await Directory.systemTemp.createTemp('scrape_private');
+      addTearDown(() => root.delete(recursive: true));
+      final dir = '${root.path}/cache';
+      Future<void> crawl(String token) => Scrape.crawl<String>(['$base/a'], (v) async {},
+          cache: dir, headers: {'authorization': token}).toList();
+      hits.clear();
+      await crawl('Bearer A');
+      await crawl('Bearer A');
+      expect(hits.where((h) => h.endsWith('/a')), hasLength(1));
+      await crawl('Bearer B');
+      expect(hits.where((h) => h.endsWith('/a')), hasLength(2));
+      if (!Platform.isWindows) expect((await Directory(dir).stat()).mode & 0x1ff, 0x1c0);
+    });
+
+    test('credential headers stay on the start origin', () async {
+      final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final seen = <String?>[];
+      other.listen((r) {
+        seen..add(r.headers.value('authorization'))..add(r.headers.value('accept'));
+        r.response.close();
+      });
+      addTearDown(() => other.close(force: true));
+      await Scrape.crawl<String>(['$base/a'], (v) async {
+        v.follow(['http://127.0.0.1:${other.port}/x'], (w) async {});
+      }, headers: {'authorization': 'Bearer T', 'accept': 'text/html'}).toList();
+      expect(seen, [null, 'text/html']);
     });
 
     test('a paused consumer pauses the crawl', () async {

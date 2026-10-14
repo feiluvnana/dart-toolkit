@@ -151,6 +151,16 @@ void main() {
       expect((await Directory(p('dst/a')).stat()).modified.year, 2001);
     });
 
+    test('a merging dir copy replaces a dest link to a folder, never follows it', () async {
+      await Fs.file(p('src/sub/f.txt')).write('f');
+      await Fs.dir(p('elsewhere')).create();
+      await Fs.link(p('dst/sub')).create(p('elsewhere'));
+      await Fs.dir(p('src')).copy(p('dst'));
+      expect(await Fs.entry(p('dst/sub')), isA<Dir>());
+      expect(await Fs.file(p('dst/sub/f.txt')).text(), 'f');
+      expect(await Fs.dir(p('elsewhere')).list(), isEmpty);
+    });
+
     test('dir copy over a file/folder collision throws before writing', () async {
       await Fs.file(p('src/a.txt')).write('a');
       await Fs.file(p('src/x')).write('file');
@@ -250,6 +260,23 @@ void main() {
       expect((await f.parent()).path(), tmp.path);
       await f.delete();
       expect(await f.exists(), isFalse);
+    });
+
+    test('overwriting a 0600 file never exposes the new bytes in a 0644 temp', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      await Fs.file(p('token')).write('old');
+      await Process.run('chmod', ['600', p('token')]);
+      final modes = <int>[];
+      Stream<List<int>> slow() async* {
+        yield [1];
+        for (final e in Directory(tmp.path).listSync()) {
+          if (e.path.contains('.token.tmp')) modes.add(e.statSync().mode & 0x1ff);
+        }
+        yield [2];
+      }
+
+      await Fs.file(p('token')).consume(slow());
+      expect(modes, [0x180]);
     });
 
     test('F7: writes keep the old mode and go through symlinks', () async {

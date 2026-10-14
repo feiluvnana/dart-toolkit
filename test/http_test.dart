@@ -605,6 +605,14 @@ void edgeTests() {
             r.response
               ..statusCode = 302
               ..headers.set('location', 'mailto:x@y');
+          case '/denied':
+            r.response
+              ..statusCode = 401
+              ..write('denied');
+          case '/to-other':
+            r.response
+              ..statusCode = 302
+              ..headers.set('location', r.uri.queryParameters['to']!);
           case '/to-bad':
             r.response
               ..statusCode = 302
@@ -669,6 +677,37 @@ Future<void> main() async {
 }
 ''', timeout: const Duration(seconds: 10));
       expect(r.exitCode, 0, reason: '${r.stderr}');
+    });
+
+    test('a cross-origin redirect drops credential headers, custom ones too', () async {
+      final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final seen = <String, String?>{};
+      other.listen((r) {
+        for (final h in ['authorization', 'x-api-key', 'private-token', 'accept']) {
+          seen[h] = r.headers.value(h);
+        }
+        r.response.close();
+      });
+      addTearDown(() => other.close(force: true));
+      await Http.get('$url/to-other?to=http://127.0.0.1:${other.port}/', headers: {
+        'authorization': 'Bearer T',
+        'x-api-key': 'K',
+        'private-token': 'P',
+        'accept': 'text/html',
+      }).then((r) => r.close());
+      expect(seen, {'authorization': null, 'x-api-key': null, 'private-token': null, 'accept': 'text/html'});
+    });
+
+    test('error messages never show URL credentials or token values', () async {
+      final secret = url.replaceFirst('http://', 'http://alice:hunter2@');
+      await expectLater(
+        Http.get('$secret/denied?access_token=SECRET&page=2', check: true),
+        throwsA(isA<HttpException>().having((e) => '$e', 'text', allOf(
+          contains('access_token=***&page=2'),
+          isNot(contains('hunter2')),
+          isNot(contains('SECRET')),
+        ))),
+      );
     });
 
     test('two reads at once share one body', () async {

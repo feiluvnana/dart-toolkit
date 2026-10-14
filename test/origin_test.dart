@@ -17,6 +17,8 @@ void main() {
       expect(h('name.'), 'name');
       expect(h('../../etc/passwd'), 'passwd');
       expect(h('plain.txt'), 'plain.txt');
+      expect(h('.bashrc'), '_.bashrc');
+      expect(h('-rf'), '_-rf');
     });
   });
 

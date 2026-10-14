@@ -1033,6 +1033,20 @@ void main() {
       expect(t.output, contains('\x1b]9;three'));
       t.close();
     });
+
+    test('notify text cannot end its OSC early', () async {
+      late App<int> app;
+      final t = testSession<int>(0, (s, a) {
+        app = a;
+        return Screen((r) => r.popup('POP\x9b2J', width: 20, height: 4));
+      });
+      await t.pump();
+      app.notify('N\x9c\x9b2J\x1b]52;c;x\x07');
+      expect(t.output, contains('\x1b]9;N2J]52;c;x\x07'));
+      expect(t.output, isNot(contains('\x9b')));
+      expect(t.output, isNot(contains('\x9c')));
+      t.close();
+    });
   });
 
   group('session memory', () {
@@ -1594,6 +1608,17 @@ void main() {
   });
 
   group('drawing (in-memory)', () {
+    test('markdown of 40,000 brackets or underscores renders at once', () async {
+      for (final c in ['[', '_', '*']) {
+        final text = c * 40000;
+        final t = testSession<int>(0, (s, a) => Screen((r) => r.markdown(text)), width: 80, height: 24);
+        final sw = Stopwatch()..start();
+        await t.pump();
+        expect(sw.elapsed, lessThan(const Duration(seconds: 2)), reason: c);
+        t.close();
+      }
+    });
+
     test("write('a\\n') draws no trailing empty row", () async {
       final t = testSession<int>(
         0,

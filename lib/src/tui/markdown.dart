@@ -265,8 +265,9 @@ List<_MdSeg> _mdInline(String text) {
       part.substring(m.end),
     ]);
   }
-  // Links.
-  final linkRe = RegExp(r'\[([^\]]*)\]\(([^)\s]+)\)');
+  // Links. The text excludes '[' so each '[' scans only to the next one:
+  // `[^\]]*` alone made a run of 40,000 '[' quadratic (14 s a render).
+  final linkRe = RegExp(r'\[([^\]\[]*)\]\(([^)\s]+)\)');
   for (var k = 0; k < parts.length; k++) {
     final part = parts[k];
     if (part is! String) continue;
@@ -325,6 +326,13 @@ List<_MdSeg> _mdEmph(String text, Set<Style> base) {
       '~~' => Style.strike,
       _ => Style.italic,
     };
+    // A style already on adds nothing: the mark is text. This bounds the
+    // recursion at three levels; a run of 20,000 '_' nested one call each.
+    if (base.contains(bit)) {
+      plain.write(mark);
+      i += mark.length;
+      continue;
+    }
     var close = text.indexOf(mark, i + mark.length);
     while (close > 0 &&
         (text.codeUnitAt(close - 1) == 0x20 ||

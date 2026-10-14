@@ -6,6 +6,11 @@ import 'package:test/test.dart';
 
 void main() {
   group('Html.parse', () {
+    test('text() of a page nested 20,000 deep does not overflow', () {
+      final deep = '${'<b>' * 20000}deep${'</b>' * 20000}';
+      expect(Html.parse(deep).text(), 'deep');
+    });
+
     test('returns Elements', () {
       expect(Html.parse('<div></div>'), isA<Elements>());
     });

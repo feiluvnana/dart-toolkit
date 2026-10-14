@@ -362,6 +362,33 @@ void main() {
     });
   });
 
+  group('messages', () {
+    test('a bad value with escapes is quoted inert', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  exitCode = await Command('app', 'X.', params: [Opt<int>('port', 'P.', or: 1)], handler: (_) {}).run(a);
+}
+''', args: ['--port', '1\x1b]0;PWN\x07']);
+      expect(r.exitCode, 64);
+      expect(r.stderr, contains('1\uFFFD]0;PWN\uFFFD'));
+      expect(r.stderr, isNot(contains('\x1b')));
+    });
+
+    test('Console prompts and log keep colour but drop other escapes', () async {
+      final r = await runDart('''
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async {
+  Console.log('\\x1b[32mok\\x1b[0m \\x1b]52;c;SGk=\\x07');
+  print(await Console.ask('Q\\x1b]0;T\\x07?'));
+}
+''', stdin: const [(Duration.zero, 'x\n')]);
+      expect(r.stderr, contains('\x1b[32mok\x1b[0m \uFFFD]52;c;SGk=\uFFFD'));
+      expect(r.stderr, contains('Q\uFFFD]0;T\uFFFD?'));
+    });
+  });
+
   group('suggestions', () {
     test('L1: short options suggest only the case-swapped letter', () async {
       const script = '''

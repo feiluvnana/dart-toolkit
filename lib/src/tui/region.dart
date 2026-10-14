@@ -435,7 +435,7 @@ final class Region {
     var col = from;
     for (final r in text.runes) {
       if (col >= end || col >= grid[row].length) break;
-      if (r < 0x20 || r == 0x7f) continue;
+      if (r < 0x20 || r >= 0x7f && r <= 0x9f) continue; // C0, DEL, C1
       grid[row][col++] = _Cell(String.fromCharCode(r), style, 1, link: link);
     }
   }

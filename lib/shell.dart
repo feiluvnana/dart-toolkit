@@ -164,10 +164,14 @@ abstract final class Shell {
   /// Returns once launched (it does not wait for the app to close). An empty
   /// [target] is an [ArgumentError]; a launcher that cannot start or exits
   /// non-zero throws [io.ProcessException] carrying the first 4 KB of stderr.
+  /// A [target] starting with `-` opens as the path `./-…`, never an option.
   static Future<void> open(String target) async {
     if (target.isEmpty) {
       throw ArgumentError.value(target, 'target', 'must not be empty');
     }
+    // A leading '-' would be read as a launcher option (`open -a App`);
+    // no URL starts with one, so it is a relative path. xdg-open has no `--`.
+    if (target.startsWith('-')) target = './$target';
     final List<String> cmd;
     if (io.Platform.isMacOS) {
       cmd = ['open', target];

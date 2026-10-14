@@ -116,7 +116,7 @@ abstract final class Console {
   static Future<String?> _ask(String question, {required bool secret}) async {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.promptAsk(question, secret: secret);
-    io.stderr.writeln(question);
+    io.stderr.writeln(term.safeText(question));
     final modes = term.captureModes();
     try {
       io.stdin.echoMode = !secret;
@@ -241,7 +241,7 @@ abstract final class Console {
     List<String> labels,
   ) async {
     _cooked();
-    io.stderr.writeln(question);
+    io.stderr.writeln(term.safeText(question));
     for (var i = 0; i < labels.length; i++) {
       io.stderr.writeln('  ${i + 1}. ${labels[i]}');
     }
@@ -309,7 +309,7 @@ abstract final class Console {
       if (line.isEmpty) return 'enter';
       return String.fromCharCode(line.runes.first);
     }
-    if (prompt != null) io.stderr.writeln(prompt);
+    if (prompt != null) io.stderr.writeln(term.safeText(prompt));
     return _withKeys((found) async {
       for (;;) {
         final event = await found.nextEvent();
@@ -345,7 +345,7 @@ abstract final class Console {
     if (bridge != null) return bridge.log(line);
     final live = _animated ? _live : null;
     if (live != null) io.stderr.write('\r\x1b[K');
-    io.stderr.writeln(line);
+    io.stderr.writeln(term.safeText(line));
     live?._repaint();
   }
 
@@ -581,7 +581,7 @@ abstract final class Console {
     var current = selected;
     return _withKeys((found) async {
       var painted = 0;
-      io.stderr.writeln(_emph(question));
+      io.stderr.writeln(_emph(term.safeText(question)));
       for (;;) {
         painted = _paintChoices(labels, current, painted);
         final keyName = await found.nextKey();

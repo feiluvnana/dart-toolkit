@@ -9,6 +9,23 @@ List<int> get tinyPng => base64Decode(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
     );
 
+/// [tinyPng] with its IHDR claiming 15000x15000 (checksum fixed).
+Uint8List _bombPng() {
+  final bomb = Uint8List.fromList(tinyPng);
+  final data = bomb.buffer.asByteData()
+    ..setUint32(16, 15000)
+    ..setUint32(20, 15000);
+  var crc = 0xFFFFFFFF; // IHDR checksum over type + data
+  for (var i = 12; i < 29; i++) {
+    crc ^= bomb[i];
+    for (var k = 0; k < 8; k++) {
+      crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+    }
+  }
+  data.setUint32(29, crc ^ 0xFFFFFFFF);
+  return bomb;
+}
+
 void main() {
   group('Image.decode', () {
     test('decodes bytes', () {
@@ -17,23 +34,36 @@ void main() {
       expect(img.height(), 1);
     });
 
+    test('an EXIF orientation is applied; width and height are as displayed', () {
+      final raw = img.Image(width: 4, height: 2);
+      raw.exif.imageIfd.orientation = 6; // rotate 90° to display
+      final turned = Image.decode(img.encodeJpg(raw));
+      expect((turned.width(), turned.height()), (2, 4));
+      final plain = Image.decode(img.encodeJpg(img.Image(width: 4, height: 2)));
+      expect((plain.width(), plain.height()), (4, 2));
+    });
+
+    test('an ICO wrapping a huge PNG is refused before decoding', () {
+      final png = _bombPng();
+      final ico = Uint8List(22 + png.length);
+      ico.buffer.asByteData()
+        ..setUint16(2, 1, Endian.little) // type: icon
+        ..setUint16(4, 1, Endian.little) // one entry
+        ..setUint16(10, 1, Endian.little) // planes
+        ..setUint16(12, 32, Endian.little) // bpp
+        ..setUint32(14, png.length, Endian.little)
+        ..setUint32(18, 22, Endian.little);
+      ico.setRange(22, ico.length, png);
+      expect(() => Image.decode(ico),
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))));
+    });
+
     test('unknown bytes are a FormatException', () {
       expect(() => Image.decode([1, 2, 3]), throwsFormatException);
     });
 
     test('M12: a huge declared size is refused before decoding', () async {
-      final bomb = Uint8List.fromList(tinyPng);
-      final data = bomb.buffer.asByteData()
-        ..setUint32(16, 15000)
-        ..setUint32(20, 15000);
-      var crc = 0xFFFFFFFF; // IHDR checksum over type + data
-      for (var i = 12; i < 29; i++) {
-        crc ^= bomb[i];
-        for (var k = 0; k < 8; k++) {
-          crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
-        }
-      }
-      data.setUint32(29, crc ^ 0xFFFFFFFF);
+      final bomb = _bombPng();
       expect(() => Image.decode(bomb),
           throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))));
       await expectLater(_Mem(bomb).image(), throwsFormatException);

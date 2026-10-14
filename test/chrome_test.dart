@@ -10,6 +10,8 @@ import 'dart:io';
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/json.dart';
+import 'package:dart_toolkit/src/cache.dart' as cache;
+import 'package:puppeteer/puppeteer.dart' as pp;
 import 'package:test/test.dart';
 
 void main() {
@@ -123,6 +125,18 @@ void main() {
       expect(left, isEmpty);
       expect(profiles(), isFalse);
     }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
+
+    test('closing a connected browser closes its own tabs, not the host\'s', () async {
+      final exe = (await pp.downloadChrome(cachePath: '${cache.userCacheDir()}/dart_toolkit/chrome')).executablePath;
+      final host = await pp.puppeteer.launch(executablePath: exe);
+      addTearDown(host.close);
+      final before = (await host.pages).length;
+      final b = await Chrome.connect(host.wsEndpoint);
+      await b.open('data:text/html,<p>x</p>');
+      await b.open('data:text/html,<p>y</p>');
+      await b.close();
+      expect((await host.pages).length, before);
+    });
 
     test('connect to a dead port throws', () async {
       expect(Chrome.connect('http://127.0.0.1:1'), throwsA(anything));

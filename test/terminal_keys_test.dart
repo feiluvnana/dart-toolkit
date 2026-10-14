@@ -79,4 +79,19 @@ void main() {
       expect((event as TermType).text, 'ws');
     });
   });
+
+  group('sanitisers', () {
+    const evil = 'Q\x1b]0;T\x07\x9d52;c;SGk=\x9c\u202etxt\x1b[2J';
+
+    test('plainLabel replaces C0, DEL, C1 and bidi overrides', () {
+      expect(plainLabel(evil), 'Q\uFFFD]0;T\uFFFD\uFFFD52;c;SGk=\uFFFD\uFFFDtxt\uFFFD[2J');
+      expect(plainLabel('a\nb\x7f'), 'a\uFFFDb\uFFFD');
+    });
+
+    test('safeText keeps SGR colour, newlines and tabs, nothing else', () {
+      expect(safeText('\x1b[1;32mok\x1b[0m\n\tnext'), '\x1b[1;32mok\x1b[0m\n\tnext');
+      expect(safeText(evil), plainLabel(evil));
+      expect(safeText('plain'), 'plain');
+    });
+  });
 }

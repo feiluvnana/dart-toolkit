@@ -432,7 +432,9 @@ final class _Session<S> implements term.TuiBridge {
   void _notify(String message) {
     // Silent only while the terminal reports that it has focus.
     if (_focusReported && _termFocused) return;
-    String esc(String s) => s.replaceAll('\x1b', '').replaceAll('\x07', '');
+    // Controls (C1 0x9c ends an OSC too) are dropped, not shown: an OSC
+    // payload has nowhere to draw `�`.
+    String esc(String s) => term.plainLabel(s).replaceAll('\uFFFD', '');
     out('\x1b]9;${esc(message)}\x07');
     out('\x1b]777;notify;${esc(message)}\x07');
     out('\x07');

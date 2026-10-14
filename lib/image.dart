@@ -103,7 +103,10 @@ final class Image {
     if (decoded == null) {
       throw const FormatException('unknown image format');
     }
-    return Image._(img.bakeOrientation(decoded));
+    // bakeOrientation always copies the pixels; most images need no turn.
+    final ifd = decoded.exif.imageIfd;
+    final turned = ifd.hasOrientation && ifd.orientation != 1;
+    return Image._(turned ? img.bakeOrientation(decoded) : decoded);
   }
 
   /// Width in pixels, as displayed.
@@ -185,6 +188,17 @@ final class Image {
 (int, int) _declaredSize(Uint8List raw) {
   try {
     final info = img.findDecoderForData(raw)?.startDecode(raw);
+    if (info is img.IcoInfo) {
+      // An ICO reports 0x0; the first entry (the one decoded) may wrap a PNG
+      // that declares any size, so judge that entry's own header.
+      if (info.images.isEmpty) return (0, 0);
+      final e = info.images.first;
+      final end = e.bytesOffset + e.bytesSize;
+      if (e.bytesOffset < 0 || end > raw.length) return (0, 0);
+      final inner = Uint8List.sublistView(raw, e.bytesOffset, end);
+      final png = img.PngDecoder().startDecode(inner);
+      return png != null ? (png.width, png.height) : (e.width == 0 ? 256 : e.width, e.height == 0 ? 256 : e.height);
+    }
     return info == null ? (0, 0) : (info.width, info.height);
   } catch (_) {
     return (0, 0);

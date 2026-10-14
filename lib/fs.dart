@@ -252,6 +252,17 @@ final class File extends Entry with Reader implements Writer {
       } catch (_) {}
     });
     try {
+      // chmod the tmp before any byte lands in it (a 0600 secret must never
+      // sit in a 0644 temp), and only when the fresh mode differs from the
+      // old one: under the same umask that is almost never, so overwrites
+      // skip the fork.
+      if (oldMode != 0) {
+        var tmpMode = 0;
+        try {
+          tmpMode = (await io.FileStat.stat(tmp)).mode & 0xFFF;
+        } catch (_) {}
+        if (tmpMode != oldMode) await posix.chmod(tmp, oldMode);
+      }
       final sink = tmpFile.openWrite();
       try {
         await sink.addStream(input);
@@ -261,16 +272,6 @@ final class File extends Entry with Reader implements Writer {
           await sink.close();
         } catch (_) {}
         rethrow;
-      }
-      // chmod the tmp before the rename (no umask window on the target),
-      // and only when the fresh tmp mode differs from the old one: under
-      // the same umask that is almost never, so overwrites skip the fork.
-      if (oldMode != 0) {
-        var tmpMode = 0;
-        try {
-          tmpMode = (await io.FileStat.stat(tmp)).mode & 0xFFF;
-        } catch (_) {}
-        if (tmpMode != oldMode) await posix.chmod(tmp, oldMode);
       }
       await _renameOver(tmpFile, target);
     } catch (_) {
@@ -761,6 +762,9 @@ Future<void> _copyTree(String from, String to, List<(String, io.FileStat)> dirs)
         await io.Link(dest).create(target, recursive: true);
       }
     } else if (e is io.Directory) {
+      // A dest link where a folder goes is replaced, never followed: the
+      // copy must not write (or chmod) outside the destination tree.
+      if (await io.FileSystemEntity.isLink(dest)) await io.Link(dest).delete();
       await _copyTree(e.path, dest, dirs);
     } else if (e is io.File) {
       files.add((e.path, dest));

@@ -283,6 +283,7 @@ final class _Unpacker implements Writer {
     }
 
     io.RandomAccessFile? out; // the tar file member being written
+    var umask = 0x12; // 022 until the temp folder tells us
 
     // An interrupt skips `finally`: the exit hook removes the temp folder.
     final token = exit.onExit(() async {
@@ -292,6 +293,8 @@ final class _Unpacker implements Writer {
     });
     try {
       await tmpDir.create(recursive: true);
+      // A fresh folder is 0777 & ~umask: read the umask off it.
+      umask = posix.isPosix ? ~(await tmpDir.stat()).mode & 0x1FF : 0;
       if (isZip) {
         // Zip stays in memory: its directory sits at the end.
         final acc = BytesBuilder(copy: false);
@@ -385,7 +388,7 @@ final class _Unpacker implements Writer {
       // member in (rename, copy fallback). Existing files are kept. Every
       // file/folder collision fails before the first rename, so a failed
       // unpack leaves the target as it was.
-      await _checkCollisions(tmpDir.path, d);
+      final existing = await _checkCollisions(tmpDir.path, d);
       await io.Directory(d).create(recursive: true);
       await for (final e in tmpDir.list(
         recursive: false,
@@ -394,12 +397,20 @@ final class _Unpacker implements Writer {
         final dest = p.join(d, p.basename(e.path));
         await _moveInto(e.path, dest);
       }
-      // Modes go on the final paths after the merge: a read-only member
-      // folder applied in the temp tree would refuse the merge's renames.
-      await posix.chmodBatched(posix.groupByMode(
-        [for (final path in paths) p.join(d, p.relative(path, from: tmpDir.path))],
-        modes,
-      ));
+      // Modes go on the final paths after the merge (a read-only member
+      // folder applied in the temp tree would refuse the merge's renames),
+      // only on what this unpack made (an archive never re-modes a folder
+      // that was already there), and through the umask like `tar` does.
+      final mask = ~umask & 0x1FF;
+      final finalPaths = <String>[];
+      final finalModes = <int>[];
+      for (var i = 0; i < paths.length; i++) {
+        final path = p.join(d, p.relative(paths[i], from: tmpDir.path));
+        if (existing.contains(path)) continue;
+        finalPaths.add(path);
+        finalModes.add(modes[i] & mask);
+      }
+      await posix.chmodBatched(posix.groupByMode(finalPaths, finalModes));
     } finally {
       try {
         await out?.close();
@@ -415,9 +426,11 @@ final class _Unpacker implements Writer {
   }
 
   /// Throw when a member would put a file where the target has a folder, or
-  /// a folder where it has a file (a link counts as a file).
-  static Future<void> _checkCollisions(String tmp, String target) async {
-    if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) return;
+  /// a folder where it has a file (a link counts as a file). Returns the
+  /// target folders that already exist (their modes stay).
+  static Future<Set<String>> _checkCollisions(String tmp, String target) async {
+    final existing = <String>{};
+    if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) return existing;
     await for (final e in io.Directory(tmp).list(recursive: true, followLinks: false)) {
       final dest = p.join(target, p.relative(e.path, from: tmp));
       final dt = await io.FileSystemEntity.type(dest, followLinks: false);
@@ -429,7 +442,9 @@ final class _Unpacker implements Writer {
           dest,
         );
       }
+      if (destIsDir) existing.add(dest);
     }
+    return existing;
   }
 
   /// Move [src] (inside the temp dir) into [dest] (inside the target),

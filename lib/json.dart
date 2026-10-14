@@ -100,19 +100,16 @@ final class Json extends Iterable<Json> {
   T? value<T>() {
     final v = _v;
     assert(
-        v is T ||
-            !((v is List || v is Map) &&
-            (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)),
-        'value<$T>() reads scalars; use asList/asMap');
+      v is T || !((v is List || v is Map) && (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)),
+      'value<$T>() reads scalars; use asList/asMap',
+    );
     if (v is T) return v;
     if (v is num) {
       if (v is int) {
         final d = v.toDouble();
         if (d is T) return d as T;
-      } else if (v.isFinite &&
-          v == v.truncateToDouble() &&
-          v >= -9223372036854775808.0 &&
-          v <= 9223372036854775807.0) {
+      } else if (v.isFinite && v == v.truncateToDouble() && v >= -9223372036854775808.0 && v < 9223372036854775808.0) {
+        // 2^63 itself does not fit
         final i = v.toInt();
         if (i is T) return i as T;
       }
@@ -316,7 +313,8 @@ Object? _scalar<E>(Object? e) {
       e.isFinite &&
       e == e.truncateToDouble() &&
       e >= -9223372036854775808.0 &&
-      e <= 9223372036854775807.0) {
+      e < 9223372036854775808.0) {
+    // 2^63 itself does not fit
     final i = e.toInt();
     if (i is E) return i;
   }

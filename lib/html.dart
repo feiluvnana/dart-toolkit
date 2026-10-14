@@ -260,32 +260,41 @@ final class Element {
       }
     }
 
-    void walk(dom.Node node, bool pre) {
-      if (node is dom.Text) {
-        if (pre) {
-          flushGap();
-          out.write(node.data);
-        } else {
-          push(node.data);
+    // An explicit stack, not recursion: a page nested 10,000 deep must not
+    // overflow the call stack. A null node marks the end of a block.
+    void walk(dom.Node root, bool rootPre) {
+      final stack = <(dom.Node?, bool)>[(root, rootPre)];
+      while (stack.isNotEmpty) {
+        final (node, pre) = stack.removeLast();
+        if (node == null) {
+          if (!pre && out.isNotEmpty) gap(newline: true);
+        } else if (node is dom.Text) {
+          if (pre) {
+            flushGap();
+            out.write(node.data);
+          } else {
+            push(node.data);
+          }
+        } else if (node is dom.Element) {
+          final tag = node.localName;
+          if (tag == 'script' || tag == 'style' || tag == 'noscript' || tag == 'template') {
+            continue;
+          }
+          if (tag == 'br') {
+            // A line break even with no surrounding text nodes.
+            gap(newline: true);
+            continue;
+          }
+          final isBlock = tag != null && _blocks.contains(tag);
+          if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
+          if ((tag == 'td' || tag == 'th') && !pre && out.isNotEmpty) gap(newline: false);
+          final inner = pre || tag == 'pre';
+          if (isBlock) stack.add((null, pre));
+          final children = node.nodes;
+          for (var i = children.length - 1; i >= 0; i--) {
+            stack.add((children[i], inner));
+          }
         }
-      } else if (node is dom.Element) {
-        final tag = node.localName;
-        if (tag == 'script' || tag == 'style' || tag == 'noscript' || tag == 'template') {
-          return;
-        }
-        if (tag == 'br') {
-          // A line break even with no surrounding text nodes.
-          gap(newline: true);
-          return;
-        }
-        final isBlock = tag != null && _blocks.contains(tag);
-        if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
-        if ((tag == 'td' || tag == 'th') && !pre && out.isNotEmpty) gap(newline: false);
-        final inner = pre || tag == 'pre';
-        for (final child in node.nodes) {
-          walk(child, inner);
-        }
-        if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
       }
     }
 
@@ -417,6 +426,8 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
       e.source,
       e.offset,
     );
+  } on StackOverflowError {
+    rethrow; // a document nested too deep, not a bad selector
   } catch (e) {
     throw FormatException("invalid selector '$selector': $e");
   }

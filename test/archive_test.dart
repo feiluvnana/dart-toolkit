@@ -241,8 +241,32 @@ void main() {
       await Archive.unpack(p('out')).consume(Stream.value(tar));
       expect(await Fs.file(p('out/ro/f.txt')).text(), 'f');
       expect(await Fs.file(p('out/ro/old.txt')).text(), 'old');
-      expect((await Directory(p('out/ro')).stat()).mode & 0x1ff, 0x16d);
+      // A folder that was already there keeps its own mode.
+      expect((await Directory(p('out/ro')).stat()).mode & 0x1ff, 0x1ed);
       expect((await Fs.dir(tmp.path).list()).map((e) => e.name()).where((n) => n.startsWith('.out')), isEmpty);
+    });
+
+    test('modes apply through the umask, only to what the unpack made', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      List<int> mode(List<int> block, String octal) => block..setRange(100, 107, octal.codeUnits);
+      final tar = [
+        ...mode(_tarBlock('secret/', 0, 0x35), '0000777'),
+        ...mode(_tarBlock('secret/new.txt', 1, 0x30), '0006777'),
+        ..._tarBody('n'.codeUnits),
+        ...mode(_tarBlock('fresh/', 0, 0x35), '0000777'),
+        ...List.filled(1024, 0),
+      ];
+      for (final at in [0, 512, 1536]) {
+        _resum(tar, at);
+      }
+      await Fs.dir(p('out/secret')).create();
+      await Process.run('chmod', ['700', p('out/secret')]);
+      final open = 0x1ff & (await Directory(p('probe')).create()).statSync().mode; // 0777 & ~umask
+      await Archive.unpack(p('out')).consume(Stream.value(tar));
+      Future<int> modeOf(String path) async => (await FileStat.stat(p(path))).mode & 0xfff;
+      expect(await modeOf('out/secret'), 0x1c0); // existing folder untouched
+      expect(await modeOf('out/fresh'), open);
+      expect(await modeOf('out/secret/new.txt'), open); // setuid/setgid dropped
     });
 
     test('macOS AppleDouble members are dropped; a real ._ file stays', () async {
