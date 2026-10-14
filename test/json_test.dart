@@ -54,11 +54,16 @@ void main() {
       expect(() => doc.$('users')[5], throwsRangeError);
     });
 
-    test('value<T>() is null when absent or mistyped', () {
+    test('value<T>() is null when absent or mistyped', () async {
       expect(doc.$('server.port').value<String>(), isNull);
       expect(doc.$('server.port').value<num>(), 8080);
       expect(doc.$('server.port').value<Object>(), 8080);
-      expect(doc.$('missing').value<int>() ?? 8080, 8080);
+      expect(doc.$('missing').or(8080), 8080);
+      expect(doc.$('server.port').or(1), 8080);
+      expect(doc.$('server.port').or('x'), 'x');
+      expect(await Future.value(doc.$('missing')).or(7), 7);
+      expect(doc.$('missing').asList<int>(), isEmpty);
+      expect(doc.$('missing').asMap<int>(), isEmpty);
     });
   });
 
@@ -84,9 +89,9 @@ void main() {
       final f = Future.value(Json.parse('{"a": {"b": 1}}'));
       expect((await f.$('a')).$('b').value<int>(), 1);
       expect(await f.$('a.b').value<int>(), 1);
-      expect(await Future.value(Json.parse('[1,2]')).listOf<int>(), [1, 2]);
+      expect(await Future.value(Json.parse('[1,2]')).asList<int>(), [1, 2]);
       expect(
-        await Future.value(Json.parse('{"a":1}')).mapOf<int>(),
+        await Future.value(Json.parse('{"a":1}')).asMap<int>(),
         {'a': 1},
       );
     });
@@ -107,34 +112,34 @@ void main() {
   });
 
   group('typed lists and maps (V13)', () {
-    test('listOf<T> checks every element', () {
-      expect(Json.parse('[1,2,3]').listOf<int>(), [1, 2, 3]);
+    test('asList<T> checks every element', () {
+      expect(Json.parse('[1,2,3]').asList<int>(), [1, 2, 3]);
       // One mismatch nulls the whole read.
-      expect(Json.parse('[1,"a"]').listOf<int>(), isNull);
-      expect(Json.parse('[]').listOf<int>(), isEmpty);
+      expect(Json.parse('[1,"a"]').asList<int>(), isEmpty);
+      expect(Json.parse('[]').asList<int>(), isEmpty);
     });
 
     test('elements coerce like scalars', () {
-      expect(Json.parse('[1,2]').listOf<double>(), [1.0, 2.0]);
-      expect(Json.parse('[1.0,2.0]').listOf<int>(), [1, 2]);
-      expect(Json.parse('[1.5]').listOf<int>(), isNull);
-      expect(Json.parse('["a",null]').listOf<String?>(), ['a', null]);
-      expect(Json.parse('["a",null]').listOf<String>(), isNull);
+      expect(Json.parse('[1,2]').asList<double>(), [1.0, 2.0]);
+      expect(Json.parse('[1.0,2.0]').asList<int>(), [1, 2]);
+      expect(Json.parse('[1.5]').asList<int>(), isEmpty);
+      expect(Json.parse('["a",null]').asList<String?>(), ['a', null]);
+      expect(Json.parse('["a",null]').asList<String>(), isEmpty);
     });
 
-    test('mapOf<T> checks every value', () {
-      expect(Json.parse('{"a":1}').mapOf<int>(), {'a': 1});
-      expect(Json.parse('{"a":"x"}').mapOf<int>(), isNull);
-      expect(Json.parse('{"a":1}').mapOf<double>(), {'a': 1.0});
+    test('asMap<T> checks every value', () {
+      expect(Json.parse('{"a":1}').asMap<int>(), {'a': 1});
+      expect(Json.parse('{"a":"x"}').asMap<int>(), isEmpty);
+      expect(Json.parse('{"a":1}').asMap<double>(), {'a': 1.0});
     });
 
-    test('listOf reads REST shapes in one pass', () {
+    test('asList reads REST shapes in one pass', () {
       expect(
-        Json.parse('[{"a":1},{"b":2}]').listOf<Map<String, Object?>>(),
+        Json.parse('[{"a":1},{"b":2}]').asList<Map<String, Object?>>(),
         isNotNull,
       );
       expect(
-        Json.parse('[{"a":1},{"b":2}]').listOf<Map<String, dynamic>>(),
+        Json.parse('[{"a":1},{"b":2}]').asList<Map<String, dynamic>>(),
         isNotNull,
       );
       // value<List<...>> is not the typed read; debug builds say so.
@@ -143,8 +148,8 @@ void main() {
     });
 
     test('Json.of wraps a held value', () {
-      expect(Json.of({'a': [1, 2]}).$('a').listOf<int>(), [1, 2]);
-      expect(Json.of([1, 2]).listOf<int>(), [1, 2]);
+      expect(Json.of({'a': [1, 2]}).$('a').asList<int>(), [1, 2]);
+      expect(Json.of([1, 2]).asList<int>(), [1, 2]);
     });
 
     test('nested reads go through iteration (records)', () {
@@ -154,8 +159,8 @@ void main() {
       final users = [
         for (final u in doc.$('users'))
           (
-            name: u.$('name').value<String>() ?? '',
-            age: u.$('age').value<int>() ?? 0,
+            name: u.$('name').or(''),
+            age: u.$('age').or(0),
           ),
       ];
       expect(users, [(name: 'a', age: 1), (name: 'b', age: 2)]);
@@ -169,10 +174,10 @@ void main() {
 
     test('* maps over items, missing keys are null entries', () {
       expect(
-        doc.$('data.users.*.name').listOf<String?>(),
+        doc.$('data.users.*.name').asList<String?>(),
         ['a', 'b', null],
       );
-      expect(doc.$('data.users.*.name').listOf<String>(), isNull);
+      expect(doc.$('data.users.*.name').asList<String>(), isEmpty);
     });
 
     test('* as the last segment collects the items', () {
@@ -184,7 +189,7 @@ void main() {
 
     test('* over an object maps over values in iteration order', () {
       final m = Json.parse('{"a":{"x":1},"b":{"x":2}}');
-      expect(m.$('*.x').listOf<int>(), [1, 2]);
+      expect(m.$('*.x').asList<int>(), [1, 2]);
     });
 
     test('* over a scalar or missing path holds null', () {

@@ -7,7 +7,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin].
-/// - [Reader]: `stream` `bytes` `text` `pipe` `|` `writeTo` `>` (+ `origin`, `of`).
+/// - [Reader]: `stream` `bytes` `text` `pipe` `|` `to` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume`.
 /// - [Pipe]: `transform` `abort`.
 /// - [Closeable]: `close`.
@@ -95,7 +95,7 @@ abstract mixin class Reader {
   /// would start a child process (shell filter) never starts one just to
   /// kill it, an http source is not marked streaming by the failure path,
   /// and broadcast sources poison their stages too.
-  Future<void> writeTo(Writer? writer) async {
+  Future<void> to(Writer? writer) async {
     Stream<List<int>>? s;
     try {
       // [_PipedReader.stream] is lazy (async*): creating [s] starts nothing.
@@ -119,8 +119,8 @@ abstract mixin class Reader {
     }
   }
 
-  /// `= writeTo(writer)`.
-  Future<void> operator >(Writer? writer) => writeTo(writer);
+  /// `= to(writer)`.
+  Future<void> operator >(Writer? writer) => to(writer);
 }
 
 /// Walk a [_PipedReader] chain and call [Pipe.abort] on each stage, outermost
@@ -171,8 +171,8 @@ abstract interface class Writer {
 abstract mixin class Pipe {
   Stream<List<int>> transform(Stream<List<int>> input);
 
-  /// The run failed: poison the stage (a Hasher refuses `hexDigest`), print
-  /// ✗ (a Bar), release the live line. Called by [Reader.writeTo] on every
+  /// The run failed: poison the stage (a Hasher refuses `hex`), print
+  /// ✗ (a Bar), release the live line. Called by [Reader.to] on every
   /// stage without starting anything; also called by a stage's own
   /// `transform`/`consume` error path when the failure happens mid-stream.
   /// The default is a no-op for stateless pipes (gzip).
@@ -199,9 +199,9 @@ extension ReaderFuture on Future<Reader> {
   }
   Reader pipe(Pipe? pipe) => _FutureReader(this).pipe(pipe);
   Reader operator |(Pipe? pipe) => _FutureReader(this) | pipe;
-  Future<void> writeTo(Writer? writer) async => (await this).writeTo(writer);
+  Future<void> to(Writer? writer) async => (await this).to(writer);
 
-  Future<void> operator >(Writer? writer) async => (await this).writeTo(writer);
+  Future<void> operator >(Writer? writer) async => (await this).to(writer);
 }
 
 /// `Chrome.launch().close()`; one mirror for every type.
@@ -220,7 +220,7 @@ final class _PipedReader with Reader {
 
   @override
   // async* defers `_source.stream()` until listened: building the stream
-  // starts nothing, so [Reader.writeTo]'s abort path has no side effects.
+  // starts nothing, so [Reader.to]'s abort path has no side effects.
   Stream<List<int>> stream() async* {
     yield* _pipe.transform(_source.stream());
   }
@@ -250,7 +250,7 @@ final class _FutureReader with Reader {
   Future<String> text() async => (await _get()).text();
 
   @override
-  Future<void> writeTo(Writer? writer) => _get().then((r) => r.writeTo(writer));
+  Future<void> to(Writer? writer) => _get().then((r) => r.to(writer));
 }
 
 /// In-memory bytes behind [Reader.of].

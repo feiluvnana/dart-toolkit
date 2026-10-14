@@ -25,7 +25,7 @@ final class Region {
   final int _gy;
   final int _w;
   final int _h;
-  /// The buffer grows as rows are written (inline, scroll, print).
+  /// The buffer grows as rows are written (scroll).
   final bool _grow;
 
   /// The height comes from the content: `rows` 0-sizes and `box` take
@@ -97,8 +97,9 @@ final class Region {
     }
     return this;
   }
-  /// Border the rest of the region with [title]; return the inside.
-  Region box(String title) {
+  /// Border the rest of the region, with [title] when given; return the
+  /// inside.
+  Region box([String title = '']) {
     if (_open) return _measuredRows(const [0], 2, title).single;
     return _boxAt(title, _gy + _cursor, _h - _cursor);
   }
@@ -106,24 +107,10 @@ final class Region {
   Region _boxAt(String title, int top, int h, {bool open = false}) {
     _cursor = _h;
     if (_w <= 0 || h <= 0) return _sub(_gx, top, 0, 0);
-    final ascii = _s._caps.ascii;
-    final (horiz, vert, tl, tr, bl, br) = ascii
-        ? ('-', '|', '+', '+', '+', '+')
-        : ('─', '│', '┌', '┐', '└', '┘');
     final right = _gx + _w - 1;
     final bottom = top + h - 1;
-    for (var x = _gx; x <= right; x++) {
-      _put(top, x, horiz, 1, 0, null);
-      _put(bottom, x, horiz, 1, 0, null);
-    }
-    for (var y = top; y <= bottom; y++) {
-      _put(y, _gx, vert, 1, 0, null);
-      _put(y, right, vert, 1, 0, null);
-    }
-    _put(top, _gx, tl, 1, 0, null);
-    _put(top, right, tr, 1, 0, null);
-    _put(bottom, _gx, bl, 1, 0, null);
-    _put(bottom, right, br, 1, 0, null);
+    _frame(_s._caps.ascii, top, _gx, bottom, right,
+        (y, x, ch) => _put(y, x, ch, 1, 0, null));
     if (title.isNotEmpty && _w > 5) {
       _writeLine(top, _gx + 2, right, ' $title ', 0, null);
     }
@@ -188,10 +175,10 @@ final class Region {
   }
 
   /// Split below the cursor into rows; >0 fixed, 0 shares the rest.
-  List<Region> splitRows(List<int> sizes) => _split(sizes, horizontal: true);
+  List<Region> rows(List<int> sizes) => _split(sizes, horizontal: true);
 
   /// Split below the cursor into columns.
-  List<Region> splitColumns(List<int> sizes) => _split(sizes, horizontal: false);
+  List<Region> cols(List<int> sizes) => _split(sizes, horizontal: false);
 
   /// A centered modal; drawn last.
   Region popup(String title, {int width = 40, int height = 10}) {
@@ -204,22 +191,8 @@ final class Region {
     ];
     final pop = _Popup(x, y, w, h, buf);
     _s._popups.add(pop);
-    final ascii = _s._caps.ascii;
-    final (hz, vt, tl, tr, bl, br) = ascii
-        ? ('-', '|', '+', '+', '+', '+')
-        : ('─', '│', '┌', '┐', '└', '┘');
-    for (var cx = 0; cx < w; cx++) {
-      _rawPut(buf, 0, cx, hz, 0, null);
-      _rawPut(buf, h - 1, cx, hz, 0, null);
-    }
-    for (var ry = 0; ry < h; ry++) {
-      _rawPut(buf, ry, 0, vt, 0, null);
-      _rawPut(buf, ry, w - 1, vt, 0, null);
-    }
-    _rawPut(buf, 0, 0, tl, 0, null);
-    _rawPut(buf, 0, w - 1, tr, 0, null);
-    _rawPut(buf, h - 1, 0, bl, 0, null);
-    _rawPut(buf, h - 1, w - 1, br, 0, null);
+    _frame(_s._caps.ascii, 0, 0, h - 1, w - 1,
+        (y, x, ch) => _rawPut(buf, y, x, ch, 0, null));
     if (title.isNotEmpty && w > 5) {
       _rawWrite(buf, 0, 2, w - 1, ' $title ', 0, null);
     }
@@ -228,7 +201,7 @@ final class Region {
   }
 
   /// Binding events when focused (keys) or under the pointer (mouse).
-  Region bind(Map<String, Binding> events) {
+  Region on(Map<String, Binding> events) {
     _reg(_s._bindId(events), _gx, _gy + _cursor, _w, _h - _cursor, _s._order++, null,
         onMap: events);
     return this;
@@ -448,9 +421,6 @@ final class Region {
     }
     cells[gc] = _Cell(ch, style, width, link: link);
     if (width == 2) cells[gc + 1] = _Cell('', style, 0, link: link);
-    if (identical(grid, _s._grid)) {
-      _s._usedRows = math.max(_s._usedRows, row + 1);
-    }
   }
 
   void _rawPut(List<List<_Cell>> grid, int row, int col, String ch, int style,
@@ -538,12 +508,12 @@ int _nextWord(List<int> runes, int at) {
   }
   return i;
 }
-/// ScrollPosition viewport bookkeeping.
+/// Scroll viewport bookkeeping.
 final class _ScrollCtx {
   _ScrollCtx(this.scroll, this.buf, this.gx, this.gy, this.w, this.viewH,
       this.order);
 
-  final ScrollPosition scroll;
+  final Scroll scroll;
   final List<List<_Cell>> buf;
   final int gx;
   final int gy;

@@ -8,6 +8,7 @@
 ///
 /// Public surface is exactly: [Image], [ImageFormat], [RegionPicture].
 /// - `Image.decode()` decodes bytes, `Reader.image()` reads a stream.
+/// - `Image.sniff()` names the format from the header bytes.
 /// - [Image] supports `width` `height` `resize` `crop` `encode`.
 /// - `region.picture(image)` draws it in a `Tui` (here, so `tui` doesn't
 ///   load the codecs).
@@ -15,7 +16,7 @@
 /// size from the header) the work goes through [Isolate.run] — whose result comes back
 /// through [Isolate.exit] without a copy — so a large photo never freezes
 /// the event loop under a `Console` spinner or a `Tui` frame.
-/// CPU-bound batches go through Pool.computeAll (see pool.dart).
+/// CPU-bound batches go through Pool.runAll (see pool.dart).
 /// Everything else is private.
 library;
 
@@ -45,6 +46,37 @@ final class Image {
   Image._(this._inner);
 
   final img.Image _inner;
+
+  /// The format named by the magic bytes: `'jpg'`, `'png'`, `'gif'`,
+  /// `'webp'`, `'bmp'`, `'tiff'`, `'ico'`, or null. Reads the header only,
+  /// no decode.
+  static String? sniff(List<int> bytes) {
+    bool at(int i, List<int> magic) {
+      if (bytes.length < i + magic.length) return false;
+      for (var k = 0; k < magic.length; k++) {
+        if (bytes[i + k] != magic[k]) return false;
+      }
+      return true;
+    }
+
+    if (at(0, [0xFF, 0xD8, 0xFF])) return 'jpg';
+    if (at(0, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) return 'png';
+    if (at(0, [0x47, 0x49, 0x46, 0x38]) &&
+        bytes.length >= 6 &&
+        (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+        bytes[5] == 0x61) {
+      return 'gif';
+    }
+    if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50])) {
+      return 'webp';
+    }
+    if (at(0, [0x42, 0x4D])) return 'bmp';
+    if (at(0, [0x49, 0x49, 0x2A, 0x00]) || at(0, [0x4D, 0x4D, 0x00, 0x2A])) {
+      return 'tiff';
+    }
+    if (at(0, [0x00, 0x00, 0x01, 0x00]) && bytes.length >= 6) return 'ico';
+    return null;
+  }
 
   /// Decode [bytes] (PNG, JPEG, GIF first frame, BMP, WebP, TIFF, ICO).
   /// Applies the EXIF orientation, so [width]/[height] are the size as
@@ -85,7 +117,7 @@ final class Image {
   /// is an [ArgumentError]. Shrinking averages the source area (nearest
   /// neighbour aliases); enlarging uses cubic interpolation.
   ///
-  /// Inline, on this isolate: batch resizes go through Pool.computeAll
+  /// Inline, on this isolate: batch resizes go through Pool.runAll
   /// (see pool.dart), and the `Future<Image>` mirror below offloads large
   /// images to a worker isolate.
   Image resize({int? width, int? height}) {

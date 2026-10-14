@@ -1,19 +1,19 @@
 /// Command-line parsing: declare schema plus handlers, then run.
 ///
 /// ```dart
-/// final port = Option('port', 'Port.', short: 'p', defaultsTo: 8080);  // Option<int>
+/// final port = Opt('port', 'Port.', short: 'p', or: 8080);  // Opt<int>
 /// final cli = Command('fetch', 'Fetch pages.',
 ///     params: [port],
 ///     handler: (context) async => print(context(port)));
 /// exitCode = await cli.run(argv);
 /// ```
 ///
-/// Public surface is exactly: [Param], [Flag], [Option], [MultiOption],
-/// [Argument], [Command], [Context], [UsageException].
-/// - [Flag]/[Option]/[MultiOption]/[Argument] seal [Param]: schema
+/// Public surface is exactly: [Param], [Flag], [Opt], [Multi],
+/// [Arg], [Command], [Context], [UsageException].
+/// - [Flag]/[Opt]/[Multi]/[Arg] seal [Param]: schema
 ///   definitions read back with `context(param)`, typed by the definition.
 /// - [Command] supports `run` (declare schema + handler, then run).
-/// - [Context] supports `call` `extraArgs` `usage`.
+/// - [Context] supports `call` `rest` `usage`.
 /// Everything else is private.
 library;
 
@@ -22,7 +22,7 @@ import 'dart:io' as io;
 import 'dart:math';
 
 /// A schema definition, read back with `context(param)` as a `T`. Sealed:
-/// the only inhabitants are [Flag], [Option], [MultiOption] and [Argument],
+/// the only inhabitants are [Flag], [Opt], [Multi] and [Arg],
 /// so the type comes from the definition, not the call site.
 ///
 /// Each definition carries one private record: its names, its help, the
@@ -74,14 +74,14 @@ final class _Reader<T> {
   final String hint;
 }
 
-/// A yes-or-no schema definition: `false` unless given, or [defaultsTo] by
+/// A yes-or-no schema definition: `false` unless given, or [or] by
 /// default.
 ///
-/// `defaultsTo: true` also enables `--no-name` and renders `--[no-]name` in
+/// `or: true` also enables `--no-name` and renders `--[no-]name` in
 /// usage.
 final class Flag extends Param<bool> {
-  Flag(String name, String help, {String? short, bool defaultsTo = false})
-      : _defaultsTo = defaultsTo,
+  Flag(String name, String help, {String? short, bool or = false})
+      : _or = or,
         super._(
           name: name,
           short: short,
@@ -89,34 +89,34 @@ final class Flag extends Param<bool> {
           kind: _Kind.flag,
           required: false,
           hint: '',
-          absent: () => defaultsTo,
+          absent: () => or,
         ) {
     _checkName(name);
     _checkShort(short);
     _checkHelpReserved(name);
   }
 
-  final bool _defaultsTo;
+  final bool _or;
 }
 
-/// A single valued option definition, read back as `T` itself ([defaultsTo]
-/// when absent). `T` is inferred where [defaultsTo] or [parse] gives it:
-/// `Option('port', …, defaultsTo: 8080)` is an `Option<int>`. A nullable `T`
-/// (`Option<String?>`) can be absent; a non-nullable `T` without
-/// [defaultsTo] or `required` is an [ArgumentError]. Yes/no is always a
-/// [Flag]: `Option<bool>` is an [ArgumentError].
-final class Option<T> extends Param<T> {
-  Option(String name, String help,
+/// A single valued option definition, read back as `T` itself ([or]
+/// when absent). `T` is inferred where [or] or [parse] gives it:
+/// `Opt('port', …, or: 8080)` is an `Opt<int>`. A nullable `T`
+/// (`Opt<String?>`) can be absent; a non-nullable `T` without
+/// [or] or `required` is an [ArgumentError]. Yes/no is always a
+/// [Flag]: `Opt<bool>` is an [ArgumentError].
+final class Opt<T> extends Param<T> {
+  Opt(String name, String help,
       {String? short,
-      T? defaultsTo,
+      T? or,
       bool required = false,
       T Function(String)? parse})
       : this._withReader(name, help, _resolve<T>(name, parse),
-            short: short, defaultsTo: defaultsTo, required: required);
+            short: short, or: or, required: required);
 
-  Option._withReader(String name, String help, _Reader<T> reader,
-      {String? short, required T? defaultsTo, required bool required})
-      : _defaultsTo = defaultsTo,
+  Opt._withReader(String name, String help, _Reader<T> reader,
+      {String? short, required T? or, required bool required})
+      : _or = or,
         super._(
             name: name,
             short: short,
@@ -124,32 +124,32 @@ final class Option<T> extends Param<T> {
             kind: _Kind.option,
             required: required,
             hint: reader.hint,
-            absent: () => defaultsTo,
+            absent: () => or,
             readOne: reader.read) {
     _checkName(name);
     _checkShort(short);
     _checkHelpReserved(name);
-    _checkDefault<T>(name, defaultsTo, required);
+    _checkDefault<T>(name, or, required);
   }
 
-  final T? _defaultsTo;
+  final T? _or;
 }
 
-/// A repeatable option definition, read back as `List<T>` ([defaultsTo] when
+/// A repeatable option definition, read back as `List<T>` ([or] when
 /// absent). Occurrences before and after a subcommand merge. `T` is inferred
-/// where [defaultsTo] or [parse] gives it. Yes/no is always a [Flag]:
-/// `MultiOption<bool>` is an [ArgumentError].
-final class MultiOption<T> extends Param<List<T>> {
-  MultiOption(String name, String help,
+/// where [or] or [parse] gives it. Yes/no is always a [Flag]:
+/// `Multi<bool>` is an [ArgumentError].
+final class Multi<T> extends Param<List<T>> {
+  Multi(String name, String help,
       {String? short,
-      List<T> defaultsTo = const [],
+      List<T> or = const [],
       T Function(String)? parse})
       : this._withElement(name, help, _resolve<T>(name, parse),
-            short: short, defaultsTo: defaultsTo);
+            short: short, or: or);
 
-  MultiOption._withElement(String name, String help, _Reader<T> element,
-      {String? short, required List<T> defaultsTo})
-      : _defaultsTo = defaultsTo,
+  Multi._withElement(String name, String help, _Reader<T> element,
+      {String? short, required List<T> or})
+      : _or = or,
         super._(
             name: name,
             short: short,
@@ -157,7 +157,7 @@ final class MultiOption<T> extends Param<List<T>> {
             kind: _Kind.multi,
             required: false,
             hint: '${element.hint}...',
-            absent: () => List<T>.unmodifiable(List<T>.of(defaultsTo)),
+            absent: () => List<T>.unmodifiable(List<T>.of(or)),
             readOne: element.read,
             readMany: (raws, what) => List<T>.unmodifiable(
                 [for (final raw in raws) element.read(raw, what)]),
@@ -170,22 +170,22 @@ final class MultiOption<T> extends Param<List<T>> {
     _checkHelpReserved(name);
   }
 
-  final List<T> _defaultsTo;
+  final List<T> _or;
 }
 
 /// A positional argument definition, in declaration order, read back as `T`
-/// itself. The positionals left after the [Argument]s are
-/// `context.extraArgs()`, so there is exactly one way to read the tail. `T`
-/// is inferred where [defaultsTo] or [parse] gives it. Yes/no is always a
-/// [Flag]: `Argument<bool>` is an [ArgumentError].
-final class Argument<T> extends Param<T> {
-  Argument(String name, String help,
-      {T? defaultsTo, bool required = false, T Function(String)? parse})
+/// itself. The positionals left after the [Arg]s are
+/// `context.rest()`, so there is exactly one way to read the tail. `T`
+/// is inferred where [or] or [parse] gives it. Yes/no is always a
+/// [Flag]: `Arg<bool>` is an [ArgumentError].
+final class Arg<T> extends Param<T> {
+  Arg(String name, String help,
+      {T? or, bool required = false, T Function(String)? parse})
       : this._withReader(name, help, _resolve<T>(name, parse),
-            defaultsTo: defaultsTo, required: required);
+            or: or, required: required);
 
-  Argument._withReader(String name, String help, _Reader<T> reader,
-      {required T? defaultsTo, required bool required})
+  Arg._withReader(String name, String help, _Reader<T> reader,
+      {required T? or, required bool required})
       : super._(
             name: name,
             short: null,
@@ -193,11 +193,11 @@ final class Argument<T> extends Param<T> {
             kind: _Kind.argument,
             required: required,
             hint: reader.hint,
-            absent: () => defaultsTo,
+            absent: () => or,
             readOne: reader.read) {
     _checkName(name);
     _checkHelpReserved(name);
-    _checkDefault<T>(name, defaultsTo, required);
+    _checkDefault<T>(name, or, required);
   }
 }
 
@@ -205,13 +205,13 @@ final class Argument<T> extends Param<T> {
 final class Command {
   Command(String name, String help,
       {List<Param<Object?>> params = const [],
-      List<Command> subcommands = const [],
+      List<Command> commands = const [],
       FutureOr<void> Function(Context context)? handler,
       List<String> aliases = const []})
       : _name = name,
         _help = help,
         _params = params,
-        _subcommands = subcommands,
+        _commands = commands,
         // ignore: prefer_initializing_formals – the public argument stays `handler`.
         _handler = handler,
         _aliases = aliases {
@@ -242,9 +242,9 @@ final class Command {
       }
       if (p._isArg) argDefs.add(p);
     }
-    if (argDefs.isNotEmpty && subcommands.isNotEmpty) {
+    if (argDefs.isNotEmpty && commands.isNotEmpty) {
       throw ArgumentError.value(
-          name, 'params', 'Invalid params: arguments and subcommands are exclusive');
+          name, 'params', 'Invalid params: arguments and commands are exclusive');
     }
     var optional = false;
     for (final a in argDefs) {
@@ -261,44 +261,44 @@ final class Command {
           aliases, 'aliases', 'Invalid aliases: duplicate name');
     }
     final subSeen = <String>{};
-    for (final c in subcommands) {
+    for (final c in commands) {
       for (final n in [c._name, ...c._aliases]) {
         if (!subSeen.add(n)) {
           throw ArgumentError.value(
-              n, 'subcommands', 'Invalid subcommands: "$n" twice');
+              n, 'commands', 'Invalid commands: "$n" twice');
         }
       }
     }
     // A child cannot redeclare an ancestor's --name or -s with a different
     // meaning (sharing the identical Param object is fine: it is the same
     // meaning).
-    _checkSubtree(subcommands, {for (final p in params) p},
+    _checkSubtree(commands, {for (final p in params) p},
         {for (final p in params) p._name}, {for (final p in params) p._short});
   }
 
   final String _name;
   final String _help;
   final List<Param<Object?>> _params;
-  final List<Command> _subcommands;
+  final List<Command> _commands;
   final FutureOr<void> Function(Context context)? _handler;
   final List<String> _aliases;
 
-  static void _checkSubtree(List<Command> subcommands,
+  static void _checkSubtree(List<Command> commands,
       Set<Param<Object?>> seenParams, Set<String?> longs, Set<String?> shorts) {
-    for (final c in subcommands) {
+    for (final c in commands) {
       for (final p in c._params) {
         if (seenParams.contains(p)) continue;
         if (!p._isArg && longs.contains(p._name)) {
-          throw ArgumentError.value(p._name, 'subcommands',
-              'Invalid subcommands: "${c._name}" redeclares --${p._name}');
+          throw ArgumentError.value(p._name, 'commands',
+              'Invalid commands: "${c._name}" redeclares --${p._name}');
         }
         final s = p._short;
         if (s != null && shorts.contains(s)) {
-          throw ArgumentError.value(s, 'subcommands',
-              'Invalid subcommands: "${c._name}" redeclares -$s');
+          throw ArgumentError.value(s, 'commands',
+              'Invalid commands: "${c._name}" redeclares -$s');
         }
       }
-      _checkSubtree(c._subcommands, {...seenParams, ...c._params},
+      _checkSubtree(c._commands, {...seenParams, ...c._params},
           {...longs, for (final p in c._params) p._name},
           {...shorts, for (final p in c._params) p._short});
     }
@@ -367,9 +367,9 @@ final class Context {
     return param._absent() as T;
   }
 
-  /// Positional tail left after [Argument] binding (all of it when no
-  /// [Argument] params).
-  List<String> extraArgs() => List.of(_rest);
+  /// Positional tail left after [Arg] binding (all of it when no
+  /// [Arg] params).
+  List<String> rest() => List.of(_rest);
 
   String usage() => _commandUsage(_target, _chain);
 
@@ -411,14 +411,14 @@ void _checkHelpReserved(String name) {
   }
 }
 
-void _checkDefault<T>(String name, T? defaultsTo, bool required) {
-  if (required && defaultsTo != null) {
+void _checkDefault<T>(String name, T? or, bool required) {
+  if (required && or != null) {
     throw ArgumentError.value(
-        defaultsTo, 'defaultsTo', 'Invalid default: required and defaulted');
+        or, 'or', 'Invalid default: required and defaulted');
   }
-  if (defaultsTo == null && !required && null is! T) {
-    throw ArgumentError.value(defaultsTo, 'defaultsTo',
-        'Invalid default: "$name" is not nullable, so it needs defaultsTo: or required:');
+  if (or == null && !required && null is! T) {
+    throw ArgumentError.value(or, 'or',
+        'Invalid default: "$name" is not nullable, so it needs or: or required:');
   }
 }
 
@@ -585,8 +585,8 @@ Duration? _parseDuration(String raw) {
 
 String _oneLine(String s) => s.split('\n').first.trim();
 
-Command? _findSub(List<Command> subcommands, String token) {
-  for (final c in subcommands) {
+Command? _findSub(List<Command> commands, String token) {
+  for (final c in commands) {
     if (c._name == token || c._aliases.contains(token)) return c;
   }
   return null;
@@ -625,10 +625,10 @@ _Parsed _helpParsed(
   var resolved = List<Command>.of(chain);
   for (final t in argv) {
     if (t.startsWith('-') || t == '--') break;
-    final sub = _findSub(cmd._subcommands, t);
+    final sub = _findSub(cmd._commands, t);
     if (sub == null) {
       final guess = _closest(
-          t, [for (final c in cmd._subcommands) ...[c._name, ...c._aliases]]);
+          t, [for (final c in cmd._commands) ...[c._name, ...c._aliases]]);
       throw FormatException(
         'Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}.',
       );
@@ -643,7 +643,7 @@ _Parsed _helpParsed(
 /// the child's (or take the parent's), multis concatenate parent-first and
 /// retype, and the parent's required checks run. Parent Arguments bind
 /// nothing (dispatch happens on the first positional), so a required parent
-/// Argument fails here.
+/// Arg fails here.
 _Parsed _mergeParent(
   Command root,
   Map<Param<Object?>, Object?> singles,
@@ -763,26 +763,26 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
     }
     final isLong = token.startsWith('--');
     if (!isLong && !_isShortish(token)) {
-      // Positional: subcommand dispatch, help, or an Argument value.
+      // Positional: subcommand dispatch, help, or an Arg value.
       // A command named `help` dispatches like any subcommand (not help).
-      final helpSub = _findSub(root._subcommands, 'help');
+      final helpSub = _findSub(root._commands, 'help');
       final isHelpName = token == 'help' && helpSub == null;
       final argDefs = _argDefsOf(root);
-      if (extraArgs.isEmpty && root._subcommands.isNotEmpty) {
+      if (extraArgs.isEmpty && root._commands.isNotEmpty) {
         if (isHelpName && argDefs.isEmpty) {
           return _helpParsed(root, chain, argv.sublist(i + 1));
         }
-        final sub = _findSub(root._subcommands, token);
+        final sub = _findSub(root._commands, token);
         if (sub != null) {
           // Carry parsed-so-far params into the child; the parent's
           // definitions bind and validate first (C2/C3).
           final child = _parseCommand(sub, argv.sublist(i + 1), chain, deepest);
           return _mergeParent(root, params, multiRaws, child.withHelp(help));
         }
-        // No subcommand named and no Argument defs: unknown command.
+        // No subcommand named and no Arg defs: unknown command.
         if (argDefs.isEmpty) {
           final guess = _closest(token, [
-            for (final c in root._subcommands) ...[c._name, ...c._aliases]
+            for (final c in root._commands) ...[c._name, ...c._aliases]
           ]);
           throw FormatException(
             'Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}.',
@@ -790,7 +790,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
         }
       } else if (isHelpName &&
           extraArgs.isEmpty &&
-          root._subcommands.isEmpty &&
+          root._commands.isEmpty &&
           argDefs.isEmpty) {
         // Leaf `help` shows help, not the handler.
         return _Parsed(root, chain, params, const [], true);
@@ -838,7 +838,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           help = true;
           i += 2;
         } else {
-          throw FormatException('Option --$key needs a value.');
+          throw FormatException('Opt --$key needs a value.');
         }
       } else if (!param._isArg) {
         final what = longWhat(key);
@@ -852,7 +852,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           help = true;
           i += 2;
         } else {
-          throw FormatException('Option --$key needs a value.');
+          throw FormatException('Opt --$key needs a value.');
         }
       } else {
         final guess = _closest(key, suggestPool());
@@ -913,7 +913,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           help = true;
           i++;
         } else {
-          throw FormatException('Option -$c needs a value.');
+          throw FormatException('Opt -$c needs a value.');
         }
         break;
       }
@@ -927,7 +927,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
           help = true;
           i++;
         } else {
-          throw FormatException('Option -$c needs a value.');
+          throw FormatException('Opt -$c needs a value.');
         }
         break;
       }
@@ -938,7 +938,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors,
   for (final e in multiRaws.entries) {
     params[e.key] = e.key._readMany!(e.value, 'option "--${e.key._name}"');
   }
-  // Bind positionals to Argument defs (skipped for --help: help wins over
+  // Bind positionals to Arg defs (skipped for --help: help wins over
   // missing/unexpected).
   final args = _argDefsOf(root);
   if (!help) {
@@ -1010,7 +1010,7 @@ String _commandUsage(Command target, List<Command> chain) {
   final shape = <String>[
     for (final a in argDefs) _argPlaceholder(a),
     '[options]',
-    if (target._subcommands.isNotEmpty) '[command]',
+    if (target._commands.isNotEmpty) '[command]',
   ];
   final buf = StringBuffer()..writeln('Usage: $full ${shape.join(' ')}'.trimRight());
   if (target._help.isNotEmpty) buf.writeln('\n${target._help}');
@@ -1033,7 +1033,7 @@ String _commandUsage(Command target, List<Command> chain) {
   section(
     'Commands:',
     [
-      for (final c in target._subcommands) ([c._name, ...c._aliases].join(', '), c._help)
+      for (final c in target._commands) ([c._name, ...c._aliases].join(', '), c._help)
     ],
   );
   final optionRows = _optionRows(target);
@@ -1044,7 +1044,7 @@ String _commandUsage(Command target, List<Command> chain) {
     grows.addAll(_optionRows(a));
   }
   section('Global options:', grows);
-  if (target._subcommands.isNotEmpty && chain.length == 1) {
+  if (target._commands.isNotEmpty && chain.length == 1) {
     buf.writeln('\nRun "$full <command> --help" for more on a command.');
   }
   return '$buf'.trimRight();
@@ -1083,30 +1083,30 @@ List<(String, String)> _optionRows(Command cmd) {
     switch (v) {
       case Flag():
         final left =
-            '${v._short != null ? '-${v._short}, ' : '    '}--${v._defaultsTo ? '[no-]' : ''}${v._name}';
+            '${v._short != null ? '-${v._short}, ' : '    '}--${v._or ? '[no-]' : ''}${v._name}';
         rows.add((left, v._help));
-      case Option<Object?>():
+      case Opt<Object?>():
         final left =
             '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
-        if (v._defaultsTo != null) {
+        if (v._or != null) {
           right =
-              '${right.isEmpty ? '' : '$right '}[default: ${v._defaultsTo}]';
+              '${right.isEmpty ? '' : '$right '}[default: ${v._or}]';
         }
         if (v._required) {
           right = '${right.isEmpty ? '' : '$right '}[required]';
         }
         rows.add((left, right.trimLeft()));
-      case MultiOption<Object?>():
+      case Multi<Object?>():
         final left =
             '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
-        if (v._defaultsTo.isNotEmpty) {
+        if (v._or.isNotEmpty) {
           right =
-              '${right.isEmpty ? '' : '$right '}[default: ${v._defaultsTo.join(', ')}]';
+              '${right.isEmpty ? '' : '$right '}[default: ${v._or.join(', ')}]';
         }
         rows.add((left, right.trimLeft()));
-      case Argument<Object?>():
+      case Arg<Object?>():
         continue;
     }
   }

@@ -1,9 +1,8 @@
-/// A Claude Code-style chat loop on `tui` (REPORT §15.8), inline in the
-/// terminal: finished turns go to the scrollback, the live area is the
-/// reply being streamed and the prompt.
+/// A Claude Code-style chat loop on `tui`: finished turns and the reply being
+/// streamed fill a scrolling pane, the prompt sits below it.
 ///
 /// ```sh
-/// dart run example/agent.dart
+/// dart run examples/agent.dart
 /// ```
 ///
 /// `enter` sends, `shift+enter`/`\`+`enter` add a line, `esc` interrupts a
@@ -18,7 +17,8 @@ import 'package:dart_toolkit/tui.dart';
 sealed class Turn {}
 
 final class Chat extends Turn {
-  final prompt = TextField();
+  final prompt = Field(), scroll = Scroll();
+  final turns = <(bool, String)>[]; // (is the user's, text)
   var reply = '', mode = 0, last = '';
   DateTime? since;
   StreamSubscription<String>? stream;
@@ -30,31 +30,33 @@ const _commands = ['/clear', '/help', '/model', '/quit'];
 Future<void> main() async {
   await Tui.run<Turn>(
     Chat(),
-    fullscreen: false,
     (turn, app) => switch (turn) {
       Chat c => Screen(
         status: _modes[c.mode],
         (r) {
-          if (c.since case final t?) {
-            r.markdown(c.reply).spin('Thinking… (${DateTime.now().difference(t).inSeconds}s · esc to interrupt)');
+          final [log, input] = r.rows([0, 5]);
+          final pane = log.scroll(c.scroll);
+          for (final (user, text) in c.turns) {
+            user ? pane.write('> $text\n', color: Color.gray) : pane.markdown(text);
           }
-          r
-              .box('')
-              .input(
-                c.prompt,
-                lines: 0,
-                hint: 'Try "fix the failing test"',
-                suggest: (w) => [
-                  for (final x in _commands)
-                    if (x.startsWith(w)) x,
-                ],
-              );
+          if (c.since case final t?) {
+            pane.markdown(c.reply).spin('Thinking… (${DateTime.now().difference(t).inSeconds}s · esc to interrupt)');
+          }
+          input.box().input(
+            c.prompt,
+            lines: 3,
+            hint: 'Try "fix the failing test"',
+            suggest: (w) => [
+              for (final x in _commands)
+                if (x.startsWith(w)) x,
+            ],
+          );
         },
         keys: {
           'enter': ('send', () => _send(c, app)),
           if (c.stream != null) 'escape': ('interrupt', () => _done(c, app)),
           'shift+tab': ('mode', () => c.mode = (c.mode + 1) % _modes.length),
-          'ctrl+y': ('', () => app.copyToClipboard(c.last)),
+          'ctrl+y': ('', () => app.copy(c.last)),
         },
       ),
     },
@@ -65,7 +67,7 @@ void _send(Chat c, App<Turn> app) {
   if (c.stream != null || c.prompt.text().trim().isEmpty) return;
   final text = c.prompt.submit();
   if (text == '/quit') return app.quit();
-  app.printAbove((Region r) => r.write('> $text', color: Color.gray));
+  c.turns.add((true, text));
   c
     ..reply = ''
     ..since = DateTime.now();
@@ -81,7 +83,7 @@ void _send(Chat c, App<Turn> app) {
 void _done(Chat c, App<Turn> app) {
   c.stream?.cancel();
   final text = c.last = c.reply;
-  app.printAbove((Region r) => r.markdown(text)); // into scrollback; the live area shrinks back to the prompt
+  if (text.isNotEmpty) c.turns.add((false, text));
   c
     ..stream = null
     ..since = null

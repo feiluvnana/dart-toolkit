@@ -9,7 +9,7 @@ void main() {
   group('Shell.run', () {
     test('runs a program and returns stdout', () async {
       final out = await Shell.run(['echo', 'hi']);
-      expect(out.exitCode(), 0);
+      expect(out.code(), 0);
       expect((await out.text()).trim(), 'hi');
     });
 
@@ -24,17 +24,18 @@ void main() {
 
     test('a non-zero exit is an Output', () async {
       final out = await Shell.run(['sh', '-c', 'exit 3']);
-      expect(out.exitCode(), 3);
+      expect(out.code(), 3);
+      expect(out.ok(), isFalse);
     });
 
-    test('stderrText carries stderr', () async {
+    test('err carries stderr', () async {
       final out = await Shell.run(['sh', '-c', 'echo oops >&2']);
-      expect(out.stderrText(), contains('oops'));
+      expect(out.err(), contains('oops'));
     });
 
     test('env overlays the parent; null unsets', () async {
       final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'],
-          workingDir: '/tmp', env: {'MARK': 'here'});
+          dir: '/tmp', env: {'MARK': 'here'});
       expect(await out.text(), contains('/tmp'));
       expect(await out.text(), contains('here'));
     });
@@ -53,12 +54,12 @@ void main() {
       final out = await Shell.run(
           ['sh', '-c', 'echo live-out; echo live-err >&2'],
           live: true);
-      expect(out.exitCode(), 0);
+      expect(out.code(), 0);
       expect(await out.text(), 'live-out');
-      expect(out.stderrText(), contains('live-err'));
+      expect(out.err(), contains('live-err'));
       final failing =
           await Shell.run(['sh', '-c', 'exit 3'], live: true);
-      expect(failing.exitCode(), 3);
+      expect(failing.code(), 3);
     });
 
     test('bytes() is a view, not a copy', () async {
@@ -87,8 +88,8 @@ void main() {
 
     test('Future mirrors match', () async {
       final f = Shell.run(['sh', '-c', 'echo e; echo w >&2']);
-      expect(await f.exitCode(), 0);
-      expect(await f.stderrText(), contains('w'));
+      expect(await f.code(), 0);
+      expect(await f.err(), contains('w'));
       expect((await f.text()).trim(), 'e');
     });
   });

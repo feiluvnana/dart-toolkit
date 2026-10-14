@@ -18,7 +18,7 @@ const _mouseNames = {
 /// Lifecycle event names usable in [Binding] maps.
 const _lifecycleNames = {'show', 'resize', 'focus', 'blur'};
 
-/// The height of an inline (or print) region: as tall as its content.
+/// The height of a region that grows with its content (scroll bodies).
 const _unbounded = 1 << 20;
 
 bool _isMouse(String name) => _mouseNames.contains(name);
@@ -36,21 +36,17 @@ final class App<S> {
   S state() => _s._state;
 
   /// Switch state; the next redraw calls `screen` with it.
-  void goTo(S state) => _s._go(state);
+  void go(S state) => _s._go(state);
 
-  /// A status-row message until the next [showStatus] or error.
-  void showStatus(String message) => _s._say(message);
-
-  /// Commit a drawing above the live area into the scrollback (inline mode).
-  /// In full screen this throws [StateError].
-  void printAbove(void Function(Region r) draw) => _s._print(draw);
+  /// A status-row message until the next [status] or error.
+  void status(String message) => _s._say(message);
 
   /// A desktop notification (OSC 9/777, bell fallback). Silent while the
   /// terminal reports focus; always sent when it never reports focus.
   void notify(String message) => _s._notify(message);
 
   /// Copy text to the clipboard (OSC 52).
-  void copyToClipboard(String text) => _s._copy(text);
+  void copy(String text) => _s._copy(text);
 
   /// Return the state from [Tui.run] (pending handlers keep running).
   void quit() => _s._quit();
@@ -80,22 +76,21 @@ final class Screen {
 abstract final class Tui {
   static bool _active = false;
 
-  /// Own the loop: redraw on every input event, handler settle, `goTo` /
-  /// `showStatus`, resize, and at most every 80 ms while work is pending or
+  /// Own the loop: redraw on every input event, handler settle, `go` /
+  /// `status`, resize, and at most every 80 ms while work is pending or
   /// a spinner is
   /// visible. Returns the state passed to [App.quit]. A second [run] while
   /// one is active throws [StateError]. Throws [StdoutException] when stdout
   /// is not a terminal.
   static Future<S> run<S>(S state,
       Screen Function(S state, App<S> app) screen,
-      {bool fullscreen = true, Color accent = Color.orange}) {
+      {Color? accent}) {
     if (_active) throw StateError('Tui.run is already active');
     _active = true;
     final session = _Session<S>(state, screen,
         out: io.stdout.write,
         size: () => (io.stdout.terminalColumns, io.stdout.terminalLines),
-        accent: accent,
-        fullscreen: fullscreen);
+        accent: accent);
     return session._run().whenComplete(() => _active = false);
   }
 }
@@ -104,7 +99,7 @@ final class _F {
   _F(this.id, this.x, this.y, this.w, this.h, this.order, this.tryKey,
       {this.onMap, this.fixed = false});
 
-  /// Inside a popup: screen coordinates, never shifted by inline layout.
+  /// Inside a popup: screen coordinates.
   final bool fixed;
 
   final Object id;
@@ -147,83 +142,28 @@ final class _WheelEv extends _Ev {
   final int dir;
 }
 
-/// Open suggest-completion state for one [TextField].
-final class _Suggest {
-  _Suggest(this.field);
-
-  final TextField field;
-  String word = '';
-  int wordStart = 0;
-  List<String> matches = const [];
-  var index = 0;
-  var gen = 0;
-  var open = false;
-}
-
-/// A Console prompt shown as a modal popup (ask/confirm/choose).
-final class _Prompt {
-  _Prompt.ask(this.question, this.secret)
-      : kind = 0,
-        choices = const [],
-        completer = Completer<String>();
-
-  _Prompt.confirm(this.question)
-      : kind = 1,
-        secret = false,
-        choices = const [],
-        completer = Completer<bool>();
-
-  _Prompt.choose(this.question, this.choices)
-      : kind = 2,
-        secret = false,
-        completer = Completer<String>();
-
-  final int kind; // 0 ask, 1 confirm, 2 choose
-  final String question;
-  final bool secret;
-  final List<String> choices;
-  final TextField field = TextField();
-  final Selection<int> pick = Selection<int>();
-  String? error;
-  int start = 0, shown = 0, top = 0; // choose: first visible choice, rows shown, screen row of the first
-  final Completer<Object> completer; // String (ask/choose) or bool (confirm)
-}
-
 /// A Console progress bar mirrored into the status row.
 final class _CBridge {
   _CBridge(this.total, this.label) : start = DateTime.now();
 
-  final int? total;
+  int? total;
   final String? label;
   var done = 0;
   var bytes = false;
   final DateTime start;
 }
 
-bool _isWordSuggestChar(int r) =>
-    (r >= 0x30 && r <= 0x39) ||
-    (r >= 0x41 && r <= 0x5A) ||
-    r == 0x5F ||
-    (r >= 0x61 && r <= 0x7A) ||
-    r == 0x40 ||
-    r == 0x2F ||
-    r == 0x3A ||
-    r == 0x2E ||
-    r == 0x2B ||
-    r == 0x2D;
 final class _Session<S> implements term.TuiBridge {
   _Session(this._state, this._screenFn,
       {required this.out,
       required this.size,
-      required this.accent,
-      required this.fullscreen});
+      required this.accent});
 
   S _state;
   final Screen Function(S state, App<S> app) _screenFn;
   final void Function(String) out;
   final (int, int) Function() size;
-  final Color accent;
-  final bool fullscreen;
+  final Color? accent;
   late final App<S> app = App<S>._(this);
 
   var _w = 80;
@@ -253,22 +193,32 @@ final class _Session<S> implements term.TuiBridge {
   String? _sayMsg;
   String? _error;
   String? _statusLine;
-  Map<String, Binding> _keys = const {};
+  Map<String, Binding> _drawnKeys = const {};
+  var _keysStale = false;
+
+  /// Bindings of the current state: after [_go], rebuilt before the next
+  /// redraw so a key arriving first never runs the old state's handler.
+  Map<String, Binding> get _keys {
+    if (_keysStale) {
+      _keysStale = false;
+      _drawnKeys = _screenFn(_state, app)._keys;
+    }
+    return _drawnKeys;
+  }
   String? _title;
   Object? _shownState;
 
   final _popups = <_Popup>[];
   final _scrolls = <_ScrollCtx>[];
-  final _drawnFields = <TextField>{};
+  final _drawnFields = <Field>{};
   final _clickBase = Expando<int>();
-  final _suggests = <TextField, _Suggest>{};
+  final _suggests = <Field, _Suggest>{};
   _Suggest? _activeSg;
   final _prompts = <_Prompt>[];
   final _cSpinners = <Object, String>{};
   final _cBars = <Object, _CBridge>{};
   var _termFocused = true;
   var _focusReported = false; // set by the first focus event
-  var _usedRows = 0;
   var _statusY = 23;
 
   // Open-layout measuring (see [_measured]).
@@ -277,10 +227,10 @@ final class _Session<S> implements term.TuiBridge {
   final _mPending = <void Function()>[];
   final _mBuild = <int, int>{};
   var _refocused = false;
-  var _liveH = 0;
-  int _curR = -1;
   var _spinVisible = false;
-  var _spinTick = 0;
+  /// The spinner frame follows the clock, so redraws from a busy stream
+  /// can't starve it.
+  int get _spinTick => _now() ~/ 80;
   (int, int)? _cursorPos;
   var _caps = _fallbackCaps;
   bool _testMode = false;
@@ -340,11 +290,6 @@ final class _Session<S> implements term.TuiBridge {
           }
         },
         handleUncaughtError: (self, parent, zone, e, st) {
-          // Escape in a Console prompt ends the handler silently.
-          if (e is io.StdinException) {
-            _dirtyAndWake();
-            return;
-          }
           if (e is Exception) {
             _failStatus(e);
           } else {
@@ -359,16 +304,6 @@ final class _Session<S> implements term.TuiBridge {
     final z = _zone;
     if (z == null) return fn();
     return z.run(fn);
-  }
-
-  Future<void> _settleForTest() async {
-    for (var k = 0; k < 200; k++) {
-      await Future<void>.delayed(Duration.zero);
-      if (_activeH == 0) {
-        await Future<void>.delayed(Duration.zero);
-        if (_activeH == 0) return;
-      }
-    }
   }
 
   // --- run loop ----------------------------------------------------------
@@ -391,7 +326,7 @@ final class _Session<S> implements term.TuiBridge {
 
   Future<void> _loop() async {
     _draw();
-    _paintNow();
+    _paint();
     while (!_quitFlag) {
       if (_fatal != null) {
         final e = _fatal!;
@@ -422,7 +357,6 @@ final class _Session<S> implements term.TuiBridge {
           await w.future.timeout(Duration(milliseconds: wait));
         } on TimeoutException {
           if (!_dirty && _pending.isEmpty) {
-            _spinTick++;
             _dirty = true;
           }
         }
@@ -432,7 +366,7 @@ final class _Session<S> implements term.TuiBridge {
       if (_dirty && _now() - _lastPaint >= 16) {
         _dirty = false;
         _draw();
-        _paintNow();
+        _paint();
       }
       try {
         final (w2, h2) = size();
@@ -443,7 +377,7 @@ final class _Session<S> implements term.TuiBridge {
           _fireLifecycle('resize');
           _dirty = true;
           _draw();
-          _paintNow();
+          _paint();
         }
       } catch (_) {}
     }
@@ -481,6 +415,7 @@ final class _Session<S> implements term.TuiBridge {
 
   void _go(S state) {
     _state = state;
+    _keysStale = true;
     _sayMsg = null;
     _dirtyAndWake();
   }
@@ -491,53 +426,6 @@ final class _Session<S> implements term.TuiBridge {
     _dirtyAndWake();
   }
 
-  void _print(void Function(Region r) draw) {
-    if (fullscreen) throw StateError('printAbove needs inline mode');
-    _printInline(draw);
-  }
-
-  /// Render [draw] at full width and commit it above the live area.
-  void _printInline(void Function(Region r) draw) {
-    if (_curR >= 0) {
-      out('\r\x1b[${_liveH - _curR}B');
-      _curR = -1;
-    }
-    final buf = <List<_Cell>>[List.filled(_w, _Cell.blank)];
-    final nf = _focusables.length,
-        np = _popups.length,
-        ns = _scrolls.length,
-        no = _order;
-    void restore() {
-      _focusables.length = nf;
-      _popups.length = np;
-      _scrolls.length = ns;
-      _order = no;
-    }
-
-    _measured(() {
-      draw(Region._(this, buf, 0, 0, _w, _unbounded, grow: true, open: true));
-    }, () {
-      restore();
-      buf
-        ..clear()
-        ..add(List.filled(_w, _Cell.blank));
-    });
-    restore();
-    var n = buf.length;
-    while (n > 0 && buf[n - 1].every((c) => c == _Cell.blank)) {
-      n--;
-    }
-    final sb = StringBuffer();
-    if (_liveH > 0) sb.write('\r\x1b[${_liveH}A\x1b[J');
-    for (var r = 0; r < n; r++) {
-      sb.write('\r\x1b[2K');
-      sb.write(_renderRow(buf[r]));
-      sb.write('\n');
-    }
-    out(sb.toString());
-    _liveH = 0;
-    _dirtyAndWake();
-  }
   void _notify(String message) {
     // Silent only while the terminal reports that it has focus.
     if (_focusReported && _termFocused) return;
@@ -602,6 +490,17 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   @override
+  void barTotal(Object id, int? total) {
+    _cBars[id]?.total = total;
+    _dirtyAndWake();
+  }
+
+  @override
+  void log(String line) {
+    _say(line);
+  }
+
+  @override
   void barEnded(Object id, bool ok) {
     final bar = _cBars.remove(id);
     if (!ok && bar != null) _error = '✗ ${bar.label ?? ''}'.trimRight();
@@ -609,34 +508,33 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   @override
-  Future<String> promptAsk(String question, {required bool secret}) {
-    final p = _Prompt.ask(question, secret);
+  Future<String?> promptAsk(String question, {required bool secret}) {
+    final p = _Ask(question, secret: secret);
     _prompts.add(p);
     _dirtyAndWake();
-    return p.completer.future.then((v) => v as String);
+    return p.done.future;
   }
 
   @override
-  Future<bool> promptConfirm(String question) {
-    final p = _Prompt.confirm(question);
+  Future<bool?> promptConfirm(String question, bool or) {
+    final p = _Confirm(question, or);
     _prompts.add(p);
     _dirtyAndWake();
-    return p.completer.future.then((v) => v as bool);
+    return p.done.future;
   }
 
   @override
-  Future<String> promptChoose(String question, List<String> choices) {
+  Future<String?> promptChoose(String question, List<String> choices, int initial) {
     if (choices.isEmpty) {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
-    final p = _Prompt.choose(question, choices);
-    p.pick.setItems(List<int>.generate(choices.length, (k) => k));
+    final p = _Choose(question, choices, initial);
     _prompts.add(p);
     _dirtyAndWake();
-    return p.completer.future.then((v) => v as String);
+    return p.done.future;
   }
 
-  /// One identity per key set, so a `Region.bind` region is the same
+  /// One identity per key set, so a `Region.on` region is the same
   /// focusable on every frame.
   final _bindIds = <String, Object>{};
   Object _bindId(Map<String, Binding> events) =>
@@ -693,6 +591,24 @@ final class _Session<S> implements term.TuiBridge {
   /// an `identical` source is an O(1) hit, a streamed append re-lays only
   /// from the last block boundary.
   final _mdMemos = <_MdMemo>[];
+
+  /// Diff colours without an accent: removed text dim, added bold.
+  int _diffStyle(_DiffSeg g) {
+    if (accent != null) return _pack(g.fg, g.bg, g.style);
+    final st = {...g.style};
+    if (g.fg == Color.red) {
+      st
+        ..remove(Style.bold)
+        ..add(Style.dim);
+    }
+    return _pack(null, null, st);
+  }
+
+  /// Markdown highlighting without an accent: comments dim, no colour.
+  int _mdStyle(_MdSeg g) => accent != null
+      ? _pack(g.fg, g.bg, g.style)
+      : _pack(null, null,
+          g.fg == Color.gray ? {...g.style, Style.dim} : g.style);
 
   int _pack(Color? fg, Color? bg, Set<Style> style) {
     var bits = 0;
@@ -822,7 +738,7 @@ final class _Session<S> implements term.TuiBridge {
       final r = text.runes.single;
       final nm = r == 0x20 ? 'space' : String.fromCharCode(r);
       final fid = _focusId;
-      if (fid != null && fid is! TextField && fid is! String) {
+      if (fid != null && fid is! Field && fid is! String) {
         for (final f in _focusables) {
           if (identical(f.id, fid) && f.onMap != null) {
             final b = _lookup(f.onMap!, nm);
@@ -840,7 +756,7 @@ final class _Session<S> implements term.TuiBridge {
       }
       // Screen keys before the rule-5 input fallback (mirrors 4-before-5);
       // a focused input (rule 2) takes its text first.
-      final b = fid is TextField ? null : _lookup(_keys, nm);
+      final b = fid is Field ? null : _lookup(_keys, nm);
       if (b != null) {
         _invoke(b.$2);
         return;
@@ -848,13 +764,13 @@ final class _Session<S> implements term.TuiBridge {
     }
     _F? target;
     for (final f in _focusables) {
-      if (f.id is TextField && f.tryKey != null && _sameId(f.id, _focusId)) {
+      if (f.id is Field && f.tryKey != null && _sameId(f.id, _focusId)) {
         target = f;
         break;
       }
     }
     target ??= _focusables
-        .where((f) => f.id is TextField && f.tryKey != null)
+        .where((f) => f.id is Field && f.tryKey != null)
         .firstOrNull;
     if (target != null) {
       target.tryKey!(_KeyEv('', text: text, paste: paste));
@@ -1005,7 +921,7 @@ final class _Session<S> implements term.TuiBridge {
   bool _routeWheel(int x, int y, int dir) {
     if (_prompts.isNotEmpty) {
       final p = _prompts.last;
-      if (p.kind == 2) {
+      if (p is _Choose) {
         return _promptKey(p, dir < 0 ? 'wheelup' : 'wheeldown');
       }
       return true; // modal: swallow
@@ -1032,492 +948,6 @@ final class _Session<S> implements term.TuiBridge {
     return false;
   }
 
-  /// Refresh the suggest popup for [field] from the word at its cursor.
-  void _refreshSuggest(
-      TextField field, FutureOr<List<String>> Function(String word)? fn) {
-    if (fn == null) return;
-    final sg = _suggests.putIfAbsent(field, () => _Suggest(field));
-    final runes = field._text.runes.toList();
-    final at = field._cursor.clamp(0, runes.length);
-    var start = at;
-    while (start > 0 && _isWordSuggestChar(runes[start - 1])) {
-      start = _prevCluster(runes, start);
-    }
-    var end = at;
-    while (end < runes.length && _isWordSuggestChar(runes[end])) {
-      end = _nextCluster(runes, end);
-    }
-    final word = String.fromCharCodes(runes.sublist(start, end));
-    if (word.isEmpty) {
-      sg.open = false;
-      if (identical(_activeSg, sg)) _activeSg = null;
-      _dirtyAndWake();
-      return;
-    }
-    // Same word: nothing new to ask (and an escaped popup stays closed).
-    if (word == sg.word && start == sg.wordStart) return;
-    sg.word = word;
-    sg.wordStart = start;
-    final gen = ++sg.gen;
-    FutureOr<List<String>> result;
-    try {
-      result = fn(word);
-    } catch (_) {
-      if (sg.gen == gen) sg.open = false;
-      if (identical(_activeSg, sg) && !sg.open) _activeSg = null;
-      _dirtyAndWake();
-      return;
-    }
-    if (result is Future<List<String>>) {
-      result.then((matches) {
-        if (sg.gen != gen) return; // stale async answer: drop
-        sg.matches = matches.length > 10 ? matches.sublist(0, 10) : matches;
-        sg.index = 0;
-        sg.open = sg.matches.isNotEmpty;
-        if (!sg.open && identical(_activeSg, sg)) _activeSg = null;
-        _dirtyAndWake();
-      }, onError: (_) {
-        if (sg.gen == gen) {
-          sg.open = false;
-          if (identical(_activeSg, sg)) _activeSg = null;
-          _dirtyAndWake();
-        }
-      });
-    } else {
-      sg.matches = result.length > 10 ? result.sublist(0, 10) : result;
-      sg.index = 0;
-      sg.open = sg.matches.isNotEmpty;
-      if (!sg.open && identical(_activeSg, sg)) _activeSg = null;
-      _dirtyAndWake();
-    }
-  }
-
-  void _acceptSuggest(_Suggest sg) {
-    if (sg.matches.isEmpty) {
-      sg.open = false;
-      if (identical(_activeSg, sg)) _activeSg = null;
-      _dirtyAndWake();
-      return;
-    }
-    final field = sg.field;
-    final runes = field._text.runes.toList();
-    // Replace [wordStart, cursor) with the match.
-    final at = field._cursor.clamp(0, runes.length);
-    runes.removeRange(sg.wordStart.clamp(0, at), at);
-    final match = sg.matches[sg.index.clamp(0, sg.matches.length - 1)];
-    runes.insertAll(sg.wordStart.clamp(0, runes.length), match.runes);
-    field._text = String.fromCharCodes(runes);
-    field._cursor = sg.wordStart + match.runes.length;
-    field._wantCol = -1;
-    sg.word = match;
-    sg.open = false;
-    if (identical(_activeSg, sg)) _activeSg = null;
-    _dirtyAndWake();
-  }
-
-  /// Route a key to the open suggest popup, if any drawn field has one.
-  /// Returns true when consumed.
-  bool _routeSuggest(String name) {
-    final sg = _activeSg;
-    if (sg == null || !sg.open || sg.matches.isEmpty) return false;
-    switch (name) {
-      case 'up':
-        sg.index =
-            (sg.index - 1 + sg.matches.length) % sg.matches.length;
-        _dirtyAndWake();
-        return true;
-      case 'down':
-        sg.index = (sg.index + 1) % sg.matches.length;
-        _dirtyAndWake();
-        return true;
-      case 'tab':
-      case 'enter':
-        _acceptSuggest(sg);
-        return true;
-      case 'escape':
-        sg.open = false;
-        _activeSg = null;
-        _dirtyAndWake();
-        return true;
-    }
-    return false;
-  }
-
-  /// Draw the suggest popup for [field] near its cursor (buffer coords
-  /// [cpos] in [region]), if its matches are open.
-  void _drawSuggestPopup(
-      TextField field, Region region, (int, int)? cpos) {
-    final sg = _suggests[field];
-    if (sg == null || !sg.open || sg.matches.isEmpty || cpos == null) {
-      if (sg != null && identical(_activeSg, sg)) _activeSg = null;
-      return;
-    }
-    final sp = region._toScreen(cpos.$1, cpos.$2);
-    if (sp == null) {
-      if (identical(_activeSg, sg)) _activeSg = null;
-      return;
-    }
-    _activeSg = sg;
-    var mw = 0;
-    for (final m in sg.matches) {
-      mw = math.max(mw, term.displayWidth(m));
-    }
-    final w = (mw + 4).clamp(8, math.min<int>(40, _w));
-    final h = math.min<int>(sg.matches.length + 2, math.max<int>(3, _h));
-    var y = sp.$2 + 1;
-    if (fullscreen) {
-      // Inline positions are buffer rows; the live area grows to hold the list.
-      if (y + h > _h) y = sp.$2 - h;
-      y = y.clamp(0, math.max<int>(0, _h - h));
-    }
-    var x = sp.$1.clamp(0, math.max<int>(0, _w - w));
-    final buf = <List<_Cell>>[
-      for (var k = 0; k < h; k++) List.filled(w, _Cell.blank)
-    ];
-    final ascii = _caps.ascii;
-    final (hz, vt, tl, tr, bl, br) = ascii
-        ? ('-', '|', '+', '+', '+', '+')
-        : ('─', '│', '┌', '┐', '└', '┘');
-    void raw(int r, int c, String ch) {
-      if (r >= 0 && r < h && c >= 0 && c < w) buf[r][c] = _Cell(ch, 0, 1);
-    }
-
-    for (var cx = 0; cx < w; cx++) {
-      raw(0, cx, hz);
-      raw(h - 1, cx, hz);
-    }
-    for (var ry = 0; ry < h; ry++) {
-      raw(ry, 0, vt);
-      raw(ry, w - 1, vt);
-    }
-    raw(0, 0, tl);
-    raw(0, w - 1, tr);
-    raw(h - 1, 0, bl);
-    raw(h - 1, w - 1, br);
-    final rows = h - 2;
-    var start = sg.index - rows + 1;
-    if (start < 0) start = 0;
-    for (var r = 0; r < rows && start + r < sg.matches.length; r++) {
-      final idx = start + r;
-      final sel = idx == sg.index;
-      final st = _pack(null, sel ? accent : null, sel ? {Style.bold} : {});
-      final label = term.truncateWidth(sg.matches[idx], math.max(1, w - 4));
-      var col = 2;
-      if (sel) {
-        for (var c = 1; c < w - 1; c++) {
-          buf[r + 1][c] = _Cell(' ', st, 1);
-        }
-      }
-      for (final rune in label.runes) {
-        if (col >= w - 1) break;
-        if (rune < 0x20 || rune == 0x7f) continue;
-        final cw = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
-        if (cw == 0 || col + cw > w - 1) continue;
-        buf[r + 1][col] = _Cell(String.fromCharCode(rune), st, cw);
-        if (cw == 2 && col + 1 < w - 1) {
-          buf[r + 1][col + 1] = _Cell('', st, 0);
-        }
-        col += cw;
-      }
-    }
-    _popups.add(_Popup(x, y, w, h, buf, anchored: true));
-  }
-
-  /// Route a key to the topmost Console prompt. Returns true when consumed
-  /// (prompts are modal: everything is consumed while one is open).
-  bool _promptKey(_Prompt p, String name) {
-    if (p.kind == 2) {
-      final n = p.choices.length;
-      switch (name) {
-        case 'up':
-        case 'wheelup':
-          if (n > 0) {
-            p.pick.select(p.pick.index() - 1);
-            _dirtyAndWake();
-          }
-          return true;
-        case 'down':
-        case 'wheeldown':
-          if (n > 0) {
-            p.pick.select(p.pick.index() + 1);
-            _dirtyAndWake();
-          }
-          return true;
-        case 'home':
-          p.pick.select(0);
-          _dirtyAndWake();
-          return true;
-        case 'end':
-          p.pick.select(n - 1);
-          _dirtyAndWake();
-          return true;
-        case 'enter':
-          _prompts.remove(p);
-          if (!p.completer.isCompleted) {
-            p.completer.complete(
-                n == 0 ? '' : p.choices[p.pick.index().clamp(0, n - 1)]);
-          }
-          _dirtyAndWake();
-          return true;
-        case 'escape':
-        case 'ctrl+c':
-          _prompts.remove(p);
-          if (!p.completer.isCompleted) {
-            p.completer.completeError(
-                const io.StdinException('stdin is closed'));
-          }
-          _dirtyAndWake();
-          return true;
-      }
-      return true; // modal: swallow the rest
-    }
-    switch (name) {
-      case 'backspace':
-        _promptDrop(p, -1);
-        return true;
-      case 'delete':
-        _promptDrop(p, 1);
-        return true;
-      case 'left':
-        p.field._cursor = _prevCluster(
-            p.field._text.runes.toList(), p.field._cursor);
-        _dirtyAndWake();
-        return true;
-      case 'right':
-        p.field._cursor = _nextCluster(
-            p.field._text.runes.toList(), p.field._cursor);
-        _dirtyAndWake();
-        return true;
-      case 'home':
-      case 'ctrl+a':
-        p.field._cursor = 0;
-        _dirtyAndWake();
-        return true;
-      case 'end':
-      case 'ctrl+e':
-        p.field._cursor = p.field._text.runes.length;
-        _dirtyAndWake();
-        return true;
-      case 'ctrl+u':
-      case 'ctrl+k':
-      case 'ctrl+w':
-      case 'alt+backspace':
-        p.field.setText('');
-        _dirtyAndWake();
-        return true;
-      case 'enter':
-        _submitPrompt(p);
-        return true;
-      case 'escape':
-      case 'ctrl+c':
-        _prompts.remove(p);
-        if (!p.completer.isCompleted) {
-          p.completer
-              .completeError(const io.StdinException('stdin is closed'));
-        }
-        _dirtyAndWake();
-        return true;
-    }
-    return true; // modal: swallow the rest
-  }
-
-  void _promptDrop(_Prompt p, int dir) {
-    final runes = p.field._text.runes.toList();
-    final at = p.field._cursor.clamp(0, runes.length);
-    if (dir < 0) {
-      final start = _prevCluster(runes, at);
-      runes.removeRange(start, at);
-      p.field._cursor = start;
-    } else {
-      final end = _nextCluster(runes, at);
-      runes.removeRange(at, end);
-    }
-    p.field._text = String.fromCharCodes(runes);
-    _dirtyAndWake();
-  }
-
-  void _promptText(_Prompt p, String text, bool paste) {
-    final clean = paste
-        ? text
-            .replaceAll('\r\n', ' ')
-            .replaceAll(RegExp('[\r\n\t]'), ' ')
-            .replaceAll(RegExp('[\x00-\x1f\x7f]'), '')
-        : text;
-    final runes = p.field._text.runes.toList();
-    final at = p.field._cursor.clamp(0, runes.length);
-    runes.insertAll(at, clean.runes);
-    p.field._text = String.fromCharCodes(runes);
-    p.field._cursor = at + clean.runes.length;
-    _dirtyAndWake();
-  }
-
-  void _submitPrompt(_Prompt p) {
-    if (p.kind == 1) {
-      final answer = p.field.text().trim().toLowerCase();
-      if (answer == 'y' || answer == 'yes') {
-        _prompts.remove(p);
-        if (!p.completer.isCompleted) p.completer.complete(true);
-      } else if (answer == 'n' ||
-          answer == 'no' ||
-          answer.isEmpty) {
-        _prompts.remove(p);
-        if (!p.completer.isCompleted) p.completer.complete(false);
-      } else {
-        p.error = 'please answer y or n';
-      }
-      _dirtyAndWake();
-      return;
-    }
-    final text = p.field.text();
-    _prompts.remove(p);
-    if (!p.completer.isCompleted) p.completer.complete(text);
-    _dirtyAndWake();
-  }
-
-  /// Route typed text to the topmost prompt (ask/confirm only).
-  void _promptRouteText(String text, bool paste) {
-    if (_prompts.isEmpty) return;
-    final p = _prompts.last;
-    if (p.kind == 2) return; // choose ignores typing
-    _promptText(p, text, paste);
-  }
-
-  /// Route a mouse event to the topmost prompt. Always consumes (modal).
-  bool _promptMouse(String kind, int x, int y) {
-    if (_prompts.isEmpty) return false;
-    final p = _prompts.last;
-    if (p.kind == 2 && (kind == 'click' || kind == 'doubleclick')) {
-      // Click a row to select it.
-      final row = y - p.top;
-      if (row >= 0 && row < p.shown) {
-        p.pick.select(p.start + row);
-        if (kind == 'doubleclick') {
-          _prompts.remove(p);
-          if (!p.completer.isCompleted) {
-            p.completer.complete(p.choices[p.pick.index()]);
-          }
-        }
-        _dirtyAndWake();
-      }
-    }
-    return true;
-  }
-
-  void _drawPrompt() {
-    if (_prompts.isEmpty) return;
-    final p = _prompts.last;
-    final lines = <(String, int)>[]; // (text, style)
-    void wrapped(String text, int style, {int indent = 0}) {
-      final maxW = math.max(8, _w - 8);
-      var rest = text;
-      var first = true;
-      while (rest.isNotEmpty) {
-        final lead = first ? indent : indent + 2;
-        var used = lead;
-        var k = 0;
-        for (final r in rest.runes) {
-          final w = term.isZeroWidth(r) ? 0 : term.cellWidth(r);
-          if (used + w > maxW) break;
-          used += w;
-          k++;
-        }
-        if (k == 0) break;
-        final runes = rest.runes.toList();
-        lines.add((
-          '${first ? '' : '  '}${String.fromCharCodes(runes.sublist(0, k))}',
-          style
-        ));
-        rest = String.fromCharCodes(runes.sublist(k)).trimLeft();
-        first = false;
-      }
-    }
-
-    int fieldRow = -1;
-    if (p.kind == 2) {
-      wrapped(p.question, _pack(null, null, {Style.bold}));
-      lines.add(('', 0));
-      // Window the choices to the popup height, keeping the selection in view.
-      final head = lines.length;
-      final n = p.choices.length;
-      p.shown = math.min(n, math.max(1, math.max(5, _h - 2) - 4 - head));
-      final sel = p.pick.index();
-      if (sel < p.start) p.start = sel;
-      if (sel >= p.start + p.shown) p.start = sel - p.shown + 1;
-      p.start = p.start.clamp(0, n - p.shown);
-      for (var k = p.start; k < p.start + p.shown; k++) {
-        lines.add(('${k == sel ? '❯ ' : '  '}${p.choices[k]}', 0));
-      }
-      p.top = head; // made absolute once the popup is placed
-    } else {
-      final q = p.kind == 1 ? '${p.question} [y/n]' : p.question;
-      wrapped(q, _pack(null, null, {Style.bold}));
-      lines.add(('', 0));
-      final shown =
-          p.secret ? '•' * p.field._text.runes.length : p.field._text;
-      fieldRow = lines.length;
-      lines.add(('❯ $shown', 0));
-      if (p.error != null) {
-        lines.add(('  ${p.error}', _pack(Color.red, null, {})));
-      }
-    }
-    final contentW = lines.fold<int>(0,
-        (m, l) => math.max(m, term.displayWidth(l.$1)));
-    final w = (contentW + 6).clamp(20, math.max<int>(20, _w - 2));
-    final h = (lines.length + 4).clamp(5, math.max<int>(5, _h - 2));
-    final x = ((_w - w) ~/ 2).clamp(0, math.max<int>(0, _w - w));
-    final y = ((_h - h) ~/ 2).clamp(0, math.max<int>(0, _h - h));
-    final buf = <List<_Cell>>[
-      for (var k = 0; k < h; k++) List.filled(w, _Cell.blank)
-    ];
-    final ascii = _caps.ascii;
-    final (hz, vt, tl, tr, bl, br) = ascii
-        ? ('-', '|', '+', '+', '+', '+')
-        : ('─', '│', '┌', '┐', '└', '┘');
-    void raw(int r, int c, String ch) {
-      if (r >= 0 && r < h && c >= 0 && c < w) buf[r][c] = _Cell(ch, 0, 1);
-    }
-
-    for (var cx = 0; cx < w; cx++) {
-      raw(0, cx, hz);
-      raw(h - 1, cx, hz);
-    }
-    for (var ry = 0; ry < h; ry++) {
-      raw(ry, 0, vt);
-      raw(ry, w - 1, vt);
-    }
-    raw(0, 0, tl);
-    raw(0, w - 1, tr);
-    raw(h - 1, 0, bl);
-    raw(h - 1, w - 1, br);
-    for (var r = 0; r < lines.length && r + 2 < h - 1; r++) {
-      final (text, st) = lines[r];
-      var col = 3;
-      for (final rune in text.runes) {
-        if (col >= w - 2) break;
-        if (rune < 0x20 || rune == 0x7f) continue;
-        final cw = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
-        if (cw == 0 || col + cw > w - 2) continue;
-        buf[r + 2][col] =
-            _Cell(String.fromCharCode(rune), st, cw);
-        if (cw == 2 && col + 1 < w - 2) {
-          buf[r + 2][col + 1] = _Cell('', st, 0);
-        }
-        col += cw;
-      }
-    }
-    _popups.add(_Popup(x, y, w, h, buf));
-    if (p.kind == 2) p.top += y + 2;
-    if (p.kind != 2 && fieldRow >= 0) {
-      // Hardware cursor at the end of the field text.
-      final text = p.secret
-          ? '•' * p.field._text.runes.length
-          : p.field._text;
-      var col = x + 3 + 2 + term.displayWidth(text);
-      col = math.min(col, x + w - 2);
-      _cursorPos = (y + 2 + fieldRow, col);
-    }
-  }
-
   void _invoke(FutureOr<void> Function() action) {
     _activeH++;
     _dirtyAndWake();
@@ -1542,12 +972,6 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   void _handlerError(Object e, StackTrace st) {
-    // A handler that ends in StdinException (Escape in a Console prompt)
-    // shows nothing.
-    if (e is io.StdinException) {
-      _dirtyAndWake();
-      return;
-    }
     if (e is Exception) {
       _failStatus(e);
     } else {
@@ -1571,7 +995,6 @@ final class _Session<S> implements term.TuiBridge {
     _drawnFields.clear();
     _activeSg = null;
     _order = 0;
-    _usedRows = 0;
     _spinVisible = false;
     _cursorPos = null;
     for (final row in _grid) {
@@ -1636,7 +1059,8 @@ final class _Session<S> implements term.TuiBridge {
       _repaint = true;
     }
     final screen = _screenFn(_state, app);
-    _keys = screen._keys;
+    _keysStale = false;
+    _drawnKeys = screen._keys;
     _title = screen._title;
     _statusLine = screen._status;
     final h = _h;
@@ -1647,21 +1071,17 @@ final class _Session<S> implements term.TuiBridge {
       _shown = null;
       _repaint = true;
     }
-    if (fullscreen) {
-      _measured(() {
-        screen._draw(Region._(this, _grid, 0, titleH, _w, bodyH));
-        if (titleH == 1) {
-          Region._(this, _grid, 0, 0, _w, 1)
-              .write(' ${_title ?? ''} ', color: accent);
-        }
-      }, _resetFrame);
-      _statusY = _h - 1;
-      _drawStatus();
-      _compositeScrolls();
-    } else {
-      _drawInlineBody(screen, titleH);
-      _drawStatus();
-    }
+    _measured(() {
+      screen._draw(Region._(this, _grid, 0, titleH, _w, bodyH));
+      if (titleH == 1) {
+        Region._(this, _grid, 0, 0, _w, 1)
+            .write(' ${_title ?? ''} ',
+            color: accent, style: accent == null ? {Style.reverse} : {});
+      }
+    }, _resetFrame);
+    _statusY = _h - 1;
+    _drawStatus();
+    _compositeScrolls();
     _drawPrompt();
     _compositePopups();
     if (_focusables.isNotEmpty &&
@@ -1697,68 +1117,6 @@ final class _Session<S> implements term.TuiBridge {
     });
   }
 
-  /// Inline: lay the screen out on an unbounded buffer, then keep its
-  /// bottom slice above the status row (the whole height while a popup or
-  /// prompt is open).
-  void _drawInlineBody(Screen screen, int titleH) {
-    final live = _grid;
-    var buf = <List<_Cell>>[];
-    _measured(() {
-      _grid = buf = [];
-      screen._draw(Region._(this, buf, 0, titleH, _w, _unbounded,
-          grow: true, open: true));
-      if (titleH == 1) {
-        Region._(this, buf, 0, 0, _w, 1, grow: true)
-            .write(' ${_title ?? ''} ', color: accent);
-      }
-    }, () {
-      _grid = live;
-      _resetFrame();
-    });
-    for (final ctx in _scrolls) {
-      while (buf.length < ctx.gy + ctx.viewH) {
-        buf.add(List.filled(_w, _Cell.blank));
-      }
-    }
-    _compositeScrolls();
-    var n = buf.length;
-    while (n > 0 && buf[n - 1].every((c) => c == _Cell.blank)) {
-      n--;
-    }
-    // Anchored popups (suggest lists) sit below the content and must stay
-    // visible with it, so they count toward the rows kept.
-    final total = _popups.fold(n, (m, p) => p.anchored ? math.max(m, p.y + p.h) : m);
-    final shown = math.min(total, math.max(0, _h - 1));
-    final drop = total - shown;
-    for (var r = 0; r < shown && drop + r < buf.length; r++) {
-      live[r].setRange(0, _w, buf[drop + r]);
-    }
-    _grid = live;
-    if (drop > 0) {
-      for (final p in _popups) {
-        if (p.anchored) p.y -= drop; // centered popups are screen-placed already
-      }
-      final fs = [
-        for (final f in _focusables)
-          f.fixed
-              ? f
-              : _F(f.id, f.x, f.y - drop, f.w, f.h, f.order, f.tryKey,
-                  onMap: f.onMap)
-      ];
-      _focusables
-        ..clear()
-        ..addAll(fs);
-      if (_cursorPos case (final r, final c)) {
-        _cursorPos = r - drop < 0 ? null : (r - drop, c);
-      }
-    }
-    // A popup below the content (a suggest list) grows the live area just
-    // enough; a Console prompt is centered on the whole terminal.
-    final below = _popups.fold(shown, (m, p) => math.max(m, p.y + p.h));
-    _statusY = _prompts.isNotEmpty ? _h - 1 : math.min(below, _h - 1);
-    _usedRows = _statusY + 1;
-  }
-
   void _drawStatus() {
     final y = _statusY;
     if (y < 0) return;
@@ -1766,7 +1124,9 @@ final class _Session<S> implements term.TuiBridge {
     int leftStyle = 0;
     if (_error != null) {
       left = _error!;
-      leftStyle = _pack(Color.red, null, {});
+      leftStyle = accent == null
+          ? _pack(null, null, {Style.bold})
+          : _pack(Color.red, null, {});
     } else if (_sayMsg != null) {
       left = _sayMsg!;
     } else if (_cSpinners.isNotEmpty || _cBars.isNotEmpty) {
@@ -1835,7 +1195,7 @@ final class _Session<S> implements term.TuiBridge {
     return parts.join(' · ');
   }
 
-  /// `━━━╸──── ` for a known total (like `Console.progressBar`), else nothing.
+  /// `━━━╸──── ` for a known total (like `Console.bar`), else nothing.
   String _barGlyphs(int done, int? total) {
     if (total == null || total <= 0) return '';
     const width = 10;
@@ -1934,7 +1294,6 @@ final class _Session<S> implements term.TuiBridge {
   Object? _resizeToken;
 
   Future<void> _enter() async {
-    if (!fullscreen) return _enterInline();
     try {
       final (w, h) = size();
       _w = math.max(1, w);
@@ -1983,14 +1342,10 @@ final class _Session<S> implements term.TuiBridge {
     exit.claimInterrupt(null);
   }
 
-  // Inline leaves the mouse to the terminal: no pointer reporting.
-  String get _enterCodes => fullscreen
-      ? '\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[>1u'
-      : '\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>1u';
-
-  String get _leaveCodes => fullscreen
-      ? '\x1b[<u\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l'
-      : '\x1b[<u\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?25h\n';
+  static const _enterCodes =
+      '\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[>1u';
+  static const _leaveCodes =
+      '\x1b[<u\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l';
 
   void _listenStdin() => _subs.add(term.sharedStdin().listen((b) {
         _pending.addAll(b);
@@ -2016,7 +1371,7 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   /// Write the leave codes and restore terminal modes. Idempotent: both the
-  /// exit hook and the normal [_leave]/[_leaveInline] path call it.
+  /// exit hook and the normal [_leave] path call it.
   void _restoreTerminal() {
     if (!_entered) return;
     _entered = false;
@@ -2032,7 +1387,6 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   Future<void> _leave() async {
-    if (!fullscreen) return _leaveInline();
     _done = true;
     _unwatchSignals();
     if (!_entered) return;
@@ -2043,43 +1397,6 @@ final class _Session<S> implements term.TuiBridge {
       } catch (_) {}
     }));
     _subs.clear();
-    _restoreTerminal();
-    try {
-      await io.stdout.flush();
-    } catch (_) {}
-  }
-
-  Future<void> _enterInline() async {
-    try {
-      final (w, h) = size();
-      _w = math.max(1, w);
-      _h = math.max(1, h);
-    } catch (_) {}
-    _grid = List.generate(_h, (_) => List.filled(_w, _Cell.blank));
-    _modes = term.captureModes();
-    term.setRawModes(_modes, false);
-    _listenStdin();
-    _watchSignals();
-    out(_enterCodes);
-    _repaint = true;
-    _dirty = true;
-    _entered = true;
-    _liveH = 0;
-    term.TuiBridge.current = this;
-  }
-
-  Future<void> _leaveInline() async {
-    _done = true;
-    _unwatchSignals();
-    if (!_entered) return;
-    _wake();
-    await Future.wait(_subs.map((sub) async {
-      try {
-        await sub.cancel();
-      } catch (_) {}
-    }));
-    _subs.clear();
-    // The transcript stays in the scrollback; just park the cursor below.
     _restoreTerminal();
     try {
       await io.stdout.flush();

@@ -23,10 +23,10 @@ void main() {
       await Fs.file(p('a.txt')).write('x');
       await Fs.dir(p('sub')).create();
       await Fs.link(p('lnk')).create(p('a.txt'));
-      expect(await Fs.lookup(p('a.txt')), isA<File>());
-      expect(await Fs.lookup(p('sub')), isA<Dir>());
-      expect(await Fs.lookup(p('lnk')), isA<Link>());
-      expect(await Fs.lookup(p('missing')), isNull);
+      expect(await Fs.entry(p('a.txt')), isA<File>());
+      expect(await Fs.entry(p('sub')), isA<Dir>());
+      expect(await Fs.entry(p('lnk')), isA<Link>());
+      expect(await Fs.entry(p('missing')), isNull);
     });
 
     test('handles do no I/O and compare by path', () {
@@ -62,11 +62,11 @@ void main() {
     test('delete removes and is a no-op when nothing is there', () async {
       await Fs.file(p('a.txt')).write('x');
       await Fs.file(p('a.txt')).delete();
-      expect(await Fs.lookup(p('a.txt')), isNull);
+      expect(await Fs.entry(p('a.txt')), isNull);
       await Fs.file(p('a.txt')).delete();
       await Fs.dir(p('sub')).create();
       await Fs.dir(p('sub')).delete();
-      expect(await Fs.lookup(p('sub')), isNull);
+      expect(await Fs.entry(p('sub')), isNull);
     });
 
     test('copy and move keep the type and make parents', () async {
@@ -76,7 +76,7 @@ void main() {
       expect(await Fs.file(p('d/e.txt')).text(), 'x');
       final m = await Fs.file(p('d/e.txt')).move(p('f.txt'));
       expect(m, isA<File>());
-      expect(await Fs.lookup(p('d/e.txt')), isNull);
+      expect(await Fs.entry(p('d/e.txt')), isNull);
     });
 
     test('dir copy is recursive, links as links', () async {
@@ -87,7 +87,7 @@ void main() {
       expect(c, isA<Dir>());
       expect(await Fs.file(p('dst/a.txt')).text(), 'a');
       expect(await Fs.file(p('dst/nested/b.txt')).text(), 'b');
-      expect(await Fs.lookup(p('dst/lnk')), isA<Link>());
+      expect(await Fs.entry(p('dst/lnk')), isA<Link>());
     });
 
     test('F8: move into a non-empty folder throws and keeps the source',
@@ -109,12 +109,12 @@ void main() {
         Fs.dir(p('src')).copy(p('src/sub')),
         throwsArgumentError,
       );
-      expect(await Fs.lookup(p('src/sub')), isNull);
+      expect(await Fs.entry(p('src/sub')), isNull);
       await expectLater(
         Fs.file(p('missing.txt')).copy(p('dst.txt')),
         throwsA(isA<FileSystemException>()),
       );
-      expect(await Fs.lookup(p('dst.txt')), isNull);
+      expect(await Fs.entry(p('dst.txt')), isNull);
     });
 
     test('F16: dir copy keeps folder modes and mtimes', () async {
@@ -280,9 +280,9 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
     test('target/resolve/create', () async {
       await Fs.file(p('real.txt')).write('r');
       await Fs.link(p('lnk')).create(p('real.txt'));
-      expect(await Fs.link(p('lnk')).targetPath(), p('real.txt'));
-      expect(await Fs.link(p('lnk')).resolveTarget(), isA<File>());
-      expect(await Fs.link(p('broken')).resolveTarget(), isNull);
+      expect(await Fs.link(p('lnk')).target(), p('real.txt'));
+      expect(await Fs.link(p('lnk')).resolve(), isA<File>());
+      expect(await Fs.link(p('broken')).resolve(), isNull);
     });
 
     test('create replaces an existing link', () async {
@@ -290,14 +290,14 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       await Fs.file(p('b.txt')).write('b');
       await Fs.link(p('lnk')).create(p('a.txt'));
       await Fs.link(p('lnk')).create(p('b.txt'));
-      expect(await Fs.link(p('lnk')).targetPath(), p('b.txt'));
+      expect(await Fs.link(p('lnk')).target(), p('b.txt'));
     });
 
     test('F10: resolve returns a handle at the target; create over a file',
         () async {
       await Fs.file(p('real.txt')).write('r');
       await Fs.link(p('lnk')).create(p('real.txt'));
-      final resolved = await Fs.link(p('lnk')).resolveTarget();
+      final resolved = await Fs.link(p('lnk')).resolve();
       expect(resolved, isA<File>());
       // resolveSymbolicLinks may normalize the temp prefix (/var vs
       // /private/var on macOS): compare the tail.
@@ -306,7 +306,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       // Atomic replace over a regular file (not "Cannot delete link").
       await Fs.file(p('plain.txt')).write('x');
       await Fs.link(p('plain.txt')).create(p('real.txt'));
-      expect(await Fs.link(p('plain.txt')).targetPath(), p('real.txt'));
+      expect(await Fs.link(p('plain.txt')).target(), p('real.txt'));
       expect(await Fs.file(p('real.txt')).text(), 'r');
     });
 
@@ -317,7 +317,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       expect(moved.path(), p('proj/sub/up'));
       expect(await Fs.link(p('proj/up')).exists(), isFalse);
       await Fs.link(p('proj/sub/up')).copy(p('proj/sub/up2'));
-      expect(await Fs.link(p('proj/sub/up2')).targetPath(), p('proj'));
+      expect(await Fs.link(p('proj/sub/up2')).target(), p('proj'));
     });
 
     test('L11: copy replaces an existing file or link at the destination',
@@ -326,7 +326,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       await Fs.link(p('l1')).create(p('real.txt'));
       await Fs.file(p('plain.txt')).write('x');
       await Fs.link(p('l1')).copy(p('plain.txt'));
-      expect(await Fs.link(p('plain.txt')).targetPath(), p('real.txt'));
+      expect(await Fs.link(p('plain.txt')).target(), p('real.txt'));
       await Fs.link(p('l1')).copy(p('plain.txt'));
       expect(await Fs.file(p('real.txt')).text(), 'r');
     });
@@ -343,8 +343,8 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''', '''
       final l = Future.value(Fs.link(p('ml')));
       await l.create(p('t.txt'));
       expect(await l.exists(), isTrue);
-      expect(await l.targetPath(), p('t.txt'));
-      expect(await l.resolveTarget(), isA<File>());
+      expect(await l.target(), p('t.txt'));
+      expect(await l.resolve(), isA<File>());
     });
   });
 }

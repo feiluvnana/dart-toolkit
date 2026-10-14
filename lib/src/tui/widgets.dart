@@ -6,10 +6,10 @@ part of '../tui.dart';
 ///
 /// Appends are O(1) amortised: items live in one growable list and [items]
 /// exposes a live [UnmodifiableListView] over it (no copy per [add], unlike
-/// the old rebuild-through-[setItems]). Do not hold the view across frames;
+/// the old rebuild-through-[set]). Do not hold the view across frames;
 /// call [items] again after mutating.
-final class Selection<T> {
-  Selection([List<T> items = const []]) : _items = List<T>.of(items);
+final class Pick<T> {
+  Pick([List<T> items = const []]) : _items = List<T>.of(items);
 
   final List<T> _items;
   var _index = 0;
@@ -23,7 +23,7 @@ final class Selection<T> {
 
   /// Replace the items, keeping the selected item if it is still there,
   /// else selecting 0.
-  Selection<T> setItems(List<T> items) {
+  Pick<T> set(List<T> items) {
     final cur = selected();
     _items
       ..clear()
@@ -33,27 +33,27 @@ final class Selection<T> {
   }
 
   /// Select [index], clamped.
-  Selection<T> select(int index) {
+  Pick<T> select(int index) {
     _index = _items.isEmpty ? 0 : index.clamp(0, _items.length - 1);
     return this;
   }
 
   /// Append [item] in O(1) amortised time; the selection is untouched.
   /// Returns this.
-  Selection<T> add(T item) {
+  Pick<T> add(T item) {
     _items.add(item);
     return this;
   }
 
   /// Append all [items] without rebuilding; the selection is untouched.
   /// Returns this.
-  Selection<T> addAll(Iterable<T> items) {
+  Pick<T> addAll(Iterable<T> items) {
     _items.addAll(items);
     return this;
   }
 
   /// Remove [item] from the list. Returns this.
-  Selection<T> remove(T item) {
+  Pick<T> remove(T item) {
     final cur = selected();
     _items.remove(item);
     _reselect(cur);
@@ -62,7 +62,7 @@ final class Selection<T> {
 
   /// Remove items satisfying [test] in place (one pass, no copy).
   /// Returns this.
-  Selection<T> removeWhere(bool Function(T item) test) {
+  Pick<T> removeWhere(bool Function(T item) test) {
     final cur = selected();
     _items.removeWhere(test);
     _reselect(cur);
@@ -80,8 +80,8 @@ final class Selection<T> {
 }
 
 /// An input's text, cursor and history. Lives in the app's state object.
-final class TextField {
-  TextField({String text = '', List<String> history = const []})
+final class Field {
+  Field({String text = '', List<String> history = const []})
       : _text = text,
         _history = List<String>.unmodifiable(history) {
     _cursor = text.runes.length;
@@ -99,7 +99,7 @@ final class TextField {
   List<String> history() => _history;
 
   /// Replace the text; the cursor goes to the end.
-  TextField setText(String text) {
+  Field set(String text) {
     _text = text;
     _cursor = text.runes.length;
     _histAt = -1;
@@ -121,9 +121,9 @@ final class TextField {
 
 /// A scroll view's offset. `follow` keeps the view pinned to the end as
 /// content grows; scrolling up unpins, `end` re-pins.
-final class ScrollPosition {
+final class Scroll {
   // ignore: prefer_initializing_formals – the public argument stays `follow`.
-  ScrollPosition({bool follow = true}) : _follow = follow;
+  Scroll({bool follow = true}) : _follow = follow;
 
   final bool _follow;
   var _off = 0;
@@ -132,7 +132,7 @@ final class ScrollPosition {
 
 extension RegionWidgets on Region {
     /// A tab row; returns the area below it.
-    Region tabs<T>(Selection<T> tabs, String Function(T tab) label) {
+    Region tabs<T>(Pick<T> tabs, String Function(T tab) label) {
       final y = _gy + _cursor;
       final h = _h - _cursor;
       _cursor = _h;
@@ -169,7 +169,8 @@ extension RegionWidgets on Region {
         final t = ' ${label(items[k])} ';
         final sel = k == tabs.index();
         final st = sel
-            ? _s._pack(null, _s.accent, {Style.bold})
+            ? _s._pack(null, _s.accent,
+                {Style.bold, if (_s.accent == null) Style.reverse})
             : _s._pack(null, null, {});
         x = _writeLine(y, x, _gx + _w, t, st, null);
       }
@@ -177,7 +178,7 @@ extension RegionWidgets on Region {
     }
   
     /// A scroll viewport over unbounded content.
-    Region scroll(ScrollPosition scroll) {
+    Region scroll(Scroll scroll) {
       final y = _gy + _cursor;
       var h = _h - _cursor;
       if (_open) {
@@ -224,7 +225,7 @@ extension RegionWidgets on Region {
           grow: true, open: true, scroll: ctx);
     }
   
-    void _scrollBy(ScrollPosition scroll, _ScrollCtx ctx, int d) {
+    void _scrollBy(Scroll scroll, _ScrollCtx ctx, int d) {
       final contentH = math.max(ctx.buf.length, 1);
       final maxOff = math.max(0, contentH - ctx.viewH);
       scroll._off = (scroll._off + d).clamp(0, maxOff);
@@ -232,7 +233,7 @@ extension RegionWidgets on Region {
       _s._dirtyAndWake();
     }
     /// A selectable list.
-    Region list<T>(Selection<T> pick, String Function(T item) label,
+    Region list<T>(Pick<T> pick, String Function(T item) label,
         {String empty = ''}) {
       final y = _gy + _cursor;
       final h = _listRows(pick, 0, empty);
@@ -241,7 +242,7 @@ extension RegionWidgets on Region {
     }
   
     /// A selectable table.
-    Region table<T>(Selection<T> pick, List<String> Function(T item) cells,
+    Region table<T>(Pick<T> pick, List<String> Function(T item) cells,
         {List<String>? header, String empty = ''}) {
       final y = _gy + _cursor;
       final h = _listRows(pick, header == null ? 0 : 1, empty);
@@ -278,7 +279,7 @@ extension RegionWidgets on Region {
   
     /// The rows a list takes: the rest of the region, or in an open region
     /// one per item (plus the header).
-    int _listRows(Selection<Object?> pick, int head, String empty) {
+    int _listRows(Pick<Object?> pick, int head, String empty) {
       var h = _h - _cursor;
       if (!_open) {
         _cursor = _h;
@@ -290,7 +291,7 @@ extension RegionWidgets on Region {
       return h;
     }
   
-    void _drawList<T>(Selection<T> pick, String Function(T item) label, String empty,
+    void _drawList<T>(Pick<T> pick, String Function(T item) label, String empty,
         int y, int h,
         {List<String> Function(T item)? cells, List<String>? header}) {
       final order = _s._order++;
@@ -298,7 +299,7 @@ extension RegionWidgets on Region {
       final headRows = header != null ? 1 : 0;
       final viewH = h - headRows;
       var start = _s._listStart(pick, items.length, math.max(0, viewH));
-      // ScrollPosition by the least needed to show the selection, in this frame.
+      // Scroll by the least needed to show the selection, in this frame.
       final want = pick.index();
       if (want < start) start = want;
       if (viewH > 0 && want >= start + viewH) start = want - viewH + 1;
@@ -365,7 +366,8 @@ extension RegionWidgets on Region {
         final isSel = idx == sel;
         final st = isSel
             ? (focused
-                ? _s._pack(null, _s.accent, {Style.bold})
+                ? _s._pack(null, _s.accent,
+                {Style.bold, if (_s.accent == null) Style.reverse})
                 : _s._pack(null, null, {Style.reverse, Style.dim}))
             : 0;
         final text = cells == null
@@ -403,7 +405,7 @@ extension RegionWidgets on Region {
     /// `alt+backspace`, `ctrl+u`, `ctrl+k`); `shift+enter`, `alt+enter` or `\`
     /// then `enter` insert a newline. `up`/`down` move between lines, and at
     /// the first or last line they walk the history.
-    Region input(TextField field,
+    Region input(Field field,
         {String hint = '',
         int lines = 1,
         FutureOr<List<String>> Function(String word)? suggest,
@@ -464,9 +466,9 @@ extension RegionWidgets on Region {
     }
   
     /// Display rows of [field]'s text.
-    List<String> _fieldRows(TextField field) => field._text.split('\n');
+    List<String> _fieldRows(Field field) => field._text.split('\n');
   
-    int _rowOf(TextField field) {
+    int _rowOf(Field field) {
       final off = field._cursor.clamp(0, field._text.runes.length);
       var row = 0;
       var k = 0;
@@ -479,7 +481,7 @@ extension RegionWidgets on Region {
     }
   
     /// Display column (cells) of the cursor within its row.
-    int _colOf(TextField field) {
+    int _colOf(Field field) {
       final runes = field._text.runes.toList();
       final at = field._cursor.clamp(0, runes.length);
       var start = at;
@@ -500,7 +502,7 @@ extension RegionWidgets on Region {
     }
   
     /// Offset of (row, display column), clamped into the row.
-    int _offsetAt(TextField field, int row, int colCells) {
+    int _offsetAt(Field field, int row, int colCells) {
       final rows = _fieldRows(field);
       row = row.clamp(0, rows.length - 1);
       final runes = rows[row].runes.toList();
@@ -559,7 +561,7 @@ extension RegionWidgets on Region {
     }
   
     /// Buffer (row, col) of the cursor, or null when its row is scrolled out.
-    (int, int)? _cursorScreenPos(TextField field, int y0, int lines) {
+    (int, int)? _cursorScreenPos(Field field, int y0, int lines) {
       if (lines == 1) {
         // Single line shows the tail; the cursor pins to the last cell when
         // scrolled out of view.
@@ -601,7 +603,7 @@ extension RegionWidgets on Region {
       return (y0 + rel, col);
     }
   
-    String _tailText(TextField field, int cells) {
+    String _tailText(Field field, int cells) {
       final runes = field._text.runes.toList();
       var used = 0;
       var i = runes.length;
@@ -618,7 +620,7 @@ extension RegionWidgets on Region {
       return String.fromCharCodes(runes.sublist(i));
     }
   
-    bool _inputKey(TextField field, _Ev ev, int lines,
+    bool _inputKey(Field field, _Ev ev, int lines,
         FutureOr<List<String>> Function(String word)? suggest,
         [FutureOr<void> Function()? onSubmit]) {
       if (ev is _ClickEv) {
@@ -777,9 +779,9 @@ extension RegionWidgets on Region {
     }
   
     /// Buffer row of this input's first line (for click mapping).
-    int _clickBaseRow(TextField field) => _s._clickBase[field] ?? _gy + _cursor - 1;
+    int _clickBaseRow(Field field) => _s._clickBase[field] ?? _gy + _cursor - 1;
   
-    int _clickOffset(TextField field, List<String> rows, int row, int xCells) {
+    int _clickOffset(Field field, List<String> rows, int row, int xCells) {
       var col = xCells - _gx;
       if (col < 0) col = 0;
       final runes = row < rows.length ? rows[row].runes.toList() : <int>[];
@@ -819,7 +821,7 @@ extension RegionWidgets on Region {
       return i;
     }
   
-    void _insertText(TextField field, String s) {
+    void _insertText(Field field, String s) {
       field._histAt = -1;
       final runes = field._text.runes.toList();
       final at = field._cursor.clamp(0, runes.length);
@@ -828,7 +830,7 @@ extension RegionWidgets on Region {
       field._cursor = at + s.runes.length;
     }
   
-    void _dropGrapheme(TextField field, int dir) {
+    void _dropGrapheme(Field field, int dir) {
       final runes = field._text.runes.toList();
       final at = field._cursor.clamp(0, runes.length);
       if (dir < 0) {
@@ -843,7 +845,7 @@ extension RegionWidgets on Region {
       _s._dirtyAndWake();
     }
   
-    void _deleteWord(TextField field, int dir) {
+    void _deleteWord(Field field, int dir) {
       final runes = field._text.runes.toList();
       final at = field._cursor.clamp(0, runes.length);
       final to = dir < 0 ? _prevWord(runes, at) : _nextWord(runes, at);
@@ -882,8 +884,8 @@ extension RegionWidgets on Region {
           _s._pack(null, null, focused ? {Style.reverse} : {}), null);
       return this;
     }
-    /// A static progress snapshot laid out like `Console.progressBar`.
-    Region progressBar(int done, int? total, {String? label}) {
+    /// A static progress snapshot laid out like `Console.bar`.
+    Region bar(int done, int? total, {String? label}) {
       final lab = label == null ? '' : '$label ';
       final frac = total == null || total <= 0
           ? 0.0
@@ -903,13 +905,16 @@ extension RegionWidgets on Region {
       return this;
     }
   
-    /// A static spinner snapshot; the frame advances while visible.
-    Region spin(String label) {
+    /// A static spinner snapshot; the frame advances while visible. With
+    /// [since], the elapsed time follows the label (`Thinking… (12s)`).
+    Region spin(String label, {DateTime? since}) {
       _s._spinVisible = true;
       final frames = _s._caps.ascii
           ? const ['-', '\\', '|', '/']
           : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-      write('${frames[_s._spinTick % frames.length]} $label');
+      final secs = since == null ? null : DateTime.now().difference(since).inSeconds;
+      final time = secs == null ? '' : ' (${secs >= 60 ? '${secs ~/ 60}m ${secs % 60}s' : '${secs}s'})';
+      write('${frames[_s._spinTick % frames.length]} $label$time');
       return this;
     }
 }

@@ -35,6 +35,7 @@ const _cjk = {
 };
 
 void main() {
+  abortTests();
   late HttpServer server;
   late String base;
   final hits = <String, int>{};
@@ -150,9 +151,9 @@ void main() {
   group('verbs', () {
     test('get returns status/header/url', () async {
       final res = await Http.get('$base/hello');
-      expect(res.statusCode(), HttpStatus.ok);
+      expect(res.status(), HttpStatus.ok);
       expect(res.header('content-type'), contains('text/plain'));
-      expect(res.finalUrl(), '$base/hello');
+      expect(res.url(), '$base/hello');
       await res.close();
     });
 
@@ -170,20 +171,34 @@ void main() {
 
     test('non-2xx is still a Response', () async {
       final res = await Http.get('$base/nope');
-      expect(res.statusCode(), HttpStatus.notFound);
+      expect(res.status(), HttpStatus.notFound);
       expect(await res.text(), 'nope');
     });
 
-    test('redirects are followed, finalUrl() is final', () async {
+    test('check: true throws with status, method, url and a body snippet', () async {
+      await expectLater(
+        Http.get('$base/nope', check: true),
+        throwsA(isA<HttpException>().having((e) => e.message, 'message',
+            'HTTP 404 GET $base/nope: nope')),
+      );
+      await expectLater(
+        Http.post('$base/nope', check: true),
+        throwsA(isA<HttpException>()
+            .having((e) => e.message, 'message', startsWith('HTTP 404 POST '))),
+      );
+      expect(await Http.get('$base/hello', check: true).text(), isNotEmpty);
+    });
+
+    test('redirects are followed, url() is final', () async {
       final res = await Http.get('$base/redirect');
-      expect(res.statusCode(), HttpStatus.ok);
-      expect(res.finalUrl(), '$base/hello');
+      expect(res.status(), HttpStatus.ok);
+      expect(res.url(), '$base/hello');
       expect(await res.text(), contains('hello'));
     });
 
     test('post sends body, returns status/text/header', () async {
       final res = await Http.post('$base/echo', body: Body.text('a=1'));
-      expect(res.statusCode(), HttpStatus.created);
+      expect(res.status(), HttpStatus.created);
       expect(await res.text(), 'got:a=1');
       expect(res.header('x-echo'), 'yes');
     });
@@ -227,7 +242,7 @@ void main() {
 
     test('head returns status, empty text', () async {
       final res = await Http.head('$base/hello');
-      expect(res.statusCode(), HttpStatus.ok);
+      expect(res.status(), HttpStatus.ok);
       expect(await res.text(), isEmpty);
     });
 
@@ -392,23 +407,23 @@ void main() {
     });
 
     test('Future mirrors match', () async {
-      expect(await Http.get('$base/hello').statusCode(), HttpStatus.ok);
+      expect(await Http.get('$base/hello').status(), HttpStatus.ok);
       expect(
         await Http.get('$base/hello').header('content-type'),
         contains('text/plain'),
       );
-      expect(await Http.get('$base/hello').finalUrl(), '$base/hello');
+      expect(await Http.get('$base/hello').url(), '$base/hello');
       expect(await Http.get('$base/hello').text(), contains('hello'));
-      expect(await Http.get('$base/hello').isSuccess(), isTrue);
+      expect(await Http.get('$base/hello').ok(), isTrue);
       // /hello is chunked (no content-length); /sized sets one.
-      expect(await Http.get('$base/hello').contentLength(), isNull);
-      expect(await Http.get('$base/sized').contentLength(), 5);
-      expect(await Http.get('$base/hello').fileName(), 'hello');
+      expect(await Http.get('$base/hello').size(), isNull);
+      expect(await Http.get('$base/sized').size(), 5);
+      expect(await Http.get('$base/hello').name(), 'hello');
     });
 
     test('H2: mirrors close the response (one-shot)', () async {
       final f = Http.get('$base/hello');
-      expect(await f.statusCode(), HttpStatus.ok);
+      expect(await f.status(), HttpStatus.ok);
       // Nothing else can reach the response now: reading fails, closing
       // is a harmless no-op, and the process is not kept alive.
       await expectLater(f.text(), throwsStateError);
@@ -472,4 +487,91 @@ final class _ThrowFirstWriter implements Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async =>
       throw StateError('before reading');
+}
+
+void abortTests() {
+  group('Http.abort', () {
+    late HttpServer srv;
+    late String url;
+    setUp(() async {
+      srv = await HttpServer.bind('127.0.0.1', 0);
+      url = 'http://127.0.0.1:${srv.port}';
+      srv.listen((req) async {
+        if (req.uri.path == '/slow') {
+          req.response.add([1, 2, 3]);
+          await req.response.flush();
+          await Future<void>.delayed(const Duration(seconds: 30));
+        } else {
+          req.response.write('ok');
+        }
+        await req.response.close().catchError((_) {});
+      });
+    });
+    tearDown(() => srv.close(force: true));
+
+    test('fails an in-flight body read promptly, without retrying', () async {
+      final res = await Http.get('$url/slow', retries: 3);
+      final read = res.bytes();
+      final sw = Stopwatch()..start();
+      Timer(const Duration(milliseconds: 100), Http.abort);
+      await expectLater(read, throwsA(isA<Exception>()));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
+    });
+
+    test('a pending request fails and is not retried', () async {
+      final slow = await HttpServer.bind('127.0.0.1', 0);
+      var hits = 0;
+      slow.listen((r) => hits++); // never answers
+      final f = Http.get('http://127.0.0.1:${slow.port}/', retries: 3);
+      final expectation = expectLater(f, throwsA(isA<HttpException>()));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      Http.abort();
+      await expectation.timeout(const Duration(seconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(hits, 1);
+      await slow.close(force: true);
+    });
+
+    test('abort wakes a pending retry backoff', () async {
+      final bad = await HttpServer.bind('127.0.0.1', 0);
+      bad.listen((r) {
+        r.response.statusCode = 503;
+        r.response.close();
+      });
+      final f = Http.get('http://127.0.0.1:${bad.port}/', retries: 3);
+      final expectation = expectLater(f, throwsA(isA<HttpException>()));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      Http.abort();
+      await expectation.timeout(const Duration(milliseconds: 800));
+      await bad.close(force: true);
+    });
+
+    test('requests after abort work', () async {
+      Http.abort();
+      expect(await Http.get('$url/fast').text(), 'ok');
+    });
+
+    test('a script that aborts a slow download exits by itself', () async {
+      final script = File('.dart_tool/abort_probe_$pid.dart');
+      script.writeAsStringSync('''
+import 'package:dart_toolkit/http.dart';
+Future<void> main(List<String> a) async {
+  final res = await Http.get(a[0]);
+  res.bytes().catchError((_) => res.bytes()).ignore();
+  await Future<void>.delayed(const Duration(milliseconds: 200));
+  Http.abort();
+}
+''');
+      addTearDown(() => script.deleteSync());
+      final p = await Process.start(Platform.resolvedExecutable,
+          ['run', script.path, '$url/slow'],
+          workingDirectory: Directory.current.path);
+      final code = await p.exitCode.timeout(const Duration(seconds: 20),
+          onTimeout: () {
+        p.kill();
+        return -1;
+      });
+      expect(code, 0);
+    });
+  });
 }

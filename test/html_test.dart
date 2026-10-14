@@ -16,9 +16,13 @@ void main() {
       expect(() => Html.parse('<'), returnsNormally);
     });
 
-    test('takes a baseUrl', () {
-      final doc = Html.parse('<a href="/x">t</a>', baseUrl: 'https://e.com/d/');
+    test('takes a base', () {
+      final doc = Html.parse('<a href="/x">t</a>', base: 'https://e.com/d/');
       expect(doc.$('a')[0].attr('href'), 'https://e.com/x');
+    });
+
+    test('a fragment keeps its text', () {
+      expect(Html.parse('Tom &amp; Jerry').text(), 'Tom & Jerry');
     });
   });
 
@@ -56,7 +60,7 @@ void main() {
       final doc = Html.parse(
         '<!doctype html><head><base href="https://cdn.e.com/a/"></head>'
         '<body><a href="x">t</a></body>',
-        baseUrl: 'https://e.com/d/',
+        base: 'https://e.com/d/',
       );
       expect(doc.$('a')[0].attr('href'), 'https://cdn.e.com/a/x');
     });
@@ -64,7 +68,7 @@ void main() {
     test('a relative <base> resolves against the page URL', () {
       final doc = Html.parse(
         '<html><head><base href="/s/"></head><body><a href="x">t</a></body></html>',
-        baseUrl: 'https://e.com/d/',
+        base: 'https://e.com/d/',
       );
       expect(doc.$('a')[0].attr('href'), 'https://e.com/s/x');
     });
@@ -127,14 +131,14 @@ void main() {
     });
 
     test('without removes matches and subtrees', () {
-      final clean = doc.without('ul');
+      final clean = doc.not('ul');
       expect(clean.$('li'), isEmpty);
       expect(clean.$('p').length, 2);
       expect(doc.$('li').length, 2); // receiver unchanged
     });
 
     test('without sees only the new tree', () {
-      final clean = doc.without('div');
+      final clean = doc.not('div');
       expect(clean.$('div'), isEmpty);
       expect(clean.$('ul').$('li').length, 2);
     });
@@ -158,7 +162,7 @@ void main() {
     test('attrs resolves links against the base', () {
       final based = Html.parse(
         '<a class="i" href="/x">a</a><a class="i" href="/y">b</a>',
-        baseUrl: 'https://e.com/',
+        base: 'https://e.com/',
       );
       expect(based.$('a.i').attrs('href'),
           ['https://e.com/x', 'https://e.com/y']);
@@ -170,7 +174,7 @@ void main() {
         'message',
         contains('['),
       )));
-      expect(() => doc.without('['), throwsA(isA<FormatException>()));
+      expect(() => doc.not('['), throwsA(isA<FormatException>()));
     });
 
     test('is iterable', () {
@@ -188,7 +192,7 @@ void main() {
       final f = Future.value(doc);
       expect((await f.$('p')).length, 2);
       expect(await f.$('li')[0].text(), '1');
-      expect((await f.without('ul')).$('li'), isEmpty);
+      expect((await f.not('ul')).$('li'), isEmpty);
       expect(await f.$('li').text(), '1');
       expect(await f.$('li').texts(), ['1', '2']);
       expect(await f.$('a').attr('href'), '/');
@@ -207,7 +211,7 @@ void main() {
 
     test('without copies without the parts', () {
       final doc = Html.parse('<div><p>a</p><script>var x = 1;</script></div>');
-      final clean = doc.$('div')[0].without('script');
+      final clean = doc.$('div')[0].not('script');
       expect(clean.$('script'), isEmpty);
       expect(clean.$('p').text(), 'a');
       expect(doc.$('script').length, 1);
@@ -227,7 +231,7 @@ void main() {
     });
 
     test('attr resolves href and src with a base', () {
-      final doc = Html.parse('<img src="i.png">', baseUrl: 'https://e.com/d/');
+      final doc = Html.parse('<img src="i.png">', base: 'https://e.com/d/');
       expect(doc.$('img')[0].attr('src'), 'https://e.com/d/i.png');
     });
 
@@ -243,7 +247,7 @@ void main() {
       final doc = Html.parse('<div><p><a href="/x">t</a></p></div>');
       final f = Future.value(doc.$('div')[0]);
       expect((await f.$('a')).length, 1);
-      expect((await f.without('p')).$('a'), isEmpty);
+      expect((await f.not('p')).$('a'), isEmpty);
       expect(await f.text(), contains('t'));
       expect(await f.$('a').attr('href'), '/x');
       expect(await f.parent(), isNull);
@@ -287,7 +291,7 @@ void main() {
       final doc = Html.parse(
         '<table><tr class="x"><td>a</td></tr><tr><td>b</td></tr></table>',
       );
-      final kept = doc.$('tr').without('.x');
+      final kept = doc.$('tr').not('.x');
       expect(kept.length, 1);
       expect(kept.text(), 'b');
       expect(doc.$('tr').length, 2); // receiver unchanged
@@ -295,7 +299,7 @@ void main() {
 
     test('a top-level self match drops the subtree', () {
       final doc = Html.parse('<div class="x"><p>a</p></div><div><p>b</p></div>');
-      final kept = doc.$('div').without('.x');
+      final kept = doc.$('div').not('.x');
       expect(kept.length, 1);
       expect(kept.text(), 'b');
     });
@@ -329,7 +333,7 @@ void main() {
     test('attr trims before resolving', () {
       final doc = Html.parse(
         '<a href=" /path ">t</a>',
-        baseUrl: 'https://e.com/d/',
+        base: 'https://e.com/d/',
       );
       expect(doc.$('a')[0].attr('href'), 'https://e.com/path');
     });
@@ -337,13 +341,13 @@ void main() {
     test('data-src, poster and action resolve too', () {
       final doc = Html.parse(
         '<img data-src=" img.png "><video poster=" p.png ">',
-        baseUrl: 'https://e.com/d/',
+        base: 'https://e.com/d/',
       );
       expect(doc.$('img')[0].attr('data-src'), 'https://e.com/d/img.png');
       expect(doc.$('video')[0].attr('poster'), 'https://e.com/d/p.png');
       final form = Html.parse(
         '<form action=" /go ">',
-        baseUrl: 'https://e.com/d/',
+        base: 'https://e.com/d/',
       );
       expect(form.$('form')[0].attr('action'), 'https://e.com/go');
     });

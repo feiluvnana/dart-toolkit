@@ -2,14 +2,14 @@
 ///
 /// ```dart
 /// final head = (await Shell.run(['git', 'rev-parse', 'HEAD']).text()).trim();
-/// if (await Shell.run(['git', 'diff', '--quiet']).exitCode() != 0) print('dirty');
+/// if (await Shell.run(['git', 'diff', '--quiet']).code() != 0) print('dirty');
 /// await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
 /// ```
 ///
 /// Public surface is exactly: [Shell], [Output].
 /// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe],
-///   `Shell.openInDefaultApp()` opens a URL or path with the OS.
-/// - [Output] supports `exitCode` `stderrText` (plus [Reader] over stdout).
+///   `Shell.open()` opens a URL or path with the OS.
+/// - [Output] supports `code` `ok` `err` (plus [Reader] over stdout).
 /// Everything else is private.
 library;
 
@@ -22,7 +22,7 @@ import 'core.dart';
 export 'core.dart';
 
 /// Entry point: run a program, make one a filter, or open with the OS.
-/// The only OS branch in this facade is which launcher [openInDefaultApp]
+/// The only OS branch in this facade is which launcher [open]
 /// uses; launching itself is per-OS by nature.
 abstract final class Shell {
   /// Run [command] directly (no shell), with stdin closed. Waits for the exit
@@ -35,18 +35,18 @@ abstract final class Shell {
   /// unsets the variable for the child.
   static Future<Output> run(
     List<String> command, {
-    String? workingDir,
+    String? dir,
     Map<String, String?>? env,
     bool live = false,
   }) async {
     _checkCommand(command);
-    if (live) return _runLive(command, workingDir: workingDir, env: env);
+    if (live) return _runLive(command, dir: dir, env: env);
     io.ProcessResult r;
     try {
       r = await io.Process.run(
         command[0],
         command.sublist(1),
-        workingDirectory: workingDir,
+        workingDirectory: dir,
         environment: _resolveEnv(env),
         includeParentEnvironment: env == null,
         stdoutEncoding: null,
@@ -70,7 +70,7 @@ abstract final class Shell {
   /// [run] with `live: true`: `Process.start` plus a stdout/stderr tee.
   static Future<Output> _runLive(
     List<String> command, {
-    String? workingDir,
+    String? dir,
     Map<String, String?>? env,
   }) async {
     io.Process proc;
@@ -78,7 +78,7 @@ abstract final class Shell {
       proc = await io.Process.start(
         command[0],
         command.sublist(1),
-        workingDirectory: workingDir,
+        workingDirectory: dir,
         environment: _resolveEnv(env),
         includeParentEnvironment: env == null,
       );
@@ -151,11 +151,11 @@ abstract final class Shell {
   /// parent environment; a null value unsets the variable for the child.
   static Pipe filter(
     List<String> command, {
-    String? workingDir,
+    String? dir,
     Map<String, String?>? env,
   }) {
     _checkCommand(command);
-    return _Filter(command, workingDir: workingDir, env: env);
+    return _Filter(command, dir: dir, env: env);
   }
 
   /// Open [target] (a URL or path) in the default app: `open` on macOS,
@@ -164,7 +164,7 @@ abstract final class Shell {
   /// Returns once launched (it does not wait for the app to close). An empty
   /// [target] is an [ArgumentError]; a launcher that cannot start or exits
   /// non-zero throws [io.ProcessException] carrying the first 4 KB of stderr.
-  static Future<void> openInDefaultApp(String target) async {
+  static Future<void> open(String target) async {
     if (target.isEmpty) {
       throw ArgumentError.value(target, 'target', 'must not be empty');
     }
@@ -266,17 +266,20 @@ abstract final class Shell {
 
 /// A finished program: a [Reader] of stdout.
 final class Output with Reader {
-  Output._(this._exitCode, this._out, this._err);
+  Output._(this._code, this._out, this._err);
 
-  final int _exitCode;
+  final int _code;
   final Uint8List _out;
   final String _err;
 
   /// The exit code. Never throws.
-  int exitCode() => _exitCode;
+  int code() => _code;
+
+  /// Whether the exit code is 0.
+  bool ok() => _code == 0;
 
   /// Stderr, decoded as UTF-8.
-  String stderrText() => _err;
+  String err() => _err;
 
   @override
   Stream<List<int>> stream() => Stream.value(_out.asUnmodifiableView());
@@ -301,20 +304,21 @@ final class Output with Reader {
 
 /// Future mirrors (rule 6). The extension name is import-only; never reference it.
 extension OutputFuture on Future<Output> {
-  Future<int> exitCode() async => (await this).exitCode();
-  Future<String> stderrText() async => (await this).stderrText();
+  Future<int> code() async => (await this).code();
+  Future<bool> ok() async => (await this).ok();
+  Future<String> err() async => (await this).err();
 }
 
 final class _Filter implements Pipe {
-  _Filter(this._command, {this._workingDir, this._env});
+  _Filter(this._command, {this._dir, this._env});
 
   final List<String> _command;
-  final String? _workingDir;
+  final String? _dir;
   final Map<String, String?>? _env;
 
   @override
   void abort(Object error) {
-    // Nothing started yet (Reader.writeTo aborts without listening), so
+    // Nothing started yet (Reader.to aborts without listening), so
     // there is no child to kill. A mid-run failure tears the generator down
     // via its finally, which already kills the child.
   }
@@ -326,7 +330,7 @@ final class _Filter implements Pipe {
       proc = await io.Process.start(
         _command[0],
         _command.sublist(1),
-        workingDirectory: _workingDir,
+        workingDirectory: _dir,
         environment: Shell._resolveEnv(_env),
         includeParentEnvironment: _env == null,
       );

@@ -7,13 +7,12 @@
 /// await Http.put('https://cdn.example.com/d.iso', body: .stream(Fs.file('d.iso')));
 /// ```
 ///
-/// Public surface is exactly: [Http], [Response], [Body], [HttpHold].
+/// Public surface is exactly: [Http], [Response], [Body].
 /// - `Http.get/head/delete/options/post/put/patch()` return a [Response].
-/// - [Response] supports `statusCode` `isSuccess` `header` `finalUrl`
-///   `contentLength` `fileName` (plus [Reader]/[Closeable]).
+/// - [Response] supports `status` `ok` `header` `url`
+///   `size` `name` (plus [Reader]/[Closeable]).
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
 ///   `.stream`. A [Body.stream] is sent once and never retried.
-/// - [HttpHold] keeps the shared client open for a crawl (see [Http.hold]).
 /// A non-2xx status is still a [Response]; only network failures and
 /// timeouts throw. Everything else is private.
 library;
@@ -104,7 +103,7 @@ final class _StreamBody extends Body {
 ///   a POST become a GET (the body is dropped); 307/308 keep the method and
 ///   resend an in-memory body. A 307/308 (or a 301/302 that keeps the method)
 ///   with a [Body.stream] cannot be resent, so it throws [HttpException]
-///   naming the limitation. `finalUrl()` is the final URL.
+///   naming the limitation. `url()` is the final URL.
 /// - `body` is a [Body] (`.text`/`.bytes`/`.form`/`.json`/`.stream`).
 /// - `insecure` accepts a bad certificate for this call only (one broken CDN
 ///   chain): it uses the shared insecure client, scoped to the request and
@@ -128,10 +127,23 @@ abstract final class Http {
   /// Hold the shared client open across many requests (a crawl). While the
   /// hold is open, the idle `Timer.run` close is suppressed; closing the
   /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
-  static HttpHold hold() {
+  static Closeable hold() {
     _securePool._hold();
     _insecurePool._hold();
-    return HttpHold._();
+    return _Hold._();
+  }
+
+  /// Cancel every in-flight request and body read (they fail with an
+  /// [HttpException]; retries stop). Use when quitting a UI with downloads running.
+  static void abort() {
+    _abortEpoch++;
+    for (final w in [..._sleepers]) {
+      w.timer.cancel();
+      w.done.complete();
+    }
+    _sleepers.clear();
+    _securePool._abort();
+    _insecurePool._abort();
   }
 
   /// GET [url] with optional [headers], [timeout], [retries] and [insecure].
@@ -141,6 +153,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'GET',
@@ -149,6 +162,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// HEAD [url] with optional [headers], [timeout], [retries] and [insecure].
@@ -158,6 +172,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'HEAD',
@@ -166,6 +181,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// DELETE [url] with optional [headers], [timeout], [retries] and
@@ -176,6 +192,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'DELETE',
@@ -184,6 +201,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// OPTIONS [url] with optional [headers], [timeout], [retries] and
@@ -194,6 +212,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'OPTIONS',
@@ -202,6 +221,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// POST [url] with a [Body] (`body: .json(item)`).
@@ -212,6 +232,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'POST',
@@ -221,6 +242,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// PUT [url] with a [Body] (same as [post]).
@@ -231,6 +253,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'PUT',
@@ -240,6 +263,7 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 
   /// PATCH [url] with a [Body] (same as [post]).
@@ -250,6 +274,7 @@ abstract final class Http {
     Duration? timeout,
     int retries = 0,
     bool insecure = false,
+    bool check = false,
   }) =>
       _send(
         'PATCH',
@@ -259,12 +284,13 @@ abstract final class Http {
         timeout: timeout,
         retries: retries,
         insecure: insecure,
+        check: check,
       );
 }
 
-/// Keeps the shared client open. Close to release; idempotent.
-final class HttpHold implements Closeable {
-  HttpHold._();
+/// Keeps the shared client open ([Http.hold]). Close to release; idempotent.
+final class _Hold implements Closeable {
+  _Hold._();
 
   var _closed = false;
 
@@ -316,6 +342,14 @@ final class _ClientPool {
   /// A [Response] takes ownership of its request's count: it will
   /// [release] when it finishes. Called implicitly by [_attempt].
 
+  void _abort() {
+    final c = _client;
+    _client = null;
+    try {
+      c?.close(force: true);
+    } catch (_) {}
+  }
+
   void _hold() {
     _holds++;
   }
@@ -335,21 +369,41 @@ final class _ClientPool {
   }
 }
 
+/// Bumped by [Http.abort]; a send that started before it never retries.
+var _abortEpoch = 0;
+
+/// Pending retry backoffs, woken early by [Http.abort] so they cannot keep the VM alive.
+final _sleepers = <({Timer timer, Completer<void> done})>{};
+
+Future<void> _sleep(Duration d) {
+  final done = Completer<void>();
+  late final ({Timer timer, Completer<void> done}) w;
+  w = (
+    timer: Timer(d, () {
+      _sleepers.remove(w);
+      done.complete();
+    }),
+    done: done,
+  );
+  _sleepers.add(w);
+  return done.future;
+}
+
 final _securePool = _ClientPool(insecure: false);
 final _insecurePool = _ClientPool(insecure: true);
 
 /// An HTTP response: a [Reader] of the body, streamed from the socket.
 ///
-/// - A non-2xx status is still a [Response]. [isSuccess] tests 200–299. The
+/// - A non-2xx status is still a [Response]. [ok] tests 200–299. The
 ///   readings ([text], [bytes]) work on any status, but only a 2xx body can
-///   be piped: [stream] (and so `>`/`writeTo`) throws [HttpException] naming
+///   be piped: [stream] (and so `>`/`to`) throws [HttpException] naming
 ///   the status and URL otherwise.
 /// - [text] decodes with the charset in `content-type`, then
 ///   `<meta charset>`, then UTF-8 (WHATWG CJK decoders included). Unknown
 ///   charsets fall back to UTF-8; bad bytes become `�`.
 /// - [close] drops an unread body. A body read or piped to the end releases
 ///   the connection by itself (back to the pool). The `Future<Response>`
-///   mirrors (`Http.get(u).statusCode()`) close the response after reading:
+///   mirrors (`Http.get(u).status()`) close the response after reading:
 ///   a response reached only through a mirror can never be read later. (This
 ///   keeps the code; VISION §4.2 still says mirrors leave the body readable
 ///   and needs the fix, not the code.)
@@ -370,10 +424,10 @@ final class Response with Reader implements Closeable {
   var _released = false;
 
   /// HTTP status code (e.g. 200, 404). Sync from when the headers arrive.
-  int statusCode() => _resp.statusCode;
+  int status() => _resp.statusCode;
 
   /// Whether the status is 2xx.
-  bool isSuccess() {
+  bool ok() {
     final code = _resp.statusCode;
     return code >= 200 && code < 300;
   }
@@ -387,10 +441,10 @@ final class Response with Reader implements Closeable {
   }
 
   /// The final URL, after redirects.
-  String finalUrl() => _url;
+  String url() => _url;
 
   /// The `content-length`, or `null` when absent or unparseable.
-  int? contentLength() {
+  int? size() {
     final value = header('content-length');
     if (value == null) return null;
     final n = int.tryParse(value.trim());
@@ -402,7 +456,7 @@ final class Response with Reader implements Closeable {
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
   /// URL's last segment, else `'download'`. Shared with scrape/chrome via
   /// `src/origin.dart`.
-  String fileName() => names.fileName(
+  String name() => names.fileName(
         url: _url,
         contentDisposition: header('content-disposition'),
       );
@@ -413,7 +467,7 @@ final class Response with Reader implements Closeable {
   Origin origin() => Origin(
         url: _url,
         status: _resp.statusCode,
-        name: fileName(),
+        name: name(),
       );
 
   /// The body as text (see the class doc for the charset rules). Reads into
@@ -431,12 +485,12 @@ final class Response with Reader implements Closeable {
   @override
   Future<List<int>> bytes() async {
     if (_closed) {
-      throw StateError('response is closed: ${finalUrl()}');
+      throw StateError('response is closed: ${url()}');
     }
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
     if (_streaming) {
-      throw StateError('body already streaming: ${finalUrl()}');
+      throw StateError('body already streaming: ${url()}');
     }
     _streaming = true;
     try {
@@ -455,29 +509,29 @@ final class Response with Reader implements Closeable {
   @override
   Stream<List<int>> stream() {
     if (_closed) {
-      throw StateError('response is closed: ${finalUrl()}');
+      throw StateError('response is closed: ${url()}');
     }
     final cached = _cached;
     if (cached != null) {
-      if (!isSuccess()) {
+      if (!ok()) {
         throw HttpException(
-          'HTTP ${statusCode()}: ${finalUrl()}',
-          uri: Uri.tryParse(finalUrl()),
+          'HTTP ${status()}: ${url()}',
+          uri: Uri.tryParse(url()),
         );
       }
       return Stream.value(cached.asUnmodifiableView());
     }
     if (_streaming) {
-      throw StateError('body already streaming: ${finalUrl()}');
+      throw StateError('body already streaming: ${url()}');
     }
-    if (!isSuccess()) {
+    if (!ok()) {
       // Only a 2xx body can be piped, so an error page is never saved.
       // Drop the body (releasing the pool count) and fail loudly; readings
       // still work only when the body was never piped.
       unawaited(close());
       throw HttpException(
-        'HTTP ${statusCode()}: ${finalUrl()}',
-        uri: Uri.tryParse(finalUrl()),
+        'HTTP ${status()}: ${url()}',
+        uri: Uri.tryParse(url()),
       );
     }
     _streaming = true;
@@ -506,7 +560,7 @@ final class Response with Reader implements Closeable {
       _releaseOnce();
       return;
     }
-    final len = contentLength();
+    final len = size();
     if (len == null || len > 64 * 1024) return _abandon();
     _closed = true;
     try {
@@ -529,6 +583,26 @@ final class Response with Reader implements Closeable {
     } finally {
       _finish();
     }
+  }
+
+  /// The first 200 characters of the body, whitespace collapsed, then the
+  /// body is abandoned. Empty when unreadable.
+  Future<String> _snippet() async {
+    final out = BytesBuilder(copy: false);
+    try {
+      if (!_streaming && !_closed && !_done) {
+        _streaming = true;
+        await for (final chunk in _bodyStream()) {
+          out.add(chunk);
+          if (out.length >= 1024) break;
+        }
+      }
+    } catch (_) {}
+    await _abandon();
+    final text = charset.Charset.decode(out.takeBytes(),
+        contentType: header('content-type'));
+    final flat = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return flat.length > 200 ? '${flat.substring(0, 200)}...' : flat;
   }
 
   /// Abandon an error body without draining it: force-close the socket
@@ -578,19 +652,19 @@ final class Response with Reader implements Closeable {
 /// Each mirror closes the response after reading: a response reached only
 /// through a mirror can never be read later.
 extension ResponseFuture on Future<Response> {
-  Future<int> statusCode() async {
+  Future<int> status() async {
     final res = await this;
     try {
-      return res.statusCode();
+      return res.status();
     } finally {
       await res.close();
     }
   }
 
-  Future<bool> isSuccess() async {
+  Future<bool> ok() async {
     final res = await this;
     try {
-      return res.isSuccess();
+      return res.ok();
     } finally {
       await res.close();
     }
@@ -605,28 +679,28 @@ extension ResponseFuture on Future<Response> {
     }
   }
 
-  Future<String> finalUrl() async {
+  Future<String> url() async {
     final res = await this;
     try {
-      return res.finalUrl();
+      return res.url();
     } finally {
       await res.close();
     }
   }
 
-  Future<int?> contentLength() async {
+  Future<int?> size() async {
     final res = await this;
     try {
-      return res.contentLength();
+      return res.size();
     } finally {
       await res.close();
     }
   }
 
-  Future<String> fileName() async {
+  Future<String> name() async {
     final res = await this;
     try {
-      return res.fileName();
+      return res.name();
     } finally {
       await res.close();
     }
@@ -666,6 +740,7 @@ Future<Response> _send(
   Duration? timeout,
   int retries = 0,
   bool insecure = false,
+  bool check = false,
 }) async {
   final limit = timeout ?? Http._defaultTimeout;
   if (retries < 0) {
@@ -687,16 +762,18 @@ Future<Response> _send(
   final resendable = body is! _StreamBody && _idempotent.contains(method);
   final pool = insecure ? _insecurePool : _securePool;
   var attempt = 0;
+  final epoch = _abortEpoch;
   Duration? retryAfter;
   while (true) {
     if (attempt > 0) {
-      await Future<void>.delayed(retry.backoff(attempt - 1, retryAfter));
+      await _sleep(retry.backoff(attempt - 1, retryAfter));
+      if (epoch != _abortEpoch) throw const HttpException('aborted');
     }
     retryAfter = null;
     try {
       final res = await _attempt(method, first, body, headers, limit, pool);
       if (resendable &&
-          (res.statusCode() == 429 || res.statusCode() >= 500) &&
+          (res.status() == 429 || res.status() >= 500) &&
           attempt < retries) {
         retryAfter = retry.parseRetryAfter(res.header('retry-after'));
         // Force-close the socket; don't drain the error body.
@@ -704,9 +781,19 @@ Future<Response> _send(
         attempt++;
         continue;
       }
+      if (check && !res.ok()) {
+        final snippet = await res._snippet();
+        throw HttpException(
+          'HTTP ${res.status()} $method ${res.url()}${snippet.isEmpty ? '' : ': $snippet'}',
+          uri: Uri.tryParse(res.url()),
+        );
+      }
       return res;
     } on _Retryable catch (e) {
-      if (!resendable || attempt >= retries || !retry.isRetryable(e.cause)) {
+      if (epoch != _abortEpoch ||
+          !resendable ||
+          attempt >= retries ||
+          !retry.isRetryable(e.cause)) {
         throw e.cause;
       }
       attempt++;

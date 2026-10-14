@@ -1,22 +1,22 @@
 /// Typed file-system handles. Thin facade over `dart:io` and `package:path`.
 ///
 /// ```dart
-/// switch (await Fs.lookup(args.first)) {
+/// switch (await Fs.entry(args.first)) {
 ///   case File file: print('file, ${await file.size()} bytes');
 ///   case Dir dir: print('folder of ${(await dir.list()).length}');
-///   case Link link: print('link → ${await link.targetPath()}');
+///   case Link link: print('link → ${await link.target()}');
 ///   case null: print('nothing there');
 /// }
 /// await (Reader.of(bytes) > Fs.file('a.bin'));
 /// ```
 ///
 /// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link].
-/// - `Fs.lookup/file/dir/link()` inspect or build handles (`lookup` is the
+/// - `Fs.entry/file/dir/link()` inspect or build handles (`entry` is the
 ///   one call that does I/O; the other three do none).
 /// - [Entry] supports `path` `name` `parent` `exists` `delete` `copy` `move`.
 /// - [File] supports `write` `append` `size` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `create`.
-/// - [Link] supports `targetPath` `resolveTarget` `create`.
+/// - [Link] supports `target` `resolve` `create`.
 /// Everything else is private.
 library;
 
@@ -36,7 +36,7 @@ import 'src/posix.dart' as posix;
 abstract final class Fs {
   /// What is on disk now: a [File], [Dir], [Link], or null. Never follows
   /// links. The one `Fs.` call that does I/O; `file`/`dir`/`link` don't.
-  static Future<Entry?> lookup(String path) async {
+  static Future<Entry?> entry(String path) async {
     final type = await io.FileSystemEntity.type(path, followLinks: false);
     return switch (type) {
       io.FileSystemEntityType.file => File._(path),
@@ -390,11 +390,11 @@ final class Link extends Entry {
   Link._(super.path) : super._();
 
   /// The stored target string.
-  Future<String> targetPath() => io.Link(_path).target();
+  Future<String> target() => io.Link(_path).target();
 
   /// Follow the chain to what is finally there, or null when broken.
   /// Returns a handle AT THE TARGET path (not the link's own path).
-  Future<Entry?> resolveTarget() async {
+  Future<Entry?> resolve() async {
     String resolved;
     try {
       resolved = await io.Link(_path).resolveSymbolicLinks();
@@ -480,7 +480,7 @@ final class Link extends Entry {
   @override
   Future<Link> copy(String to) async {
     await _checkSource(_path, to, io.FileSystemEntityType.link);
-    return Link._(to).create(await targetPath());
+    return Link._(to).create(await target());
   }
 
   @override
@@ -491,7 +491,7 @@ final class Link extends Entry {
       await io.Link(_path).rename(to);
     } on io.FileSystemException catch (e) {
       if (!posix.isCrossDevice(e)) rethrow;
-      final t = await targetPath();
+      final t = await target();
       await io.Link(to).create(t, recursive: true);
       await io.Link(_path).delete();
     }
@@ -550,8 +550,8 @@ extension LinkFuture on Future<Link> {
   Future<void> delete() async => (await this).delete();
   Future<Link> copy(String to) async => (await this).copy(to);
   Future<Link> move(String to) async => (await this).move(to);
-  Future<String> targetPath() async => (await this).targetPath();
-  Future<Entry?> resolveTarget() async => (await this).resolveTarget();
+  Future<String> target() async => (await this).target();
+  Future<Entry?> resolve() async => (await this).resolve();
   Future<Link> create(String target) async =>
       (await this).create(target);
 }

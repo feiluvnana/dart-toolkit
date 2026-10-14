@@ -46,7 +46,7 @@ void main() {
 
     test('method chain needs no parentheses', () async {
       final w = _Sink();
-      await _Mem([7]).pipe(null).writeTo(w);
+      await _Mem([7]).pipe(null).to(w);
       expect(w.data, [7]);
     });
   });
@@ -124,7 +124,7 @@ void main() {
       expect(await f.text(), 'x');
       expect(await f.bytes(), utf8.encode('x'));
       await (f | null > null);
-      await f.writeTo(null);
+      await f.to(null);
     });
 
     test('a writer that fails before reading closes the source', () async {

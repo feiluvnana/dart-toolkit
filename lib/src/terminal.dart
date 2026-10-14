@@ -143,9 +143,13 @@ abstract class TuiBridge {
   void barMode(Object id, bool bytes);
   void barTick(Object id, int count);
   void barEnded(Object id, bool ok);
-  Future<String> promptAsk(String question, {required bool secret});
-  Future<bool> promptConfirm(String question);
-  Future<String> promptChoose(String question, List<String> choices);
+  void barTotal(Object id, int? total);
+  void log(String line);
+
+  /// Prompts resolve null when the popup is cancelled (Escape, Ctrl-C).
+  Future<String?> promptAsk(String question, {required bool secret});
+  Future<bool?> promptConfirm(String question, bool or);
+  Future<String?> promptChoose(String question, List<String> choices, int initial);
 }
 
 /// Decode raw stdin [bytes] into events. Returns the events plus how many
@@ -865,14 +869,61 @@ final class TerminalCaps {
   final bool animated;
 }
 
-/// The one shared accent for live progress and selections: xterm 256-colour
-/// index 173, a muted orange.
-///
-/// `Console` live lines (bars, spinners, the `choose` menu) and the Tui
-/// selection, tabs and title all use this. VISION §4.12 names cyan and the
-/// Tui engine previously defaulted to 208 (bright orange); 173 is the value
-/// the console pass already shipped for its live lines, readable on dark and
-/// light terminals, so the engine adopts it here and `Color.orange` carries
-/// this index. The console pass keeps its own private escape until it adopts
-/// this constant; VISION's cyan remains aspirational for a future theme pass.
-const tuiAccent256 = 173;
+/// A terminal colour: a 256-palette index or an RGB triple.
+/// Downgraded to the terminal's level at paint time (truecolor → 256 → 16;
+/// `NO_COLOR` drops colours and keeps styles).
+final class Color {
+  static const black = Color._(0, null);
+  static const red = Color._(1, null);
+  static const green = Color._(2, null);
+  static const yellow = Color._(3, null);
+  static const blue = Color._(4, null);
+  static const magenta = Color._(5, null);
+  static const cyan = Color._(6, null);
+  static const white = Color._(7, null);
+  static const gray = Color._(8, null);
+
+  /// The shared live accent (xterm 173, a muted orange):
+  /// a ready-made value for `Tui.run(accent:)` and `Console.accent`.
+  static const orange = Color._(173, null);
+
+  /// 0–255, else [ArgumentError].
+  factory Color.index(int index) {
+    if (index < 0 || index > 255) {
+      throw ArgumentError.value(index, 'index', 'must be 0..255');
+    }
+    return Color._(index, null);
+  }
+
+  factory Color.rgb(int r, int g, int b) {
+    for (final (n, v) in [('r', r), ('g', g), ('b', b)]) {
+      if (v < 0 || v > 255) {
+        throw ArgumentError.value(v, n, 'must be 0..255');
+      }
+    }
+    return Color._(rgbTo256(r, g, b), (r, g, b));
+  }
+
+  const Color._(this.code, this.rgb);
+
+  final int code;
+  final (int, int, int)? rgb;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Color && other.code == code && other.rgb == rgb;
+
+  @override
+  int get hashCode => Object.hash(code, rgb);
+}
+
+int rgbTo256(int r, int g, int b) {
+  if (r == g && g == b) {
+    if (r < 8) return 16;
+    if (r > 248) return 231;
+    return 232 + ((r - 8) * 24 ~/ 247).clamp(0, 23);
+  }
+  int c(int v) => (v / 51).round().clamp(0, 5);
+  return 16 + 36 * c(r) + 6 * c(g) + c(b);
+}
+

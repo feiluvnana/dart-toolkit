@@ -1,9 +1,9 @@
 /// Browser automation. Thin facade over `package:puppeteer`.
 ///
 /// ```dart
-/// final browser = await Chrome.launch(profileDir: '.chrome');
-/// final page = await browser.open('https://example.com/login', blockResources: ['image', 'font'])
-///     .fill('#user', name).fill('#pass', password).click('button[type=submit]').waitFor('.dashboard');
+/// final browser = await Chrome.launch(profile: '.chrome');
+/// final page = await browser.open('https://example.com/login', block: ['image', 'font'])
+///     .fill('#user', name).fill('#pass', password).click('button[type=submit]').wait('.dashboard');
 /// await (page.screenshot(fullPage: true) > Fs.file('orders.png'));
 /// await browser.close();
 /// ```
@@ -11,11 +11,11 @@
 /// Public surface is exactly: [Chrome], [Browser], [Page], [Download].
 /// - `Chrome.launch/connect()` open a browser.
 /// - [Browser] supports `open` `pages`.
-/// - [Page] supports `goTo` `goBack` `reload` `url` `html` `text` `evaluate`
-///   `cookieHeader` `click` `fill` `press` `selectOption` `attachFile`
-///   `scrollToBottom` `scrollIntoView` `waitFor` `waitForNetworkIdle`
-///   `screenshot` `pdf` `clickToDownload`.
-/// - [Download] supports `fileName` (plus [Reader]).
+/// - [Page] supports `go` `back` `reload` `url` `html` `text` `evaluate`
+///   `cookies` `click` `fill` `press` `select` `upload`
+///   `scroll` `wait` `idle`
+///   `screenshot` `pdf` `download`.
+/// - [Download] supports `name` (plus [Reader]).
 /// Everything else is private.
 library;
 
@@ -42,22 +42,22 @@ const Duration _defaultTimeout = Duration(seconds: 30);
 /// Entry point: launch or attach a browser.
 abstract final class Chrome {
   /// Launch Chromium. Downloads it into the user cache on first use, unless
-  /// [chromePath] names a Chrome or Chromium binary. [profileDir] keeps
+  /// [path] names a Chrome or Chromium binary. [profile] keeps
   /// cookies and logins between runs; without it, every launch starts fresh
   /// in a temp profile deleted on [close]. [proxy] routes every request
   /// (`http://host:port`, `socks5://host:port`). Throws when the browser
   /// can't start.
-  static Future<Browser> launch({bool headless = true, String? chromePath, String? profileDir, String? proxy}) async {
-    var exe = chromePath;
+  static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy}) async {
+    var exe = path;
     exe ??= await _cachedExecutable();
     final args = <String>[if (proxy != null) '--proxy-server=$proxy'];
-    final temp = profileDir == null ? await io.Directory.systemTemp.createTemp('puppeteer_dev_profile-') : null;
+    final temp = profile == null ? await io.Directory.systemTemp.createTemp('puppeteer_dev_profile-') : null;
     final pp.Browser browser;
     try {
       browser = await pp.puppeteer.launch(
         headless: headless,
         executablePath: exe,
-        userDataDir: profileDir ?? temp!.path,
+        userDataDir: profile ?? temp!.path,
         args: args.isEmpty ? null : args,
       );
     } catch (_) {
@@ -153,7 +153,7 @@ final class Browser implements Closeable {
   String? _downloadDir;
   var _closed = false;
 
-  /// Serializes download begins so concurrent `clickToDownload()` calls don't
+  /// Serializes download begins so concurrent `download()` calls don't
   /// share one `onDownloadWillBegin.first`.
   Future<void> _dlPrev = Future.value();
 
@@ -169,11 +169,11 @@ final class Browser implements Closeable {
 
   /// Open a new tab and wait for the load event. Tab setup goes here, before
   /// the first request: [headers] are extra request headers for everything
-  /// the tab loads (`user-agent` also sets the UA string), [blockResources]
+  /// the tab loads (`user-agent` also sets the UA string), [block]
   /// aborts requests by resource type (`'image'`, `'font'`, `'media'`,
   /// `'stylesheet'`), [width]/[height] set the viewport.
   /// [timeout] bounds the navigation. Dialogs are always dismissed.
-  Future<Page> open(String url, {Map<String, String>? headers, List<String>? blockResources, int? width, int? height, Duration? timeout}) async {
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     final page = await _browser.newPage();
     final wrap = _wrap(page);
@@ -201,8 +201,8 @@ final class Browser implements Closeable {
       if (extra != null) {
         await page.setExtraHTTPHeaders(extra);
       }
-      if (blockResources != null && blockResources.isNotEmpty) {
-        await _block(page, wrap, blockResources);
+      if (block != null && block.isNotEmpty) {
+        await _block(page, wrap, block);
       }
       try {
         await page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -291,7 +291,7 @@ final class Browser implements Closeable {
       if (!_allowedBlock.contains(lower)) {
         throw ArgumentError.value(
           block,
-          'blockResources',
+          'block',
           'unknown resource type "$b" (image, font, media, stylesheet)',
         );
       }
@@ -331,12 +331,12 @@ final class Page implements Closeable {
   /// since the browser reads them at submit, not at `uploadFile`.
   final _stagedDirs = <io.Directory>[];
 
-  /// Requests in flight (for [waitForNetworkIdle]): +1 on request, −1 on
+  /// Requests in flight (for [idle]): +1 on request, −1 on
   /// finished/failed. Both sides count the same URLs (see [_countable]), so
   /// `data:`/`ws:` URLs never enter the count on either side.
   var _inflight = 0;
 
-  /// Completed on every 1→0 transition so [waitForNetworkIdle] wakes without
+  /// Completed on every 1→0 transition so [idle] wakes without
   /// polling the wall clock.
   Completer<void>? _idleNotified;
 
@@ -396,7 +396,7 @@ final class Page implements Closeable {
   }
 
   /// Re-navigate this tab; waits for the load event. Returns this page.
-  Future<Page> goTo(String url, {Duration? timeout}) async {
+  Future<Page> go(String url, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
       await _page.goto(url, wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -407,7 +407,7 @@ final class Page implements Closeable {
   }
 
   /// Go back; waits for the load event. Returns this page.
-  Future<Page> goBack({Duration? timeout}) async {
+  Future<Page> back({Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     try {
       await _page.goBack(wait: pp.Until.load, timeout: limit).timeout(limit);
@@ -433,7 +433,7 @@ final class Page implements Closeable {
 
   /// The rendered DOM as [Elements], with the page's URL as the base.
   /// Chain into it: `page.html().$('a')`.
-  Future<Elements> html() async => Html.parse(await _page.content ?? '', baseUrl: await url());
+  Future<Elements> html() async => Html.parse(await _page.content ?? '', base: await url());
 
   /// The page's `innerText`.
   Future<String> text() async => (await _page.evaluate<String?>('document.documentElement.innerText')) ?? '';
@@ -442,16 +442,16 @@ final class Page implements Closeable {
   /// with the `Json.value<T>()` rules (`null` for `null`, `undefined`, or
   /// a result that is not a `T`, so `??` gives the default; integral numbers
   /// read as both `int` and `double`). Collections read per element through
-  /// [Json.listOf]/[Json.mapOf] on [Json.of]:
+  /// [Json.asList]/[Json.asMap] on [Json.of]:
   ///
   /// ```dart
-  /// final title = await page.evaluate<String>('document.title') ?? '';
-  /// final tags = Json.of(await page.evaluate<dynamic>('["a", "b"]')).listOf<String>() ?? [];
+  /// final title = await page.run<String>('document.title') ?? '';
+  /// final tags = Json.of(await page.run<dynamic>('["a", "b"]')).asList<String>()
   /// ```
   ///
   /// The decoded value is wrapped directly (`Json.of`): no `jsonEncode`
   /// round trip, no transient string.
-  Future<T?> evaluate<T>(String js) async {
+  Future<T?> run<T>(String js) async {
     final v = await _page.evaluate<dynamic>(js);
     return Json.of(v).value<T>();
   }
@@ -459,7 +459,7 @@ final class Page implements Closeable {
   /// The `Cookie` header value for the current URL, ready for [Http],
   /// or `null` when there are no cookies. Names/values with `;`, `=`,
   /// space or `"` are quoted.
-  Future<String?> cookieHeader() async {
+  Future<String?> cookies() async {
     String part(String name, String value) {
       if (name.contains(RegExp(r'[;=\s"]')) ||
           value.contains(RegExp(r'[;=\s"]'))) {
@@ -565,7 +565,7 @@ final class Page implements Closeable {
 
   /// Pick the `<option>` by its value, waiting until actionable.
   /// Throws [TimeoutException] when the option is missing. Returns this page.
-  Future<Page> selectOption(String selector, String value, {Duration? timeout}) async {
+  Future<Page> select(String selector, String value, {Duration? timeout}) async {
     final handle = await _actionable(selector, timeout: timeout);
     final picked = await handle.select([value]);
     if (!picked.contains(value)) {
@@ -583,7 +583,7 @@ final class Page implements Closeable {
   /// hidden, so this waits for *attached*, not visible. Staged copies are
   /// retained until this tab closes (the browser reads them at submit).
   /// Fires `input`/`change` so frameworks see the files. Returns this page.
-  Future<Page> attachFile(String selector, Reader file, {Duration? timeout}) async {
+  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async {
     final staged = await _stage(file);
     final tmp = staged.tmpDir;
     if (tmp != null) _stagedDirs.add(tmp);
@@ -610,24 +610,22 @@ final class Page implements Closeable {
     return this;
   }
 
-  /// Go to the bottom of the page (what infinite lists need).
-  /// Returns this page.
-  Future<Page> scrollToBottom() async {
-    await _page.evaluate<void>('window.scrollTo(0, document.body.scrollHeight)');
-    return this;
-  }
-
   /// Bring the first match of [selector] into view, waiting until it is
-  /// attached first. Throws [TimeoutException] when it never attaches.
+  /// attached first (throws [TimeoutException] when it never attaches); with
+  /// no selector, go to the bottom of the page (what infinite lists need).
   /// Returns this page.
-  Future<Page> scrollIntoView(String selector, {Duration? timeout}) async {
-    final handle = await _attached(selector, timeout: timeout);
-    await handle.scrollIntoViewIfNeeded();
+  Future<Page> scroll([String? selector, Duration? timeout]) async {
+    if (selector == null) {
+      await _page.evaluate<void>('window.scrollTo(0, document.body.scrollHeight)');
+    } else {
+      final handle = await _attached(selector, timeout: timeout);
+      await handle.scrollIntoViewIfNeeded();
+    }
     return this;
   }
 
   /// Wait until [selector] is visible. Returns this page.
-  Future<Page> waitFor(String selector, {Duration? timeout}) async {
+  Future<Page> wait(String selector, {Duration? timeout}) async {
     await _visible(selector, timeout: timeout);
     return this;
   }
@@ -635,7 +633,7 @@ final class Page implements Closeable {
   /// Wait until there has been no request in flight for 500 ms.
   /// Wakes on each 1→0 in-flight transition (a [Stopwatch] measures the
   /// quiet period; no wall-clock polling). Returns this page.
-  Future<Page> waitForNetworkIdle({Duration? timeout}) async {
+  Future<Page> idle({Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     final start = _clock.elapsed;
     for (;;) {
@@ -676,7 +674,7 @@ final class Page implements Closeable {
   /// another tab inside the gate is never credited here. Begins are
   /// serialized; the whole call shares one [timeout] deadline. The
   /// browser's copies are removed when the browser closes.
-  Future<Download> clickToDownload(String selector, {Duration? timeout}) async {
+  Future<Download> download(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     // Wait for the trigger first: on a missing selector this throws before
     // any download future exists that could fail unhandled later. The
@@ -880,7 +878,7 @@ final class Page implements Closeable {
     final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_up');
     final staged = io.File(p.join(tmp.path, name));
     try {
-      await file.writeTo(_FileWriter(staged));
+      await file.to(_FileWriter(staged));
     } catch (_) {
       // Don't leak the staging dir when the reader fails mid-write.
       try {
@@ -946,7 +944,7 @@ final class Download with Reader {
   final String _name;
 
   /// The file name the site suggested.
-  String fileName() => _name;
+  String name() => _name;
 
   @override
   Origin origin() => Origin(name: _name, path: _file.path);
@@ -957,45 +955,43 @@ final class Download with Reader {
 
 /// Future mirrors (rule 6). The extension name is import-only; never reference it.
 extension BrowserFuture on Future<Browser> {
-  Future<Page> open(String url, {Map<String, String>? headers, List<String>? blockResources, int? width, int? height, Duration? timeout}) async =>
-      (await this).open(url, headers: headers, blockResources: blockResources, width: width, height: height, timeout: timeout);
+  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height, Duration? timeout}) async =>
+      (await this).open(url, headers: headers, block: block, width: width, height: height, timeout: timeout);
   Future<List<Page>> pages() async => (await this).pages();
 }
 
 /// Future mirrors for [Page].
 extension PageFuture on Future<Page> {
-  Future<Page> goTo(String url, {Duration? timeout}) async => (await this).goTo(url, timeout: timeout);
-  Future<Page> goBack({Duration? timeout}) async => (await this).goBack(timeout: timeout);
+  Future<Page> go(String url, {Duration? timeout}) async => (await this).go(url, timeout: timeout);
+  Future<Page> back({Duration? timeout}) async => (await this).back(timeout: timeout);
   Future<Page> reload({Duration? timeout}) async => (await this).reload(timeout: timeout);
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
-  Future<T?> evaluate<T>(String js) async => (await this).evaluate<T>(js);
-  Future<String?> cookieHeader() async => (await this).cookieHeader();
+  Future<T?> run<T>(String js) async => (await this).run<T>(js);
+  Future<String?> cookies() async => (await this).cookies();
   Future<Page> click(String selector, {Duration? timeout}) async => (await this).click(selector, timeout: timeout);
   Future<Page> fill(String selector, String value, {Duration? timeout}) async =>
       (await this).fill(selector, value, timeout: timeout);
   Future<Page> press(String key) async => (await this).press(key);
-  Future<Page> selectOption(String selector, String value, {Duration? timeout}) async =>
-      (await this).selectOption(selector, value, timeout: timeout);
-  Future<Page> attachFile(String selector, Reader file, {Duration? timeout}) async =>
-      (await this).attachFile(selector, file, timeout: timeout);
-  Future<Page> scrollToBottom() async => (await this).scrollToBottom();
-  Future<Page> scrollIntoView(String selector, {Duration? timeout}) async =>
-      (await this).scrollIntoView(selector, timeout: timeout);
-  Future<Page> waitFor(String selector, {Duration? timeout}) async =>
-      (await this).waitFor(selector, timeout: timeout);
-  Future<Page> waitForNetworkIdle({Duration? timeout}) async =>
-      (await this).waitForNetworkIdle(timeout: timeout);
+  Future<Page> select(String selector, String value, {Duration? timeout}) async =>
+      (await this).select(selector, value, timeout: timeout);
+  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async =>
+      (await this).upload(selector, file, timeout: timeout);
+  Future<Page> scroll([String? selector, Duration? timeout]) async => (await this).scroll(selector, timeout);
+  Future<Page> wait(String selector, {Duration? timeout}) async =>
+      (await this).wait(selector, timeout: timeout);
+  Future<Page> idle({Duration? timeout}) async =>
+      (await this).idle(timeout: timeout);
   Reader screenshot({bool fullPage = false}) => _FutureShot(this, fullPage: fullPage);
   Reader pdf() => _FutureShot(this, pdf: true);
-  Future<Download> clickToDownload(String selector, {Duration? timeout}) async =>
-      (await this).clickToDownload(selector, timeout: timeout);
+  Future<Download> download(String selector, {Duration? timeout}) async =>
+      (await this).download(selector, timeout: timeout);
 }
 
 /// Future mirrors for [Download].
 extension DownloadFuture on Future<Download> {
-  Future<String> fileName() async => (await this).fileName();
+  Future<String> name() async => (await this).name();
 }
 
 final class _Staged {

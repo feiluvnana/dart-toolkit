@@ -27,10 +27,7 @@ final class TestSession<S> {
   }
 
   bool _paint() {
-    if (_s.fullscreen) return _s._paintTo(_out);
-    final before = _out.length;
-    _s._paintInline();
-    return _out.length != before;
+    return _s._paintTo(_out);
   }
 
   /// The current screen row as text (wide continuation cells skipped).
@@ -98,8 +95,7 @@ final class TestSession<S> {
   int get styleCount => _s._styles.length;
   bool get quitRequested => _s._quitFlag;
   S get state => _s._state;
-  /// Everything written to the terminal so far (frames, OSC, inline
-  /// commits).
+  /// Everything written to the terminal so far (frames, OSC).
   String get output => _out.toString();
 
   /// Release the shared Console bridge slot.
@@ -111,23 +107,20 @@ final class TestSession<S> {
 }
 
 /// Build an in-memory [TestSession] (no terminal required); everything the
-/// session writes lands in [TestSession.output]. [fullscreen] `false` runs
-/// the inline painter; [env] sets the colour and charset capabilities as
+/// session writes lands in [TestSession.output]. [env] sets the colour and charset capabilities as
 /// `TERM`/`COLORTERM`/`NO_COLOR`/`LANG` would. Call [TestSession.close] at the end to release the
 /// shared Console bridge slot.
 TestSession<S> testSession<S>(S state,
     Screen Function(S state, App<S> app) screen,
     {int width = 80,
     int height = 24,
-    Color accent = Color.orange,
-    bool fullscreen = true,
+    Color? accent,
     Map<String, String>? env}) {
   final sink = StringBuffer();
   final s = _Session<S>(state, screen,
       out: sink.write,
       size: () => (width, height),
-      accent: accent,
-      fullscreen: fullscreen);
+      accent: accent);
   s._w = width;
   s._h = height;
   s._grid = List.generate(height, (_) => List.filled(width, _Cell.blank));
@@ -142,4 +135,16 @@ TestSession<S> testSession<S>(S state,
   s._zone = z;
   term.TuiBridge.current = s;
   return TestSession<S>._(s, sink);
+}
+
+extension on _Session<dynamic> {
+  Future<void> _settleForTest() async {
+    for (var k = 0; k < 200; k++) {
+      await Future<void>.delayed(Duration.zero);
+      if (_activeH == 0) {
+        await Future<void>.delayed(Duration.zero);
+        if (_activeH == 0) return;
+      }
+    }
+  }
 }

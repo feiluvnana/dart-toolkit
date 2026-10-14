@@ -1,7 +1,7 @@
 /// Minimal JSON values. Thin facade over `dart:convert`.
 ///
 /// ```dart
-/// final port = await Fs.file('conf.json').json().$('server.port').value<int>() ?? 8080;
+/// final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 /// await Fs.file('names.json').write(Json.encode(names, pretty: true));
 /// ```
 ///
@@ -9,7 +9,7 @@
 /// - `Json.parse()` parses text, `Json.encode()` renders it, `Json.of()`
 ///   wraps a value you already hold.
 /// - [Json] supports `$` (dotted path) `[]` (index the iteration) `value`
-///   (typed scalar read) `listOf`/`mapOf` (flat collections).
+///   (typed scalar read) `or` (read with a default) `asList`/`asMap` (flat collections).
 /// Everything else is private.
 library;
 
@@ -34,8 +34,8 @@ final class Json extends Iterable<Json> {
     }
   }
 
-  /// Wrap a value you already hold (e.g. a decoded `evaluate` result):
-  /// no `jsonEncode` → parse round trip. Lets `chrome.evaluate` skip
+  /// Wrap a value you already hold (e.g. a decoded `run` result):
+  /// no `jsonEncode` → parse round trip. Lets `page.run` skip
   /// re-encoding and lets scripts wrap values without copying them.
   static Json of(Object? decoded) => Json._(decoded);
 
@@ -78,19 +78,23 @@ final class Json extends Iterable<Json> {
     throw RangeError('index $index into a scalar JSON value');
   }
 
-  /// The value when it is a `T`, else null, so `??` gives the default.
+  /// The value when it is a `T`, else [fallback]: `$('port').or(8080)` is a
+  /// non-null `int`. See [value] for the coercions.
+  T or<T>(T fallback) => value<T>() ?? fallback;
+
+  /// The value when it is a `T`, else null.
   /// Scalars: integral numbers read as both `int` and `double`, so `3`,
   /// `3.0`, `value<int>()` and `value<double>()` all agree (a non-integral
   /// `double` is not an `int`). Use `num` for numbers that may be either,
-  /// `Object` for the raw value. Flat collections read with [listOf]/[mapOf]
+  /// `Object` for the raw value. Flat collections read with [asList]/[asMap]
   /// (the element type is the parameter); nested data reads by iterating
   /// (see below), which is also where records come from:
   ///
   /// ```dart
-  /// final port = cfg.$('server.port').value<int>() ?? 8080;
+  /// final port = cfg.$('server.port').or(8080);
   /// final users = [
   ///   for (final u in doc.$('users'))
-  ///     (name: u.$('name').value<String>() ?? '', age: u.$('age').value<int>() ?? 0),
+  ///     (name: u.$('name').or(''), age: u.$('age').or(0)),
   /// ];
   /// ```
   T? value<T>() {
@@ -99,7 +103,7 @@ final class Json extends Iterable<Json> {
         v is T ||
             !((v is List || v is Map) &&
             (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)),
-        'value<$T>() reads scalars; use listOf/mapOf');
+        'value<$T>() reads scalars; use asList/asMap');
     if (v is T) return v;
     if (v is num) {
       if (v is int) {
@@ -117,42 +121,41 @@ final class Json extends Iterable<Json> {
     return null;
   }
 
-  /// The value as a `List<T>`, or null unless it is a list and every element
+  /// The value as a `List<T>`; empty unless it is a list and every element
   /// converts to `T` (with the same integral-number coercion as [value]).
-  /// One pass, O(n): a mismatch returns null after a single scan, not
-  /// O(33·n) across a table of shapes. Flat cases only; nested data reads
+  /// One pass, O(n). Flat cases only; nested data reads
   /// by iterating:
   ///
   /// ```dart
-  /// final names = doc.$('data.users.*.name').listOf<String>() ?? [];
+  /// final names = doc.$('data.users.*.name').asList<String>();
   /// ```
-  List<T>? listOf<T>() {
+  List<T> asList<T>() {
     final v = _v;
-    if (v is! List) return null;
+    if (v is! List) return <T>[];
     final out = <T>[];
     for (final e in v) {
       final c = _scalar<T>(e);
-      if (identical(c, _mismatch)) return null;
+      if (identical(c, _mismatch)) return <T>[];
       out.add(c as T);
     }
     return out;
   }
 
-  /// The value as a `Map<String, T>`, or null unless it is an object with
+  /// The value as a `Map<String, T>`; empty unless it is an object with
   /// string keys and every value converts to `T`. One pass, O(n).
   ///
   /// ```dart
-  /// final counts = doc.$('stats').mapOf<int>() ?? {};
+  /// final counts = doc.$('stats').asMap<int>();
   /// ```
-  Map<String, T>? mapOf<T>() {
+  Map<String, T> asMap<T>() {
     final v = _v;
-    if (v is! Map) return null;
+    if (v is! Map) return <String, T>{};
     final out = <String, T>{};
     for (final entry in v.entries) {
       final k = entry.key;
-      if (k is! String) return null;
+      if (k is! String) return <String, T>{};
       final c = _scalar<T>(entry.value);
-      if (identical(c, _mismatch)) return null;
+      if (identical(c, _mismatch)) return <String, T>{};
       out[k] = c as T;
     }
     return out;
@@ -302,8 +305,8 @@ final Object _mismatch = Object();
 /// Convert [e] to [E]: a match, an integral-number coercion, or [_mismatch].
 /// `null` converts only when [E] admits it (`Null`, `E?`, `dynamic`…).
 /// `Map<String, dynamic>` (the engine's object shape) is `E` whenever `E`
-/// admits it (e.g. `Map<String, Object?>`), so `listOf<Map<String, Object?>>`
-/// and `mapOf` read the common REST shapes in one pass.
+/// admits it (e.g. `Map<String, Object?>`), so `asList<Map<String, Object?>>`
+/// and `asMap` read the common REST shapes in one pass.
 Object? _scalar<E>(Object? e) {
   if (e is E) return e;
   if (e is int) {
@@ -354,6 +357,7 @@ extension JsonFuture on Future<Json> {
   Future<Json> $(String path) async => (await this).$(path);
   Future<Json> operator [](int index) async => (await this)[index];
   Future<T?> value<T>() async => (await this).value<T>();
-  Future<List<T>?> listOf<T>() async => (await this).listOf<T>();
-  Future<Map<String, T>?> mapOf<T>() async => (await this).mapOf<T>();
+  Future<T> or<T>(T fallback) async => (await this).or(fallback);
+  Future<List<T>> asList<T>() async => (await this).asList<T>();
+  Future<Map<String, T>> asMap<T>() async => (await this).asMap<T>();
 }

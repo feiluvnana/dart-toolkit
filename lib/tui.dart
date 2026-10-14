@@ -4,12 +4,12 @@
 /// ```dart
 /// sealed class Page {}
 /// final class Search extends Page {
-///   final query = TextField();
-///   final hits = Selection<Hit>();
+///   final query = Field();
+///   final hits = Pick<Hit>();
 /// }
 /// await Tui.run<Page>(Search(), (page, app) => switch (page) {
 ///   Search s => Screen(title: 'demo', (r) {
-///       final [body, foot] = r.splitRows([0, 3]);
+///       final [body, foot] = r.rows([0, 3]);
 ///       body.list(s.hits, (h) => h.title, empty: 'type, press enter');
 ///       foot.box('search').input(s.query);
 ///     }, keys: {
@@ -20,19 +20,20 @@
 /// ```
 ///
 /// Public surface is exactly: [Tui], [App], [Screen], [Binding],
-/// [Selection], [TextField], [ScrollPosition], [Region], [Color], [Style],
+/// [Pick], [Field], [Scroll], [Region], [Color], [Style],
 /// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
 /// (method carriers from the `src/tui/` split: importing this library
 /// applies them to [Region] automatically, never reference them by name).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
 ///   the screen for a state and never blocks.
-/// - [App] supports `state` `goTo` `showStatus` `printAbove` `notify`
-///   `copyToClipboard` `quit`.
-/// - Widget state lives in [Selection], [TextField] and [ScrollPosition]
+/// - [App] supports `state` `go` `status` `notify`
+///   `copy` `quit`.
+/// - Widget state lives in [Pick], [Field] and [Scroll]
 ///   objects held by the app's state, so focus, selection and scroll survive
-///   `goTo` and back.
-/// - While `run` is active, `Console.withSpinner`/`progressBar` draw in the
-///   status row and `Console.ask`/`confirm`/`choose` open a popup.
+///   `go` and back.
+/// - While `run` is active, `Console.spin`/`bar` draw in the
+///   status row and `Console.ask`/`confirm`/`choose` open a popup
+///   and `Console.log` goes to the status row.
 library;
 
 export 'src/tui.dart'
@@ -41,12 +42,12 @@ export 'src/tui.dart'
         App,
         Screen,
         Binding,
-        Selection,
-        TextField,
-        ScrollPosition,
+        Pick,
+        Field,
+        Scroll,
         Region,
         RegionWidgets,
         RegionMarkdown,
         RegionDiff,
-        Color,
         Style;
+export 'src/terminal.dart' show Color;

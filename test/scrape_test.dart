@@ -75,7 +75,7 @@ void main() {
       final titles = await Scrape.crawl<String>(['$base/'], (v) async {
         final doc = await v.html();
         v.follow(doc.$('a').attrs('href'), (w) async {
-          w.emit('${w.statusCode()}:${w.finalUrl()}');
+          w.emit('${w.status()}:${w.url()}');
         });
       }).toList();
       expect(
@@ -103,8 +103,8 @@ void main() {
         for (var run = 0; run < 2; run++) {
           final got = await Scrape.crawl<String>(['$base/r1', '$base/r2'],
               (v) async {
-            v.emit(v.finalUrl());
-          }, cacheDir: dir.path, concurrency: 1).toList();
+            v.emit(v.url());
+          }, cache: dir.path, limit: 1).toList();
           expect(got, ['$base/a']);
         }
       } finally {
@@ -119,7 +119,7 @@ void main() {
       var n = 0;
       sub = Scrape.crawl<String>(urls, (v) async {
         v.emit(await v.text());
-      }, concurrency: 1).listen((_) {
+      }, limit: 1).listen((_) {
         if (++n == 1) sub.pause();
       }, onDone: done.complete);
       await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -132,7 +132,7 @@ void main() {
     test('a 404 reaches its handler', () async {
       var status = 0;
       await Scrape.crawl<void>(['$base/b'], (v) async {
-        status = v.statusCode();
+        status = v.status();
         expect(await v.text(), 'nope');
       }).toList();
       expect(status, HttpStatus.notFound);
@@ -143,28 +143,28 @@ void main() {
       await Scrape.crawl<void>(['$base/'], (v) async {
         final doc = await v.html();
         v.follow(doc.$('a').attrs('href'), (w) async {
-          urls.add(w.finalUrl());
+          urls.add(w.url());
         });
       }).toList();
       expect(urls..sort(), ['$base/a', '$base/b']);
     });
 
     test('a 3-level tree with more workers than URLs never stalls', () async {
-      // concurrency: 8 with a narrow tree parks most workers in _waitWork;
+      // limit: 8 with a narrow tree parks most workers in _waitWork;
       // without a notify on every enqueue/finish the crawl would hang here.
       final seen = <String>{};
       Future<void> handler(Visit<void> v) async {
-        seen.add(v.finalUrl());
-        if (v.finalUrl() == '$base/') {
+        seen.add(v.url());
+        if (v.url() == '$base/') {
           final doc = await v.html();
           v.follow(doc.$('a').attrs('href'), handler);
-        } else if (v.finalUrl() == '$base/a') {
+        } else if (v.url() == '$base/a') {
           final doc = await v.html();
           v.follow(doc.$('img').attrs('src'), handler);
         }
       }
 
-      await Scrape.crawl<void>(['$base/'], handler, concurrency: 8)
+      await Scrape.crawl<void>(['$base/'], handler, limit: 8)
           .toList()
           .timeout(const Duration(seconds: 30));
       expect(seen, {'$base/', '$base/a', '$base/b', '$base/img.png'});
@@ -185,18 +185,18 @@ void main() {
       }
     });
 
-    test('visit reads agree: fileName, contentLength, isSuccess', () async {
+    test('visit reads agree: name, size, ok', () async {
       await Scrape.crawl<void>(['$base/a'], (v) async {
-        expect(v.fileName(), 'a');
-        expect(v.contentLength(), greaterThan(0));
-        expect(v.isSuccess(), isTrue);
-        expect((await v.bytes()).length, v.contentLength());
-        expect(v.origin().url(), v.finalUrl());
-        expect(v.origin().status(), v.statusCode());
+        expect(v.name(), 'a');
+        expect(v.size(), greaterThan(0));
+        expect(v.ok(), isTrue);
+        expect((await v.bytes()).length, v.size());
+        expect(v.origin().url(), v.url());
+        expect(v.origin().status(), v.status());
       }).toList();
       await Scrape.crawl<void>(['$base/b'], (v) async {
-        expect(v.isSuccess(), isFalse);
-        expect(v.statusCode(), HttpStatus.notFound);
+        expect(v.ok(), isFalse);
+        expect(v.status(), HttpStatus.notFound);
       }).toList();
     });
 
@@ -220,7 +220,7 @@ void main() {
 
     test('S1: a failure with queued URLs errors instead of hanging',
         () async {
-      // concurrency: 1, the handler queues two URLs then throws: without the
+      // limit: 1, the handler queues two URLs then throws: without the
       // queue-clearing fix the workers exit but _drain waits forever.
       await expectLater(
         Scrape.crawl<String>(
@@ -229,7 +229,7 @@ void main() {
             v.follow(['$base/a', '$base/b'], (w) async {});
             throw StateError('handler blew up after queueing');
           },
-          concurrency: 1,
+          limit: 1,
         ).toList().timeout(const Duration(seconds: 30)),
         throwsStateError,
       );
@@ -240,7 +240,7 @@ void main() {
       await Scrape.crawl<void>(['$base/'], (v) async {
         v.follow(
           ['mailto:a@b.c', 'tel:+1', 'javascript:void(0)', 'data:,x', '$base/a'],
-          (w) async => seen.add(w.finalUrl()),
+          (w) async => seen.add(w.url()),
         );
       }).toList();
       expect(seen, ['$base/a']);
@@ -251,7 +251,7 @@ void main() {
       final out = await Scrape.crawl<String>(
         ['$base/a', '$base/b'],
         (w) async {
-          if (w.finalUrl().endsWith('/a')) throw StateError('bad a');
+          if (w.url().endsWith('/a')) throw StateError('bad a');
           w.emit('b-ok');
         },
         onError: (url, e) => errors.add(url),
@@ -287,9 +287,9 @@ Future<void> main(List<String> args) async {
       }
     });
 
-    test('bad concurrency is an ArgumentError', () {
+    test('bad limit is an ArgumentError', () {
       expect(
-        () => Scrape.crawl<String>([], (v) async {}, concurrency: 0),
+        () => Scrape.crawl<String>([], (v) async {}, limit: 0),
         throwsArgumentError,
       );
     });
@@ -300,7 +300,7 @@ Future<void> main(List<String> args) async {
         Future<Stream<String>> crawl() => Future.value(
               Scrape.crawl<String>(['$base/slow'], (w) async {
                 w.emit(await w.text());
-              }, cacheDir: dir.path),
+              }, cache: dir.path),
             );
         expect(await (await crawl()).toList(), ['slow-ok']);
         final firstHits = hits.length;
@@ -313,13 +313,13 @@ Future<void> main(List<String> args) async {
       }
     });
 
-    test('perHostDelay spaces requests to one host', () async {
+    test('delay spaces requests to one host', () async {
       final sw = Stopwatch()..start();
       await Scrape.crawl<void>(
         ['$base/a', '$base/b'],
         (v) async {},
-        perHostDelay: const Duration(milliseconds: 400),
-        concurrency: 2,
+        delay: const Duration(milliseconds: 400),
+        limit: 2,
       ).toList();
       expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(350));
     });
@@ -328,7 +328,7 @@ Future<void> main(List<String> args) async {
       final browser = await Chrome.launch();
       try {
         final out = await Scrape.crawl<String>(['$base/js'], (v) async {
-          v.emit('${v.statusCode()}:${(await v.html()).$('title').text()}');
+          v.emit('${v.status()}:${(await v.html()).$('title').text()}');
         }, browser: browser).toList();
         expect(out, ['200:rendered']);
       } finally {

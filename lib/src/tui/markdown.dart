@@ -17,7 +17,7 @@ extension RegionMarkdown on Region {
         var col = _gx;
         for (final seg in line) {
           col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text,
-              _s._pack(seg.fg, seg.bg, seg.style), seg.link);
+              _s._mdStyle(seg), seg.link);
         }
         _cursor++;
       }
@@ -357,6 +357,7 @@ List<List<_MdSeg>> _mdWrap(List<_MdSeg> segs, int width, int indent) {
   var used = 0;
   var start = 0; // where words begin on this line
   var space = false; // the source had a space before the next word
+  _MdSeg? prev; // the run the last word came from
   for (final seg in segs) {
     final words = seg.text.split(' ');
     for (var k = 0; k < words.length; k++) {
@@ -370,12 +371,16 @@ List<List<_MdSeg>> _mdWrap(List<_MdSeg> segs, int width, int indent) {
         line = [];
         used = start = indent;
       } else if (gap == 1) {
-        line.add(_MdSeg(' ', seg.fg, seg.bg, seg.style, seg.link));
+        // The gap belongs to the text it sits in, never to a styled neighbour.
+        line.add(identical(prev, seg)
+            ? _MdSeg(' ', seg.fg, seg.bg, seg.style, seg.link)
+            : _MdSeg(' ', null, null, const {}, null));
         used++;
       }
       line.add(_MdSeg(word, seg.fg, seg.bg, seg.style, seg.link));
       used += w;
       space = false;
+      prev = seg;
     }
   }
   lines.add(line);

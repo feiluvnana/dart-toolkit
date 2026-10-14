@@ -2,15 +2,15 @@
 ///
 /// ```dart
 /// final doc = await Http.get('https://example.com/article').html();
-/// final body = doc.without('script, style, nav').$('article').text();
+/// final body = doc.not('script, style, nav').$('article').text();
 /// final next = await Http.get(url).html().$('a.next')[0].attr('href');
 /// ```
 ///
 /// Public surface is exactly: [Html], [Elements], [Element].
 /// - `Html.parse()` parses HTML and returns [Elements].
-/// - [Elements] supports `$` `[]` `without` `text` `texts` `attr` `attrs`
+/// - [Elements] supports `$` `[]` `not` `text` `texts` `attr` `attrs`
 ///   (plus [Iterable] helpers).
-/// - [Element] supports `$` `without` `text` `attr` `parent`.
+/// - [Element] supports `$` `not` `text` `attr` `parent`.
 /// A selector the engine rejects is a [FormatException] naming the selector.
 /// Everything else is private.
 library;
@@ -37,13 +37,14 @@ abstract final class Html {
   /// Parse [html]. Never throws on bad markup. Input that starts (after
   /// whitespace) with `<!doctype` or `<html` is a whole document (so
   /// `$('body')` works); anything else is a fragment.
-  /// [baseUrl] is the base for relative links: with one, URL attributes
+  /// [base] is the base for relative links: with one, URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
   /// absolute. The base is parsed once per [Elements] and shared with every
   /// child (1000 links no longer parse it 1000 times). A document's
-  /// `<base href>` overrides it.
-  static Elements parse(String html, {String? baseUrl}) {
-    final baseUri = _parseBase(baseUrl);
+  /// `<base href>` overrides it. A fragment with loose top-level text is
+  /// wrapped in one `div`, so the text is kept.
+  static Elements parse(String html, {String? base}) {
+    final baseUri = _parseBase(base);
     var s = html.replaceFirst('﻿', '').trimLeft();
     while (s.startsWith('<!--')) {
       final end = s.indexOf('-->');
@@ -63,6 +64,12 @@ abstract final class Html {
       );
     }
     final frag = parser.parseFragment(html);
+    if (frag.nodes.any((n) => n is dom.Text && n.data.trim().isNotEmpty)) {
+      // Loose text (`Tom &amp; Jerry`) has no element to live in: keep it
+      // under one synthetic root so text() reads it.
+      final root = dom.Element.tag('div')..nodes.addAll(frag.nodes.toList());
+      return Elements._([Element._(root, baseUri)], baseUri);
+    }
     return Elements._(
       [for (final n in frag.nodes) if (n is dom.Element) Element._(n, baseUri)],
       baseUri,
@@ -70,10 +77,10 @@ abstract final class Html {
   }
 }
 
-/// Parse [baseUrl] once; null when absent or unparseable.
-Uri? _parseBase(String? baseUrl) {
-  if (baseUrl == null || baseUrl.isEmpty) return null;
-  return Uri.tryParse(baseUrl);
+/// Parse [base] once; null when absent or unparseable.
+Uri? _parseBase(String? base) {
+  if (base == null || base.isEmpty) return null;
+  return Uri.tryParse(base);
 }
 
 /// A list of elements. Query with `$()`, read with `[]`.
@@ -109,7 +116,7 @@ final class Elements extends Iterable<Element> {
   /// A new tree without every match of [selector] and its subtree.
   /// Returns a new tree (one O(n) clone, table parts included); the receiver
   /// is unchanged. A top-level element that matches is dropped whole.
-  Elements without(String selector) {
+  Elements not(String selector) {
     final group = _parseSelector(selector);
     final evaluator = query.SelectorEvaluator();
     final out = <Element>[];
@@ -189,7 +196,7 @@ final class Element {
 
   /// A copy of this element without every match of [selector] and its
   /// subtree. The receiver is unchanged.
-  Element without(String selector) {
+  Element not(String selector) {
     final clone = _el.clone(true);
     List<dom.Element> found;
     try {
@@ -426,7 +433,7 @@ extension ReaderHtml on Reader {
     try {
       return Html.parse(
         text,
-        baseUrl: names.baseUrlFor(url: o.url(), path: o.path()),
+        base: names.baseUrlFor(url: o.url(), path: o.path()),
       );
     } on FormatException catch (e) {
       final status = o.status();
@@ -445,8 +452,8 @@ extension ReaderFutureHtml on Future<Reader> {
 extension ElementsFuture on Future<Elements> {
   Future<Elements> $(String selector) async => (await this).$(selector);
   Future<Element> operator [](int index) async => (await this)[index];
-  Future<Elements> without(String selector) async =>
-      (await this).without(selector);
+  Future<Elements> not(String selector) async =>
+      (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<List<String>> texts() async => (await this).texts();
   Future<String?> attr(String name) async => (await this).attr(name);
@@ -456,8 +463,8 @@ extension ElementsFuture on Future<Elements> {
 /// Future mirrors for [Element].
 extension ElementFuture on Future<Element> {
   Future<Elements> $(String selector) async => (await this).$(selector);
-  Future<Element> without(String selector) async =>
-      (await this).without(selector);
+  Future<Element> not(String selector) async =>
+      (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<Element?> parent() async => (await this).parent();

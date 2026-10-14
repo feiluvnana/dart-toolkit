@@ -1,4 +1,4 @@
-# dart_toolkit v2
+# dart_toolkit
 
 **Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fourteen
 small modules for command-line automation: fetch, scrape, drive a browser, move files, run
@@ -8,20 +8,20 @@ pipe in a shell.
 
 ```dart
 final title = await Http.get('https://example.com').html().$('title').text();
-final port = await Fs.file('conf.json').json().$('server.port').value<int>() ?? 8080;
+final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 await (Fs.file('photo.jpg').image().resize(width: 800).encode(.jpg) > Fs.file('thumb.jpg'));
 
 final iso = await Http.get(isoUrl, retries: 2), hash = Hash.sha256();
 await (iso | Console.bar(iso.size(), label: iso.name()) | hash > Fs.file(iso.name()));
 await Http.post(api, json: {'sha256': hash.hex()});
 
-final page = await Chrome.launch().open('https://example.com/report').click('#accept').waitIdle();
+final page = await Chrome.launch().open('https://example.com/report').click('#accept').idle();
 await (page.pdf() > Fs.file('report.pdf'));
 ```
 
 **Target:** scripts and small tools on macOS, Linux and Windows: scrapers, downloaders,
 release scripts, file shufflers, terminal apps. These are not servers or Flutter apps. The bar for
-the library is set by real scripts (`example/`): every workaround a script needs is a gap in the
+the library is set by real scripts (`projects/`): every workaround a script needs is a gap in the
 library.
 
 **Priorities, in order:** correct → fast (startup and throughput) → short at the call site (fewer steps, not clipped names) → small
@@ -34,7 +34,7 @@ at its call sites than it adds to the surface.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type. |
 | 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. Each library doc says `Public surface is exactly: …`.                     |
-| 3   | **Clear names over short names.** A name says what the call does, at whatever length that takes: `waitFor` not `wait`, `isSuccess` not `ok`, `hexDigest` not `hex`, and no abbreviations (`evaluate`, not `eval`). One word is right only when it can't be misread (`get`, `pack`, `text`). Brevity comes from fewer calls, steps and parameters, never from clipping a name until it reads two ways. The same idea has the same name everywhere (§3). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). Renames still pending: PROPOSAL.md §Naming. |
+| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:`, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name. |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                      |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                         |
@@ -58,9 +58,11 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   Future<String> text();                          // UTF-8, malformed bytes replaced
   Reader pipe(Pipe? pipe);       Reader operator |(Pipe? pipe);         // lazy; null = skip
   Future<void> to(Writer? w);    Future<void> operator >(Writer? w);    // run; null = discard
+  Origin origin();                                // where the bytes came from (the base for `html()`)
+  static Reader of(List<int> bytes);
 }
 abstract interface class Writer { Future<void> consume(Stream<List<int>> input); }
-abstract interface class Pipe { Stream<List<int>> transform(Stream<List<int>> input); }
+abstract mixin class Pipe { Stream<List<int>> transform(Stream<List<int>> input);  void abort(Object error) {} }
 abstract interface class Closeable { Future<void> close(); }
 ```
 
@@ -101,62 +103,62 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | content as text / bytes                | `text()` / `bytes()`                   | every `Reader`, `Element(s)`, `Page`          |
 | bytes → value                          | `html()` `json()` `image()`            | readings on `Reader`                          |
 | text → value / value → text or bytes   | `parse` / `encode`                     | `Html`, `Json`, `Command` / `Json`, `Image`   |
-| query a tree / typed read, null if not | `$` / `value<T>()`, `eval<T>()`        | `Elements`, `Element`, `Json` / `Json`, `Page` |
+| query a tree / typed read, null if not | `$` / `value<T>()`, `run<T>()`        | `Elements`, `Element`, `Json` / `Json`, `Page` |
 | an attribute / every match's attribute | `attr` / `attrs`                       | `Element(s)`                                  |
-| a tree without some parts              | `without(selector)`                    | `Element(s)`                                  |
+| a tree without some parts              | `not(selector)`                    | `Element(s)`                                  |
 | feed data / count progress             | `add(data)` / `tick(n)`                | `Hasher` / `Bar`                              |
 | release / remove from disk / make      | `close()` / `delete()` / `create()`    | `Closeable`, `Pool` / `Entry` / `Dir`, `Link` |
-| final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`          | `Response`, `Page`, `Visit`                   |
+| final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`          | `Response`, `Visit` (`Page` has `url()`)       |
 | a file name / a size in bytes          | `name()` / `size()`                    | `Entry`, `Download`, `Response`, `Visit` / `File`, `Response` |
-| run a program, a job, an app           | `run`                                  | `Shell`, `Pool`, `Tui`, `Scrape`              |
+| run a program, a job, an app, a CLI    | `run`                                  | `Shell`, `Pool`, `Tui`, `Command`             |
 | a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen` |
 | draw or store into                     | `write`                                | `File`, `Region`                              |
 | dimensions                             | `width()` `height()` / `width:` `height:` | `Image`, `Region` / `open`, `resize`, `popup` |
-| the function that does the work        | `handler`                              | `Command(handler:)`, `Scrape.run`, `follow`   |
+| the function that does the work        | `handler`                              | `Command(handler:)`, `Scrape.crawl`, `follow` |
 | a notification / a bound event         | `on…:` / `on(events)`, `keys:`         | `onResult:`, `onError:` / `Region`, `Screen`  |
 | switch the current state               | `go(state)`                            | `App`                                         |
 
-Named parameters, each with one meaning: `headers` `body` `timeout` `baseUrl` `headless`
-`executable` `profile` `proxy` `block` `width` `height` `fullPage` `workingDir` `env` `recursive`
-`json` `pretty` `limit` `delay` `retries` `cache` `browser` `onResult` `onError` `short` `or`
-`required` `parse` `values` `commands` `aliases` `handler` `secret` `label` `quality` `color`
-`background` `style` `link` `title` `status` `keys` `fullscreen` `accent` `hint` `lines` `suggest`
+Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
+`path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
+`json` `pretty` `limit` `delay` `retries` `insecure` `check` `cache` `browser` `onResult` `onError` `short` `or`
+`required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
+`background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
 `empty` `header` `follow`.
 
 ## 4. Modules
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                     | Engine                |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `without` `text` `attr` `attrs` · `Element` `$` `without` `text` `attr` `parent`               | `package:html`        |
-| `http`    | `Http.get` `head` `delete` `options` `post` `put` `patch` · `Response` `status` `ok` `header` `url`                                               | `package:http`        |
-| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (19, below) · `Download` `name`                                                       | `package:puppeteer`   |
-| `json`    | `Json.parse` `encode` · `Reader.json` · `Json` `$` `[]` `value`                                                                                   | `dart:convert`        |
+| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `attr` `attrs` · `Element` `$` `not` `text` `attr` `parent`               | `package:html`        |
+| `http`    | `Http.get` `head` `delete` `options` `post` `put` `patch` `hold` · `Response` `status` `ok` `header` `url` `size` `name`                                               | `package:http`        |
+| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name`                                                       | `package:puppeteer`   |
+| `json`    | `Json.parse` `of` `encode` · `Reader.json` · `Json` `$` `[]` `value` `or` `asList` `asMap`                                                                                   | `dart:convert`        |
 | `fs`      | `Fs.entry` `file` `dir` `link` · `Entry` `path` `name` `parent` `exists` `delete` `copy` `move` · `File` `write` `append` `size` · `Dir` `file` `dir` `list` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
-| `shell`   | `Shell.run` `filter` `open` · `Output` `exitCode` `errorText`                                                                                     | `dart:io`             |
+| `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
 | `archive` | `Archive.pack` `unpack` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `package:archive`     |
-| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` · `Hasher` `add` `hex`                                                                                        | `package:crypto`      |
-| `pool`    | `Pool.run` `map` `close`                                                                                                                          | `worker_manager`      |
-| `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Def<T>`) · `Command` `parse` · `Ctx` `call` `rest` `usage` · `UsageException`                                  | in-house              |
-| `console` | `Console.ask` `confirm` `choose` `spin` `bar` · `Bar` `tick`                                                                                      | in-house              |
-| `tui`     | `Tui.run` · `App` `state` `go` `say` `print` `notify` `copy` `quit` · `Screen` · `Bind` · `Pick` · `Field` · `Scroll` · `Region` (20, below) · `Color` · `Style` | in-house              |
-| `image`   | `Image.decode` · `Reader.image` · `Image` `width` `height` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
-| `scrape`  | `Scrape.run` · `Visit` `url` `status` `follow` `emit`                                                                                             | http + html + chrome  |
+| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` · `Hasher` `add` `addBytes` `hex`                                                                                        | `package:crypto`      |
+| `pool`    | `Pool.run` `runAll` `map` `close`                                                                                                                          | `worker_manager`      |
+| `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
+| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `clear` · `Bar` `tick` `setTotal`                                                                                      | in-house              |
+| `tui`     | `Tui.run` · `App` `state` `go` `status` `log` `notify` `copy` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below) · `Color` · `Style` | in-house              |
+| `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
+| `scrape`  | `Scrape.crawl` · `Visit` `url` `status` `ok` `size` `name` `follow` `emit`                                                                                             | http + html + chrome  |
 
 A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
-for `Elements` and `json` for the `eval<T>` coercion rules, and `scrape`, which composes `http`, `html` and `chrome`. `console` and `tui`
+for `Elements` and `json` for the `run<T>` coercion rules, and `scrape`, which composes `http`, `html` and `chrome`. `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
 ### 4.1 html
 
 ```dart
-abstract final class Html { static Elements parse(String html, {String? baseUrl}); }
+abstract final class Html { static Elements parse(String html, {String? base}); }
 extension on Reader { Future<Elements> html(); }     // base = the response's final URL or the file's URI
 final class Elements extends Iterable<Element> {
-  Elements $(String selector);  Element operator [](int i);  Elements without(String selector);
+  Elements $(String selector);  Element operator [](int i);  Elements not(String selector);
   String text();  String? attr(String name);  List<String> attrs(String name);
 }
 final class Element {
-  Elements $(String selector);  Element without(String selector);
+  Elements $(String selector);  Element not(String selector);
   String text();  String? attr(String name);  Element? parent();
 }
 ```
@@ -171,13 +173,13 @@ final class Element {
 - `text()` reads like `innerText`, so scraped text needs no `.trim()`. Runs of spaces collapse to
   one space, and a run that holds a newline becomes one newline. The result is trimmed, and
   `<pre>` keeps its whitespace.
-- `without` returns a new tree (one O(n) clone, table parts included); the receiver is
+- `not` returns a new tree (one O(n) clone, table parts included); the receiver is
   unchanged.
 - A selector the engine rejects is a `FormatException` naming it.
 
 ```dart
 final doc = await Http.get(url).html();
-final body = doc.without('script, style, nav').$('article').text();
+final body = doc.not('script, style, nav').$('article').text();
 final links = await Http.get(url).html().$('a.item').attrs('href');
 ```
 
@@ -185,26 +187,29 @@ final links = await Http.get(url).html().$('a.item').attrs('href');
 
 ```dart
 abstract final class Http {
-  static Future<Response> get(String url, {Map<String, String>? headers, Duration? timeout, int retries = 0});
-  // head, delete, options: the same; post, put, patch add {Object? body, Object? json}
+  static Future<Response> get(String url, {Map<String, String>? headers, Duration? timeout, int retries = 0, bool insecure = false, bool check = false});
+  // head, delete, options: the same; post, put, patch add {Body? body}
+  static Closeable hold();                       // keep the shared client open (a crawl)
+  static void abort();                           // cancel every in-flight request, no retries (quitting a UI)
 }
 final class Response with Reader implements Closeable {
-  int statusCode();  bool isSuccess();  String? header(String name);  String finalUrl();
-  int? contentLength();                          // content-length, null when unknown
-  String fileName();                             // content-disposition filename, else the URL's last segment
+  int status();  bool ok();  String? header(String name);  String url();
+  int? size();                                   // content-length, null when unknown
+  String name();                                 // content-disposition filename, else the URL's last segment
 }
 ```
 
 - A verb completes when the headers arrive; the body streams. A non-2xx status is still a
-  `Response`, and `isSuccess()` is `statusCode` in 200–299.
+  `Response`, and `ok()` is `status()` in 200–299. `insecure: true` accepts a bad certificate for that call only. `check: true` on any verb throws
+  `HttpException('HTTP 404 GET <url>: <snippet>')` instead and closes the body.
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
-  and 307/308 keep the method and resend an in-memory body. `finalUrl()` is the final URL.
+  and 307/308 keep the method and resend an in-memory body. `url()` is the final URL.
 - `body` is a `Body` (`Body.text`, `Body.bytes`, `Body.json`, `Body.form`, `Body.stream`).
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws `HttpException` naming the status
   and URL, so `await (Http.get(u) > Fs.file(f))` never saves an error page. The readings
   (`text()`, `json()`, `html()`) work on any status, and a `json()`/`html()` that fails on an
   error page says the status in its `FormatException`.
-- `retries` re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
+- `retries` re-sends GET/HEAD/OPTIONS/PUT/DELETE (never POST or PATCH) on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
   or the server's `Retry-After`. It applies only when the body is in memory. Scrape uses the same
   logic.
 - `timeout` (30 s) bounds the wait for the headers, then any stall in the body. A
@@ -216,24 +221,25 @@ final class Response with Reader implements Closeable {
   a piped body can't be read again (`StateError`).
 - `close()` drops an unread body. A body read or piped to the end releases the connection by
   itself. The `Future<Response>` mirrors close the response after every mirror read (closing
-  is right for one-liners like `Http.get(u).statusCode()`). To read metadata and keep the body,
+  is right for one-liners like `Http.get(u).status()`). To read metadata and keep the body,
   await the `Response` first.
 - Engine errors arrive as `SocketException`/`HttpException`/`TimeoutException`. A failed or
   timed-out upload never hangs.
 
 ```dart
 final res = await Http.post('$api/items', body: Body.json(item));
-if (!res.isSuccess()) throw StateError('create failed: ${res.statusCode()} ${await res.text()}');
+if (!res.ok()) throw StateError('create failed: ${res.status()} ${await res.text()}');
+final me = await Http.get('$api/me', check: true).json();   // a 404 throws
 final form = await Http.post('$base/ajax', body: Body.form({'action': 'decode', 'p': '$id'})).json();
 final img = await Http.get(src, retries: 2);
-await (img > Fs.dir('imgs').file(img.fileName()));       // a 404 throws instead of saving junk
+await (img > Fs.dir('imgs').file(img.name()));       // a 404 throws instead of saving junk
 ```
 
 ### 4.3 chrome
 
 ```dart
 abstract final class Chrome {
-  static Future<Browser> launch({bool headless = true, String? executable, String? profile, String? proxy});
+  static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy});
   static Future<Browser> connect(String url);
 }
 final class Browser implements Closeable {
@@ -242,23 +248,23 @@ final class Browser implements Closeable {
   Future<List<Page>> pages();
 }
 final class Page implements Closeable {
-  Future<Page> goto(String url, {Duration? timeout});                                  // wait for load
+  Future<Page> go(String url, {Duration? timeout});                                  // wait for load
   Future<Page> back({Duration? timeout});  Future<Page> reload({Duration? timeout});
   Future<String> url();  Future<Elements> html();  Future<String> text();
-  Future<T?> eval<T>(String js);  Future<String?> cookies();                            // Cookie header
+  Future<T?> run<T>(String js);  Future<String?> cookies();                            // Cookie header
   Future<Page> click(String selector, {Duration? timeout});                             // auto-wait
   Future<Page> fill(String selector, String value, {Duration? timeout});
   Future<Page> select(String selector, String value, {Duration? timeout});
   Future<Page> upload(String selector, Reader file, {Duration? timeout});
   Future<Page> press(String key);  Future<Page> scroll([String? selector, Duration? timeout]);  // scroll auto-waits too
-  Future<Page> wait(String selector, {Duration? timeout});  Future<Page> waitIdle({Duration? timeout});
+  Future<Page> wait(String selector, {Duration? timeout});  Future<Page> idle({Duration? timeout});
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
   Future<Download> download(String selector, {Duration? timeout});
 }
 final class Download with Reader { String name(); }
 ```
 
-- `launch` fetches Chromium into the user cache (once per machine) unless `executable` is given. `profile` keeps logins
+- `launch` fetches Chromium into the user cache (once per machine) unless `path` is given. `profile` keeps logins
   between runs; without it, a temp profile is deleted on `close`. `connect` attaches, and its
   `close` only disconnects.
 - Tab setup happens at `open`: `headers` (including `user-agent`), `block` by resource type
@@ -267,9 +273,9 @@ final class Download with Reader { String name(); }
 - Actions wait until the first match is attached, visible and enabled (`upload`: attached only,
   since file inputs are usually hidden). They time out (30 s) with a `TimeoutException` naming the
   selector. `fill` clears the field, types the value, and fires `input`/`change`.
-- `waitIdle` waits for 500 ms with no request in flight. Each `download` has its own folder, so
+- `idle` waits for 500 ms with no request in flight. Each `download` has its own folder, so
   concurrent downloads don't clash.
-- `eval<T>` awaits promises and reads the result with the `Json.value<T>()` rules (use
+- `run<T>` awaits promises and reads the result with the `Json.value<T>()` rules (use
   `List<Object?>`/`Map<String, Object?>` for collections). `press` takes the key names of §4.12;
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
@@ -290,18 +296,21 @@ final api = await Http.get(apiUrl, headers: {'cookie': ?await page.cookies()}).j
 final class Json extends Iterable<Json> {
   static Json parse(String json);
   static String encode(Object? value, {bool pretty = false});
-  Json $(String path);  Json operator [](int i);  T? value<T>();
+  Json $(String path);  Json operator [](int i);
+  T? value<T>();  T or<T>(T fallback);           // typed read, null / the fallback when absent or mistyped
+  List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
 extension on Reader { Future<Json> json(); }
 ```
 
 - `$('a.b.0')` walks dotted paths, and a numeric segment indexes an array. A `*` segment maps
-  over every item: `$('data.users.*.name').value<List<String>>()`. A missing path is a `Json` of
+  over every item: `$('data.users.*.name').asList<String>()`. A missing path is a `Json` of
   `null`, never a throw.
 - `value<T>()` returns `null` when the value is absent or not a `T`. Integral numbers read as both
   `int` and `double`, so `3`, `3.0`, `value<int>()` and `value<double>()` all agree.
-  `value<List<T>>()` and `value<Map<String, T>>()` check each element (for example
-  `p.$('tags').value<List<int>>()`).
+  `$('port').or(8080)` is a non-null `int`. `asList<T>()` and `asMap<T>()` check each element
+  and give `[]` / `{}` when missing or mistyped (`p.$('tags').asList<int>()`); `value<List<T>>()`
+  asserts and points to them.
 - A `Json` iterates an array's items or an object's values. Lazy wrapping keeps `[i]` and
   iteration O(1) per item.
 - `encode` accepts what `dart:convert` accepts (string keys) and throws what it throws.
@@ -320,7 +329,7 @@ sealed class Entry {
   Future<Entry> copy(String to);  Future<Entry> move(String to);   // subtypes narrow the return type
 }
 final class File extends Entry with Reader implements Writer {
-  Future<File> write(Object data);  Future<File> append(Object data);  Future<int> size();
+  Future<File> write(String text);  Future<File> append(String text);  Future<int> size();
 }
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
@@ -352,11 +361,11 @@ final class Link extends Entry {
 
 ```dart
 abstract final class Shell {
-  static Future<Output> run(List<String> command, {String? workingDir, Map<String, String>? env});
-  static Pipe filter(List<String> command, {String? workingDir, Map<String, String>? env});
+  static Future<Output> run(List<String> command, {String? dir, Map<String, String>? env});
+  static Pipe filter(List<String> command, {String? dir, Map<String, String>? env});
   static Future<void> open(String target);    // URL or path, in the default app
 }
-final class Output with Reader { int exitCode();  String errorText(); }   // Reader = stdout
+final class Output with Reader { int code();  bool ok();  String err(); }   // Reader = stdout
 ```
 
 - `command[0]` is the program, looked up on `PATH`, and there is no shell, so arguments are safe.
@@ -393,8 +402,7 @@ abstract final class Archive {
   format.
 - `gunzip` checks the gzip trailer. Truncated or corrupt data fails the run with a
   `FormatException`.
-- pack/unpack hold the archive in memory. Streaming members is an engine swap, not an API
-  change.
+- `zip` is held in memory (its directory is at the end); tar and tgz stream member by member.
 
 ```dart
 await (Http.get(releaseUrl) > Archive.unpack('vendor'));
@@ -405,7 +413,7 @@ await Http.put(uploadUrl, body: Archive.pack('site', .zip));
 
 ```dart
 abstract final class Hash { static Hasher md5(); static Hasher sha1(); static Hasher sha256(); static Hasher sha512(); }
-final class Hasher implements Writer, Pipe { Hasher add(Object data);  String hex(); }
+final class Hasher implements Writer, Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex(); }
 ```
 
 - One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a
@@ -417,16 +425,19 @@ final class Hasher implements Writer, Pipe { Hasher add(Object data);  String he
 
 ```dart
 abstract final class Pool {
-  static Future<R> run<R>(FutureOr<R> Function() job);
+  static Future<R> run<R>(FutureOr<R> Function() job);                        // on a worker
+  static Future<List<R>> runAll<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
+      {int? limit, void Function(R result)? onResult});                       // on the workers
   static Future<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, void Function(R result)? onResult});
+      {int? limit, void Function(R result)? onResult});                       // on this isolate, for I/O
   static Future<void> close();
 }
 ```
 
 - One process-wide pool starts lazily, with `max(1, cores − 1)` workers that are reused. A job is
   a top-level or static function, or a closure that captures only sendable values.
-- `map` returns results in input order. `limit` defaults to the worker count. `onResult` runs on
+- `runAll` and `map` return results in input order; `runAll` runs the jobs on the workers (CPU-bound,
+  sendable), `map` on this isolate, so a job may capture a client or a bar and I/O fans out. `limit` defaults to the worker count. `onResult` runs on
   the caller's isolate (progress goes there). The first error stops new jobs and is rethrown.
 - **Idle workers never keep the script alive;** the pool shuts itself down when no job is left.
   `close()` stops the workers now, and jobs still in flight fail with `StateError`.
@@ -440,17 +451,17 @@ await bar.close();
 ### 4.10 cli
 
 ```dart
-sealed class Def<T> {}                                     // read back with ctx(def) as a T
-final class Flag extends Def<bool> { Flag(String name, String help, {String? short, bool or = false}); }
-final class Opt<T> extends Def<T> { Opt(String name, String help, {String? short, T? or, bool required = false, T Function(String)? parse}); }
-final class Multi<T> extends Def<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse}); }
-final class Arg<T> extends Def<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse}); }
+sealed class Param<T> {}                                   // read back with context(param) as a T
+final class Flag extends Param<bool> { Flag(String name, String help, {String? short, bool or = false}); }
+final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, T Function(String)? parse}); }
+final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse}); }
+final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse}); }
 final class Command {
-  Command(String name, String help, {List<Def<Object?>> values = const [], List<Command> commands = const [],
-      FutureOr<void> Function(Ctx ctx)? handler, List<String> aliases = const []});
-  Future<int> parse(List<String> argv);                   // 0 ok/help, 64 usage, 1 failure
+  Command(String name, String help, {List<Param<Object?>> params = const [], List<Command> commands = const [],
+      FutureOr<void> Function(Context context)? handler, List<String> aliases = const []});
+  Future<int> run(List<String> argv);                     // 0 ok/help, 64 usage, 1 failure
 }
-final class Ctx { T call<T>(Def<T> def);  List<String> rest();  String usage(); }
+final class Context { T call<T>(Param<T> param);  List<String> rest();  String usage(); }
 final class UsageException implements Exception { const UsageException(String message); }
 ```
 
@@ -458,8 +469,7 @@ final class UsageException implements Exception { const UsageException(String me
   `Opt<String?>('out', …)` reads as `String?`. A non-nullable `T` without `or` or `required` is an
   `ArgumentError`. Built-in `T`s are `String`, `int`, `double`, `num`, `Duration`, `DateTime` and
   `Uri`; anything else needs `parse:`. Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`.
-  The positionals left after the `Arg`s are `ctx.rest()`, so `Arg(many:)` is gone and there is
-  one way to read them.
+  The positionals left after the `Arg`s are `context.rest()`.
 - **Syntax:**
   - `--x v`, `--x=v`, `-x v`, `-xv`, grouped `-vq`, and `--no-x` for a flag whose `or` is `true`.
   - `--` ends the options. `-5` stays positional when no short answers to it.
@@ -482,39 +492,44 @@ final class UsageException implements Exception { const UsageException(String me
 final verbose = Flag('verbose', 'Print every request.', short: 'v');
 final out = Opt<String>('out', 'Output folder.', short: 'o', or: 'out');
 final url = Arg<String>('url', 'URL to fetch.', required: true);
-exitCode = await Command('fetch', 'Fetch pages.', values: [verbose, out], commands: [
-  Command('get', 'Fetch one URL.', values: [url], handler: (ctx) => fetch(ctx(url), ctx(out), ctx(verbose))),
-]).parse(argv);
+exitCode = await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
+  Command('get', 'Fetch one URL.', params: [url], handler: (c) => fetch(c(url), c(out), c(verbose))),
+]).run(argv);
 ```
 
 ### 4.11 console
 
 ```dart
 abstract final class Console {
-  static Future<String> ask(String question, {bool secret = false});
-  static Future<bool> confirm(String question);
-  static Future<T> choose<T>(String question, List<T> items, {required String Function(T) label, T? initial, Map<String, T>? keys});
-  static Future<String> readKey({String? prompt});
-  static Future<T> withSpinner<T>(String label, Future<T> Function() work);
-  static ProgressBar progressBar(int? total, {String? label}); // null = unknown
-  static void clearScreen();
+  static Color? accent;  // null (default) = no colour; e.g. Color.orange for live lines and the choose row
+  static Future<String?> ask(String question, {bool secret = false, String? or});
+  static Future<bool> confirm(String question, {bool or = false});
+  static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
+  static Future<String> key({String? prompt});
+  static Future<T> spin<T>(String label, Future<T> work);
+  static Bar bar(int? total, {String? label});   // null = unknown
+  static void log(String line);                    // prints above a live spinner or bar
+  static void clear();
 }
-final class ProgressBar implements Pipe, Closeable { ProgressBar tick([int count = 1]); }
+final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar setTotal(int? total); }
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
   prompt restores the terminal and exits with 130.
-- `confirm` takes y/yes/n/no, and Enter means no. On a terminal, `choose` uses the arrow keys,
+- **A closed stdin is not an error.** `ask` and `choose` give their `or` (null without one),
+  `confirm` gives its `or` (false by default); the same goes for Escape in a Tui popup. An empty
+  line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.
+- `confirm` takes y/yes/n/no, and Enter gives `or`. On a terminal, `choose` uses the arrow keys,
   scrolling when the choices outnumber the rows. Piped, it reads a number.
-- **The live line** (one `withSpinner` or `progressBar` at a time; a second is a `StateError` before anything is
+- **The live line** (one `spin` or `bar` at a time; a second is a `StateError` before anything is
   drawn):
   - It always fits the terminal width, which is re-read on resize. The label is cut with `…`, the
     bar shrinks, and every redraw clears to the end of the line.
   - It redraws at most every 80 ms.
-- **A progressBar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
+- **A bar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
   `tick()`, it counts items (`12/40  3.1/s`). A `null` total shows a count and a rate, with no
-  bar, so `Console.progressBar(res.contentLength())` just works. The bar renders as a clean line track (`━━╸──`),
+  bar, so `Console.bar(res.size())` just works. The bar renders as a clean line track (`━━╸──`),
   matching the `tui` aesthetic. `close()` prints the final line.
 - A bar takes the live line on first use and gives it back when it closes, or when its pipeline
   fails at any point.
@@ -526,42 +541,41 @@ final class ProgressBar implements Pipe, Closeable { ProgressBar tick([int count
 ```dart
 abstract final class Tui {
   static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen,
-      {bool fullscreen = true, Color accent = Color.orange});
+      {Color? accent});   // null = monochrome (bold/dim/reverse only); an accent adds colour
 }
 final class App<S> {
-  S state();  void goTo(S state);  void showStatus(String message);
-  void printAbove(void Function(Region r) draw);   // inline: commit above the live area, into scrollback
+  S state();  void go(S state);  void status(String message);
   void notify(String message);                     // OSC 9/777, bell fallback; no-op while focused
-  void copyToClipboard(String text);               // OSC 52
+  void copy(String text);               // OSC 52
   void quit();                                     // run() returns state()
 }
 final class Screen {
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}});
 }
 typedef Binding = (String label, FutureOr<void> Function() action);
-final class Selection<T> {                       // a list's items and selection; O(1) amortised append
-  Selection([List<T> items = const []]);
-  List<T> items();  int index();  T? selected();  Selection<T> setItems(List<T> items);  Selection<T> select(int index);
-  Selection<T> add(T item);  Selection<T> addAll(Iterable<T> items);  Selection<T> remove(T item);  Selection<T> removeWhere(bool Function(T item) test);
+final class Pick<T> {                       // a list's items and selection; O(1) amortised append
+  Pick([List<T> items = const []]);
+  List<T> items();  int index();  T? selected();  Pick<T> set(List<T> items);  Pick<T> select(int index);
+  Pick<T> add(T item);  Pick<T> addAll(Iterable<T> items);  Pick<T> remove(T item);  Pick<T> removeWhere(bool Function(T item) test);
 }
-final class TextField {                          // an editor's text, cursor and history
-  TextField({String text = '', List<String> history = const []});
-  String text();  List<String> history();  TextField setText(String text);  String submit();
+final class Field {                          // an editor's text, cursor and history
+  Field({String text = '', List<String> history = const []});
+  String text();  List<String> history();  Field set(String text);  String submit();
 }
-final class ScrollPosition { ScrollPosition({bool follow = true}); }
+final class Scroll { Scroll({bool follow = true}); }
 final class Region {
   int width();  int height();  bool hovered();  bool focused();
   Region write(String text, {Color? color, Color? background, Set<Style> style = const {}, String? link});
   Region markdown(String source);  Region diff(String before, String after);
-  Region box(String title);  List<Region> splitRows(List<int> sizes);  List<Region> splitColumns(List<int> sizes);
-  Region tabs<T>(Selection<T> tabs, String Function(T tab) label);  Region scroll(ScrollPosition scroll);
+  Region box([String title = '']);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
+  Region tabs<T>(Pick<T> tabs, String Function(T tab) label);  Region scroll(Scroll scroll);
   Region popup(String title, {int width = 40, int height = 10});
-  Region bind(Map<String, Binding> events);
-  Region list<T>(Selection<T> selection, String Function(T item) label, {String empty = ''});
-  Region table<T>(Selection<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
-  Region input(TextField field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
+  Region on(Map<String, Binding> events);
+  Region list<T>(Pick<T> selection, String Function(T item) label, {String empty = ''});
+  Region table<T>(Pick<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = ''});
+  Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
-  Region progressBar(int done, int? total, {String? label});  Region spin(String label);
+  Region bar(int done, int? total, {String? label});  Region spin(String label, {DateTime? since});
 }
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
   const factory Color.index(int index);  const factory Color.rgb(int r, int g, int b);
@@ -571,24 +585,22 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 
 `image` adds `Region.picture(Image)` (half-block cells), so `tui` doesn't load the codecs.
 
-- **Unified Aesthetic.** `Console` and `Tui` share one uncustomizable, elegant design language:
-  - **Borders:** `Region.box` uses smooth rounded corners `╭ ╮ ╰ ╯` (`\u256D \u256E \u2570 \u256F`). Focused cards have `accent` borders with a `●` focus dot in the title; unfocused cards use `dim` Slate Gray.
-  - **Selection:** `Region.list` and `table` match `Console.choose`: selected rows start with `❯ ` in `accent` muted orange (xterm 173, `\x1b[38;5;173m`) rather than full-width reverse video.
-  - **Bars & Spinners:** Progress bars in `Console.progressBar` and `Region.progressBar` are drawn with sleek lines (`━━╸──`: heavy line `━` for filled track in orange, `╸` for the leading edge, and thin line `─` for the remaining track in dim gray), never blocky bars or solid blocks. Spinners use Braille `⠋..⠏` and finish with `✓` / `✗`.
-  - **Status Line:** Key help uses badges `[key] action` in orange and dim gray.
+- **One look for `Console` and `Tui`**, not customizable:
+  - `Region.box` draws `┌ ┐ └ ┘` lines with the title after the top edge. `Console.choose` marks the
+    row with `❯`; `Region.list`/`table` show the selection in reverse video (accent colour if set, else bold; dim
+    when not focused).
+  - Bars (`Console.bar`, `Region.bar`) are `━━╸──`; spinners are Braille `⠋…⠏` and end with
+    `✓` / `✗`. The status row's key help reads `key action · key action`.
 - **State-driven.** The state is the app's own value, usually a sealed class with one subclass per
   view, so `screen` is an exhaustive `switch`. `screen` runs on every redraw, only describes the
-  screen and never blocks. Widget state lives in `Selection`/`TextField`/`ScrollPosition` objects held by the
-  state, so `app.goTo(previous)` brings back the query, selection, scroll and focus.
+  screen and never blocks. Widget state lives in `Pick`/`Field`/`Scroll` objects held by the
+  state, so `app.go(previous)` brings back the query, selection, scroll and focus.
 - **Redraws are event-driven**, coalesced to 60 fps, writing only changed cells: after each input
-  event, on `go`/`say`/`print`, on resize, and whenever work started by a handler (timer, future,
+  event, on `go`/`status`, on resize, and whenever work started by a handler (timer, future,
   stream event) delivers, since handlers run in a zone. Spinners animate at 80 ms while visible.
   An idle app uses no CPU.
-- **Modes.** `fullscreen: true` uses the alternate screen and captures the mouse. `false` is
-  inline: the live area sits below the prompt, as tall as what is drawn (a `0` row takes its
-  content's height), and `print` commits rendered output into the terminal's scrollback. In full
-  screen, `print` throws `StateError`.
-- **One `Bind` map for every event**, in `Screen(keys:)` and `Region.on`: key names (below, plus
+- **Alternate screen only.** `Tui` owns the whole terminal and captures the mouse; for scrollback output use `Console`.
+- **One `Binding` map for every event**, in `Screen(keys:)` and `Region.on`: key names (below, plus
   `shift+enter`/`ctrl+enter` where the terminal reports them), `click` `doubleclick` `rightclick`
   `middleclick` `wheelup` `wheeldown`, and `show` `resize` `focus` `blur`. A name may list
   alternatives (`'b escape'`). Hover is a reading: `if (r.hovered()) …`. `keys:` is rebuilt with
@@ -617,12 +629,12 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   pending. An `Exception` from a handler, or from work it started, shows as `✗ <first line>` in
   the status row and the app keeps running. An `Error` ends `run` and is rethrown.
 - **Rows.** `title` is the top row, in the accent. The bottom status row shows, on the left, the
-  error, the `say` message, running spinners and bars, or else `status`; on the right, the key
+  error, the `app.status` message, running spinners and bars, or else the screen's `status`; on the right, the key
   help from `keys:` (`enter send · esc interrupt`), with empty labels and mouse/lifecycle bindings
   hidden. A narrow row cuts the help first.
 - **Console inside the Tui.** While `run` is active, `Console.spin`/`bar` draw in the status row
-  (several at once), and `Console.ask`/`confirm`/`choose` open a modal popup, where `escape` is EOF
-  (`StdinException`; a handler that ends with it shows nothing).
+  (several at once), `Console.log` goes to the status row, and
+  `Console.ask`/`confirm`/`choose` open a modal popup, where `escape` answers like a closed stdin.
 - **Drawing.**
   - `write` wraps at the edge, `\n` breaks, `\t` expands, controls show as `�`, and text past the
     last row ends with `…`. Widths follow grapheme clusters: CJK and emoji take 2 cells, combining
@@ -648,7 +660,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   - `run` enters raw mode (and in full screen the alternate screen and mouse reporting), turns
     autowrap, bracketed paste and focus reports on and off, and restores the terminal when the
     app quits or throws, on Ctrl-C, on SIGTERM/SIGHUP, and on an uncaught error in work the app
-    started (rethrown from `run`). Ctrl-Z suspends and resumes with a full repaint.
+    started (rethrown from `run`). On macOS and Linux, Ctrl-Z suspends and resumes with a full repaint; on Windows only Ctrl-C ends the app.
   - A resize repaints every cell. Frames use synchronized output, so nothing tears. Shift-drag
     still selects text natively while the mouse is captured.
   - `run` can be called again, and prompts work before and after it; a second `run` while one
@@ -660,21 +672,21 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 ```dart
 typedef Hit = ({String title, String url});
 sealed class Page {}
-final class Search extends Page { final query = TextField(); final hits = Selection<Hit>(); }
-final class Series extends Page { Series(this.back, this.hit); final Search back; final Hit hit; final chapters = Selection<String>(); }
+final class Search extends Page { final query = Field(); final hits = Pick<Hit>(); }
+final class Series extends Page { Series(this.back, this.hit); final Search back; final Hit hit; final chapters = Pick<String>(); }
 
 await Tui.run<Page>(Search(), (page, app) => switch (page) {
   Search s => Screen(title: 'search', (r) {
-      final [body, foot] = r.splitRows([0, 3]);
+      final [body, foot] = r.rows([0, 3]);
       body.list(s.hits, (h) => h.title, empty: 'type a title, press enter');
       foot.box('query').input(s.query);
     }, keys: {
-      'enter': ('search', () async => s.hits.setItems(await Console.withSpinner('searching', () => search(s.query.text())))),
-      'ctrl+o': ('open', () => app.goTo(Series(s, s.hits.selected()!))),
+      'enter': ('search', () async => s.hits.set(await Console.spin('searching', search(s.query.text())))),
+      'ctrl+o': ('open', () => app.go(Series(s, s.hits.selected()!))),
       'escape': ('quit', app.quit),
     }),
   Series c => Screen(title: c.hit.title, (r) => r.list(c.chapters, (t) => t), keys: {
-      'b escape': ('back', () => app.goTo(c.back)),
+      'b escape': ('back', () => app.go(c.back)),
     }),
 });
 ```
@@ -685,6 +697,7 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico }
 final class Image {
   static Image decode(List<int> bytes);
+  static String? sniff(List<int> bytes);          // "jpg" "png" "gif" "webp" "bmp" "tiff" "ico" or null, header only
   int width();  int height();
   Image resize({int? width, int? height});  Image crop(int x, int y, int width, int height);
   Reader encode(ImageFormat format, {int quality = 90});
@@ -704,21 +717,21 @@ extension on Reader { Future<Image> image(); }
 ```dart
 abstract final class Scrape {
   static Stream<T> crawl<T>(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler, {
-    int concurrency = 4, Duration? perHostDelay, int retries = 2, String? cacheDir,
+    int limit = 4, Duration? delay, int retries = 2, String? cache,
     Map<String, String>? headers, Duration? timeout, Browser? browser,
     void Function(String url, Object error)? onError});
 }
 final class Visit<T> with Reader {
-  String finalUrl();  int statusCode();  String fileName();   // fileName() via shared origin()
+  String url();  int status();  bool ok();  int size();  String name();   // name() via shared origin()
   Visit<T> follow(Iterable<String> urls, Future<void> Function(Visit<T> visit) handler);
   Visit<T> emit(T item);
 }
 ```
 
-- This module is the crawl around `Http.get(u).html()`: a deduplicated queue, `concurrency` in flight,
-  a per-host `perHostDelay`, and `retries`. Retries cover network errors, timeouts, 5xx and 429, with
+- This module is the crawl around `Http.get(u).html()`: a deduplicated queue, `limit` in flight,
+  a per-host `delay`, and `retries`. Retries cover network errors, timeouts, 5xx and 429, with
   backoff or `Retry-After`.
-- `cacheDir` is a folder of bodies by URL, so a rerun is offline.
+- `cache` is a folder of bodies by URL, so a rerun is offline.
 - Routing is by function: `follow(urls, handler)`. URLs are made absolute and their fragments
   dropped, non-http(s) links (`mailto:`, `javascript:`…) are skipped, and each URL is visited once.
 - `crawl` returns a stream of the emitted records. It completes when the queue is drained.
@@ -730,13 +743,13 @@ final class Visit<T> with Reader {
 - With `browser`, visits are tabs, `html()` is the rendered DOM, and the handlers are unchanged.
 
 ```dart
-final albums = await Scrape.crawl<Album>([listUrl], listing, perHostDelay: Duration(milliseconds: 250), cacheDir: '.cache').toList();
+final albums = await Scrape.crawl<Album>([listUrl], listing, delay: Duration(milliseconds: 250), cache: '.cache').toList();
 Future<void> listing(Visit<Album> v) async {
   final doc = await v.html();
   v.follow(doc.$('a.album').attrs('href'), album).follow(doc.$('a.next').attrs('href'), listing);
 }
 Future<void> album(Visit<Album> v) async =>
-    v.emit((title: (await v.html()).$('h1').text(), url: v.finalUrl()));
+    v.emit((title: (await v.html()).$('h1').text(), url: v.url()));
 ```
 
 ## 5. Errors
@@ -745,7 +758,7 @@ Future<void> album(Visit<Album> v) async =>
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `IOException`s (`SocketException`, `HttpException`, `TlsException`, `FileSystemException`) | the network or the disk failed; an HTTP status never throws |
 | `ProcessException`                             | a program can't start, or a `Shell.filter` exits non-zero                                |
-| `StdinException`, `StdoutException`            | stdin closed; no terminal for the TUI                                                    |
+| `StdinException`, `StdoutException`            | `Console.key` on a closed stdin; no terminal for the TUI                                 |
 | `TimeoutException`                             | a response, a stalled body or a browser wait ran out (names the URL or selector)         |
 | `FormatException`                              | invalid content: JSON, gzip, an archive or a member, an image, a selector                |
 | `ArgumentError`, `RangeError`, `StateError`    | the caller's mistake: wrong data type, bad size, index, non-sendable job, double read    |
@@ -768,12 +781,10 @@ surfaces from its `>`/`to`, after cleanup. An error in a chain surfaces at its s
   real `sh`/`grep`.
 - Every fixed bug keeps a regression test.
 
-## 7. Not in v2
+## 7. Not included
 
 Native code and codegen; test seams in the public API; sync twins and aliases; fan-out to several
 writers; download resume; file watching and globbing; browser interception beyond `block`, frames
 and `hover`; colours outside the TUI; a TUI widget tree (widget state lives in
 `Pick`/`Field`/`Scroll`); terminal images beyond half-blocks (Sixel, kitty), `ctrl+r` history search
 and vim mode in `input`; HMAC; torrents. Each comes back only when a real script needs it.
-
-Known bugs and the work left against this document are in `REPORT.md`.

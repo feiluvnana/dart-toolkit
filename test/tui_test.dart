@@ -212,9 +212,9 @@ void main() {
     });
   });
 
-  group('Selection', () {
+  group('Pick', () {
     test('select clamps, set keeps the item if still there', () {
-      final p = Selection<String>(['a', 'b', 'c']);
+      final p = Pick<String>(['a', 'b', 'c']);
       expect(p.selected(), 'a');
       p.select(5);
       expect(p.index(), 2);
@@ -222,16 +222,16 @@ void main() {
       p.select(-4);
       expect(p.selected(), 'a');
       p.select(1);
-      p.setItems(['x', 'b', 'y']);
+      p.set(['x', 'b', 'y']);
       expect(p.selected(), 'b');
       expect(p.index(), 1);
-      p.setItems(['z']);
+      p.set(['z']);
       expect(p.selected(), 'z');
       expect(p.index(), 0);
     });
 
     test('empty has null selection', () {
-      final p = Selection<int>();
+      final p = Pick<int>();
       expect(p.selected(), isNull);
       expect(p.index(), 0);
       p.select(3);
@@ -239,7 +239,7 @@ void main() {
     });
 
     test('add, addAll, remove, removeWhere mutate and preserve selection', () {
-      final p = Selection<String>(['a', 'b']);
+      final p = Pick<String>(['a', 'b']);
       p.add('c');
       expect(p.items(), ['a', 'b', 'c']);
       p.addAll(['d', 'e']);
@@ -255,8 +255,8 @@ void main() {
       expect(p.index(), 0);
     });
 
-    test('Selection append is O(1) amortised with unmodifiable view', () {
-      final p = Selection<int>();
+    test('Pick append is O(1) amortised with unmodifiable view', () {
+      final p = Pick<int>();
       for (var i = 0; i < 20000; i++) {
         p.add(i);
       }
@@ -266,18 +266,18 @@ void main() {
     });
   });
 
-  group('TextField', () {
+  group('Field', () {
     test('set moves the cursor to the end, submit pushes history', () {
-      final f = TextField();
+      final f = Field();
       expect(f.text(), '');
-      f.setText('hi');
+      f.set('hi');
       expect(f.text(), 'hi');
       expect(f.submit(), 'hi');
       expect(f.text(), '');
       expect(f.history(), ['hi']);
-      f.setText('a');
+      f.set('a');
       f.submit();
-      f.setText('b');
+      f.set('b');
       f.submit();
       expect(f.history(), ['b', 'a', 'hi']);
     });
@@ -309,15 +309,29 @@ void main() {
   });
 
   group('keys and widgets (in-memory)', () {
+    test('keys pressed before the next redraw see the state go set', () async {
+      final t = testSession<int>(
+        0,
+        (n, app) => Screen((r) => r.write('$n'), keys: {'enter': ('add', () => app.go(n + 1))}),
+        width: 20,
+        height: 5,
+      );
+      await t.pump();
+      t.bytes(const [0x0d, 0x0d, 0x0d, 0x0d]);
+      await t.pump();
+      expect(t.state, 4);
+      t.close();
+    });
+
     test('list navigates, enter opens, help shows labels', () async {
-      final hits = Selection<String>(['alpha', 'beta', 'gamma']);
+      final hits = Pick<String>(['alpha', 'beta', 'gamma']);
       var opened = 0;
       var quit = false;
       late final TestSession<int> t;
       t = testSession<int>(
         0,
         (s, app) => Screen(title: 'demo', (r) {
-          final [body, foot] = r.splitRows([0, 3]);
+          final [body, foot] = r.rows([0, 3]);
           body.list(hits, (h) => h, empty: 'none');
           foot.box('search');
         }, keys: {'enter': ('open', () async => opened++), 'escape': ('quit', () => app.quit()), 'x': ('', () {})}),
@@ -347,8 +361,8 @@ void main() {
     });
 
     test('focus survives go via recency', () async {
-      final a = TextField();
-      final b = Selection<String>(['one', 'two']);
+      final a = Field();
+      final b = Pick<String>(['one', 'two']);
       var back = false;
       final s1 = testSession<String>(
         'a',
@@ -356,7 +370,7 @@ void main() {
           if (s == 'a') {
             return Screen((r) {
               r.input(a, hint: 'type');
-            }, keys: {'enter': ('next', () => app.goTo('b'))});
+            }, keys: {'enter': ('next', () => app.go('b'))});
           }
           return Screen(
             (r) {
@@ -367,7 +381,7 @@ void main() {
                 'back',
                 () {
                   back = true;
-                  app.goTo('a');
+                  app.go('a');
                 },
               ),
             },
@@ -400,7 +414,7 @@ void main() {
     });
 
     test('input editing: words, history, submit', () async {
-      final f = TextField(history: const ['old']);
+      final f = Field(history: const ['old']);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
@@ -498,17 +512,48 @@ void main() {
       expect(await t.pump(), isFalse);
     });
 
+    test('no accent by default: list, tabs, diff and markdown emit no colour codes', () async {
+      final tabs = Pick<String>(['one', 'two']);
+      final rows = Pick<String>(['a', 'b']);
+      Future<String> out({Color? accent}) async {
+        final t = testSession<int>(
+          0,
+          (s, app) => Screen(title: 't', (r) {
+            final [top, mid, low] = r.tabs(tabs, (x) => x).rows([3, 0, 0]);
+            top.list(rows, (x) => x);
+            mid.diff('one\ntwo words\nx', 'one\ntwo birds\ny');
+            low.markdown('# h\n```dart\nfinal a = "s"; // c\n```');
+          }),
+          width: 40,
+          height: 20,
+          accent: accent,
+        );
+        await t.pump();
+        final o = t.output;
+        t.close();
+        return o;
+      }
+
+      bool colour(String o) => RegExp('\x1b\\[([0-9;]*)m').allMatches(o).any((m) => m
+          .group(1)!
+          .split(';')
+          .map((p) => int.tryParse(p) ?? 0)
+          .any((n) => (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n == 38 || n == 48));
+      expect(colour(await out()), isFalse);
+      expect(colour(await out(accent: Color.orange)), isTrue);
+    });
+
     test('table, tabs, bar, spin, box layout smoke', () async {
-      final tabs = Selection<String>(['one', 'two']);
+      final tabs = Pick<String>(['one', 'two']);
       tabs.select(1);
-      final rows = Selection<int>([1, 2, 3]);
+      final rows = Pick<int>([1, 2, 3]);
       final t = testSession<int>(
         0,
         (s, app) => Screen(title: 't', (r) {
           final top = r.tabs(tabs, (x) => x);
-          final [a, b] = top.splitRows([0, 2]);
+          final [a, b] = top.rows([0, 2]);
           a.table(rows, (v) => ['n$v', 'v$v'], header: ['#', 'v']);
-          b.progressBar(3, 10, label: 'up');
+          b.bar(3, 10, label: 'up');
           r.spin('work');
         }),
         width: 30,
@@ -545,13 +590,13 @@ void main() {
         height: 4,
       );
       await t.pump();
-      app.showStatus('hello there');
+      app.status('hello there');
       await t.pump();
       expect(t.row(3), contains('hello there'));
     });
 
     test('click focuses and selects; hover restyles', () async {
-      final p = Selection<String>(['a', 'b', 'c']);
+      final p = Pick<String>(['a', 'b', 'c']);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
@@ -570,15 +615,15 @@ void main() {
 
   group('routing (in-memory)', () {
     test('order: popup > focused > tab > keys > other widget > ctrl+c', () async {
-      final f = TextField();
-      final p = Selection<String>(['a', 'b', 'c']);
+      final f = Field();
+      final p = Pick<String>(['a', 'b', 'c']);
       final log = <String>[];
       var tabBound = false;
       final t = testSession<int>(
         0,
         (s, app) => Screen(
           (r) {
-            final [top, bottom] = r.splitRows([3, 0]);
+            final [top, bottom] = r.rows([3, 0]);
             top.input(f);
             bottom.list(p, (x) => x);
           },
@@ -628,12 +673,12 @@ void main() {
     });
 
     test('5: an unbound up/down reaches the only list while typing', () async {
-      final f = TextField();
-      final p = Selection<String>(['a', 'b']);
+      final f = Field();
+      final p = Pick<String>(['a', 'b']);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [a, b] = r.splitRows([0, 1]);
+          final [a, b] = r.rows([0, 1]);
           a.list(p, (x) => x);
           b.input(f);
         }),
@@ -655,7 +700,7 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          r.bind({'k': ('hit', () => hit++)}).write('zone');
+          r.on({'k': ('hit', () => hit++)}).write('zone');
         }, keys: {'b escape': ('back', () => back++)}),
         width: 20,
         height: 4,
@@ -686,7 +731,7 @@ void main() {
       );
       await t.pump();
       expect(shown, ['a']);
-      app.goTo('b');
+      app.go('b');
       await t.pump();
       await t.pump();
       expect(shown, ['a', 'b']);
@@ -735,11 +780,11 @@ void main() {
       );
       await t.pump();
       expect(t.row(2), endsWith('a alpha · b bravo'));
-      app.showStatus('downloading things');
+      app.status('downloading things');
       await t.pump();
       expect(t.row(2), startsWith('downloading things'));
       expect(t.row(2), isNot(contains('alpha')));
-      app.showStatus('a much longer message than the row');
+      app.status('a much longer message than the row');
       await t.pump();
       expect(t.row(2), 'a much longer message t…');
       t.close();
@@ -773,7 +818,7 @@ void main() {
       await t.pump();
       expect(t.row(2), contains('✗ FormatException: bad'));
       expect(t.quitRequested, isFalse);
-      app.showStatus('hi');
+      app.status('hi');
       await t.pump();
       t.close();
     });
@@ -782,17 +827,17 @@ void main() {
   group('Console inside run (in-memory)', () {
     test('spin and bar draw in the status row, several at once', () async {
       final done = Completer<void>();
-      ProgressBar? bar;
+      Bar? bar;
       final t = testSession<int>(
         0,
         (s, app) => Screen(
           (r) {},
           keys: {
-            'a': ('', () => Console.withSpinner('searching', () => done.future)),
+            'a': ('', () => Console.spin('searching', done.future)),
             'b': (
               '',
               () {
-                bar = Console.progressBar(4, label: '↓ ch.1')..tick();
+                bar = Console.bar(4, label: '↓ ch.1')..tick();
               },
             ),
           },
@@ -822,9 +867,7 @@ void main() {
           keys: {
             'a': (
               '',
-              () => Console.withSpinner('loading', () async {
-                throw Exception('down');
-              }),
+              () => Console.spin('loading', Future<void>.error(Exception('down'))),
             ),
           },
         ),
@@ -873,8 +916,22 @@ void main() {
       t.close();
     });
 
-    test('ask and choose; escape is EOF and shows nothing', () async {
-      String? name, pick;
+    test('Console.log shows on the status row in full screen', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {}, keys: {'l': ('', () => Console.log('hello there'))}),
+        width: 50,
+        height: 10,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('l'));
+      await t.pump();
+      expect(t.row(9), contains('hello there'));
+      t.close();
+    });
+
+    test('ask and choose; escape gives null and shows nothing', () async {
+      String? name, pick, cancelled = 'x';
       var reached = false;
       final t = testSession<int>(
         0,
@@ -890,13 +947,13 @@ void main() {
             'c': (
               '',
               () async {
-                pick = await Console.choose('which?', ['one', 'two'], label: (s) => '$s');
+                pick = await Console.choose('which?', ['one', 'two']);
               },
             ),
             'e': (
               '',
               () async {
-                await Console.ask('cancel me');
+                cancelled = await Console.ask('cancel me');
                 reached = true;
               },
             ),
@@ -920,7 +977,8 @@ void main() {
       await t.pump();
       t.bytes(utf8.encode('\x1b\x1b'));
       await t.pump();
-      expect(reached, isFalse);
+      expect(reached, isTrue);
+      expect(cancelled, isNull);
       expect(t.row(9), isNot(contains('✗')));
       expect(t.quitRequested, isFalse);
       t.close();
@@ -929,12 +987,12 @@ void main() {
 
   group('tabs clicks', () {
     test('a click inside a column and a scroll region picks the tab under it', () async {
-      final tabs = Selection<String>(['aaa', 'bbb', 'ccc']);
+      final tabs = Pick<String>(['aaa', 'bbb', 'ccc']);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [_, b] = r.splitColumns([5, 0]);
-          b.scroll(ScrollPosition()).tabs(tabs, (x) => x);
+          final [_, b] = r.cols([5, 0]);
+          b.scroll(Scroll()).tabs(tabs, (x) => x);
         }),
         width: 30,
         height: 6,
@@ -996,13 +1054,13 @@ void main() {
   });
 
   group('bind regions', () {
-    test('a Region.bind region keeps focus across frames', () async {
-      final f = TextField();
+    test('a Region.on region keeps focus across frames', () async {
+      final f = Field();
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
           r.input(f);
-          r.bind({'x': ('', () {})}).write('zone');
+          r.on({'x': ('', () {})}).write('zone');
         }),
       );
       await t.pump();
@@ -1049,7 +1107,7 @@ void main() {
           'c': (
             '',
             () async {
-              picks.add(await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i'], label: (s) => s));
+              picks.add((await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i']))!);
             },
           ),
         }),
@@ -1127,141 +1185,8 @@ void main() {
       t.bytes([0x03]);
       await t.pump();
       expect(screen(), isNot(contains('cancel me')));
-      expect(reached, isFalse);
+      expect(reached, isTrue);
       expect(t.quitRequested, isFalse);
-      t.close();
-    });
-  });
-
-  group('inline suggest', () {
-    test('the suggest popup follows the input when the live area scrolls', () async {
-      final f = TextField();
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen(status: 'mode', (r) {
-          for (var i = 0; i < 14; i++) {
-            r.write('line $i');
-          }
-          r.input(f, suggest: (w) => ['/clear', '/compact']);
-        }),
-        width: 30,
-        height: 10,
-        fullscreen: false,
-      );
-      await t.pump();
-      t.bytes(utf8.encode('/c'));
-      await t.pump();
-      await t.pump();
-      final rows = [for (var i = 0; i < 10; i++) t.row(i)];
-      final input = rows.indexWhere((r) => r.contains('/c') && !r.contains('/cl') && !r.contains('/co'));
-      final pop = rows.indexWhere((r) => r.contains('/clear'));
-      expect(input, isNonNegative, reason: rows.join('|'));
-      expect(pop, greaterThan(input), reason: rows.join('|'));
-      expect(rows.indexWhere((r) => r.contains('mode')), greaterThan(pop), reason: rows.join('|'));
-      t.close();
-    });
-  });
-
-  group('inline mode (in-memory)', () {
-    test('the live area is as tall as its content; box and rows measure', () async {
-      final f = TextField();
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen(status: 'mode', (r) {
-          r.write('reply');
-          r.box('').input(f, hint: 'type');
-          final [a, b] = r.splitRows([0, 0]);
-          a.write('a1\na2');
-          b.write('b1');
-        }),
-        width: 20,
-        height: 20,
-        fullscreen: false,
-      );
-      await t.pump();
-      expect(
-        [for (var i = 0; i < 8; i++) t.row(i)],
-        ['reply', '┌──────────────────┐', '│type              │', '└──────────────────┘', 'a1', 'a2', 'b1', 'mode'],
-      );
-      // The input shows the hardware cursor at its first cell.
-      expect(t.output, endsWith('\x1b[6A\r\x1b[1C\x1b[?25h'));
-      t.close();
-    });
-
-    test('print commits above the live area and leaves the redraw set', () async {
-      late App<int> app;
-      final t = testSession<int>(
-        0,
-        (s, a) {
-          app = a;
-          return Screen((r) => r.write('live'));
-        },
-        width: 20,
-        height: 10,
-        fullscreen: false,
-      );
-      await t.pump();
-      app.printAbove((r) => r.box('').write('> hello'));
-      await t.pump();
-      final out = t.output;
-      final commit = out.indexOf('> hello');
-      expect(commit, greaterThan(0));
-      expect(out.substring(commit), contains('└'));
-      // The live area is drawn again below the commit.
-      expect(out.lastIndexOf('live'), greaterThan(commit));
-      expect(t.row(0), 'live');
-      t.close();
-    });
-
-    test('print throws StateError in full screen', () async {
-      late App<int> app;
-      final t = testSession<int>(0, (s, a) {
-        app = a;
-        return Screen((r) {});
-      });
-      await t.pump();
-      expect(() => app.printAbove((r) => r.write('x')), throwsStateError);
-      t.close();
-    });
-
-    test('a repaint rewrites only changed rows, inside synchronized output', () async {
-      var n = 0;
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen((r) {
-          r.write('static top\nvalue $n');
-        }),
-        width: 20,
-        height: 10,
-        fullscreen: false,
-      );
-      await t.pump();
-      expect(t.output, startsWith('\x1b[?2026h'));
-      final before = t.output.length;
-      n = 1;
-      t.bytes(utf8.encode(' '));
-      await t.pump();
-      final delta = t.output.substring(before);
-      expect(delta, contains('value 1'));
-      expect(delta, isNot(contains('static top')));
-      expect(delta, endsWith('\x1b[?2026l\x1b[?25l'));
-      t.close();
-    });
-
-    test('content taller than the terminal shows its bottom', () async {
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen((r) {
-          for (var i = 0; i < 10; i++) {
-            r.write('line $i');
-          }
-        }),
-        width: 20,
-        height: 5,
-        fullscreen: false,
-      );
-      await t.pump();
-      expect([for (var i = 0; i < 4; i++) t.row(i)], ['line 6', 'line 7', 'line 8', 'line 9']);
       t.close();
     });
   });
@@ -1274,8 +1199,8 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [a, b] = r.bind({'click': ('', () => log.add('outer'))}).splitRows([2, 0]);
-          a.bind({'click': ('', () => log.add('inner'))}).write('btn');
+          final [a, b] = r.on({'click': ('', () => log.add('outer'))}).rows([2, 0]);
+          a.on({'click': ('', () => log.add('inner'))}).write('btn');
           b.write('plain');
         }, keys: {'rightclick': ('', () => log.add('keys right'))}),
         width: 20,
@@ -1298,7 +1223,7 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          r.bind({'click': ('', () => log.add('click')), 'doubleclick': ('', () => log.add('double'))}).write('x');
+          r.on({'click': ('', () => log.add('click')), 'doubleclick': ('', () => log.add('double'))}).write('x');
         }),
         width: 10,
         height: 3,
@@ -1311,13 +1236,13 @@ void main() {
     });
 
     test('the wheel scrolls what is under the pointer; hover restyles', () async {
-      final left = Selection<int>(List.generate(20, (i) => i));
-      final right = Selection<int>(List.generate(20, (i) => i));
+      final left = Pick<int>(List.generate(20, (i) => i));
+      final right = Pick<int>(List.generate(20, (i) => i));
       var hovered = false;
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [a, b] = r.splitColumns([10, 0]);
+          final [a, b] = r.cols([10, 0]);
           a.list(left, (i) => 'L$i');
           hovered = b.hovered();
           b.list(right, (i) => 'R$i');
@@ -1362,13 +1287,13 @@ void main() {
   });
 
   group('input (in-memory)', () {
-    Future<(TestSession<int>, TextField)> field({
+    Future<(TestSession<int>, Field)> field({
       String text = '',
       List<String> history = const [],
       int lines = 1,
       FutureOr<List<String>> Function(String)? suggest,
     }) async {
-      final f = TextField(text: text, history: history);
+      final f = Field(text: text, history: history);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
@@ -1416,7 +1341,7 @@ void main() {
 
     test('paste never submits and newlines become spaces on one line', () async {
       var sent = 0;
-      final f = TextField();
+      final f = Field();
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) => r.input(f), keys: {'enter': ('send', () => sent++)}),
@@ -1449,7 +1374,7 @@ void main() {
     });
 
     test('a multi-line input grows to its lines', () async {
-      final f = TextField(text: 'l1\nl2\nl3');
+      final f = Field(text: 'l1\nl2\nl3');
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
@@ -1504,7 +1429,7 @@ void main() {
     });
 
     test('onSubmit fires on enter', () async {
-      final f = TextField(text: 'submit text');
+      final f = Field(text: 'submit text');
       var submitted = false;
       final t = testSession<int>(
         0,
@@ -1524,7 +1449,7 @@ void main() {
 
   group('scroll (in-memory)', () {
     test('follow pins to the end; scrolling up unpins; end re-pins', () async {
-      final sc = ScrollPosition();
+      final sc = Scroll();
       var n = 10;
       final t = testSession<int>(
         0,
@@ -1562,7 +1487,7 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final v = r.scroll(ScrollPosition(follow: false));
+          final v = r.scroll(Scroll(follow: false));
           for (var i = 0; i < 8; i++) {
             v.write('abcdefghi0 日日日日日日日日');
           }
@@ -1580,8 +1505,24 @@ void main() {
       t.close();
     });
 
+    test('box() takes no title; spin(since:) appends the elapsed time', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.spin('Thinking…', since: DateTime.now().subtract(const Duration(seconds: 75)));
+          r.box().write('in');
+        }),
+        width: 24,
+        height: 8,
+      );
+      await t.pump();
+      expect(t.row(0), contains('Thinking… (1m 15s)'));
+      expect(t.row(1), startsWith('┌──'));
+      expect(t.row(2), contains('in'));
+    });
+
     test('a box inside a scroll takes its content height', () async {
-      final sc = ScrollPosition(follow: false);
+      final sc = Scroll(follow: false);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
@@ -1622,7 +1563,7 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [a, _] = r.splitRows([2, 0]);
+          final [a, _] = r.rows([2, 0]);
           a.write('1\n2\n3');
         }),
         width: 10,
@@ -1833,9 +1774,9 @@ void main() {
         final t = testSession<int>(
           0,
           (s, app) => Screen((r) {
-            final [a, b] = r.splitRows([3, 0]);
+            final [a, b] = r.rows([3, 0]);
             a.box('t');
-            b.progressBar(1, 2).spin('w');
+            b.bar(1, 2).spin('w');
           }),
           width: 12,
           height: 6,
@@ -1888,6 +1829,15 @@ void main() {
       await t.pump();
       term.feed(t.output.substring(from));
     }
+
+    test('inline code does not highlight the space before it', () async {
+      final (t, term) = await paint(() => (r) => r.markdown('run `dart test` now'), w: 30, h: 4);
+      expect(term.row(0).trimRight(), 'run dart test now');
+      expect(term.styleAt(3, 0), isNot(contains('inverse')));
+      expect(term.styleAt(4, 0), contains('inverse'));
+      expect(term.styleAt(13, 0), isNot(contains('inverse')));
+      t.close();
+    });
 
     test('a partial change redraws in place (no cursor drift)', () async {
       var text = 'abcdef';
@@ -2012,7 +1962,7 @@ void main() {
     });
 
     test('a list scrolls by the least needed; clicks pick what is shown', () async {
-      final p = Selection<String>([for (var i = 0; i < 10; i++) 'item $i']);
+      final p = Pick<String>([for (var i = 0; i < 10; i++) 'item $i']);
       final (t, term) = await paint(
         () =>
             (r) => r.list(p, (x) => x),
@@ -2035,7 +1985,7 @@ void main() {
       final fired = <String>[];
       final (t, _) = await paint(
         () => (r) {
-          final [top, _] = r.splitRows([1, 0]);
+          final [top, _] = r.rows([1, 0]);
           top.button('one', () => fired.add('one')).button('two', () => fired.add('two'));
         },
         w: 20,
@@ -2051,12 +2001,12 @@ void main() {
 
   group('regressions (in-memory)', () {
     test('the hardware cursor is (row, col), shown on the first frame', () async {
-      final f = TextField(text: 'ab');
+      final f = Field(text: 'ab');
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final [_, b] = r.splitRows([2, 0]);
-          b.splitColumns([3, 0])[1].input(f);
+          final [_, b] = r.rows([2, 0]);
+          b.cols([3, 0])[1].input(f);
         }),
         width: 20,
         height: 6,
@@ -2070,9 +2020,9 @@ void main() {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          final v = r.scroll(ScrollPosition());
+          final v = r.scroll(Scroll());
           v.write('top');
-          final [a, b] = v.splitColumns([5, 0]);
+          final [a, b] = v.cols([5, 0]);
           a.write('L');
           b.write('R');
         }),
@@ -2094,7 +2044,7 @@ void main() {
 
   group('regressions: examples (in-memory)', () {
     test('a focused input takes letters before a Screen key (rule 2 before 4)', () async {
-      final f = TextField();
+      final f = Field();
       var bound = 0;
       final t = testSession<int>(
         0,
@@ -2121,8 +2071,8 @@ void main() {
             (r) {},
             keys: {
               'e': ('', () => throw Exception('boom')),
-              's': ('', () => Console.withSpinner('working', () => done.future)),
-              'b': ('', () => Console.progressBar(3, label: 'dl')),
+              's': ('', () => Console.spin('working', done.future)),
+              'b': ('', () => Console.bar(3, label: 'dl')),
             },
           );
         },
@@ -2130,14 +2080,14 @@ void main() {
         height: 3,
       );
       await t.pump();
-      app.showStatus('hello');
+      app.status('hello');
       await t.pump();
       expect(t.row(2), contains('hello'));
       t.bytes(utf8.encode('e'));
       await t.pump();
       expect(t.row(2), contains('✗ boom'));
       expect(t.row(2), isNot(contains('hello')));
-      app.showStatus('again');
+      app.status('again');
       await t.pump();
       expect(t.row(2), contains('again'));
       expect(t.row(2), isNot(contains('boom')));
@@ -2156,11 +2106,11 @@ void main() {
       t.close();
     });
 
-    test('a status-row bar draws label, glyphs, counts and rate like Console.progressBar', () async {
-      ProgressBar? bar;
+    test('a status-row bar draws label, glyphs, counts and rate like Console.bar', () async {
+      Bar? bar;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.progressBar(4, label: '↓ ch')..tick(2))}),
+        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.bar(4, label: '↓ ch')..tick(2))}),
         width: 60,
         height: 3,
       );
@@ -2173,7 +2123,7 @@ void main() {
     });
 
     test('table columns are as wide as their widest cell, shrunk to fit', () async {
-      final rows = Selection<List<String>>([
+      final rows = Pick<List<String>>([
         ['a', 'x', '1'],
         ['longer name', 'yy', '2'],
       ]);
@@ -2192,47 +2142,6 @@ void main() {
       narrow.close();
     });
 
-    test('inline: a suggest popup grows the live area only as far as it reaches', () async {
-      final f = TextField();
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen(status: 'mode', (r) {
-          r.input(f, suggest: (w) => [for (final c in ['/clear', '/help']) if (c.startsWith(w)) c]);
-        }),
-        width: 30,
-        height: 20,
-        fullscreen: false,
-      );
-      await t.pump();
-      t.bytes(utf8.encode('/'));
-      await t.pump();
-      final screen = [for (var i = 0; i < 20; i++) t.row(i)];
-      final popupEnd = screen.lastIndexWhere((l) => l.contains('└'));
-      expect(popupEnd, greaterThan(0));
-      expect(screen.indexWhere((l) => l.startsWith('mode')), popupEnd + 1);
-      t.close();
-    });
-
-    test('inline: a tall popup caps the live area at the terminal height minus one', () async {
-      final f = TextField();
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen(status: 'mode', (r) {
-          r.input(f, suggest: (w) => [for (var i = 0; i < 30; i++) '/c$i']);
-        }),
-        width: 30,
-        height: 8,
-        fullscreen: false,
-      );
-      await t.pump();
-      t.bytes(utf8.encode('/'));
-      await t.pump();
-      // Each inline paint ends by parking below the live area.
-      final paints = t.output.split('\n\x1b[J');
-      final last = paints[paints.length - 2];
-      expect('\x1b[2K'.allMatches(last).length, 7);
-      t.close();
-    });
   });
 
   group('App (in-memory)', () {
@@ -2275,7 +2184,7 @@ void main() {
         return Screen((r) {});
       });
       await t.pump();
-      app.copyToClipboard('hé');
+      app.copy('hé');
       expect(t.output, contains('\x1b]52;c;${base64.encode(utf8.encode('hé'))}\x1b\\'));
       t.close();
     });
@@ -2372,22 +2281,6 @@ void main() {
         ],
       );
       expect(log.split('\n'), ['escape', 'query=h', 'sel=4', 'go=true']);
-    }, timeout: const Timeout(Duration(seconds: 60)));
-
-    test('inline: the live area sits below the prompt; print scrolls back', () async {
-      final (log, bytes, _) = await _pty(
-        mode: 'inline',
-        rows: 12,
-        cols: 30,
-        feeds: const [(1.5, r'hello'), (1.8, r'\r'), (2.4, r'\x1b')],
-      );
-      expect(log, 'escape');
-      final out = utf8.decode(bytes, allowMalformed: true);
-      expect(out, isNot(contains('\x1b[?1049h')), reason: 'no alternate screen');
-      expect(out, isNot(contains('\x1b[?1000h')), reason: 'the mouse stays with the terminal');
-      expect(out, contains('> hello'));
-      expect(out, contains('mode line'));
-      expect(out.substring(out.indexOf('> hello')), contains('┌'), reason: 'the live area redraws below');
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('LANG=C draws ASCII; NO_COLOR drops colours', () async {

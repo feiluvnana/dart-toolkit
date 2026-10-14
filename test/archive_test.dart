@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' hide File;
-import 'dart:typed_data';
 import 'dart:io' as io show File;
 
 import 'package:dart_toolkit/archive.dart';
@@ -63,7 +62,7 @@ void main() {
       await (Fs.file(p('s.zip')) > Archive.unpack(p('out')));
       expect(await Fs.file(p('out/index.html')).text(), '<h1>hi</h1>');
       expect(await Fs.file(p('out/a/b.txt')).text(), 'bee');
-      expect(await Fs.lookup(p('out/site')), isNull);
+      expect(await Fs.entry(p('out/site')), isNull);
     });
 
     test('tar round-trips', () async {
@@ -105,7 +104,7 @@ void main() {
         Fs.file(p('bad.zip')) > Archive.unpack(p('out')),
         throwsFormatException,
       );
-      expect(await Fs.lookup(p('out')), isNull);
+      expect(await Fs.entry(p('out')), isNull);
     });
 
     test('F1: unpacking merges, never deletes the target', () async {
@@ -218,7 +217,7 @@ void main() {
         throwsA(isA<FormatException>()
             .having((e) => e.message, 'message', contains('sparse'))),
       );
-      expect(await Fs.lookup(p('out')), isNull);
+      expect(await Fs.entry(p('out')), isNull);
     });
 
     test('H10: tar header of a file over 8 GiB carries the true size',
@@ -252,20 +251,36 @@ void main() {
     });
 
     test('H7: tar unpack streams a member in constant memory', () async {
-      const total = 100 << 20;
-      final chunk = Uint8List(64 << 10);
-      Stream<List<int>> tar() async* {
-        yield _tarBlock('big.bin', total, 0x30);
-        for (var n = 0; n < total; n += chunk.length) {
-          yield chunk;
-        }
-        yield Uint8List(1024);
-      }
-
-      final before = ProcessInfo.maxRss;
-      await Archive.unpack(p('out')).consume(tar());
-      expect(await Fs.file(p('out/big.bin')).size(), total);
-      expect(ProcessInfo.maxRss - before, lessThan(60 << 20));
+      await Directory(p('work')).create();
+      await runInDir(p('work'), """
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:dart_toolkit/archive.dart';
+""", r'''
+const total = 100 << 20;
+final chunk = Uint8List(64 << 10);
+final head = List<int>.filled(512, 0)
+  ..setRange(0, 7, 'big.bin'.codeUnits)
+  ..setRange(100, 107, '0000644'.codeUnits)
+  ..setRange(124, 135, total.toRadixString(8).padLeft(11, '0').codeUnits)
+  ..[156] = 0x30
+  ..setRange(257, 263, 'ustar\x00'.codeUnits)
+  ..setRange(148, 156, List.filled(8, 0x20));
+final sum = head.fold<int>(0, (a, c) => a + c);
+head.setRange(148, 155, sum.toRadixString(8).padLeft(6, '0').codeUnits + [0]);
+head[155] = 0x20;
+Stream<List<int>> tar() async* {
+  yield head;
+  for (var n = 0; n < total; n += chunk.length) {
+    yield chunk;
+  }
+  yield Uint8List(1024);
+}
+final before = ProcessInfo.maxRss;
+await Archive.unpack('out').consume(tar());
+if (File('out/big.bin').lengthSync() != total) throw 'size';
+if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss - before}';
+''');
     });
 
     test('H7: tar unpack handles tiny input chunks', () async {
@@ -305,7 +320,7 @@ void main() {
           throwsFormatException,
           reason: name,
         );
-        expect(await Fs.lookup(p('out')), isNull, reason: name);
+        expect(await Fs.entry(p('out')), isNull, reason: name);
       }
     });
 

@@ -25,28 +25,28 @@ void main() {
 
     test('an initial that is not an item is an ArgumentError', () {
       expect(
-        Console.choose('Pick', ['a', 'b'], label: (s) => s, initial: 'z'),
+        Console.choose('Pick', ['a', 'b'], label: (s) => s, or: 'z'),
         throwsArgumentError,
       );
     });
   });
 
-  group('Console.withSpinner', () {
+  group('Console.spin', () {
     test('returns the work result', () async {
-      expect(await Console.withSpinner('Work', () async => 42), 42);
+      expect(await Console.spin('Work', Future.value(42)), 42);
     });
 
     test('rethrows the work error', () async {
       expect(
-        Console.withSpinner<void>('Work', () => throw StateError('bad')),
+        Console.spin<void>('Work', Future.error(StateError('bad'))),
         throwsStateError,
       );
     });
   });
 
-  group('ProgressBar', () {
+  group('Bar', () {
     test('tick counts and stops at the total, returns the bar', () async {
-      final bar = Console.progressBar(3, label: 'T');
+      final bar = Console.bar(3, label: 'T');
       expect(identical(bar.tick(), bar), isTrue);
       bar.tick(5);
       await bar.close();
@@ -57,7 +57,7 @@ void main() {
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${root.path}/nosuch.log',
+        '${Directory.systemTemp.path}/probe_nosuch.log',
         'over',
       ], workingDirectory: root.path);
       expect(res.stderr, contains('5/3'));
@@ -67,7 +67,7 @@ void main() {
       final root = Directory.current;
       final proc = await Process.start(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${root.path}/nosuch.log',
+        '${Directory.systemTemp.path}/probe_nosuch.log',
         'evil',
       ], workingDirectory: root.path);
       proc.stdin.write('1\n');
@@ -78,55 +78,66 @@ void main() {
       expect(err, isNot(contains('\x1b')));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    test('setTotal fills in a total that arrives later; log prints above', () async {
+      final root = Directory.current;
+      final res = await Process.run(Platform.resolvedExecutable, [
+        '${root.path}/test/console_pty/probe.dart',
+        '${Directory.systemTemp.path}/probe_nosuch.log',
+        'total',
+      ], workingDirectory: root.path);
+      expect(res.stderr, contains('T 2/4'));
+      expect(res.stderr, contains('logged above\n'));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('null total means unknown, like 0', () async {
-      final bar = Console.progressBar(null, label: 'U');
+      final bar = Console.bar(null, label: 'U');
       bar.tick(11);
       await bar.close();
     });
 
     test('K2: a pipeline that fails before the bar runs frees the line',
         () async {
-      final bar = Console.progressBar(5, label: 'stuck?');
+      final bar = Console.bar(5, label: 'stuck?');
       await expectLater(
         _Mem('hello') | bar > _ThrowBeforeRead(),
         throwsA(isA<ArgumentError>()),
       );
       // The line must be free: the next bar builds without StateError.
-      final next = Console.progressBar(1, label: 'free');
+      final next = Console.bar(1, label: 'free');
       await next.close();
     });
 
     test('unknown totals count up', () async {
-      final bar = Console.progressBar(0);
+      final bar = Console.bar(0);
       bar.tick();
       bar.tick(10);
       await bar.close();
     });
 
     test('close is idempotent', () async {
-      final bar = Console.progressBar(1);
+      final bar = Console.bar(1);
       await bar.close();
       await bar.close();
     });
 
     test('a second live line is a StateError', () async {
-      final bar = Console.progressBar(1);
-      expect(() => Console.progressBar(2), throwsStateError);
-      expect(() => Console.withSpinner('x', () async {}), throwsStateError);
+      final bar = Console.bar(1);
+      expect(() => Console.bar(2), throwsStateError);
+      expect(() => Console.spin('x', Future<void>.value()), throwsStateError);
       await bar.close();
-      final ok = Console.progressBar(1);
+      final ok = Console.bar(1);
       await ok.close();
     });
 
     test('as a Pipe it counts bytes and closes itself', () async {
-      final bar = Console.progressBar(5, label: 'P');
+      final bar = Console.bar(5, label: 'P');
       final out = await (_Mem('hello') | bar).bytes();
       expect(out, utf8.encode('hello'));
       await bar.close(); // already closed by the pipe: no-op
     });
 
     test('a failed run prints and rethrows', () async {
-      final bar = Console.progressBar(5);
+      final bar = Console.bar(5);
       await expectLater(
         _Mem('x') | bar | _Boom() > null,
         throwsStateError,
@@ -137,8 +148,8 @@ void main() {
       final file = File('${Directory.systemTemp.path}/bar_pipe.bin');
       try {
         final hash = Hash.sha256();
-        await (_Mem('0123456789') | Console.progressBar(10) | hash > _Writer(file));
-        expect(hash.hexDigest().length, 64);
+        await (_Mem('0123456789') | Console.bar(10) | hash > _Writer(file));
+        expect(hash.hex().length, 64);
       } finally {
         if (await file.exists()) await file.delete();
       }
@@ -163,6 +174,38 @@ void main() {
       }
     }, timeout: const Timeout(Duration(seconds: 90)));
 
+    test('no accent by default: bar, spinner and choose emit no colour codes; accent restores it',
+        () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      Future<String> run(String mode, {bool accent = false}) async {
+        final res = await Process.run('python3', [
+          '${root.path}/test/console_pty/drive.py',
+          '--size', '24', '80',
+          if (mode == 'choose') ...['--ready', 'blue', '--feed', '1.0', r'\x0d'],
+          '--', if (accent) ...['env', 'PROBE_ACCENT=1'],
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          '${Directory.systemTemp.path}/probe_nosuch.log', mode,
+        ], workingDirectory: root.path, stdoutEncoding: null);
+        return utf8.decode(res.stdout as List<int>, allowMalformed: true);
+      }
+
+      final colour = RegExp(r'\x1b\[([0-9;]*)m');
+      bool hasColour(String s) => colour.allMatches(s).any((m) => m
+          .group(1)!
+          .split(';')
+          .map((p) => int.tryParse(p) ?? 0)
+          .any((n) => (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n == 38 || n == 48));
+      for (final mode in ['bar', 'spin', 'choose']) {
+        final out = await run(mode);
+        expect(out, isNotEmpty, reason: mode);
+        expect(hasColour(out), isFalse, reason: mode);
+      }
+      expect(await run('bar', accent: true), contains('38;5;173'));
+      expect(await run('choose', accent: true), contains('38;5;173'));
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
     test('H15: an unclosed bar does not keep the process alive', () async {
       if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
@@ -171,13 +214,13 @@ void main() {
         '--size', '24', '80', '--ready', 'ready-leak',
         '--', Platform.resolvedExecutable,
         '${root.path}/test/console_pty/probe.dart',
-        '${root.path}/nosuch.log', 'leak',
+        '${Directory.systemTemp.path}/probe_nosuch.log', 'leak',
       ], workingDirectory: root.path);
       expect(res.stderr, isNot(contains('did not exit')));
       expect(res.stderr, contains('exit=0'));
     }, timeout: const Timeout(Duration(seconds: 90)));
 
-    test('K6: interactive choose takes arrows+enter, escape accepts',
+    test('K6: interactive choose takes arrows+enter, escape gives or',
         () async {
       final pick = await _ptyChoose(feeds: const [
         (1.5, r'\x1b[B'),
@@ -214,6 +257,10 @@ void main() {
       expect(await run(['secret'], 's3cret\n'), contains('secret=s3cret'));
       // H16: CRLF is one line break, also across two prompts.
       expect(await run(['ask2'], 'x\r\ny\r\n'), contains('answer=x|y'));
+      // A closed stdin gives each prompt its `or` (null without one, confirm false).
+      expect(await run(['eof'], ''), contains('eof=null|dflt|true|false|null|y'));
+      // An empty line gives `or`; without one the answer is empty.
+      expect(await run(['empty'], '\n\n\n'), contains('empty=dflt||true'));
       try {
         await log.delete();
       } catch (_) {}
@@ -239,7 +286,7 @@ void main() {
         '--',
         Platform.resolvedExecutable,
         '${root.path}/test/console_pty/probe.dart',
-        '${root.path}/nosuch.log',
+        '${Directory.systemTemp.path}/probe_nosuch.log',
         'secret',
       ], workingDirectory: root.path);
       expect(res.stdout, contains('EXIT=exit=130'));
@@ -287,7 +334,7 @@ Future<String> _ptyBar({required int cols}) async {
     '--size', '24', '$cols',
     '--', Platform.resolvedExecutable,
     '${root.path}/test/console_pty/probe.dart',
-    '${root.path}/nosuch.log', 'bar',
+    '${Directory.systemTemp.path}/probe_nosuch.log', 'bar',
   ], workingDirectory: root.path, stdoutEncoding: null);
   if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
   return utf8.decode(res.stdout as List<int>, allowMalformed: true);

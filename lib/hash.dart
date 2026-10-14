@@ -1,16 +1,16 @@
 /// Incremental hashes, one-shot or in a pipe. Thin facade over `package:crypto`.
 ///
 /// ```dart
-/// final id = Hash.md5().add(url).hexDigest();
+/// final id = Hash.md5().add(url).hex();
 /// final h = Hash.sha256().addBytes(header).add(name);
 /// final check = Hash.sha256();
 /// await (Http.get(isoUrl) | check > Fs.file('disc.iso'));
-/// if (check.hexDigest() != expected) await Fs.file('disc.iso').delete();
+/// if (check.hex() != expected) await Fs.file('disc.iso').delete();
 /// ```
 ///
 /// Public surface is exactly: [Hash], [Hasher].
 /// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher].
-/// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hexDigest`
+/// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
 ///   (finish). As a [Writer] it digests a stream; as a [Pipe] it forwards
 ///   unchanged and digests, so `reader | hasher > file` stores and checksums
 ///   in one pass.
@@ -49,7 +49,7 @@ enum _State {
   /// A pipeline is flowing through [Hasher.consume] or [Hasher.transform].
   running,
 
-  /// Finished: [Hasher.hexDigest] closed the sink.
+  /// Finished: [Hasher.hex] closed the sink.
   done,
 
   /// A run failed partway: later reads throw instead of a partial digest.
@@ -69,7 +69,7 @@ final class Hasher implements Writer, Pipe {
 
   /// The one guard: every entry point runs through this switch, so each
   /// state has exactly one meaning everywhere. [action] names the attempted
-  /// use for the error; [reread] allows [hexDigest] on a finished hash (it
+  /// use for the error; [reread] allows [hex] on a finished hash (it
   /// returns the same digest).
   void _guard(String action, {bool reread = false}) {
     switch (_state) {
@@ -87,9 +87,9 @@ final class Hasher implements Writer, Pipe {
     }
   }
 
-  /// [Pipe.abort]: poison so a later [hexDigest] throws instead of returning
+  /// [Pipe.abort]: poison so a later [hex] throws instead of returning
   /// a wrong digest. Covers broadcast sources too (the old listen-cancel
-  /// probe skipped them). Wired via [Reader.writeTo]'s abort walk, which
+  /// probe skipped them). Wired via [Reader.to]'s abort walk, which
   /// calls [abort] without starting the pipeline, and via [_tee]'s finally /
   /// [consume]'s catch mid-run.
   @override
@@ -97,7 +97,7 @@ final class Hasher implements Writer, Pipe {
     _state = _State.poisoned;
   }
 
-  /// Feed more text (UTF-8). Returns this. An [add] after [hexDigest], while
+  /// Feed more text (UTF-8). Returns this. An [add] after [hex], while
   /// a pipeline is running, or after a failed run is a [StateError].
   Hasher add(String data) {
     _guard('add');
@@ -115,8 +115,8 @@ final class Hasher implements Writer, Pipe {
   /// Finish the hash. Calling it again returns the same digest. After a
   /// failed run through this hasher it throws instead of a partial digest,
   /// and an [add]/[addBytes] after it is a [StateError].
-  String hexDigest() {
-    _guard('hexDigest', reread: true);
+  String hex() {
+    _guard('hex', reread: true);
     if (_state == _State.done) return _capture.digest.toString();
     _in.close();
     _state = _State.done;
@@ -133,7 +133,7 @@ final class Hasher implements Writer, Pipe {
       }
     } catch (e) {
       // The run failed: the digest is partial, so poison it rather than
-      // let a later hexDigest() silently return it.
+      // let a later hex() silently return it.
       abort(e);
       rethrow;
     } finally {
@@ -157,16 +157,16 @@ final class Hasher implements Writer, Pipe {
         _in.add(chunk);
         yield chunk;
       }
-      // The pipe ran to the end: finish here so hexDigest() is stable and a
+      // The pipe ran to the end: finish here so hex() is stable and a
       // second pipeline is a StateError, as specced.
       _in.close();
       _state = _State.done;
       ok = true;
     } finally {
       if (_state == _State.running) _state = _State.idle;
-      // Input failure or downstream cancel (including Reader.writeTo's
+      // Input failure or downstream cancel (including Reader.to's
       // abort on a writer-first failure): the digest is partial, so a later
-      // hexDigest()/add() must throw rather than silently use it (or return
+      // hex()/add() must throw rather than silently use it (or return
       // the empty-input digest when nothing was read).
       if (!ok) abort(StateError('pipe did not run to the end'));
     }

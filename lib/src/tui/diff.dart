@@ -20,7 +20,7 @@ extension RegionDiff on Region {
         var col = _gx;
         for (final seg in line) {
           col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text,
-              _s._pack(seg.fg, seg.bg, seg.style), null);
+              _s._diffStyle(seg), null);
         }
         _cursor++;
       }
@@ -203,6 +203,8 @@ List<int> _myersCore(List<String> a, List<String> b) {
   return ops.reversed.toList();
 }
 
+final _delBg = Color.index(52), _addBg = Color.index(22);
+
 List<_DiffSeg> _diffRow(String mark, int? aNo, int? bNo, String text,
     Set<Style> extra, {bool? del}) {
   final gutter =
@@ -215,8 +217,8 @@ List<_DiffSeg> _diffRow(String mark, int? aNo, int? bNo, String text,
   final bg = del == null
       ? null
       : del
-          ? const Color._(52, null)
-          : const Color._(22, null);
+          ? _delBg
+          : _addBg;
   return [
     _DiffSeg(gutter, fg, null, {...extra}),
     _DiffSeg(text, fg, bg, extra),
@@ -234,18 +236,18 @@ List<List<_DiffSeg>> _diffPair(
   final bSegs = <_DiffSeg>[];
   for (final op in ops) {
     if (op == 0) {
-      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, const Color._(52, null),
+      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg,
           const {Style.bold}));
-      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, const Color._(22, null),
+      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg,
           const {Style.bold}));
       ai++;
       bi++;
     } else if (op < 0) {
-      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, const Color._(52, null),
+      aSegs.add(_DiffSeg('${aw[ai]} ', Color.red, _delBg,
           const {Style.bold, Style.reverse}));
       ai++;
     } else {
-      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, const Color._(22, null),
+      bSegs.add(_DiffSeg('${bw[bi]} ', Color.green, _addBg,
           const {Style.bold, Style.reverse}));
       bi++;
     }

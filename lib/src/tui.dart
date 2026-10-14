@@ -13,8 +13,11 @@ import 'dart:typed_data';
 import 'exit.dart' as exit;
 import 'keys.dart' as keys;
 import 'terminal.dart' as term;
+import 'terminal.dart' show Color;
 
 part 'tui/session.dart';
+part 'tui/prompt.dart';
+part 'tui/suggest.dart';
 part 'tui/region.dart';
 part 'tui/paint.dart';
 part 'tui/widgets.dart';

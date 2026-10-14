@@ -120,6 +120,17 @@ void main() {
       expect(bytes.sublist(0, 2), [0xff, 0xd8]);
     });
 
+    test('sniff names the format from the header', () async {
+      expect(Image.sniff(tinyPng), 'png');
+      for (final f in [ImageFormat.jpg, ImageFormat.gif, ImageFormat.bmp, ImageFormat.tiff, ImageFormat.ico]) {
+        final bytes = await Image.decode(tinyPng).encode(f).bytes();
+        expect(Image.sniff(bytes), f == ImageFormat.jpg ? 'jpg' : f.name);
+      }
+      expect(Image.sniff([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]), 'webp');
+      expect(Image.sniff('hello world'.codeUnits), isNull);
+      expect(Image.sniff([]), isNull);
+    });
+
     test('Future mirrors match', () async {
       final f = Future.value(Image.decode(tinyPng));
       expect(await f.width(), 1);

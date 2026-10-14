@@ -4,7 +4,7 @@
 ///
 /// ```dart
 /// final albums = await Scrape.crawl<Album>(starts, listing,
-///     perHostDelay: Duration(milliseconds: 250), cacheDir: '.cache/shop').toList();
+///     delay: Duration(milliseconds: 250), cache: '.cache/shop').toList();
 /// Future<void> listing(Visit<Album> v) async {
 ///   final doc = await v.html();
 ///   v.follow(doc.$('a[href*="detail"]').attrs('href'), album);
@@ -13,8 +13,8 @@
 ///
 /// Public surface is exactly: [Scrape], [Visit].
 /// - `Scrape.crawl()` visits start URLs and returns a `Stream` of records.
-/// - [Visit] (a [Reader] of the page body) supports `finalUrl` `statusCode`
-///   `isSuccess` `contentLength` `fileName` `follow` `emit`, mirroring the
+/// - [Visit] (a [Reader] of the page body) supports `url` `status`
+///   `ok` `size` `name` `follow` `emit`, mirroring the
 ///   `http.Response` names.
 /// Everything else is private.
 library;
@@ -48,39 +48,39 @@ abstract final class Scrape {
   /// and every handler has returned. Cancelling the subscription stops the
   /// crawl: nothing new starts, visits in flight are dropped.
   ///
-  /// Up to [concurrency] workers fetch at once; [perHostDelay] spaces
+  /// Up to [limit] workers fetch at once; [delay] spaces
   /// requests to one host. Routing is by function: [Visit.follow] queues
   /// URLs for a handler. Each URL is visited once (absolute, fragment
   /// dropped). A 404 reaches its handler. Failures end the run, rethrown
   /// from the stream, unless [onError] reports the URL and the crawl goes on
   /// without that page. In HTTP mode the shared client is held for the crawl
-  /// lifetime (see [Http.hold]); in browser mode [concurrency] tabs are kept
-  /// and reused with `goTo` instead of opening one tab per URL.
+  /// lifetime (see [Http.hold]); in browser mode [limit] tabs are kept
+  /// and reused with `go` instead of opening one tab per URL.
   static Stream<T> crawl<T>(
     Iterable<String> urls,
     Future<void> Function(Visit<T> visit) handler, {
-    int concurrency = 4,
-    Duration? perHostDelay,
+    int limit = 4,
+    Duration? delay,
     int retries = 2,
-    String? cacheDir,
+    String? cache,
     Map<String, String>? headers,
     Duration? timeout,
     Browser? browser,
     void Function(String url, Object error)? onError,
   }) {
-    if (concurrency < 1) {
+    if (limit < 1) {
       throw ArgumentError.value(
-          concurrency, 'concurrency', 'must be at least 1');
+          limit, 'limit', 'must be at least 1');
     }
     if (retries < 0) {
       throw ArgumentError.value(retries, 'retries', 'must not be negative');
     }
     final controller = StreamController<T>();
     final crawl = _Crawl<T>(
-      concurrency: concurrency,
-      perHostDelay: perHostDelay,
+      limit: limit,
+      delay: delay,
       retries: retries,
-      cacheDir: cacheDir,
+      cache: cache,
       headers: headers,
       timeout: timeout,
       browser: browser,
@@ -128,30 +128,30 @@ final class Visit<T> with Reader {
   Elements? _parsed;
 
   /// The final URL after redirects.
-  String finalUrl() => _url;
+  String url() => _url;
 
-  /// The HTTP status. A 404 reaches its handler; [statusCode] tells it apart.
-  int statusCode() => _status;
+  /// The HTTP status. A 404 reaches its handler; [status] tells it apart.
+  int status() => _status;
 
   /// Whether the status is 2xx.
-  bool isSuccess() {
+  bool ok() {
     final code = _status;
     return code >= 200 && code < 300;
   }
 
   /// The body length in bytes. The body is always in memory, so unlike
   /// `http`'s header reading this is never null.
-  int contentLength() => _body.length;
+  int size() => _body.length;
 
   /// A file name for the body: the `content-disposition` filename
   /// (`filename*=` wins over `filename=`, paths stripped), else the final
   /// URL's last segment, else `'download'`. Same rules as `Response`
   /// (shared `src/origin.dart`).
-  String fileName() =>
+  String name() =>
       names.fileName(url: _url, contentDisposition: _disposition);
 
   @override
-  Origin origin() => Origin(url: _url, status: _status, name: fileName());
+  Origin origin() => Origin(url: _url, status: _status, name: name());
 
   /// Queue [urls] to be handled by [handler]. URLs are made absolute against
   /// this visit's URL and their fragment is dropped; an already-queued URL
@@ -197,7 +197,7 @@ final class Visit<T> with Reader {
     final cached = _parsed;
     if (cached != null) return cached;
     final dom = _dom;
-    final parsed = Html.parse(dom ?? await text(), baseUrl: _url);
+    final parsed = Html.parse(dom ?? await text(), base: _url);
     return _parsed = parsed;
   }
 }
@@ -210,7 +210,7 @@ final class _Task<T> {
 }
 
 /// Pooled browser tabs: at most [size] tabs (one per worker) are ever open;
-/// idle tabs are reused with [Page.goTo] instead of paying `Browser.open`
+/// idle tabs are reused with [Page.go] instead of paying `Browser.open`
 /// per URL. Tab setup (headers, viewport, blocks) happens once at open and
 /// persists across reuses — the crawl passes one headers map anyway, so a
 /// reused tab is configured exactly like a fresh one.
@@ -230,7 +230,7 @@ final class _TabPool {
     if (idle.isNotEmpty) {
       final page = idle.removeLast();
       try {
-        await page.goTo(url, timeout: timeout);
+        await page.go(url, timeout: timeout);
         return page;
       } catch (_) {
         // A dead tab never returns to the pool.
@@ -279,10 +279,10 @@ final class _TabPool {
 
 final class _Crawl<T> {
   _Crawl({
-    required this.concurrency,
-    required this.perHostDelay,
+    required this.limit,
+    required this.delay,
     required this.retries,
-    required this.cacheDir,
+    required this.cache,
     required this.headers,
     required this.timeout,
     required this.browser,
@@ -290,10 +290,10 @@ final class _Crawl<T> {
     required this.out,
   }) : _clock = Stopwatch();
 
-  final int concurrency;
-  final Duration? perHostDelay;
+  final int limit;
+  final Duration? delay;
   final int retries;
-  final String? cacheDir;
+  final String? cache;
   final Map<String, String>? headers;
   final Duration? timeout;
   final Browser? browser;
@@ -307,7 +307,7 @@ final class _Crawl<T> {
   final _hostNext = <String, Duration>{};
 
   /// Held HTTP client (HTTP mode) and pooled tabs (browser mode).
-  HttpHold? _hold;
+  Closeable? _hold;
   _TabPool? _tabs;
 
   final _queue = <_Task<T>>[];
@@ -328,7 +328,7 @@ final class _Crawl<T> {
       _hold = Http.hold();
     } else {
       _tabs = _TabPool(browser!,
-          concurrency, headers: headers, timeout: timeout);
+          limit, headers: headers, timeout: timeout);
     }
     try {
       for (final u in urls) {
@@ -339,7 +339,7 @@ final class _Crawl<T> {
       unawaited(_drain());
       return;
     }
-    for (var i = 0; i < concurrency; i++) {
+    for (var i = 0; i < limit; i++) {
       _worker();
     }
   }
@@ -494,22 +494,22 @@ final class _Crawl<T> {
   Future<void> _visit(_Task<T> task) async {
     final uri = Uri.parse(task.url);
     // Cache first: hits skip the delay and the network.
-    final hit = cacheDir == null ? null : await _readCache(task.url);
+    final hit = cache == null ? null : await _readCache(task.url);
     Visit<T> visit;
     Page? page;
     if (hit != null) {
       visit = Visit._cached(hit.finalUrl, hit.status, hit.body, this,
           hit.contentType, hit.disposition);
     } else {
-      if (perHostDelay != null) await _polite(uri.host);
+      if (delay != null) await _polite(uri.host);
       final fetched = await _fetch(task.url);
       page = fetched.page;
-      if (cacheDir != null) await _writeCache(task.url, fetched);
+      if (cache != null) await _writeCache(task.url, fetched);
       visit = fetched.visit;
     }
     // A fetch that finished after a failure or cancel, or that redirected
     // to a URL already visited, is dropped; its tab still goes back.
-    final landed = visit.finalUrl();
+    final landed = visit.url();
     if (_cancelled ||
         _failure != null ||
         (landed != task.url && !_seen.add(landed))) {
@@ -527,7 +527,7 @@ final class _Crawl<T> {
     // Reserve the next slot synchronously (no await between the read and the
     // write): concurrent workers on one host line up in slots instead of
     // all reading the same last time and firing together.
-    final gap = perHostDelay!;
+    final gap = delay!;
     final now = _clock.elapsed;
     final allowed = _hostNext[host];
     if (allowed == null || now >= allowed) {
@@ -578,9 +578,9 @@ final class _Crawl<T> {
     // here, like any other failure.
     final res = await Http.get(url,
         headers: headers, timeout: timeout, retries: retries);
-    final status = res.statusCode();
+    final status = res.status();
     if (status == 429 || status >= 500) {
-      final finalUrl = res.finalUrl();
+      final finalUrl = res.url();
       await res.close();
       throw io.HttpException('HTTP $status: $finalUrl',
           uri: Uri.tryParse(finalUrl));
@@ -593,7 +593,7 @@ final class _Crawl<T> {
       contentType = res.header('content-type');
       disposition = res.header('content-disposition');
       rawBody = await res.bytes();
-      finalUrl = res.finalUrl();
+      finalUrl = res.url();
     } finally {
       // bytes() releases the client by itself; close() is a no-op then.
       await res.close();
@@ -628,12 +628,12 @@ final class _Crawl<T> {
       // One DOM serialize per visit: this snapshot feeds both the body and
       // Visit.html() (which used to serialize a second time via content).
       final status = await page
-          .evaluate<num>(
+          .run<num>(
             'performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0',
           )
           .timeout(timeout ?? const Duration(seconds: 30));
       final content = await page
-          .evaluate<String>('document.documentElement.outerHTML')
+          .run<String>('document.documentElement.outerHTML')
           .timeout(timeout ?? const Duration(seconds: 30));
       final dom = content ?? '';
       final code = (status ?? 0).toInt();
@@ -654,11 +654,11 @@ final class _Crawl<T> {
     }
   }
 
-  String _cacheKey(String url) => Hash.md5().add(url).hexDigest();
+  String _cacheKey(String url) => Hash.md5().add(url).hex();
 
   Future<_Hit?> _readCache(String url) async {
     try {
-      final dir = cacheDir!;
+      final dir = cache!;
       final key = _cacheKey(url);
       final metaFile = Fs.file('$dir/$key.json');
       if (!await metaFile.exists()) return null;
@@ -681,7 +681,7 @@ final class _Crawl<T> {
 
   Future<void> _writeCache(String url, _Fetched<T> fetched) async {
     try {
-      final dir = cacheDir!;
+      final dir = cache!;
       final key = _cacheKey(url);
       final visit = fetched.visit;
       await (Reader.of(visit._body) > Fs.file('$dir/$key.body'));

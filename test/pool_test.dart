@@ -17,7 +17,7 @@ Future<int> slowDouble(int x) async {
 
 int boom(int x) => throw StateError('bad $x');
 
-/// Blocks its worker; used to prove shutdown() fails in-flight jobs instead
+/// Blocks its worker; used to prove close() fails in-flight jobs instead
 /// of leaving them hanging. Top-level so it crosses isolates. Parks on the
 /// event loop (never completing) rather than a native sleep, so killing the
 /// worker takes effect immediately instead of at the end of the sleep.
@@ -31,40 +31,40 @@ int quarterSecond(int x) {
 }
 
 void main() {
-  tearDownAll(Pool.shutdown);
+  tearDownAll(Pool.close);
 
-  group('Pool.compute', () {
+  group('Pool.run', () {
     test('runs one job and returns its result', () async {
-      expect(await Pool.compute(() => 40 + 2), 42);
+      expect(await Pool.run(() => 40 + 2), 42);
     });
 
     test('an error in the job is rethrown', () async {
-      expect(Pool.compute(() => throw StateError('nope')), throwsStateError);
+      expect(Pool.run(() => throw StateError('nope')), throwsStateError);
     });
 
     test('a job capturing a non-sendable value is an ArgumentError', () async {
       final port = ReceivePort();
       try {
-        expect(Pool.compute(() => port.hashCode), throwsArgumentError);
+        expect(Pool.run(() => port.hashCode), throwsArgumentError);
       } finally {
         port.close();
       }
     });
   });
 
-  group('Pool.computeAll', () {
+  group('Pool.runAll', () {
     test('maps in input order', () async {
-      expect(await Pool.computeAll([1, 2, 3], doubleIt), [2, 4, 6]);
+      expect(await Pool.runAll([1, 2, 3], doubleIt), [2, 4, 6]);
     });
 
     test('empty input returns empty', () async {
-      expect(await Pool.computeAll(<int>[], doubleIt), isEmpty);
+      expect(await Pool.runAll(<int>[], doubleIt), isEmpty);
     });
 
-    test('concurrency: 1 runs jobs serially', () async {
+    test('limit: 1 runs jobs serially', () async {
       // 3 x 250 ms serially is ~750 ms; any parallelism would be ~250 ms.
       final sw = Stopwatch()..start();
-      final out = await Pool.computeAll([1, 2, 3], quarterSecond, concurrency: 1);
+      final out = await Pool.runAll([1, 2, 3], quarterSecond, limit: 1);
       sw.stop();
       expect(out, [1, 2, 3]);
       expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 600)));
@@ -72,32 +72,32 @@ void main() {
 
     test('onResult runs on the caller as each job finishes', () async {
       final seen = <int>[];
-      await Pool.computeAll([1, 2, 3], slowDouble, onResult: seen.add);
+      await Pool.runAll([1, 2, 3], slowDouble, onResult: seen.add);
       expect(seen..sort(), [2, 4, 6]);
     });
 
     test('the first error stops new jobs and is rethrown', () async {
-      expect(Pool.computeAll([1, 2, 3], boom), throwsStateError);
+      expect(Pool.runAll([1, 2, 3], boom), throwsStateError);
     });
 
     test('a non-sendable item is an ArgumentError', () async {
       final port = ReceivePort();
       try {
-        await expectLater(Pool.computeAll([port], (_) => 1), throwsArgumentError);
+        await expectLater(Pool.runAll([port], (_) => 1), throwsArgumentError);
       } finally {
         port.close();
       }
     });
 
-    test('a bad concurrency is an ArgumentError', () {
-      expect(() => Pool.computeAll([1], doubleIt, concurrency: 0), throwsArgumentError);
+    test('a bad limit is an ArgumentError', () {
+      expect(() => Pool.runAll([1], doubleIt, limit: 0), throwsArgumentError);
     });
 
     test('the default runs jobs in parallel, in input order', () async {
       // 6 x 250 ms serially is 1.5 s; with the default worker-count limit it
       // is one wave. (On a 1-CPU engine with 0 workers this hangs instead.)
       final sw = Stopwatch()..start();
-      final out = await Pool.computeAll([1, 2, 3, 4, 5, 6], quarterSecond);
+      final out = await Pool.runAll([1, 2, 3, 4, 5, 6], quarterSecond);
       sw.stop();
       expect(out, [1, 2, 3, 4, 5, 6]);
       expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
@@ -113,7 +113,7 @@ void main() {
       expect(await Pool.map(<int>[], (x) => x * 2), isEmpty);
     });
 
-    test('concurrency caps lanes in flight', () async {
+    test('limit caps lanes in flight', () async {
       var inflight = 0;
       var max = 0;
       Future<int> job(int x) async {
@@ -124,7 +124,7 @@ void main() {
         return x;
       }
 
-      final out = await Pool.map([1, 2, 3, 4, 5, 6], job, concurrency: 2);
+      final out = await Pool.map([1, 2, 3, 4, 5, 6], job, limit: 2);
       expect(out, [1, 2, 3, 4, 5, 6]);
       expect(max, 2);
     });
@@ -134,7 +134,7 @@ void main() {
       try {
         // A bar, a client, a socket: none of it crosses isolates here, so a
         // job that captures a port is fine on lanes (and an ArgumentError on
-        // computeAll).
+        // runAll).
         final seen = <int>[];
         final out = await Pool.map([1, 2, 3], (x) async {
           seen.add(port.hashCode ^ x);
@@ -161,27 +161,27 @@ void main() {
         return x;
       }
 
-      await expectLater(Pool.map([1, 2, 3], job, concurrency: 1), throwsStateError);
+      await expectLater(Pool.map([1, 2, 3], job, limit: 1), throwsStateError);
       expect(started, [1]);
     });
 
-    test('a bad concurrency is an ArgumentError', () {
-      expect(() => Pool.map([1], (x) => x, concurrency: 0), throwsArgumentError);
+    test('a bad limit is an ArgumentError', () {
+      expect(() => Pool.map([1], (x) => x, limit: 0), throwsArgumentError);
     });
   });
 
-  group('Pool.shutdown', () {
+  group('Pool.close', () {
     test('the pool restarts on the next call', () async {
-      await Pool.shutdown();
-      expect(await Pool.compute(() => 1), 1);
+      await Pool.close();
+      expect(await Pool.run(() => 1), 1);
     });
 
     test('concurrent first calls share one init (no double-init warning)', () async {
-      await Pool.shutdown();
+      await Pool.close();
       final lines = <String>[];
       await runZoned(
         () async {
-          await Future.wait([Pool.compute(() => 1), Pool.compute(() => 2)]);
+          await Future.wait([Pool.run(() => 1), Pool.run(() => 2)]);
         },
         zoneSpecification: ZoneSpecification(
           print: (self, parent, zone, line) {
@@ -192,33 +192,33 @@ void main() {
       expect(lines.where((l) => l.contains('already warmed up')), isEmpty);
     });
 
-    test('shutdown fails an in-flight job with StateError', () async {
-      final pending = Pool.compute(() => hold(0));
+    test('close fails an in-flight job with StateError', () async {
+      final pending = Pool.run(() => hold(0));
       // Let the job reach a worker; even queued it is covered, but a running
       // job is the case that used to hang forever.
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      await Pool.shutdown();
+      await Pool.close();
       await expectLater(pending, throwsA(isA<StateError>().having((e) => e.message, 'message', 'pool closed')));
     });
 
-    test('shutdown fails in-flight lanes with StateError', () async {
+    test('close fails in-flight lanes with StateError', () async {
       final pending = Pool.map([1, 2, 3], (_) => Completer<int>().future);
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      await Pool.shutdown();
+      await Pool.close();
       await expectLater(pending, throwsA(isA<StateError>().having((e) => e.message, 'message', 'pool closed')));
     });
 
-    test('compute then shutdown is a no-op; the pool restarts after', () async {
+    test('run then close is a no-op; the pool restarts after', () async {
       // The engine shuts itself down when no job is left (F5), so this
-      // shutdown must find nothing to stop and must not throw. Process exit
+      // close must find nothing to stop and must not throw. Process exit
       // itself is checked manually with a scratch script (see report).
-      expect(await Pool.compute(() => 7), 7);
-      await Pool.shutdown();
-      await Pool.shutdown();
-      expect(await Pool.compute(() => 8), 8);
+      expect(await Pool.run(() => 7), 7);
+      await Pool.close();
+      await Pool.close();
+      expect(await Pool.run(() => 8), 8);
     });
 
-    test('shutdown during a running job leaves a script that exits', () async {
+    test('close during a running job leaves a script that exits', () async {
       final dir = Directory.systemTemp.createTempSync('pool_h4');
       addTearDown(() => dir.deleteSync(recursive: true));
       final script = File('${dir.path}/s.dart')
@@ -226,11 +226,11 @@ void main() {
 import 'dart:async';
 import 'package:dart_toolkit/pool.dart';
 Future<void> main() async {
-  final slow = Pool.compute(() => Completer<int>().future);
+  final slow = Pool.run(() => Completer<int>().future);
   slow.ignore();
   await Future<void>.delayed(const Duration(milliseconds: 500));
-  await Pool.shutdown();
-  print(await Pool.compute(() => 1));
+  await Pool.close();
+  print(await Pool.run(() => 1));
 }
 ''');
       final p = await Process.start(Platform.resolvedExecutable, [
