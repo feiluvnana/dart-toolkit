@@ -28,3 +28,8 @@
 - Startup (A/B): scrape 1.77 s → 0.82 s (no chrome import; `src/tabs.dart`), image 1.12 s → 0.99 s (`Region.picture` via `src/pixels.dart`, adds `Image.pixel`), archive 0.53 s → 0.24 s (in-house zip, package:archive dropped; zip pack also 15% faster), cli 0.23 s → 0.19 s (`src/sanitize.dart`).
 - Pure refactors: one tree copy (`src/tree.dart`) for fs and archive; `_Unpacker.consume` split into `_Extraction`. Unused `http` dependency dropped.
 - Deferred: an in-house HTML parser (~0.7 s off every scrape/chrome script; L, own stage), splitting `tui/session.dart`, pinning html/csslib.
+
+## 6. ERGONOMIC (476bb69..cb22087, 9 + 12 user-directed commits)
+- User-directed mid-stage: `Archive.archive(paths, {format, dir, password})` / `unarchive(dir, {password})` replace pack/unpack; zip AES-256 (write) + AES/ZipCrypto (read); 7z read (LZMA/LZMA2/PPMd/Deflate/BCJ/AES) and write (Deflate, AES with hidden names); RAR5 and RAR4 read (filters, solid, PPMd, AES) — all pure Dart, fixtures from libarchive; pointycastle measured (+370 ms startup) and not taken. The user removed examples/ (acda85c): the gate is `dart analyze lib test projects tool`.
+- Audit fixes: an unread response no longer keeps the VM alive (60 s → 0 s, 64 KB prefetch); `retries:` honoured on every verb; a ticked bar closes at its total; network/TLS errors name the request; `insecure:` lists trusted hosts; `Shell.run(check:)`; `Image.sniff` → `ImageFormat` (+ read-only webp); `archive(dir:)`.
+- Deferred: public names for `TabHost`/`Pixels` (doc lines in DOCS instead), `Fs.safe(name)` (FEATURE), `attrs` alternatives, `Http.client`, label/`setTotal`/accent naming, 7z LZMA encoder, BCJ2/bzip2/xz, PPMd speed (~5 MB/s).

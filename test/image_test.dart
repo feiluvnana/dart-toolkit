@@ -151,12 +151,13 @@ void main() {
     });
 
     test('sniff names the format from the header', () async {
-      expect(Image.sniff(tinyPng), 'png');
+      expect(Image.sniff(tinyPng), ImageFormat.png);
       for (final f in [ImageFormat.jpg, ImageFormat.gif, ImageFormat.bmp, ImageFormat.tiff, ImageFormat.ico]) {
         final bytes = await Image.decode(tinyPng).encode(f).bytes();
-        expect(Image.sniff(bytes), f == ImageFormat.jpg ? 'jpg' : f.name);
+        expect(Image.sniff(bytes), f);
       }
-      expect(Image.sniff([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]), 'webp');
+      expect(Image.sniff([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]), ImageFormat.webp);
+      expect(() => Image.decode(tinyPng).encode(ImageFormat.webp).bytes(), throwsArgumentError);
       expect(Image.sniff('hello world'.codeUnits), isNull);
       expect(Image.sniff([]), isNull);
     });

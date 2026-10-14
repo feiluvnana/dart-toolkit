@@ -34,12 +34,15 @@ abstract final class Shell {
   /// With [live], the child's stdout/stderr tee to ours while it runs (for
   /// build steps a human watches); the output is still captured and returned
   /// as the [Output]. [env] overlays the parent environment; a null value
-  /// unsets the variable for the child.
+  /// unsets the variable for the child. With [check] a non-zero exit throws
+  /// [io.ProcessException] carrying the exit code and stderr (as `check:`
+  /// does for a non-2xx response).
   static Future<Output> run(
     List<String> command, {
     String? dir,
     Map<String, String?>? env,
     bool live = false,
+    bool check = false,
   }) async {
     _checkCommand(command);
     io.Process proc;
@@ -95,7 +98,11 @@ abstract final class Shell {
         }
       }
       final code = await proc.exitCode;
-      return Output._(code, out.takeBytes(), utf8.decode(err.takeBytes(), allowMalformed: true));
+      final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
+      if (check && code != 0) {
+        throw io.ProcessException(command[0], command.sublist(1), 'exit $code: ${stderr.trim()}', code);
+      }
+      return Output._(code, out.takeBytes(), stderr);
     } finally {
       exit.offExit(token);
     }

@@ -63,6 +63,24 @@ Future<void> main() async {
   });
 
   group('Bar', () {
+    test('a bar ticked to its total closes itself; a second one may start', () async {
+      final first = Console.bar(3, label: 'items');
+      for (var i = 0; i < 3; i++) {
+        first.tick();
+      }
+      await Future<void>.delayed(Duration.zero);
+      final second = Console.bar(2)..tick(2);
+      await Future<void>.delayed(Duration.zero);
+      expect(() => Console.bar(1)..tick(), returnsNormally);
+      await second.close();
+    });
+
+    test('two live bars name the fix', () async {
+      final open = Console.bar(10);
+      expect(() => Console.bar(5), throwsA(isA<StateError>().having((e) => e.message, 'message', contains('close()'))));
+      await open.close();
+    });
+
     test('tick counts and stops at the total, returns the bar', () async {
       final bar = Console.bar(3, label: 'T');
       expect(identical(bar.tick(), bar), isTrue);

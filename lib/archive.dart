@@ -1,19 +1,25 @@
-/// Archives and gzip.
+/// Archives and gzip, in pure Dart.
 ///
-/// Zip is in-house (`src/zip.dart`, on the SDK's raw deflate) and stays in
-/// memory (its central directory sits at the end; the docs say so). Tar and
-/// tgz stream one member at a time through an in-house tar coder plus the
-/// SDK's gzip, so `pack`/`unpack` hold the largest member, not the archive.
+/// | format | archive | unarchive |
+/// |---|---|---|
+/// | zip | ✓ (AES-256 with `password:`) | ✓ (AES, legacy ZipCrypto) |
+/// | tar, tgz | ✓ (streamed) | ✓ (streamed) |
+/// | 7z | ✓ (Deflate; AES-256 hides names) | ✓ (LZMA, LZMA2, PPMd, Deflate, BCJ, AES) |
+/// | RAR4, RAR5 | — (the compressor is proprietary) | ✓ (solid, filters, PPMd, AES) |
+///
+/// Zip, 7z and RAR stay in memory (their directory or solid stream needs
+/// the whole archive); tar and tgz stream one member at a time.
 ///
 /// ```dart
-/// await (Archive.pack('site', ArchiveFormat.zip) > Fs.file('site.zip'));
-/// await (Archive.pack('site', ArchiveFormat.tgz) > Fs.file('site.tgz'));  // streams
-/// await (Http.get(url) > Archive.unpack('vendor'));                        // streams to a temp sibling, then merges
-/// await (Http.get(url) | Archive.gunzip() > Fs.file('dump.sql'));          // a truncated stream now fails
+/// await (Archive.archive(['site', 'README.md']) > Fs.file('site.zip'));        // like zip -r
+/// await (Archive.archive(['.'], dir: 'site', format: .tgz) > Fs.file('site.tgz')); // the contents, streamed
+/// await (Archive.archive(['docs'], format: .sevenZip, password: pw) > Fs.file('docs.7z'));
+/// await (Http.get(url) > Archive.unarchive('vendor', password: pw)); // any format above
+/// await (Http.get(url) | Archive.gunzip() > Fs.file('dump.sql'));    // a truncated stream fails
 /// ```
 ///
 /// Public surface is exactly: [Archive], [ArchiveFormat].
-/// - `Archive.pack()` is a [Reader] of the archive, `unpack()` a [Writer].
+/// - `Archive.archive()` is a [Reader] of the archive, `unarchive()` a [Writer].
 /// - `Archive.gzip()`/`gunzip()` are streaming [Pipe]s.
 /// Everything else is private.
 library;
@@ -30,24 +36,45 @@ export 'core.dart';
 
 import 'src/exit.dart' as exit;
 import 'src/posix.dart' as posix;
+import 'src/rar.dart' as rarlib;
+import 'src/sevenzip.dart' as sevenzip;
 import 'src/tree.dart' as tree;
 import 'src/zip.dart' as zip;
 
-/// Archive formats for [Archive.pack].
-enum ArchiveFormat { zip, tar, tgz }
+/// Formats [Archive.archive] writes. [Archive.unarchive] reads these and
+/// RAR (the magic bytes decide); RAR is read-only, its compressor being
+/// proprietary.
+enum ArchiveFormat { zip, tar, tgz, sevenZip }
 
-/// Entry point: pack a folder, unpack a stream, gzip on the way.
+/// Entry point: archive files and folders, unarchive a stream, gzip on
+/// the way.
 abstract final class Archive {
-  /// A [Reader] of the archive holding the contents of [dir] (not [dir]
-  /// itself), paths relative to it. Built when read.
+  /// A [Reader] of an archive holding [paths] (files and folders, each with
+  /// its whole tree), named relative to [dir] (default: the working
+  /// folder, as `Shell.run(dir:)`), like `zip -r out.zip site README.md`. `['.']` is the contents
+  /// of [dir]: `Archive.archive(['.'], dir: 'site')`. Built when read.
   ///
-  /// Links are refused with a [FormatException], the same as [unpack]:
-  /// an archive never silently drops entries.
-  static Reader pack(String dir, ArchiveFormat format) => _Packed(dir, format);
+  /// With [password] the files are encrypted: zip as WinZip AES-256 (what
+  /// every modern tool reads), 7z as AES-256 with the names hidden too. Tar
+  /// has no encryption, so a password with tar or tgz is an [ArgumentError].
+  ///
+  /// A path outside [dir] is an [ArgumentError]; links are refused with a
+  /// [FormatException], the same as [unarchive]: an archive never silently
+  /// drops entries.
+  static Reader archive(List<String> paths,
+      {ArchiveFormat format = ArchiveFormat.zip, String dir = '.', String? password}) {
+    if (password != null && (format == ArchiveFormat.tar || format == ArchiveFormat.tgz)) {
+      throw ArgumentError.value(format, 'format', 'tar has no encryption: use zip for a password');
+    }
+    return _Packed(paths, dir, format, password);
+  }
 
-  /// A [Writer] extracting what it is given into [dir], creating it.
-  /// The format comes from the magic bytes (zip, tar, gzip-compressed tar).
-  static Writer unpack(String dir) => _Unpacker(dir);
+  /// A [Writer] extracting what it is given into [dir], creating it and
+  /// merging into what is there. The format comes from the magic bytes.
+  /// [password] opens encrypted archives (zip AES or legacy ZipCrypto, 7z
+  /// AES, RAR4/RAR5); an encrypted member without it, or with the wrong one,
+  /// is a [FormatException] before anything lands in [dir].
+  static Writer unarchive(String dir, {String? password}) => _Unpacker(dir, password);
 
   /// Streaming gzip compression.
   static Pipe gzip() => _GzipPipe(compress: true);
@@ -57,17 +84,23 @@ abstract final class Archive {
   static Pipe gunzip() => _GzipPipe(compress: false);
 }
 
-final class _Packed with Reader {
-  _Packed(this._dir, this._format);
+/// One member to pack: its name in the archive, where it is, and whether
+/// it is a folder.
+typedef _Member = ({String name, String path, bool dir});
 
-  final String _dir;
+final class _Packed with Reader {
+  _Packed(this._paths, this._from, this._format, this._password);
+
+  final List<String> _paths;
+  final String _from;
   final ArchiveFormat _format;
+  final String? _password;
 
   @override
   Stream<List<int>> stream() async* {
-    if (_format == ArchiveFormat.zip) {
-      // Zip stays in memory: the central directory sits at the end.
-      yield await _buildZip();
+    if (_format == ArchiveFormat.zip || _format == ArchiveFormat.sevenZip) {
+      // Zip and 7z stay in memory: their directory sits at the end.
+      yield await _build();
       return;
     }
     var tar = _tarStream();
@@ -75,123 +108,88 @@ final class _Packed with Reader {
     yield* tar;
   }
 
-  Future<List<int>> _buildZip() async {
-    final members = <(String, int, List<int>)>[];
-    final normalizedDir = p.normalize(_dir);
-    final root = io.Directory(normalizedDir);
-    if (!await root.exists()) {
-      throw io.PathNotFoundException(_dir, const io.OSError());
-    }
-    await for (final e in root.list(recursive: true, followLinks: false)) {
-      final t = await io.FileSystemEntity.type(e.path, followLinks: false);
-      // Pack refuses links with a FormatException, the same as unpack:
-      // silently dropping them would lose data.
-      if (t == io.FileSystemEntityType.link) {
-        throw FormatException('pack refuses links: ${e.path}');
-      }
-      var rel = p.relative(p.normalize(e.path), from: normalizedDir);
-      rel = rel.replaceAll('\\', '/');
+  /// Every member, depth-first by name. A folder brings its whole tree; '.'
+  /// is [_from]'s contents. Names are relative to [_from]; a path outside it
+  /// is an [ArgumentError], a missing one a [io.PathNotFoundException].
+  /// Links are refused (an archive never silently drops entries), and so
+  /// are the atomic-write temps of a writer saving into the tree itself.
+  Future<List<_Member>> _members() async {
+    final base = p.normalize(p.absolute(_from));
+    final out = <String, _Member>{};
+    Future<void> add(String path) async {
+      final t = await io.FileSystemEntity.type(path, followLinks: false);
+      final rel = p.relative(path, from: base).replaceAll('\\', '/');
+      if (t == io.FileSystemEntityType.link) throw FormatException('archive refuses links: $path');
+      if (t == io.FileSystemEntityType.notFound) throw io.PathNotFoundException(path, const io.OSError());
+      if (posix.isTmpName(p.basename(path))) return;
       if (t == io.FileSystemEntityType.directory) {
-        if (rel.isNotEmpty) {
-          var mode = 0;
-          try {
-            mode = (await io.FileStat.stat(e.path)).mode & 0x1FF;
-            if (mode != 0 && (mode & 0x49) == 0) mode |= 0x49;
-          } catch (_) {}
-          members.add(('$rel/', mode, const <int>[]));
+        if (rel != '.') out[rel] = (name: '$rel/', path: path, dir: true);
+        await for (final e in io.Directory(path).list(followLinks: false)) {
+          await add(e.path);
         }
-        continue;
+      } else if (t == io.FileSystemEntityType.file) {
+        out[rel] = (name: rel, path: path, dir: false);
       }
-      if (t != io.FileSystemEntityType.file) continue;
-      final data = await io.File(e.path).readAsBytes();
-      var mode = 0;
-      try {
-        mode = (await io.FileStat.stat(e.path)).mode & 0x1FF;
-      } catch (_) {}
-      members.add((rel, mode, data));
     }
-    return zip.writeZip(members);
+
+    for (final given in _paths) {
+      final path = p.normalize(p.join(base, given));
+      if (path != base && !p.isWithin(base, path)) {
+        throw ArgumentError.value(given, 'paths', 'must be inside dir ($_from)');
+      }
+      await add(path);
+    }
+    final members = out.values.toList();
+    posix.sortByRelative(members, (m) => m.path, base);
+    return members;
   }
 
-  /// Streams a tar of [dir]: one 512-byte header per member, file bytes
-  /// straight from disk, two zero blocks at the end. Holds one member at a
-  /// time, never the archive.
+  /// [m]'s permission bits; folders stay traversable.
+  static Future<(int, io.FileStat?)> _stat(_Member m) async {
+    try {
+      final st = await io.FileStat.stat(m.path);
+      var mode = st.mode & 0x1FF;
+      if (m.dir && mode != 0 && (mode & 0x49) == 0) mode |= 0x49;
+      return (mode, st);
+    } catch (_) {
+      return (0, null);
+    }
+  }
+
+  Future<List<int>> _build() async {
+    final members = <(String, int, List<int>)>[];
+    for (final m in await _members()) {
+      final (mode, _) = await _stat(m);
+      members.add((m.name, mode, m.dir ? const <int>[] : await io.File(m.path).readAsBytes()));
+    }
+    return _format == ArchiveFormat.zip
+        ? zip.writeZip(members, password: _password)
+        : sevenzip.writeSevenZip(members, password: _password);
+  }
+
+  /// Streams a tar: one 512-byte header per member, file bytes straight
+  /// from disk, two zero blocks at the end. Holds one member at a time,
+  /// never the archive.
   Stream<List<int>> _tarStream() async* {
-    final normalizedDir = p.normalize(_dir);
-    final root = io.Directory(normalizedDir);
-    if (!await root.exists()) {
-      throw io.PathNotFoundException(_dir, const io.OSError());
-    }
-    final entities = <io.FileSystemEntity>[];
-    await for (final e in root.list(recursive: true, followLinks: false)) {
-      entities.add(e);
-    }
-    posix.sortByRelative(
-      entities,
-      (e) => p.normalize(e.path),
-      normalizedDir,
-    );
-    for (final e in entities) {
-      final t = await io.FileSystemEntity.type(e.path, followLinks: false);
-      // Pack refuses links with a FormatException, the same as unpack:
-      // silently dropping them would lose data.
-      if (t == io.FileSystemEntityType.link) {
-        throw FormatException('pack refuses links: ${e.path}');
-      }
-      var rel = p.relative(p.normalize(e.path), from: normalizedDir);
-      rel = rel.replaceAll('\\', '/');
-      if (t == io.FileSystemEntityType.directory) {
-        if (rel.isNotEmpty) {
-          var mode = 0;
-          var mtime = DateTime.fromMillisecondsSinceEpoch(0);
-          try {
-            final st = await io.FileStat.stat(e.path);
-            mode = st.mode & 0x1FF;
-            if (mode != 0 && (mode & 0x49) == 0) mode |= 0x49;
-            mtime = st.modified;
-          } catch (_) {}
-          for (final chunk in _tarHeader(
-            name: '$rel/',
-            size: 0,
-            mode: mode,
-            mtime: mtime,
-            typeflag: _tarDir,
-          )) {
-            yield chunk;
-          }
-        }
-        continue;
-      }
-      if (t != io.FileSystemEntityType.file) continue;
+    for (final m in await _members()) {
+      final (mode, st) = await _stat(m);
+      final mtime = st?.modified ?? DateTime.fromMillisecondsSinceEpoch(0);
       // Streamed from disk: the stat size goes in the header, exactly that
       // many bytes follow (a file that shrinks mid-pack is an error).
-      var mode = 0;
-      var mtime = DateTime.fromMillisecondsSinceEpoch(0);
-      var size = 0;
-      try {
-        final st = await io.FileStat.stat(e.path);
-        mode = st.mode & 0x1FF;
-        mtime = st.modified;
-        size = st.size;
-      } catch (_) {}
-      for (final chunk in _tarHeader(
-        name: rel,
-        size: size,
-        mode: mode,
-        mtime: mtime,
-        typeflag: _tarFile,
-      )) {
+      final size = m.dir ? 0 : st?.size ?? 0;
+      for (final chunk in _tarHeader(name: m.name, size: size, mode: mode, mtime: mtime, typeflag: m.dir ? _tarDir : _tarFile)) {
         yield chunk;
       }
+      if (m.dir) continue;
       var sent = 0;
       if (size > 0) {
-        await for (final chunk in io.File(e.path).openRead(0, size)) {
+        await for (final chunk in io.File(m.path).openRead(0, size)) {
           sent += chunk.length;
           yield chunk;
         }
       }
       if (sent != size) {
-        throw io.FileSystemException('file changed while packing', e.path);
+        throw io.FileSystemException('file changed while packing', m.path);
       }
       final pad = (512 - size % 512) % 512;
       if (pad != 0) yield Uint8List(pad);
@@ -242,7 +240,9 @@ final class _Extraction {
   Future<String?> _prepare(String name, {bool file = false}) async {
     _Unpacker._checkMember(name, _folded);
     // Split on both separators so member names work on every platform.
-    final relParts = name.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty);
+    // '.' segments name nothing: a '.' member is the target itself, whose
+    // mode an archive never sets.
+    final relParts = name.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty && s != '.');
     if (relParts.isEmpty) return null;
     final dest = p.joinAll([tmp.path, ...relParts]);
     await io.Directory(p.dirname(dest)).create(recursive: true);
@@ -264,7 +264,7 @@ final class _Extraction {
   }
 
   /// Zip stays in memory: its directory sits at the end.
-  Future<void> zip(Stream<List<int>> input) async {
+  Future<void> zip(Stream<List<int>> input, String? password) async {
     final acc = BytesBuilder(copy: false);
     await for (final chunk in input) {
       acc.add(chunk);
@@ -277,7 +277,38 @@ final class _Extraction {
     }
     for (final f in entries) {
       // One member inflated at a time.
-      await _writeMember(f.name, f.mode, isDir: f.isDir, data: f.isDir ? null : f.data());
+      await _writeMember(f.name, f.mode, isDir: f.isDir, data: f.isDir ? null : f.data(password: password));
+    }
+  }
+
+  /// 7z stays in memory too: its header sits at the end.
+  Future<void> sevenZip(Stream<List<int>> input, String? password) async {
+    final acc = BytesBuilder(copy: false);
+    await for (final chunk in input) {
+      acc.add(chunk);
+    }
+    final entries = sevenzip.readSevenZip(acc.takeBytes(), password: password);
+    for (final e in entries) {
+      _Unpacker._checkMember(e.name, _folded);
+    }
+    for (final e in entries) {
+      await _writeMember(e.name, e.mode, isDir: e.isDir, data: e.isDir ? null : e.data());
+    }
+  }
+
+  /// RAR stays in memory: a solid run decodes as one.
+  Future<void> rar(Stream<List<int>> input, String? password) async {
+    final acc = BytesBuilder(copy: false);
+    await for (final chunk in input) {
+      acc.add(chunk);
+    }
+    final entries = rarlib.readRar(acc.takeBytes(), password: password);
+    for (final e in entries) {
+      _Unpacker._checkMember(e.name, _folded);
+      if (e.isLink) throw FormatException('archive member is a link: ${e.name}');
+    }
+    for (final e in entries) {
+      await _writeMember(e.name, e.mode, isDir: e.isDir, data: e.isDir ? null : e.data());
     }
   }
 
@@ -374,16 +405,17 @@ final class _Extraction {
 }
 
 final class _Unpacker implements Writer {
-  _Unpacker(this._dir);
+  _Unpacker(this._dir, this._password);
 
   final String _dir;
+  final String? _password;
 
   @override
   Future<void> consume(Stream<List<int>> input) async {
     // Sniff the format from the magic bytes without consuming them.
     final it = StreamIterator(input);
     final head = <int>[];
-    while (head.length < 2 && await it.moveNext()) {
+    while (head.length < 8 && await it.moveNext()) {
       head.addAll(it.current);
     }
     Stream<List<int>> rest() async* {
@@ -398,6 +430,8 @@ final class _Unpacker implements Writer {
     }
     final isGzip = head[0] == 0x1f && head[1] == 0x8b;
     final isZip = !isGzip && head[0] == 0x50 && head[1] == 0x4b;
+    final is7z = sevenzip.isSevenZip(head);
+    final isRar = rarlib.isRar(head);
     // Normalise the target; the temp folder is a SIBLING of the target,
     // never inside it (F2). Use the absolute path so '.' (whose dirname is
     // '.') still gets a sibling outside itself.
@@ -412,7 +446,11 @@ final class _Unpacker implements Writer {
     try {
       await x.start();
       if (isZip) {
-        await x.zip(rest());
+        await x.zip(rest(), _password);
+      } else if (is7z) {
+        await x.sevenZip(rest(), _password);
+      } else if (isRar) {
+        await x.rar(rest(), _password);
       } else {
         // Tar and gzip-compressed tar stream straight to the temp sibling:
         // links, escapes and truncation fail here, before the merge.

@@ -212,13 +212,15 @@ void main() {
       expect(await r.text(), 'got:{"a":{"b":[1,2]}}');
     });
 
-    test('retries re-send idempotent verbs but never POST or PATCH', () async {
+    test('retries re-send any verb that asks, POST and PATCH included', () async {
       await Http.put('$base/boom', body: Body.text('x'), retries: 1);
       expect(hits['PUT'], 2);
       await Http.post('$base/boom', body: Body.text('x'), retries: 1);
       await Http.patch('$base/boom', body: Body.text('x'), retries: 1);
-      expect(hits['POST'], 1);
-      expect(hits['PATCH'], 1);
+      expect(hits['POST'], 2);
+      expect(hits['PATCH'], 2);
+      await Http.post('$base/boom', body: Body.text('x'));
+      expect(hits['POST'], 3); // the default: no retries
     });
 
     test('post sends json and form bodies', () async {
@@ -339,8 +341,30 @@ void main() {
       await res.close();
     });
 
+    test('insecure trusts only the hosts it names, with their subdomains', () async {
+      final dir = await Directory.systemTemp.createTemp('tls');
+      addTearDown(() => dir.delete(recursive: true));
+      final made = await Process.run('openssl', [
+        'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', //
+        '-keyout', '${dir.path}/key.pem', '-out', '${dir.path}/cert.pem',
+      ]);
+      if (made.exitCode != 0) markTestSkipped('needs openssl');
+      final ctx = SecurityContext()
+        ..useCertificateChain('${dir.path}/cert.pem')
+        ..usePrivateKey('${dir.path}/key.pem');
+      final tls = await HttpServer.bindSecure(InternetAddress.loopbackIPv4, 0, ctx);
+      tls.listen((r) => r.response
+        ..write('secret')
+        ..close());
+      addTearDown(() => tls.close(force: true));
+      final u = 'https://localhost:${tls.port}/';
+      expect(await Http.get(u, insecure: ['localhost']).text(), 'secret');
+      await expectLater(Http.get(u), throwsA(isA<HandshakeException>()));
+      await expectLater(Http.get(u, insecure: ['example.com']), throwsA(isA<HandshakeException>()));
+    });
+
     test('insecure is per-call and hold() keeps the client', () async {
-      final plain = await Http.get('$base/hello', insecure: true);
+      final plain = await Http.get('$base/hello', insecure: ['127.0.0.1']);
       expect(await plain.text(), contains('hello'));
       final hold = Http.hold();
       try {
@@ -708,6 +732,51 @@ Future<void> main() async {
           isNot(contains('SECRET')),
         ))),
       );
+    });
+
+    test('an unread response, chunked or not, lets the script exit', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/http.dart';
+Future<void> main() async {
+  final s = await HttpServer.bind('127.0.0.1', 0);
+  s.listen((r) {
+    if (r.uri.path == '/len') r.response.contentLength = 4;
+    r.response..statusCode = 404..write('nope');
+    r.response.close();
+  });
+  for (final p in ['/len', '/chunked']) {
+    print((await Http.get('http://127.0.0.1:\${s.port}\$p')).status());
+  }
+  await s.close(force: true);
+}
+''', timeout: const Duration(seconds: 15));
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      expect(r.stdout, '404\n404\n');
+    });
+
+    test('a body past the 64 KB prefix reads whole after a delay, and pipes', () async {
+      final big = List.generate(300000, (i) => i % 251);
+      final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      other.listen((r) => r.response
+        ..add(big)
+        ..close());
+      addTearDown(() => other.close(force: true));
+      final u = 'http://127.0.0.1:${other.port}/';
+      final res = await Http.get(u);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(await res.bytes(), big);
+      final sink = _Sink();
+      await (await Http.get(u) > sink);
+      expect(sink.data, big);
+    });
+
+    test('a refused connection names the request', () async {
+      final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = dead.port;
+      await dead.close();
+      await expectLater(Http.get('http://127.0.0.1:$port/thing'),
+          throwsA(isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing'))));
     });
 
     test('two reads at once share one body', () async {

@@ -36,7 +36,7 @@ import 'src/retry.dart' as retry;
 /// ```dart
 /// await Http.post('$api/items', body: .json(item));
 /// await Http.post('$base/ajax', body: .form({'action': 'decode'}));
-/// await Http.put(uploadUrl, body: .stream(Archive.pack('site', .zip)));
+/// await Http.put(uploadUrl, body: .stream(Archive.archive(['.'], from: 'site', format: .zip)));
 /// ```
 sealed class Body {
   const Body._();
@@ -106,11 +106,10 @@ final class _StreamBody extends Body {
 ///   with a [Body.stream] cannot be resent, so it throws [HttpException]
 ///   naming the limitation. `url()` is the final URL.
 /// - `body` is a [Body] (`.text`/`.bytes`/`.form`/`.json`/`.stream`).
-/// - `insecure` accepts a bad certificate for this call only (one broken CDN
-///   chain): it uses the shared insecure client, scoped to the request and
-///   visible at the call site. It replaces the example's hand-written
-///   `_getPageInsecure` (~40 lines of `dart:io`).
-/// - `retries` re-sends GET/HEAD/OPTIONS/PUT/DELETE (never POST or PATCH) on network errors, timeouts, 5xx and 429, with
+/// - `insecure` lists hosts whose bad certificate is accepted (each with its
+///   subdomains), for this call only and on every redirect hop: one broken
+///   CDN chain stays one host, and a redirect elsewhere is checked as usual.
+/// - `retries` (0 by default, so opt-in on every verb) re-sends on network errors, timeouts, 5xx and 429, with
 ///   doubling backoff from 1 s or the server's `Retry-After` (see
 ///   `src/retry.dart`; TLS/Handshake errors are permanent and never
 ///   retried). It applies only when the body is in memory (and only to the
@@ -129,8 +128,10 @@ abstract final class Http {
   /// hold is open, the idle `Timer.run` close is suppressed; closing the
   /// hold releases it. `scrape` (a later pass) holds for the crawl lifetime.
   static Closeable hold() {
-    _securePool._hold();
-    _insecurePool._hold();
+    _holdCount++;
+    for (final pool in _pools) {
+      pool._hold();
+    }
     return _Hold._();
   }
 
@@ -143,8 +144,9 @@ abstract final class Http {
       w.done.complete();
     }
     _sleepers.clear();
-    _securePool._abort();
-    _insecurePool._abort();
+    for (final pool in _pools) {
+      pool._abort();
+    }
   }
 
   /// GET [url] with optional [headers], [timeout], [retries] and [insecure].
@@ -153,7 +155,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -172,7 +174,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -192,7 +194,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -212,7 +214,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -232,7 +234,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -253,7 +255,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -274,7 +276,7 @@ abstract final class Http {
     Map<String, String>? headers,
     Duration? timeout,
     int retries = 0,
-    bool insecure = false,
+    List<String> insecure = const [],
     bool check = false,
   }) =>
       _send(
@@ -299,8 +301,10 @@ final class _Hold implements Closeable {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    _securePool._unhold();
-    _insecurePool._unhold();
+    _holdCount--;
+    for (final pool in _pools) {
+      pool._unhold();
+    }
   }
 }
 
@@ -308,19 +312,25 @@ final class _Hold implements Closeable {
 /// certificate mode, counted by requests + live responses + holds. When all
 /// reach 0, `close()` is scheduled with `Timer.run`.
 final class _ClientPool {
-  _ClientPool({required this.insecure});
+  _ClientPool(this._trusted) : _holds = _holdCount;
 
-  final bool insecure;
+  /// Hosts whose bad certificates this pool accepts, each with subdomains.
+  final List<String> _trusted;
+
+  bool _trusts(String host) {
+    final h = host.toLowerCase();
+    return _trusted.any((t) => h == t || h.endsWith('.$t'));
+  }
   HttpClient? _client;
   var _active = 0;
-  var _holds = 0;
+  int _holds;
 
   HttpClient _ensure() {
     var c = _client;
     if (c == null) {
       c = HttpClient();
-      if (insecure) {
-        c.badCertificateCallback = (cert, host, port) => true;
+      if (_trusted.isNotEmpty) {
+        c.badCertificateCallback = (cert, host, port) => _trusts(host);
       }
       _client = c;
     }
@@ -395,8 +405,20 @@ Future<void> _sleep(Duration d, abort.AbortSignal? signal) {
   return done.future;
 }
 
-final _securePool = _ClientPool(insecure: false);
-final _insecurePool = _ClientPool(insecure: true);
+final _securePool = _ClientPool(const []);
+
+/// One pool per trusted-host set, so a call's `insecure:` hosts never widen
+/// another call's.
+final _trustedPools = <String, _ClientPool>{};
+var _holdCount = 0;
+
+Iterable<_ClientPool> get _pools => [_securePool, ..._trustedPools.values];
+
+_ClientPool _poolFor(List<String> insecure) {
+  if (insecure.isEmpty) return _securePool;
+  final hosts = {for (final h in insecure) h.toLowerCase()}.toList()..sort();
+  return _trustedPools[hosts.join(' ')] ??= _ClientPool(hosts);
+}
 
 /// An HTTP response: a [Reader] of the body, streamed from the socket.
 ///
@@ -407,8 +429,10 @@ final _insecurePool = _ClientPool(insecure: true);
 /// - [text] decodes with the charset in `content-type`, then
 ///   `<meta charset>`, then UTF-8 (WHATWG CJK decoders included). Unknown
 ///   charsets fall back to UTF-8; bad bytes become `�`.
-/// - [close] drops an unread body. A body read or piped to the end releases
-///   the connection by itself (back to the pool). The `Future<Response>`
+/// - A body of up to 64 KB is read as the headers arrive, so an unread
+///   response never keeps the script alive; [close] drops a longer unread
+///   one. A body read or piped to the end releases the connection by itself
+///   (back to the pool). The `Future<Response>`
 ///   mirrors (`Http.get(u).status()`) close the response after reading:
 ///   a response reached only through a mirror can never be read later. (This
 ///   keeps the code; VISION §4.2 still says mirrors leave the body readable
@@ -428,6 +452,79 @@ final class Response with Reader implements Closeable {
 
   Uint8List? _cached;
   Future<Uint8List>? _reading;
+
+  // The body is read as soon as the headers arrive, up to 64 KB: a body
+  // that ends by then is cached and its connection released, so an unread
+  // response never holds the script open. A longer one pauses with that
+  // prefix held, and the first read takes over the subscription.
+  static const _prefix = 64 * 1024;
+  StreamSubscription<List<int>>? _preSub;
+  Completer<void>? _preReady; // the body ended, overflowed or failed
+  final _preBuf = BytesBuilder(copy: false);
+  var _preEnded = false, _preTaken = false;
+  Object? _preError;
+  StackTrace? _preStack;
+
+  void _prefetch() {
+    final empty = _head || status() == 204 || status() == 304;
+    final len = empty ? 0 : size();
+    if (len != null && len > _prefix) return; // known to be long: streamed
+    _streaming = true;
+    final ready = _preReady = Completer<void>();
+    _preSub = _bodyStream().listen(
+      (chunk) {
+        _preBuf.add(chunk);
+        if (_preBuf.length > _prefix && !ready.isCompleted) {
+          _preSub!.pause();
+          ready.complete();
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        _preError = e;
+        _preStack = st;
+        _preEnded = true;
+        _finish();
+        if (!ready.isCompleted) ready.complete();
+      },
+      onDone: () {
+        _preEnded = true;
+        _cached = _preBuf.takeBytes();
+        _finish();
+        if (!ready.isCompleted) ready.complete();
+      },
+      cancelOnError: true,
+    );
+  }
+
+  /// The prefetched body as a stream: the cache, or the held prefix then
+  /// the rest through the resumed subscription.
+  Stream<List<int>> _fromPrefetch() async* {
+    await _preReady!.future;
+    final e = _preError;
+    if (e != null) Error.throwWithStackTrace(e, _preStack!);
+    if (_preEnded) {
+      yield _cached!.asUnmodifiableView();
+      return;
+    }
+    if (_preTaken) throw StateError('body already streaming: ${names.redact(url())}');
+    _preTaken = true;
+    yield _preBuf.takeBytes();
+    final rest = StreamController<List<int>>();
+    final sub = _preSub!
+      ..onData(rest.add)
+      ..onError((Object e, StackTrace st) {
+        rest.addError(e, st);
+        rest.close();
+      })
+      ..onDone(rest.close);
+    rest.onCancel = sub.cancel;
+    sub.resume();
+    try {
+      yield* rest.stream;
+    } finally {
+      _finish();
+    }
+  }
   var _streaming = false;
   var _closed = false;
   var _done = false;
@@ -499,6 +596,7 @@ final class Response with Reader implements Closeable {
     }
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
+    if (_preReady != null) return (await (_reading ??= _readAll())).asUnmodifiableView();
     // A second read while the first runs shares it.
     final reading = _reading;
     if (reading != null) return (await reading).asUnmodifiableView();
@@ -512,7 +610,7 @@ final class Response with Reader implements Closeable {
   Future<Uint8List> _readAll() async {
     try {
       final out = BytesBuilder(copy: false);
-      await for (final chunk in _bodyStream()) {
+      await for (final chunk in _preReady != null ? _fromPrefetch() : _bodyStream()) {
         out.add(chunk);
       }
       return _cached = out.takeBytes();
@@ -536,6 +634,13 @@ final class Response with Reader implements Closeable {
         );
       }
       return Stream.value(cached.asUnmodifiableView());
+    }
+    if (_preReady != null) {
+      if (!ok()) {
+        unawaited(close());
+        throw HttpException('HTTP ${status()}: ${names.redact(url())}', uri: Uri.tryParse(names.redact(url())));
+      }
+      return _fromPrefetch();
     }
     if (_streaming) {
       throw StateError('body already streaming: ${names.redact(url())}');
@@ -572,6 +677,16 @@ final class Response with Reader implements Closeable {
   /// [close] is a [StateError].
   @override
   Future<void> close() async {
+    if (_preReady != null) {
+      // A short body is coming into the cache by itself; a long one that
+      // nobody took over is dropped with its connection.
+      _closed = true;
+      if (!_preEnded && !_preTaken && _preBuf.length > _prefix) {
+        await _preSub?.cancel();
+        _finish();
+      }
+      return;
+    }
     if (_closed || _done) {
       _releaseOnce();
       return;
@@ -748,7 +863,6 @@ final class _Retryable {
 }
 
 /// Verbs a retry may re-send: POST and PATCH could repeat an effect the server already committed.
-const _idempotent = {'GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'};
 
 Future<Response> _send(
   String method,
@@ -757,7 +871,7 @@ Future<Response> _send(
   Map<String, String>? headers,
   Duration? timeout,
   int retries = 0,
-  bool insecure = false,
+  List<String> insecure = const [],
   bool check = false,
 }) async {
   final limit = timeout ?? Http._defaultTimeout;
@@ -777,8 +891,10 @@ Future<Response> _send(
       'must be an absolute http(s) URL',
     );
   }
-  final resendable = body is! _StreamBody && _idempotent.contains(method);
-  final pool = insecure ? _insecurePool : _securePool;
+  // Retries are opt-in (0 by default), so a caller who asks for them on a
+  // POST gets them; only a streamed body, already spent, cannot be resent.
+  final resendable = body is! _StreamBody;
+  final pool = _poolFor(insecure);
   var attempt = 0;
   final epoch = _abortEpoch;
   final signal = abort.currentAbort();
@@ -808,17 +924,31 @@ Future<Response> _send(
           uri: Uri.tryParse(names.redact(res.url())),
         );
       }
+      res._prefetch();
       return res;
     } on _Retryable catch (e) {
       if (aborted() ||
           !resendable ||
           attempt >= retries ||
           !retry.isRetryable(e.cause)) {
-        throw e.cause;
+        throw _naming(e.cause, method, first);
       }
       attempt++;
     }
   }
+}
+
+/// [e] with the request in its message: a refused connection or a bad
+/// certificate otherwise names only an address and port. Types are kept.
+Object _naming(Object e, String method, Uri url) {
+  final what = '$method ${names.redact(url)}';
+  return switch (e) {
+    SocketException() => SocketException('${e.message}: $what', osError: e.osError, address: e.address, port: e.port),
+    HandshakeException() => HandshakeException('${e.message}: $what', e.osError),
+    CertificateException() => CertificateException('${e.message}: $what', e.osError),
+    TlsException() => TlsException('${e.message}: $what', e.osError),
+    _ => e,
+  };
 }
 
 /// One send: the request plus manual redirect following. Retryable network

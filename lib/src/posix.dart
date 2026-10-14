@@ -149,3 +149,8 @@ String tmpPath(String target) {
     '.$base.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.$rand',
   );
 }
+
+/// True for a name [tmpPath] made: `.<base>.tmp<pid>.<µs>.<rand>`.
+bool isTmpName(String name) => _tmpName.hasMatch(name);
+
+final _tmpName = RegExp(r'^\..*\.tmp\d+\.\d+\.\d+$');

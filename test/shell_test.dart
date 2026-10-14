@@ -42,6 +42,14 @@ void main() {
       expect(await out.text(), contains('here'));
     });
 
+    test('check: a non-zero exit throws with the code and stderr', () async {
+      await expectLater(Shell.run(['sh', '-c', 'echo bad >&2; exit 4'], check: true),
+          throwsA(isA<ProcessException>()
+              .having((e) => e.errorCode, 'code', 4)
+              .having((e) => e.message, 'message', contains('bad'))));
+      expect(await Shell.run(['echo', 'ok'], check: true).text(), 'ok');
+    });
+
     test('a null env value unsets the variable', () async {
       // HOME is set in any real parent; null must hide it from the child.
       final unset = await Shell.run(['sh', '-c', 'echo "[\$HOME]"'],

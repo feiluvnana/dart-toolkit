@@ -2,7 +2,7 @@
 
 **Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fourteen
 small modules for command-line automation: fetch, scrape, drive a browser, move files, run
-programs, pack, hash, prompt, and draw a terminal UI. Each module is a thin facade over a good pub
+programs, archive, hash, prompt, and draw a terminal UI. Each module is a thin facade over a good pub
 engine, and every module speaks the same four interfaces, so the bytes flow between them like a
 pipe in a shell.
 
@@ -45,7 +45,7 @@ at its call sites than it adds to the surface.
 | 11  | **Types over runtime checks.** Generics carry the value type (`Opt<int>`, `value<T>()`, `Visit<T>`), sealed types make `switch` exhaustive (`Entry`), and `Object` parameters are kept to data and `body:`.                                     |
 | 12  | **`close()` releases a resource and is idempotent.** Whatever holds a process, socket, terminal or isolate cleans up on `close()`, on an error, and on Ctrl-C. Nothing keeps a finished script alive.                                    |
 | 13  | **Engines stay private and swappable.** An engine type never appears in a public signature, and engine exceptions are rethrown as Dart's own (§5). Tests use real servers, files, browsers and pseudo-terminals, never the engine, so a swap is proven by the same suite. |
-| 14  | **No code generation, no native code.** Dart 3.10+ (dot shorthands: `encode(.jpg)`, `pack('site', .zip)`).                                                                                                                           |
+| 14  | **No code generation, no native code.** Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`).                                                                                                                           |
 
 ## 2. Core: Reader, Writer, Pipe, Closeable
 
@@ -71,8 +71,8 @@ abstract interface class Closeable { Future<void> close(); }
 | `Response` (http), `Visit` (scrape)      |   ✓    |        |      | ✓ (http)  |
 | `File` (fs)                              |   ✓    |   ✓    |      |           |
 | `Output` (shell), `Download` (chrome)    |   ✓    |        |      |           |
-| `page.screenshot()` `pdf()`, `image.encode()`, `Archive.pack()` | ✓ |  |  |   |
-| `Archive.unpack(dir)`                    |        |   ✓    |      |           |
+| `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` | ✓ |  |  |   |
+| `Archive.unarchive(dir)`                    |        |   ✓    |      |           |
 | `Hasher`                                 |        |   ✓    |  ✓   |           |
 | `Bar` (console)                          |        |        |  ✓   |     ✓     |
 | `Archive.gzip()` `gunzip()`, `Shell.filter()` |   |        |  ✓   |           |
@@ -135,7 +135,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` · `Json` `$` `[]` `value` `or` `asList` `asMap`                                                                                   | `dart:convert`        |
 | `fs`      | `Fs.entry` `file` `dir` `link` · `Entry` `path` `name` `parent` `exists` `delete` `copy` `move` · `File` `write` `append` `size` · `Dir` `file` `dir` `list` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
 | `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
-| `archive` | `Archive.pack` `unpack` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `package:archive`     |
+| `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` · `Hasher` `add` `addBytes` `hex`                                                                                        | `package:crypto`      |
 | `pool`    | `Pool.run` `runAll` `map` `close`                                                                                                                          | `worker_manager`      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
@@ -187,7 +187,7 @@ final links = await Http.get(url).html().$('a.item').attrs('href');
 
 ```dart
 abstract final class Http {
-  static Future<Response> get(String url, {Map<String, String>? headers, Duration? timeout, int retries = 0, bool insecure = false, bool check = false});
+  static Future<Response> get(String url, {Map<String, String>? headers, Duration? timeout, int retries = 0, List<String> insecure = const [], bool check = false});
   // head, delete, options: the same; post, put, patch add {Body? body}
   static Closeable hold();                       // keep the shared client open (a crawl)
   static void abort();                           // cancel every in-flight request, no retries (quitting a UI)
@@ -200,7 +200,7 @@ final class Response with Reader implements Closeable {
 ```
 
 - A verb completes when the headers arrive; the body streams. A non-2xx status is still a
-  `Response`, and `ok()` is `status()` in 200–299. `insecure: true` accepts a bad certificate for that call only. `check: true` on any verb throws
+  `Response`, and `ok()` is `status()` in 200–299. `insecure: ['cdn.example']` accepts a bad certificate from those hosts (and their subdomains) for that call only, on every redirect hop. `check: true` on any verb throws
   `HttpException('HTTP 404 GET <url>: <snippet>')` instead and closes the body.
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
   and 307/308 keep the method and resend an in-memory body. `url()` is the final URL.
@@ -209,7 +209,7 @@ final class Response with Reader implements Closeable {
   and URL, so `await (Http.get(u) > Fs.file(f))` never saves an error page. The readings
   (`text()`, `json()`, `html()`) work on any status, and a `json()`/`html()` that fails on an
   error page says the status in its `FormatException`.
-- `retries` re-sends GET/HEAD/OPTIONS/PUT/DELETE (never POST or PATCH) on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
+- `retries` (0 by default, opt-in on every verb, POST included) re-sends on network errors, timeouts, 5xx and 429, with doubling backoff from 1 s
   or the server's `Retry-After`. It applies only when the body is in memory. Scrape uses the same
   logic.
 - `timeout` (30 s) bounds the wait for the headers, then any stall in the body. A
@@ -361,7 +361,7 @@ final class Link extends Entry {
 
 ```dart
 abstract final class Shell {
-  static Future<Output> run(List<String> command, {String? dir, Map<String, String>? env});
+  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false});
   static Pipe filter(List<String> command, {String? dir, Map<String, String>? env});
   static Future<void> open(String target);    // URL or path, in the default app
 }
@@ -379,34 +379,39 @@ final class Output with Reader { int code();  bool ok();  String err(); }   // R
 - `open` uses `open`/`xdg-open`/`start` and returns once the program has launched.
 
 ```dart
-final head = await Shell.run(['git', 'rev-parse', 'HEAD']).text();
+final head = await Shell.run(['git', 'rev-parse', 'HEAD'], check: true).text(); // a non-zero exit throws
 await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
 ```
 
 ### 4.7 archive
 
 ```dart
-enum ArchiveFormat { zip, tar, tgz }
+enum ArchiveFormat { zip, tar, tgz, sevenZip }   // what archive writes; unarchive also reads RAR4/RAR5
 abstract final class Archive {
-  static Reader pack(String dir, ArchiveFormat format);   // the contents of dir, built when read
-  static Writer unpack(String dir);                       // format from the magic bytes
+  static Reader archive(List<String> paths, {ArchiveFormat format = .zip, String dir = '.', String? password}); // files and folders, named relative to dir
+  static Writer unarchive(String dir, {String? password}); // format from the magic bytes
   static Pipe gzip();  static Pipe gunzip();
 }
 ```
 
-- `unpack` checks every member first: absolute paths, `..` escapes and links are a
+- `unarchive` checks every member first: absolute paths, `..` escapes and links are a
   `FormatException`. It then extracts into a temp sibling and moves the members into `dir`,
   **merging with what is already there and never deleting it**. File modes are kept, so
   executables still run.
-- `pack` refuses links, the same as `unpack`, and an empty folder packs and unpacks in every
-  format.
+- `archive` takes files and folders like `zip -r` (`['.']` with `dir:` is a folder's contents),
+  refuses links the same as `unarchive`, and an empty folder round-trips in every format.
 - `gunzip` checks the gzip trailer. Truncated or corrupt data fails the run with a
   `FormatException`.
-- `zip` is held in memory (its directory is at the end); tar and tgz stream member by member.
+- `zip`, 7z and RAR are held in memory (their directory or solid stream needs it all); tar and
+  tgz stream member by member. Everything is pure Dart: zip/7z/RAR, LZMA/LZMA2, PPMd and AES are
+  in-house; RAR is read-only (its compressor is proprietary).
+- `password:` encrypts zip as WinZip AES-256 and 7z as AES-256 with the names hidden; unarchive
+  opens zip AES and ZipCrypto, 7z AES and RAR4/RAR5 encryption. A missing or wrong password is a
+  `FormatException` before anything lands in `dir`; tar with a password is an `ArgumentError`.
 
 ```dart
-await (Http.get(releaseUrl) > Archive.unpack('vendor'));
-await Http.put(uploadUrl, body: Archive.pack('site', .zip));
+await (Http.get(releaseUrl) > Archive.unarchive('vendor'));
+await Http.put(uploadUrl, body: Archive.archive(['.'], dir: 'site', format: .zip));
 ```
 
 ### 4.8 hash
@@ -444,8 +449,7 @@ abstract final class Pool {
 
 ```dart
 final bar = Console.bar(urls.length, label: 'pages');
-await Pool.map(urls, fetch, onResult: (_) => bar.tick());
-await bar.close();
+await Pool.map(urls, fetch, onResult: (_) => bar.tick()); // the bar closes itself at its total
 ```
 
 ### 4.10 cli
@@ -694,10 +698,10 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 ### 4.13 image
 
 ```dart
-enum ImageFormat { png, jpg, gif, bmp, tiff, ico }
+enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp }
 final class Image {
   static Image decode(List<int> bytes);
-  static String? sniff(List<int> bytes);          // "jpg" "png" "gif" "webp" "bmp" "tiff" "ico" or null, header only
+  static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension; webp decodes, never encodes
   int width();  int height();
   Image resize({int? width, int? height});  Image crop(int x, int y, int width, int height);
   Reader encode(ImageFormat format, {int quality = 90});
@@ -772,7 +776,7 @@ surfaces from its `>`/`to`, after cleanup. An error in a chain surfaces at its s
 - Pipelines stream 64 KiB chunks with backpressure, so a 10 GB download, hash and save runs at
   constant memory in one pass. `text()`/`bytes()`/`html()`/`json()`/`image()` load everything into
   memory, and are meant for documents.
-- Lazy content (`screenshot` `pdf` `encode` `pack`) does no work until it is read. A Future mirror
+- Lazy content (`screenshot` `pdf` `encode` `archive`) does no work until it is read. A Future mirror
   costs one `await`.
 - An engine stays until an A/B measurement (alternating rounds, medians, from one sitting) shows it
   is the bottleneck. A module compiles only its own engine.

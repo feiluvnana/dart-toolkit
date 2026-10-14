@@ -243,12 +243,11 @@ const _halted = 'halted';
 Future<String?> _fetchPage(Job job, int i, String url) async {
   final n = i + 1;
   try {
-    final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
     final img = await Http.get(
       url,
       headers: {..._headers, 'referer': '$_base/'},
       retries: 2,
-      insecure: _insecureHosts.any((s) => host == s || host.endsWith('.$s')),
+      insecure: _insecureHosts,
     );
     if (!img.ok()) {
       await img.close();
@@ -257,7 +256,7 @@ Future<String?> _fetchPage(Job job, int i, String url) async {
     final data = await img.bytes();
     if (data.length < 1024) return 'empty reply p$n';
     // The host serves application/octet-stream with extensionless URLs: sniff the bytes.
-    await (Reader.of(data) > Fs.dir(job.dir).file('${'$n'.padLeft(3, '0')}.${Image.sniff(data) ?? 'jpg'}'));
+    await (Reader.of(data) > Fs.dir(job.dir).file('${'$n'.padLeft(3, '0')}.${(Image.sniff(data) ?? .jpg).name}'));
     return null;
   } on Exception catch (e) {
     return 'p$n: ${_short(e)}';

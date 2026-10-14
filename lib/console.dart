@@ -4,8 +4,7 @@
 /// if (!await Console.confirm('Delete ${files.length} files?')) return;
 /// final me = await Console.spin('Signing in', Http.get(api).json());
 /// final bar = Console.bar(urls.length, label: 'Pages');
-/// await Pool.map(urls, fetch, onResult: (_) => bar.tick());
-/// await bar.close();
+/// await Pool.map(urls, fetch, onResult: (_) => bar.tick()); // closes at its total
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar].
@@ -49,7 +48,8 @@ abstract final class Console {
 
   static void _claim(_Live live) {
     if (_live != null) {
-      throw StateError('only one live spinner or bar at a time');
+      throw StateError('only one live spinner or bar at a time: close() the one before '
+          '(a bar ticked to its total closes itself)');
     }
     _live = live;
   }
@@ -886,9 +886,10 @@ final class Bar extends _Live implements Pipe, Closeable {
   /// displayed speed.
   final Stopwatch _clock = Stopwatch();
 
-  /// Add [count] (1 by default; non-positive is ignored). Counts past the
-  /// total are kept (the length may be the compressed size); the bar fills
-  /// and stays full. Returns this bar.
+  /// Add [count] (1 by default; non-positive is ignored). A bar counting
+  /// items closes itself when it reaches its total, so a loop needs no
+  /// `close()`. Piped bytes past the total are kept (the length may be the
+  /// compressed size); the bar fills and stays full. Returns this bar.
   Bar tick([int count = 1]) {
     final bridge = _bridge;
     final id = _bridgeId;
@@ -897,13 +898,20 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (!_clock.isRunning) _clock.start();
       if (count > 0) _done += count;
       bridge.barTick(id, count);
+      _closeAtTotal();
       return this;
     }
     if (_closed) return this;
     if (!_clock.isRunning) _clock.start();
     if (count > 0) _done += count;
     _render();
+    _closeAtTotal();
     return this;
+  }
+
+  void _closeAtTotal() {
+    final total = _total;
+    if (!_piped && total != null && total > 0 && _done >= total) unawaited(close());
   }
 
   /// Set the total once it is known (a download's length arrives with its
@@ -920,7 +928,8 @@ final class Bar extends _Live implements Pipe, Closeable {
     return this;
   }
 
-  /// Print the final line. Call it in `finally`.
+  /// Print the final line. A ticked bar does this itself at its total; call
+  /// it for bars that may stop early (in `finally`) and for piped ones.
   @override
   Future<void> close() async {
     final bridge = _bridge;

@@ -37,9 +37,9 @@ const _isolatePixels = 1000000;
 /// Larger declared sizes are refused before decoding (decompression bomb).
 const _maxPixels = 100000000;
 
-/// Encodable image formats. WebP decodes but the engine cannot encode it,
-/// so it is not listed.
-enum ImageFormat { png, jpg, gif, bmp, tiff, ico }
+/// Image formats: [Image.sniff] names one, [Image.encode] writes all but
+/// [webp] (decoded, never encoded). `.name` is the usual file extension.
+enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp }
 
 /// An image value.
 final class Image implements Pixels {
@@ -47,10 +47,10 @@ final class Image implements Pixels {
 
   final img.Image _inner;
 
-  /// The format named by the magic bytes: `'jpg'`, `'png'`, `'gif'`,
-  /// `'webp'`, `'bmp'`, `'tiff'`, `'ico'`, or null. Reads the header only,
-  /// no decode.
-  static String? sniff(List<int> bytes) {
+  /// The format named by the magic bytes, or null when they are not an
+  /// image. Reads the header only, no decode:
+  /// `'page.${(Image.sniff(data) ?? .jpg).name}'` names a downloaded file.
+  static ImageFormat? sniff(List<int> bytes) {
     bool at(int i, List<int> magic) {
       if (bytes.length < i + magic.length) return false;
       for (var k = 0; k < magic.length; k++) {
@@ -59,22 +59,22 @@ final class Image implements Pixels {
       return true;
     }
 
-    if (at(0, [0xFF, 0xD8, 0xFF])) return 'jpg';
-    if (at(0, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) return 'png';
+    if (at(0, [0xFF, 0xD8, 0xFF])) return ImageFormat.jpg;
+    if (at(0, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) return ImageFormat.png;
     if (at(0, [0x47, 0x49, 0x46, 0x38]) &&
         bytes.length >= 6 &&
         (bytes[4] == 0x37 || bytes[4] == 0x39) &&
         bytes[5] == 0x61) {
-      return 'gif';
+      return ImageFormat.gif;
     }
     if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50])) {
-      return 'webp';
+      return ImageFormat.webp;
     }
-    if (at(0, [0x42, 0x4D])) return 'bmp';
+    if (at(0, [0x42, 0x4D])) return ImageFormat.bmp;
     if (at(0, [0x49, 0x49, 0x2A, 0x00]) || at(0, [0x4D, 0x4D, 0x00, 0x2A])) {
-      return 'tiff';
+      return ImageFormat.tiff;
     }
-    if (at(0, [0x00, 0x00, 0x01, 0x00]) && bytes.length >= 6) return 'ico';
+    if (at(0, [0x00, 0x00, 0x01, 0x00]) && bytes.length >= 6) return ImageFormat.ico;
     return null;
   }
 
@@ -320,6 +320,8 @@ List<int> _encode(Image image, ImageFormat format, int quality) {
       return img.encodeBmp(inner);
     case ImageFormat.tiff:
       return img.encodeTiff(inner);
+    case ImageFormat.webp:
+      throw ArgumentError.value(format, 'format', 'webp can be decoded, not encoded: use png or jpg');
     case ImageFormat.ico:
       if (inner.width > 256 || inner.height > 256) {
         throw ArgumentError.value(
