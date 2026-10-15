@@ -135,8 +135,17 @@ final class Scroll {
 }
 
 extension RegionWidgets on Region {
-  /// A tab row; returns the area below it.
-  Region tabs<T>(Pick<T> tabs, String Function(T tab) label) {
+  /// A tab row; returns the area below it. [color], [background] and
+  /// [style] paint the tabs as in `write`; [highlight] backs the selected
+  /// one (default: the accent, else reverse video).
+  Region tabs<T>(
+    Pick<T> tabs,
+    String Function(T tab) label, {
+    Color? highlight,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+  }) {
     final y = _gy + _cursor;
     final h = _h - _cursor;
     _cursor = _h;
@@ -172,9 +181,7 @@ extension RegionWidgets on Region {
     for (var k = 0; k < items.length && x < _gx + _w; k++) {
       final t = ' ${label(items[k])} ';
       final sel = k == tabs.index();
-      final st = sel
-          ? _s._pack(null, _s.accent, {Style.bold, if (_s.accent == null) Style.reverse})
-          : _s._pack(null, null, {});
+      final st = sel ? _s._selected(highlight, color, style) : _s._pack(color, background, style);
       x = _writeLine(y, x, _gx + _w, t, st, null);
     }
     return _sub(_gx, y + 1, _w, math.max(0, h - 1));
@@ -196,6 +203,15 @@ extension RegionWidgets on Region {
     final ctx = _ScrollCtx(scroll, buf, _gx, y, _w, viewH, _s._order++);
     _s._scrolls.add(ctx);
     _reg(scroll, _gx, y, _w, viewH, ctx.order, (ev) {
+      if (ev is _ClickEv) {
+        _s._setFocus(scroll);
+        // The scrollbar: jump there, and a drag moves it. A click on the
+        // content still reaches the screen's bindings.
+        if (ev.x != _gx + _w - 1 || ctx.buf.length <= viewH) return false;
+        _s._dragging = scroll;
+        _s._scrollTo(ctx, ev.y);
+        return true;
+      }
       if (ev is _WheelEv) {
         _scrollBy(scroll, ctx, ev.dir * 3);
         _s._setFocus(scroll);
@@ -233,16 +249,35 @@ extension RegionWidgets on Region {
     _s._dirtyAndWake();
   }
 
-  /// A selectable list.
-  Region list<T>(Pick<T> pick, String Function(T item) label, {String empty = ''}) {
+  /// A selectable list. [color], [background] and [style] paint the rows
+  /// as in `write`; [highlight] backs the selected row (default: the
+  /// accent, else reverse video).
+  Region list<T>(
+    Pick<T> pick,
+    String Function(T item) label, {
+    String empty = '',
+    Color? highlight,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+  }) {
     final y = _gy + _cursor;
     final h = _listRows(pick, 0, empty);
-    _drawList(pick, label, empty, y, h);
+    _drawList(pick, label, empty, y, h, paint: (highlight, color, background, style));
     return this;
   }
 
-  /// A selectable table.
-  Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''}) {
+  /// A selectable table, painted like [list].
+  Region table<T>(
+    Pick<T> pick,
+    List<String> Function(T item) cells, {
+    List<String>? header,
+    String empty = '',
+    Color? highlight,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+  }) {
     final y = _gy + _cursor;
     final h = _listRows(pick, header == null ? 0 : 1, empty);
     // Columns as wide as their widest cell, the widest shrunk to fit. Only
@@ -274,7 +309,15 @@ extension RegionWidgets on Region {
       for (var k = 0; k < row.length; k++)
         k == row.length - 1 ? row[k] : _padCells(term.truncateWidth(row[k], widths[k]), widths[k]),
     ].join('  ');
-    _drawList(pick, (t) => line(cells(t)), empty, y, h, header: header == null ? null : [line(header)]);
+    _drawList(
+      pick,
+      (t) => line(cells(t)),
+      empty,
+      y,
+      h,
+      header: header == null ? null : [line(header)],
+      paint: (highlight, color, background, style),
+    );
     return this;
   }
 
@@ -304,7 +347,10 @@ extension RegionWidgets on Region {
     int h, {
     List<String> Function(T item)? cells,
     List<String>? header,
+    required (Color?, Color?, Color?, Set<Style>) paint,
   }) {
+    final (highlight, color, background, style) = paint;
+    final plain = _s._pack(color, background, style);
     final order = _s._order++;
     final items = pick.items();
     final headRows = header != null ? 1 : 0;
@@ -316,7 +362,7 @@ extension RegionWidgets on Region {
     if (viewH > 0 && want >= start + viewH) start = want - viewH + 1;
     if (items.isEmpty || h <= 0 || _w <= 0) {
       if (empty.isNotEmpty && h > 0 && _w > 0) {
-        _writeLine(y, _gx, _gx + _w, empty, _s._pack(null, null, {Style.dim}), null);
+        _writeLine(y, _gx, _gx + _w, empty, _s._pack(color, background, {...style, Style.dim}), null);
       }
       _reg(pick, _gx, y, _w, math.max(0, h), order, (_) => false);
       return;
@@ -366,7 +412,7 @@ extension RegionWidgets on Region {
     });
     var row = y;
     if (header != null && h > 0) {
-      _writeLine(row++, _gx, _gx + _w, _rowText(header), _s._pack(null, null, {Style.bold}), null);
+      _writeLine(row++, _gx, _gx + _w, _rowText(header), _s._pack(color, background, {...style, Style.bold}), null);
     }
     final sel = pick.index();
     final focused = _sameId(_s._focusId, pick);
@@ -375,9 +421,9 @@ extension RegionWidgets on Region {
       final isSel = idx == sel;
       final st = isSel
           ? (focused
-                ? _s._pack(null, _s.accent, {Style.bold, if (_s.accent == null) Style.reverse})
-                : _s._pack(null, null, {Style.reverse, Style.dim}))
-          : 0;
+                ? _s._selected(highlight, color, style)
+                : _s._pack(color, background, {...style, Style.reverse, Style.dim}))
+          : plain;
       final text = cells == null ? label(items[idx]) : _rowText(cells(items[idx]));
       if (st != 0) {
         for (var x = _gx; x < _gx + _w; x++) {
@@ -418,6 +464,9 @@ extension RegionWidgets on Region {
     int lines = 1,
     FutureOr<List<String>> Function(String word)? suggest,
     FutureOr<void> Function()? onSubmit,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
   }) {
     if (lines < 0) {
       throw ArgumentError.value(lines, 'lines', 'must be >= 0');
@@ -462,7 +511,7 @@ extension RegionWidgets on Region {
       } else {
         shown = _fitCells(text, _w - 1);
       }
-      final st = isHint ? _s._pack(null, null, {Style.dim}) : 0;
+      final st = _s._pack(color, background, {...style, if (isHint) Style.dim});
       final end = _writeLine(y + r, _gx, _gx + _w - 1, shown, st, null);
       _put(y + r, end, ' ', 1, _s._pack(null, null, {Style.reverse}), null);
     }
@@ -873,7 +922,14 @@ extension RegionWidgets on Region {
       text.replaceAll('\r\n', ' ').replaceAll(_lineBreaksRe, ' ').replaceAll(_controlsRe, '');
 
   /// A button. Runs [action] on click or on enter/space while focused.
-  Region button(String label, FutureOr<void> Function() action) {
+  /// [color], [background] and [style] paint it as in `write`.
+  Region button(
+    String label,
+    FutureOr<void> Function() action, {
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+  }) {
     final y = _gy + _cursor;
     _cursor++;
     if (y >= _gy + _h || _w <= 0) return this;
@@ -892,32 +948,65 @@ extension RegionWidgets on Region {
       }
       return false;
     });
-    _writeLine(y, _gx, _gx + _w, '[ $label ]', _s._pack(null, null, focused ? {Style.reverse} : {}), null);
+    _writeLine(
+      y,
+      _gx,
+      _gx + _w,
+      '[ $label ]',
+      _s._pack(color, background, {...style, if (focused) Style.reverse}),
+      null,
+    );
     return this;
   }
 
-  /// A static progress snapshot laid out like `Console.bar`.
-  Region bar(int done, int? total, {String? label}) {
+  /// A static progress snapshot laid out like `Console.bar`; with [bytes],
+  /// the counts are sizes (`1.2 MB/4.0 MB`). [color], [background], [style]
+  /// and [on] as in `write`.
+  Region bar(
+    int done,
+    int? total, {
+    String? label,
+    bool bytes = false,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+    Map<String, Binding>? on,
+  }) {
     final lab = label == null ? '' : '$label ';
-    final counts = total != null && total > 0 ? '$done/$total' : '$done';
+    String n(int v) => bytes ? fmt.fmtSize(v) : '$v';
+    final counts = total != null && total > 0 ? '${n(done)}/${n(total)}' : n(done);
     var width = 20;
     while (width > 10) {
       if (term.displayWidth('$lab${'_' * width}  $counts') <= _w) break;
       width--;
     }
     final glyphs = fmt.barGlyphs(done, total, width, ascii: _s._caps.ascii);
-    write('$lab$glyphs  $counts');
+    write('$lab$glyphs  $counts', color: color, background: background, style: style, on: on);
     return this;
   }
 
   /// A static spinner snapshot; the frame advances while visible. With
   /// [since], the elapsed time follows the label (`Thinking… (12s)`).
-  Region spin(String label, {DateTime? since}) {
+  /// [color], [background], [style] and [on] as in `write`.
+  Region spin(
+    String label, {
+    DateTime? since,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+    Map<String, Binding>? on,
+  }) {
     _s._spinVisible = true;
     final frames = fmt.spinFrames(ascii: _s._caps.ascii);
     final secs = since == null ? null : DateTime.now().difference(since).inSeconds;
     final time = secs == null ? '' : ' (${secs >= 60 ? '${secs ~/ 60}m ${secs % 60}s' : '${secs}s'})';
-    write('${frames[_s._spinTick % frames.length]} $label$time');
+    write(
+      '${frames[_s._spinTick % frames.length]} $label$time',
+      color: color,
+      background: background,
+      style: style,
+      on: on,
+    );
     return this;
   }
 }

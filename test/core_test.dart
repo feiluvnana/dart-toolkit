@@ -65,6 +65,13 @@ void main() {
   });
 
   group('pipelines', () {
+    test('Pipe.tap passes bytes unchanged and counts them', () async {
+      final heard = <(int, int?)>[];
+      final out = await (Reader.of([1, 2, 3]) | Pipe.tap((done, total) => heard.add((done, total)))).bytes();
+      expect(out, [1, 2, 3]);
+      expect(heard, [(3, null)]);
+    });
+
     test('ordering: bytes flow through stages in order', () async {
       final order = <String>[];
       final writer = _OrderWriter(order);

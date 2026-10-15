@@ -63,7 +63,7 @@ Future<void> release(Context c) async {
   // upload_url ends in a URI template, e.g. ".../assets{?name,label}"
   final uploadUrl = info.$('upload_url').text()!.replaceFirst(RegExp(r'\{.*\}$'), '');
 
-  await Fs.temp((dir) async {
+  await Fs.tempDir((dir) async {
     final zip = dir.file('dart_toolkit-$version.zip');
     await (Shell.run(['git', 'archive', '--format=zip', tag], check: true) > zip);
     final size = await zip.size();

@@ -144,9 +144,11 @@ void main() {
       expect(click.x, 9);
       expect(click.y, 19);
       expect(click.kind, 'click');
-      // Release and drag: nothing.
-      expect(events('\x1b[<0;10;20m'), isEmpty);
-      expect(events('\x1b[<32;10;20M'), isEmpty);
+      // A left release ends a drag; a left drag is a drag, a right drag nothing.
+      expect((events('\x1b[<0;10;20m').single as term.TermRelease).x, 9);
+      expect(events('\x1b[<2;10;20m'), isEmpty);
+      expect((events('\x1b[<32;10;20M').single as term.TermDrag).y, 19);
+      expect(events('\x1b[<34;10;20M'), isEmpty);
       expect((events('\x1b[<2;10;20M').single as term.TermClick).kind, 'rightclick');
       expect((events('\x1b[<1;10;20M').single as term.TermClick).kind, 'middleclick');
       // Wheel: the position as a hover, then the key.
@@ -619,6 +621,17 @@ void main() {
       expect(t.row(1), contains('two'));
       expect(t.row(2), contains('#'));
       expect(t.row(9), contains('up'));
+    });
+
+    test('bar(bytes: true) shows sizes', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.bar(1536, 4096, label: 'f', bytes: true)),
+        width: 50,
+        height: 4,
+      );
+      await t.pump();
+      expect(t.row(0), contains('1.5 KB/4.0 KB'));
     });
 
     test('say shows until the next error', () async {
@@ -1768,7 +1781,7 @@ void main() {
         0,
         (s, app) => Screen((r) {
           r.spin('Thinking…', since: DateTime.now().subtract(const Duration(seconds: 75)));
-          r.box().write('in');
+          r.box('').write('in');
         }),
         width: 24,
         height: 8,
@@ -1777,6 +1790,88 @@ void main() {
       expect(t.row(0), contains('Thinking… (1m 15s)'));
       expect(t.row(1), startsWith('┌──'));
       expect(t.row(2), contains('in'));
+    });
+
+    test('the scrollbar jumps on a click and follows a drag', () async {
+      final sc = Scroll(follow: false);
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.scroll(sc).write([for (var i = 0; i < 20; i++) 'line $i'].join('\n'))),
+        width: 12,
+        height: 5,
+      );
+      await t.pump();
+      expect(t.row(0), startsWith('line 0'));
+      t.bytes('\x1b[<0;12;4M'.codeUnits); // click the scrollbar's bottom cell (row 4 is the status row)
+      await t.pump();
+      expect(t.row(3), startsWith('line 19'));
+      t.bytes('\x1b[<32;12;3M'.codeUnits); // drag to the third of four rows: 2/3 of the way
+      await t.pump();
+      expect(t.row(0), startsWith('line 11'));
+      t.bytes('\x1b[<35;5;3M\x1b[<32;12;1M'.codeUnits); // released (motion), then a stray drag
+      await t.pump();
+      expect(t.row(0), startsWith('line 11'));
+      t.close();
+    });
+
+    test('a drag selects text within its scroll, and letting go copies it', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          final [a, b] = r.cols([10, 0]);
+          a.scroll(Scroll(follow: false)).write('hello\nworld');
+          b.write('RIGHT');
+        }),
+        width: 20,
+        height: 4,
+      );
+      await t.pump();
+      t.bytes('\x1b[<0;2;1M\x1b[<32;15;2M'.codeUnits); // from "ello" past the scroll's edge on row 2
+      await t.pump();
+      t.bytes('\x1b[<0;15;2m'.codeUnits);
+      await t.pump();
+      expect(t.output, contains('\x1b]52;c;${base64.encode(utf8.encode('ello\nworld'))}'));
+      expect(t.row(3), contains('copied 10 characters'));
+      t.close();
+    });
+
+    test('on: binds what a widget drew: a box header, written rows', () async {
+      final heard = <String>[];
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          final [top, rest] = r.rows([4, 0]);
+          top.box('head', on: {'click': ('', () => heard.add('head'))}).write('inside');
+          rest.write('text', on: {'rightclick': ('', () => heard.add('text'))});
+        }),
+        width: 20,
+        height: 8,
+      );
+      await t.pump();
+      t.bytes('\x1b[<0;10;1M\x1b[<0;3;2M\x1b[<2;2;5M'.codeUnits); // the header, the inside, the text
+      await t.pump();
+      expect(heard, ['head', 'text']);
+      t.close();
+    });
+
+    test('colours apply to every widget', () async {
+      final pick = Pick<String>(['a', 'b']);
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          final [top, rest] = r.rows([3, 0]);
+          top.box('t', color: Color.red).write('in');
+          rest.list(pick, (x) => x, color: Color.green, highlight: Color.blue);
+        }),
+        width: 20,
+        height: 8,
+        env: const {'COLORTERM': 'truecolor', 'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color'},
+      );
+      await t.pump();
+      expect(t.output, contains('\x1b[0;38;5;1m┌─ t ─')); // the border and title
+      expect(t.output, contains('\x1b[0;1;48;5;4ma')); // the selection on the highlight
+      expect(t.output, contains('\x1b[0;38;5;2mb')); // the other rows in the colour
+      t.close();
     });
 
     test('a box inside a scroll takes its content height', () async {

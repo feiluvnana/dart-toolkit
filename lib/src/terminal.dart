@@ -53,6 +53,19 @@ bool get stdinUnclaimed => _stdinFallback == null;
 /// byte, so nothing past the line is consumed, and unlike a subscription it
 /// neither drops lines that arrive between prompts nor keeps the script
 /// alive until the writer closes the pipe. Only while [stdinUnclaimed].
+/// Whether stdin is a terminal. `stdin.hasTerminal` also says yes for any
+/// character device (`< /dev/null`); a terminal is one whose modes can be
+/// read.
+final bool stdinTty = () {
+  if (!io.stdin.hasTerminal) return false;
+  try {
+    io.stdin.echoMode;
+    return true;
+  } on io.StdinException {
+    return false;
+  }
+}();
+
 Future<String?> pipedLine() => Isolate.run(_readLineSync);
 
 String? _readLineSync() => io.stdin.readLineSync(encoding: const Utf8Codec(allowMalformed: true));
@@ -64,11 +77,11 @@ var ttyInput = false;
 
 /// True when stdin is a pipe but the Tui can still reach the terminal
 /// through /dev/tty (stdout is one).
-bool get _pipedWithTty => !io.Platform.isWindows && !io.stdin.hasTerminal && io.stdout.hasTerminal;
+bool get _pipedWithTty => !io.Platform.isWindows && !stdinTty && io.stdout.hasTerminal;
 
 Future<void> _startInput() async {
   final session = ++_session;
-  if (!io.Platform.isWindows && (io.stdin.hasTerminal || ttyInput && _pipedWithTty)) {
+  if (!io.Platform.isWindows && (stdinTty || ttyInput && _pipedWithTty)) {
     try {
       final tty = await io.Process.start('/bin/sh', ['-c', _ttyScript]);
       unawaited(tty.stderr.drain<void>());
@@ -158,6 +171,23 @@ final class TermHover extends TermEvent {
   final int y;
 }
 
+/// Pointer motion with the left button held, at cell (x, y), zero-based:
+/// a drag, as of a scrollbar. Only sent with `?1003h` (or `?1002h`).
+final class TermDrag extends TermEvent {
+  TermDrag(this.x, this.y);
+
+  final int x;
+  final int y;
+}
+
+/// The left button let go at cell (x, y), zero-based: the end of a drag.
+final class TermRelease extends TermEvent {
+  TermRelease(this.x, this.y);
+
+  final int x;
+  final int y;
+}
+
 /// Terminal window focus change (`?1004h` reports). Engines that don't track
 /// focus can ignore these.
 final class TermFocus extends TermEvent {
@@ -230,7 +260,11 @@ abstract class TuiBridge {
           final btn = int.tryParse(parts[0]) ?? -1;
           final x = (int.tryParse(parts[1]) ?? 1) - 1;
           final y = (int.tryParse(parts[2]) ?? 1) - 1;
-          if (bytes[j] != 0x6d) _mouse(out, btn, x, y); // 'm' is a release
+          if (bytes[j] != 0x6d) {
+            _mouse(out, btn, x, y);
+          } else if (btn & 3 == 0 && btn & 64 == 0) {
+            out.add(TermRelease(x, y)); // 'm' is a release
+          }
         }
         i = j + 1;
         continue;
@@ -277,7 +311,8 @@ abstract class TuiBridge {
           if (j + 3 >= bytes.length) break; // split report: hold.
           final btn = bytes[j + 1] - 32;
           final valid = bytes[j + 1] >= 32 && bytes[j + 2] > 32 && bytes[j + 3] > 32;
-          if (valid && btn & 3 != 3) _mouse(out, btn, bytes[j + 2] - 33, bytes[j + 3] - 33); // 3 is a release
+          if (valid && btn & 3 != 3) _mouse(out, btn, bytes[j + 2] - 33, bytes[j + 3] - 33);
+          if (valid && btn & 3 == 3 && btn & 96 == 0) out.add(TermRelease(bytes[j + 2] - 33, bytes[j + 3] - 33)); // 3 is a release
           i = j + 4;
           continue;
         }
@@ -452,7 +487,8 @@ void _mouse(List<TermEvent> out, int btn, int x, int y) {
     // Motion with no buttons: hover position, not a click.
     out.add(TermHover(x, y));
   } else if (btn & 32 != 0) {
-    // Drag (32): not a click, ignore.
+    // Motion with a button held (32): a left drag; others scroll nothing.
+    if (btn & 3 == 0) out.add(TermDrag(x, y));
   } else {
     // Press: left, middle or right.
     switch (btn & 3) {
@@ -732,7 +768,7 @@ String? _stty(String args) {
 }
 
 bool _isig(bool on) {
-  if (io.Platform.isWindows || !io.stdin.hasTerminal) return false;
+  if (io.Platform.isWindows || !stdinTty) return false;
   try {
     return io.Process.runSync('/bin/sh', ['-c', 'stty ${on ? '' : '-'}isig </dev/tty']).exitCode == 0;
   } catch (_) {

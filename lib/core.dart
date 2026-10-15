@@ -16,7 +16,7 @@
 /// - [Rate]: paces the work that shares it (`wait`).
 /// - [Durations]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [Times] / [Spans]: `now.format('yyyy-MM-dd')`, `wait.human()` (`11 min 5 s`).
-/// - [Pipe]: `transform` `abort`.
+/// - [Pipe]: `transform` `abort` (+ `tap`, a progress probe).
 /// - [Closeable]: `close`.
 /// - [Origin]: typed `url()` / `status()` / `name()` / `path()` for a reader.
 /// - [ToolkitException]: the base of every failure the toolkit itself reports.
@@ -252,6 +252,29 @@ abstract mixin class Pipe {
   /// `transform`/`consume` error path when the failure happens mid-stream.
   /// The default is a no-op for stateless pipes (gzip).
   void abort(Object error) {}
+
+  /// Bytes pass unchanged; [onProgress] hears the count so far and the total
+  /// (null until known: a `resume: true` download reports its full length,
+  /// and a skip or resume replays the stored bytes). For progress drawn by
+  /// hand, as in a Tui: `get(u) | Pipe.tap((done, total) => …) > file`.
+  static Pipe tap(void Function(int done, int? total) onProgress) => _ProgressTap(onProgress);
+}
+
+final class _ProgressTap with Pipe implements PassThrough {
+  _ProgressTap(this._onProgress) {
+    sizers[this] = (bytes) => _onProgress(_done, _total = bytes);
+  }
+
+  final void Function(int done, int? total) _onProgress;
+  var _done = 0;
+  int? _total;
+
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input.map((chunk) {
+    _done += chunk.length;
+    _onProgress(_done, _total);
+    return chunk;
+  });
 }
 
 /// Something that holds a resource until closed: a browser, a page, a response, a bar.

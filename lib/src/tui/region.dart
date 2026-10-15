@@ -85,7 +85,16 @@ final class Region {
 
   /// Draw text, wrapping at the right edge (`\n` breaks, `\t` expands,
   /// controls show as `�`, rows past the bottom end with `…`). `link` makes an OSC 8 hyperlink.
-  Region write(String text, {Color? color, Color? background, Set<Style> style = const {}, String? link}) {
+  /// [on] binds events (as in [Region.on]) to the rows the text took.
+  Region write(
+    String text, {
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+    String? link,
+    Map<String, Binding>? on,
+  }) {
+    final top = _cursor;
     final st = _s._pack(color, background, style);
     final parts = text.split('\n');
     final lines = parts.isNotEmpty && parts.last.isEmpty ? parts.sublist(0, parts.length - 1) : parts;
@@ -109,7 +118,14 @@ final class Region {
     if (overflow && _h > 0 && _w > 0) {
       _put(_gy + _h - 1, _gx + _w - 1, '…', 1, st, link);
     }
+    _bindRows(on, top);
     return this;
+  }
+
+  /// Bind [on] to the rows from [top] to the cursor (what a widget drew).
+  void _bindRows(Map<String, Binding>? on, int top) {
+    final rows = math.min(_cursor, _h) - top;
+    if (on != null && rows > 0 && _w > 0) _reg(_s._bindId(on), _gx, _gy + top, _w, rows, _s._order++, null, onMap: on);
   }
 
   /// The rest of the region as half-block cells (`▀`) showing [image] (an
@@ -117,22 +133,25 @@ final class Region {
   /// Returns the receiver.
   Region picture(Pixels image) => _drawPicture(this, image.width(), image.height(), image.pixel);
 
-  /// Border the rest of the region, with [title] when given; return the
-  /// inside.
-  Region box([String title = '']) {
-    if (_open) return _measuredRows(const [0], 2, title).single;
-    return _boxAt(title, _gy + _cursor, _h - _cursor);
+  /// Border the rest of the region, titled unless [title] is empty; return
+  /// the inside. [color], [background] and [style] paint the border and
+  /// title, as in [write]; [on] binds events to the top row (the header).
+  Region box(String title, {Color? color, Color? background, Set<Style> style = const {}, Map<String, Binding>? on}) {
+    final st = _s._pack(color, background, style);
+    if (_open) return _measuredRows(const [0], 2, title, boxStyle: st, boxOn: on).single;
+    return _boxAt(title, _gy + _cursor, _h - _cursor, style: st, on: on);
   }
 
-  Region _boxAt(String title, int top, int h, {bool open = false}) {
+  Region _boxAt(String title, int top, int h, {bool open = false, int style = 0, Map<String, Binding>? on}) {
     _cursor = _h;
     if (_w <= 0 || h <= 0) return _sub(_gx, top, 0, 0);
     final right = _gx + _w - 1;
     final bottom = top + h - 1;
-    _frame(_s._caps.ascii, top, _gx, bottom, right, (y, x, ch) => _put(y, x, ch, 1, 0, null));
+    _frame(_s._caps.ascii, top, _gx, bottom, right, (y, x, ch) => _put(y, x, ch, 1, style, null));
     if (title.isNotEmpty && _w > 5) {
-      _writeLine(top, _gx + 2, right, ' $title ', 0, null);
+      _writeLine(top, _gx + 2, right, ' $title ', style, null);
     }
+    if (on != null) _reg(_s._bindId(on), _gx, top, _w, 1, _s._order++, null, onMap: on);
     if (_w < 3 || h < 3) return _sub(_gx, top, 0, 0, open: open);
     return _sub(_gx + 1, top + 1, _w - 2, open ? _unbounded : h - 2, open: open);
   }
@@ -142,7 +161,13 @@ final class Region {
   /// child its own scratch buffer and measures it; later passes lay them
   /// out with the measured heights until they settle (see
   /// [_Session._measured]).
-  List<Region> _measuredRows(List<int> sizes, int border, String? title) {
+  List<Region> _measuredRows(
+    List<int> sizes,
+    int border,
+    String? title, {
+    int boxStyle = 0,
+    Map<String, Binding>? boxOn,
+  }) {
     final s = _s;
     final base = s._mNext;
     s._mNext += sizes.length;
@@ -160,7 +185,7 @@ final class Region {
       final hs = [for (var k = 0; k < sizes.length; k++) base + k < slots.length ? slots[base + k] : 0];
       final total = hs.fold(0, (a, b) => a + b);
       if (title != null) {
-        kids = [_boxAt(title, _gy + at, total + border, open: true)];
+        kids = [_boxAt(title, _gy + at, total + border, open: true, style: boxStyle, on: boxOn)];
       } else {
         kids = [];
         var off = _gy + at;
@@ -193,8 +218,17 @@ final class Region {
   /// Split below the cursor into columns.
   List<Region> cols(List<int> sizes) => _split(sizes, horizontal: false);
 
-  /// A centered modal; drawn last.
-  Region popup(String title, {int width = 40, int height = 10}) {
+  /// A centered modal; drawn last. [color], [background] and [style] paint
+  /// its border and title, as in [write].
+  Region popup(
+    String title, {
+    int width = 40,
+    int height = 10,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+  }) {
+    final st = _s._pack(color, background, style);
     final w = math.min(width, _s._w);
     final h = math.min(height, _s._h);
     final x = (_s._w - w) ~/ 2;
@@ -202,9 +236,9 @@ final class Region {
     final buf = <List<_Cell>>[for (var k = 0; k < h; k++) List.filled(w, _Cell.blank)];
     final pop = _Popup(x, y, w, h, buf);
     _s._popups.add(pop);
-    _frame(_s._caps.ascii, 0, 0, h - 1, w - 1, (y, x, ch) => _rawPut(buf, y, x, ch, 0, null));
+    _frame(_s._caps.ascii, 0, 0, h - 1, w - 1, (y, x, ch) => _rawPut(buf, y, x, ch, st, null));
     if (title.isNotEmpty && w > 5) {
-      _rawWrite(buf, 0, 2, w - 1, ' $title ', 0, null);
+      _rawWrite(buf, 0, 2, w - 1, ' $title ', st, null);
     }
     return Region._(_s, buf, 1, 1, math.max(0, w - 2), math.max(0, h - 2), pop: pop);
   }

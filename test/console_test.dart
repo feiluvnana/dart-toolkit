@@ -38,6 +38,21 @@ void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long'
     });
   });
 
+  test('confirm on stdin from /dev/null gives its default instead of hanging', () async {
+    final dir = await Directory.systemTemp.createTemp('devnull');
+    addTearDown(() => dir.delete(recursive: true));
+    await File('${dir.path}/main.dart').writeAsString('''
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async => print('answer=\${await Console.confirm('ok?')}');
+''');
+    final packages = '${Directory.current.path}/.dart_tool/package_config.json';
+    final r = await Process.run('/bin/sh', [
+      '-c',
+      '"${Platform.resolvedExecutable}" --packages="$packages" "${dir.path}/main.dart" < /dev/null',
+    ]).timeout(const Duration(seconds: 20));
+    expect(r.stdout, contains('answer=false'));
+  }, testOn: '!windows');
+
   group('piped stdin', () {
     test('a line that arrives between prompts is kept', () async {
       final r = await runDart(

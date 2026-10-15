@@ -1120,7 +1120,7 @@ Future<void> main() async {
   });
   final cdn = Http.client(resume: true);
   final url = 'http://127.0.0.1:${server.port}/f';
-  await Fs.temp((dir) async {
+  await Fs.tempDir((dir) async {
     final to = dir.file('f.bin');
     await (cdn.get(url) | Console.bar(null, label: 'fresh') > to);
     await (cdn.get(url) | Console.bar(null, label: 'skipped') > to);
@@ -1135,6 +1135,18 @@ Future<void> main() async {
       for (final label in ['fresh', 'skipped', 'resumed']) {
         expect(err, contains('$label 1000 B/1000 B'));
       }
+    });
+
+    test('Pipe.tap hears the bytes and the full length of a resumed download', () async {
+      final dir = await Directory.systemTemp.createTemp('tap');
+      addTearDown(() => dir.delete(recursive: true));
+      final c = Http.client(resume: true);
+      final to = _Path('${dir.path}/f.bin');
+      await File('${to.path}.part').writeAsBytes(List.filled(600, 0));
+      final heard = <(int, int?)>[];
+      await (c.get('$url/file') | Pipe.tap((done, total) => heard.add((done, total))) > to);
+      expect(heard.last, (1000, 1000)); // the 600 stored bytes replay through it
+      expect(heard.map((h) => h.$1), orderedEquals([...heard.map((h) => h.$1)]..sort()));
     });
 
     test('resume: a GET piped into a file is atomic, skips a complete file, resumes a .part', () async {

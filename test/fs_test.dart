@@ -373,7 +373,7 @@ void main() {
   group('temp, home, lock, modified', () {
     test('Fs.temp hands a fresh folder to the body and deletes it after, failures too', () async {
       String? kept;
-      final n = await Fs.temp((d) async {
+      final n = await Fs.tempDir((d) async {
         kept = d.path();
         await d.file('x/y.txt').write('y');
         return 3;
@@ -381,7 +381,7 @@ void main() {
       expect(n, 3);
       expect(Directory(kept!).existsSync(), isFalse);
       await expectLater(
-        Fs.temp((d) async {
+        Fs.tempDir((d) async {
           kept = d.path();
           throw StateError('boom');
         }),
@@ -407,7 +407,7 @@ Future<void> main() async {
     });
 
     test('Fs.home is HOME', () {
-      expect(Fs.home().path(), Platform.environment['HOME']);
+      expect(Fs.homeDir().path(), Platform.environment['HOME']);
     });
 
     test('modified() reads the mtime; a missing entry throws', () async {

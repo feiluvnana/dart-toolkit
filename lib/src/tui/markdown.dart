@@ -8,7 +8,16 @@ extension RegionMarkdown on Region {
   /// emphasis renders as if closed (safe to stream). Layout is memoized
   /// per call site: an unchanged source is an O(1) hit,
   /// a streamed append re-lays only from the last block boundary.
-  Region markdown(String source) {
+  /// [color], [background] and [style] are the base under the
+  /// highlighting and [on] binds events, as in `write`.
+  Region markdown(
+    String source, {
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+    Map<String, Binding>? on,
+  }) {
+    final top = _cursor;
     for (final line in _mdLayout(source, _w, _s._caps.ascii, _s)) {
       if (_cursor >= _h) {
         _cursor++;
@@ -16,10 +25,11 @@ extension RegionMarkdown on Region {
       }
       var col = _gx;
       for (final seg in line) {
-        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._mdStyle(seg), seg.link);
+        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._mdStyle(seg, color, background, style), seg.link);
       }
       _cursor++;
     }
+    _bindRows(on, top);
     return this;
   }
 }

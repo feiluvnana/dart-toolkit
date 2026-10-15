@@ -601,22 +601,37 @@ final class _Session<S> implements term.TuiBridge {
   /// from the last block boundary.
   final _mdMemos = <_MdMemo>[];
 
-  /// Diff colours without an accent: removed text dim, added bold.
-  int _diffStyle(_DiffSeg g) {
-    if (accent != null) return _pack(g.fg, g.bg, g.style);
-    final st = {...g.style};
+  /// Diff colours without an accent or colours given: removed text dim,
+  /// added bold.
+  int _diffStyle(_DiffSeg g, ({Color? removed, Color? added, Color? color, Color? background, Set<Style> style}) p) {
+    final st = {...g.style, ...p.style};
+    if (accent != null || p.removed != null || p.added != null || p.color != null) {
+      final fg = g.fg == Color.red
+          ? (p.removed ?? Color.red)
+          : g.fg == Color.green
+          ? (p.added ?? Color.green)
+          : (g.fg ?? p.color);
+      return _pack(fg, g.bg ?? p.background, st);
+    }
     if (g.fg == Color.red) {
       st
         ..remove(Style.bold)
         ..add(Style.dim);
     }
-    return _pack(null, null, st);
+    return _pack(null, p.background, st);
   }
 
-  /// Markdown highlighting without an accent: comments dim, no colour.
-  int _mdStyle(_MdSeg g) => accent != null
-      ? _pack(g.fg, g.bg, g.style)
-      : _pack(null, null, g.fg == Color.gray ? {...g.style, Style.dim} : g.style);
+  /// Markdown highlighting without an accent or colour: comments dim.
+  int _mdStyle(_MdSeg g, Color? color, Color? background, Set<Style> style) => accent != null || color != null
+      ? _pack(g.fg ?? color, g.bg ?? background, {...g.style, ...style})
+      : _pack(null, background, g.fg == Color.gray ? {...g.style, ...style, Style.dim} : {...g.style, ...style});
+
+  /// A selected row or tab: bold on [highlight], else the accent, else
+  /// reverse video.
+  int _selected(Color? highlight, Color? fg, Set<Style> style) {
+    final bg = highlight ?? accent;
+    return _pack(bg == null ? fg : null, bg, {...style, Style.bold, if (bg == null) Style.reverse});
+  }
 
   int _pack(Color? fg, Color? bg, Set<Style> style) {
     var bits = 0;
@@ -630,6 +645,10 @@ final class _Session<S> implements term.TuiBridge {
         Style.reverse => 32,
       };
     }
+    return _packBits(fg, bg, bits);
+  }
+
+  int _packBits(Color? fg, Color? bg, int bits) {
     if (fg == null && bg == null && bits == 0) return 0;
     final key = (fg, bg, bits);
     return _styleCache.putIfAbsent(key, () {
@@ -709,7 +728,20 @@ final class _Session<S> implements term.TuiBridge {
           _clickAt(kind, x, y);
         case term.TermHover(:final x, :final y):
           _mouse = (x, y);
+          _released(); // motion without a button: let go
           _dirtyAndWake();
+        case term.TermDrag(:final x, :final y):
+          _mouse = (x, y);
+          final drag = _dragging;
+          if (drag != null) {
+            for (final ctx in _scrolls) {
+              if (identical(ctx.scroll, drag)) _scrollTo(ctx, y);
+            }
+          } else {
+            _selectTo(x, y);
+          }
+        case term.TermRelease():
+          _released();
         case term.TermFocus(:final gained):
           _termFocused = gained;
           _focusReported = true;
@@ -719,7 +751,95 @@ final class _Session<S> implements term.TuiBridge {
     }
   }
 
+  /// The scroll whose scrollbar the left button is dragging.
+  Scroll? _dragging;
+
+  /// Where the left button went down: a drag from there selects text.
+  (int, int)? _pressAt;
+
+  /// The selection, as (x, y) screen cells from where the drag began to
+  /// where it is; rows run within [_selCols] (the scroll it began in, else
+  /// the whole width). Drawn reversed until the next click.
+  (int, int)? _selFrom, _selTo;
+  var _selCols = (0, 0);
+  var _selecting = false;
+
+  void _selectTo(int x, int y) {
+    final from = _pressAt;
+    if (from == null) return;
+    if (!_selecting) {
+      _selecting = true;
+      _selFrom = from;
+      _selCols = (0, _w);
+      for (final c in _scrolls) {
+        if (from.$1 >= c.gx && from.$1 < c.gx + c.w - 1 && from.$2 >= c.gy && from.$2 < c.gy + c.viewH) {
+          _selCols = (c.gx, c.gx + c.w - 1); // the scrollbar is not text
+        }
+      }
+    }
+    _selTo = (x.clamp(_selCols.$1, _selCols.$2 - 1), y.clamp(0, math.max(0, _h - 1)));
+    _dirtyAndWake();
+  }
+
+  /// The button let go: a selection is copied (OSC 52).
+  void _released() {
+    _dragging = null;
+    _pressAt = null;
+    if (!_selecting) return;
+    _selecting = false;
+    final text = _selText();
+    if (text.isEmpty) return;
+    copy(text);
+    _say('copied ${text.length} characters');
+  }
+
+  /// The selected cells, row by row: (y, first x, last x), inclusive.
+  Iterable<(int, int, int)> _selRows() sync* {
+    final a = _selFrom, b = _selTo;
+    if (a == null || b == null) return;
+    final (start, end) = (a.$2 < b.$2 || (a.$2 == b.$2 && a.$1 <= b.$1)) ? (a, b) : (b, a);
+    for (var y = start.$2; y <= end.$2 && y < _grid.length; y++) {
+      yield (y, y == start.$2 ? start.$1 : _selCols.$1, y == end.$2 ? end.$1 : _selCols.$2 - 1);
+    }
+  }
+
+  String _selText() => [
+    for (final (y, x0, x1) in _selRows())
+      [
+        for (var x = x0; x <= x1 && x < _grid[y].length; x++)
+          if (_grid[y][x].width > 0) _grid[y][x].ch,
+      ].join().trimRight(),
+  ].join('\n');
+
+  /// Reverse the selected cells of this frame.
+  void _drawSelection() {
+    for (final (y, x0, x1) in _selRows()) {
+      for (var x = x0; x <= x1 && x < _grid[y].length; x++) {
+        final c = _grid[y][x];
+        final (fg, bg, bits) = c.style <= 0 ? (null, null, 0) : _styles[c.style - 1];
+        _grid[y][x] = _Cell(c.ch, _packBits(fg, bg, bits ^ 32), c.width, link: c.link);
+      }
+    }
+  }
+
+  /// Put the scrollbar thumb at screen row [y] of [ctx]: the top row shows
+  /// the start, the bottom row the end (which pins a following scroll).
+  void _scrollTo(_ScrollCtx ctx, int y) {
+    final maxOff = math.max(0, ctx.buf.length - ctx.viewH);
+    final row = (y - ctx.gy).clamp(0, math.max(0, ctx.viewH - 1));
+    final st = ctx.scroll;
+    st._off = ctx.viewH <= 1 ? maxOff : (row * maxOff / (ctx.viewH - 1)).round();
+    st._pinned = st._off >= maxOff;
+    _dirtyAndWake();
+  }
+
   void _clickAt(String kind, int x, int y) {
+    _dragging = null;
+    _pressAt = kind == 'click' ? (x, y) : null;
+    if (_selFrom != null) {
+      _selFrom = _selTo = null;
+      _dirty = true;
+    }
     if (kind == 'click') {
       final now = _now();
       final last = _lastClick;
@@ -1120,6 +1240,7 @@ final class _Session<S> implements term.TuiBridge {
         return;
       }
     }
+    _drawSelection();
     if (!identical(_shownState, _state)) {
       _shownState = _state;
       _fireLifecycle('show');

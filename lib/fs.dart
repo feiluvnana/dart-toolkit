@@ -64,7 +64,7 @@ abstract final class Fs {
   /// Run [body] with a fresh folder under the system temp dir, then delete
   /// it (Ctrl-C included) and return what [body] returned. A scope, not a
   /// handle: nothing to forget, and nothing keeps the script alive.
-  static Future<T> temp<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'}) async {
+  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'}) async {
     final made = await io.Directory.systemTemp.createTemp('$prefix-');
     final token = exit.onExit(() async {
       try {
@@ -82,7 +82,7 @@ abstract final class Fs {
   }
 
   /// The user's home folder (`HOME`; `USERPROFILE` on Windows).
-  static Dir home() {
+  static Dir homeDir() {
     final env = io.Platform.environment;
     final home = io.Platform.isWindows ? env['USERPROFILE'] : env['HOME'];
     if (home == null || home.isEmpty) throw const io.FileSystemException('no home folder (HOME is unset)');

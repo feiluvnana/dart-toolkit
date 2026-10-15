@@ -5,7 +5,21 @@ extension RegionDiff on Region {
   /// A line diff: unified hunks with 3 context lines, gutter line numbers,
   /// `-`/`+` rows on red/green backgrounds, changed words of paired lines
   /// brighter.
-  Region diff(String before, String after) {
+  /// [removed] and [added] replace red and green; [color], [background]
+  /// and [style] are the base of the context lines and [on] binds events,
+  /// as in `write`.
+  Region diff(
+    String before,
+    String after, {
+    Color? removed,
+    Color? added,
+    Color? color,
+    Color? background,
+    Set<Style> style = const {},
+    Map<String, Binding>? on,
+  }) {
+    final top = _cursor;
+    final paint = (removed: removed, added: added, color: color, background: background, style: style);
     final key = (before, after);
     final rows = _diffMemo.remove(key) ?? _diffHunks(before.split('\n'), after.split('\n'));
     _diffMemo[key] = rows; // most recent last
@@ -17,10 +31,11 @@ extension RegionDiff on Region {
       }
       var col = _gx;
       for (final seg in line) {
-        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._diffStyle(seg), null);
+        col = _writeLine(_gy + _cursor, col, _gx + _w, seg.text, _s._diffStyle(seg, paint), null);
       }
       _cursor++;
     }
+    _bindRows(on, top);
     return this;
   }
 }

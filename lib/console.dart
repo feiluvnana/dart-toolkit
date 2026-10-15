@@ -264,7 +264,7 @@ abstract final class Console {
     }
     final bindings = _canonicalBindings(keys);
     try {
-      if (!io.stdin.hasTerminal || !io.stderr.hasTerminal || !_rawKeys()) {
+      if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
         return await _chooseNumbered(question, items, labels);
       }
       return await _chooseInteractive(question, items, labels, selected, bindings, or);
@@ -339,7 +339,7 @@ abstract final class Console {
   /// Where raw mode is unavailable (or piped), a line is read instead and
   /// its first character counts as the key (an empty line counts as Enter).
   static Future<String> key({String? prompt}) async {
-    if (!io.stdin.hasTerminal || !io.stderr.hasTerminal || !_rawKeys()) {
+    if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
       term.setLineModes(); // undo a half-applied raw mode: fallback prompts stay visible
       final line = await _ask(prompt ?? 'Press a key, then Enter:', secret: false);
       if (line == null) throw const io.StdinException('stdin is closed');
@@ -538,7 +538,7 @@ abstract final class Console {
     // Piped stdin is read line by line off the event loop while nothing has
     // subscribed to it: a subscription drops lines that arrive between
     // prompts and keeps the script alive until the writer closes the pipe.
-    if (!io.stdin.hasTerminal && term.stdinUnclaimed && (_linePushback?.isEmpty ?? true)) {
+    if (!term.stdinTty && term.stdinUnclaimed && (_linePushback?.isEmpty ?? true)) {
       final line = await term.pipedLine();
       if (line == null) throw const io.StdinException('stdin is closed');
       return line;
