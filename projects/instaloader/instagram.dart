@@ -45,14 +45,14 @@ final web = Http.client(
 // Images and videos come from the CDN, which has no rate limit.
 final cdn = Http.client(headers: {'user-agent': agent, 'referer': '$site/'}, retries: 3, resume: true);
 
-// The logged-in client from .session (a cookies.txt export plus a
+// The logged-in client from .instaloader.session (a cookies.txt export plus a
 // "user-agent: ..." line), or null.
 Future<Client?> login() async {
-  final text = await Fs.scriptDir().file('.session').text(or: '');
+  final text = await Fs.scriptDir().file('.instaloader.session').text(or: '');
   final cookies = Cookies.parse(text);
   if (cookies['sessionid'] == null) return null;
   final ua = RegExp(r'^user-agent:(.*)$', multiLine: true, caseSensitive: false).firstMatch(text)?[1]?.trim();
-  if (ua == null) Console.log('warning: .session has no user-agent line, so requests use another browser');
+  if (ua == null) Console.log('warning: .instaloader.session has no user-agent line, so requests use another browser');
   return Http.client(
     base: site,
     rate: apiRate,
@@ -172,7 +172,7 @@ Future<Json> json(Future<Response> request) async {
   await response.close();
   throw Exception(
     url.contains('/accounts/login')
-        ? 'Instagram logged you out: copy a fresh .session from your browser.'
+        ? 'Instagram logged you out: copy a fresh .instaloader.session from your browser.'
         : 'Instagram wants you to verify the account. Do it in the browser or the app, then run again.\n$url',
   );
 }

@@ -26,7 +26,7 @@
 // notified. Nothing is ever deleted, except by --reset (it asks first).
 //
 // Without a login you only get the latest 12 posts. To log in, export your
-// instagram.com cookies as cookies.txt into .session (next to this script)
+// instagram.com cookies as cookies.txt into .instaloader.session (next to this script)
 // and add a line `user-agent: <navigator.userAgent>` of the same browser.
 //
 // If Instagram wants you to verify the account, the script stops: do it in
@@ -72,7 +72,7 @@ Future<void> run(Context c) async {
       ...(k == .all ? download.Kind.values.where((k) => k != .all && (api != null || !k.login)) : [k]),
   };
   if (api == null && want.any((k) => k.login)) {
-    throw const UsageException('Stories and highlights need a login: see .session in instaloader.dart.');
+    throw const UsageException('Stories and highlights need a login: see .instaloader.session in instaloader.dart.');
   }
   await dashboard.watch(() async {
     final added = await download.run(

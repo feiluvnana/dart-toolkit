@@ -166,7 +166,8 @@ Future<int> _user(User u, Set<Kind> kinds, Client? api, Dir root, Queue q, {requ
     // .instaloader-cursor-* remembers where an interrupted listing stopped;
     // it only moves past a page once that page's files are saved, so
     // failures retry. A run continues from it after the new posts on top,
-    // unless --all starts over.
+    // unless --all starts over, and stops as a fresh run would: at the first
+    // page on disk, unless every post is due to be listed.
     final feed = api.copy(rate: instagram.feedRate), full = all || check;
     final mark = dir.file('.instaloader-cursor-${feedParts.map((part) => part.name).join('-')}');
     final resume = all ? '' : (await mark.text(or: '')).trim();
@@ -209,15 +210,16 @@ Future<int> _user(User u, Set<Kind> kinds, Client? api, Dir root, Queue q, {requ
       } else {
         await walk(null, tracked: false, stop: true);
         log('continuing where the last run stopped');
-        complete = await walk(resume, tracked: true, stop: false);
+        complete = await walk(resume, tracked: true, stop: !full);
       }
     } finally {
       await saving;
     }
     index.newest = codes.values.fold(newest, max);
-    // Hidden and re-shown posts only show in a listing from the top; one
-    // that resumed still counts as the full listing.
-    if (complete) index.checked = DateTime.now();
+    // A full listing with failures stays due, so the next run lists past
+    // every failed page again. Hidden and re-shown posts only show in a
+    // listing from the top; one that resumed still counts as the full listing.
+    if (complete && ok) index.checked = DateTime.now();
     if (complete && resume.isEmpty) {
       final listed = codes.keys.toSet();
       // Shown again: hidden last time, or unknown but older than the newest
@@ -299,19 +301,26 @@ Future<int> _user(User u, Set<Kind> kinds, Client? api, Dir root, Queue q, {requ
     if (!index.profiles.containsKey(id)) {
       if (index.profiles.isNotEmpty) changed('new profile picture');
       index.profiles[id] = DateTime.now().format('yyyy-MM-dd');
+      await index.save(); // the file name holds that day: keep it before downloading
     }
     add([(to: dir.dir('profiles').file('${index.profiles[id]}_$id'), url: url, text: null)]);
     phase(part, '${index.profiles.length} seen${api == null ? ', 150px without a login' : ''}', done: true);
   }
 
-  await Future.wait([
-    if (kinds.contains(Kind.profile)) exploreProfile(),
-    if (photos != null || reels != null) explorePosts(),
-    if (kinds.contains(Kind.story)) exploreStories(),
-    if (kinds.contains(Kind.highlight)) exploreHighlights(),
-  ]);
+  // Even when an explorer fails, what was queued finishes and the index is
+  // saved before the user counts as failed (and r may start it over).
+  try {
+    await Future.wait([
+      if (kinds.contains(Kind.profile)) exploreProfile(),
+      if (photos != null || reels != null) explorePosts(),
+      if (kinds.contains(Kind.story)) exploreStories(),
+      if (kinds.contains(Kind.highlight)) exploreHighlights(),
+    ]);
+  } finally {
+    await Future.wait(batches);
+    await index.save();
+  }
   final results = [for (final b in await Future.wait(batches)) ...b];
-  await index.save();
   if (u.changes.isNotEmpty) Console.notify('instaloader: @${p.name} changed: ${u.changes.join('; ')}');
   return results.values().where((isNew) => isNew).length;
 }

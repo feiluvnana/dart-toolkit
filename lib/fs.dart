@@ -90,8 +90,7 @@ abstract final class Fs {
   }
 
   /// The folder of the running script (`Platform.script`), so a script keeps
-  /// its data next to itself whatever the working directory:
-  /// `Fs.scriptDir().file('.session')`.
+  /// its data next to itself whatever the working directory.
   static Dir scriptDir() => Dir._(p.dirname(io.Platform.script.toFilePath()));
 
   /// [name] (a scraped title, a header value) as one file name that is safe
