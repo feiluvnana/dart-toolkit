@@ -2,6 +2,7 @@
 // Import with `as dashboard`.
 library;
 
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io' show exit, stdout;
 import 'dart:math' show max;
@@ -21,11 +22,29 @@ final class Board {
   final usersScroll = Scroll(follow: false), transfersScroll = Scroll(follow: false), log = Scroll();
   var requests = 0, bytes = 0;
   String? pause; // why Instagram calls are on hold
+  Timer? _pauseTimer; // clears [pause]; cancelled on quit so it never keeps the process alive
   var done = false, failuresOnly = false, live = false;
   final failures = <Failure>[]; // what r retries
   var retrying = 0;
   bool get finished => done && retrying == 0;
   final _samples = ListQueue<(DateTime, int)>();
+
+  // Instagram calls are on hold for [wait]: show why, then clear it. The
+  // timer is cancelled on quit (see [clearPause]), so a run quit during a
+  // rate-limit wait never keeps the process alive until it fires.
+  void holdPause(String why, Duration wait) {
+    pause = why;
+    note(why);
+    _pauseTimer?.cancel();
+    _pauseTimer = Timer(wait, () => pause = null);
+  }
+
+  // Drop a pending pause wait: the timer must not outlive the run.
+  void clearPause() {
+    _pauseTimer?.cancel();
+    _pauseTimer = null;
+    pause = null;
+  }
 
   // A failure to report now and retry on r.
   void fail(String line, Future<void> Function() retry) {
@@ -130,40 +149,51 @@ Future<T> watch<T>(Future<T> Function() work) async {
     try {
       return await work();
     } finally {
+      board.clearPause();
       summary();
     }
   }
   late final Future<T> job;
   board.live = true;
-  await Tui.run(board, accent: name, (b, app) {
-    return Screen(
-      title: title(b),
-      status: b.finished
-          ? 'done: press q to leave'
-          : b.retrying > 0
-          ? 'retrying ${b.retrying}…'
-          : b.pause,
-      draw,
-      keys: {
-        'show': (
-          '',
-          () {
-            job = work();
-            job.then((_) {}, onError: (Object e, _) => b.note('✗ $e', failed: true)).whenComplete(() => b.done = true);
-          },
-        ),
-        'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()} (${b.events.length} lines)')),
-        if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
-        'q escape': (
-          'quit',
-          () async {
-            if (b.finished || await Console.confirm('Stop downloading? The next run continues from here.')) app.quit();
-          },
-        ),
-      },
-    );
-  });
-  board.live = false;
+  try {
+    await Tui.run(board, accent: name, (b, app) {
+      return Screen(
+        title: title(b),
+        status: b.finished
+            ? 'done: press q to leave'
+            : b.retrying > 0
+            ? 'retrying ${b.retrying}…'
+            : b.pause,
+        draw,
+        keys: {
+          'show': (
+            '',
+            () {
+              job = work();
+              job
+                  .then((_) {}, onError: (Object e, _) => b.note('✗ $e', failed: true))
+                  .whenComplete(() => b.done = true);
+            },
+          ),
+          'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()} (${b.events.length} lines)')),
+          if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
+          'q escape': (
+            'quit',
+            () async {
+              if (b.finished || await Console.confirm('Stop downloading? The next run continues from here.')) {
+                app.quit();
+              }
+            },
+          ),
+        },
+      );
+    });
+  } finally {
+    // The TUI is gone from here on: no timer may keep the process alive
+    // past it (the shell would wait with no prompt until Ctrl-C).
+    board.live = false;
+    board.clearPause();
+  }
   summary();
   if (!board.finished) exit(130);
   final result = await job;

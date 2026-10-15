@@ -20,11 +20,7 @@ Rate rate(int calls) => Rate(
   calls,
   11.minutes,
   pause: 3.seconds,
-  onWait: (w) {
-    board.pause = 'Instagram rate limit: waiting ${w.human()}';
-    board.note(board.pause!);
-    Timer(w, () => board.pause = null);
-  },
+  onWait: (w) => board.holdPause('Instagram rate limit: waiting ${w.human()}', w),
 );
 final apiRate = rate(75), feedRate = rate(200);
 

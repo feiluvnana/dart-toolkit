@@ -1550,19 +1550,30 @@ final class _Session<S> implements term.TuiBridge {
     _cancelPrompts();
     if (!_entered) return;
     _wake();
-    await Future.wait(
-      _subs.map((sub) async {
-        try {
-          await sub.cancel();
-        } catch (_) {}
-      }),
-    );
+    // Bounded: a listener that never cancels (a stuck tty child, a blocked
+    // stdin) must not keep the shell waiting with no prompt after the
+    // alternate screen is gone; the restore below still runs.
+    try {
+      await Future.wait(
+        _subs.map((sub) async {
+          try {
+            await sub.cancel().timeout(const Duration(seconds: 2));
+          } catch (_) {
+            // Give up on this listener; the restore below still runs.
+          }
+        }),
+      ).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Give up waiting: the terminal restore below still runs.
+    }
     _subs.clear();
     _restoreTerminal();
     term.ttyInput = false;
     try {
-      await io.stdout.flush();
-    } catch (_) {}
+      await io.stdout.flush().timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Give up flushing: the terminal is already restored above.
+    }
     for (final (e, st) in _errorLog) {
       try {
         io.stderr.writeln('tui: a handler failed: $e\n$st');

@@ -127,7 +127,14 @@ Future<void> _stopInput() async {
   _ttySub = null;
   final tty = _tty;
   _tty = null;
-  await sub?.cancel();
+  // Bounded: a tty child that never closes its stdout must not keep the
+  // process alive after the TUI is gone; its stdin pipe is still closed
+  // below so the child can exit on its own.
+  try {
+    await sub?.cancel().timeout(const Duration(seconds: 2));
+  } catch (_) {
+    // Give up waiting: the stdin pipe below still lets the child exit.
+  }
   if (tty != null) _endTty(tty);
 }
 
@@ -312,7 +319,8 @@ abstract class TuiBridge {
           final btn = bytes[j + 1] - 32;
           final valid = bytes[j + 1] >= 32 && bytes[j + 2] > 32 && bytes[j + 3] > 32;
           if (valid && btn & 3 != 3) _mouse(out, btn, bytes[j + 2] - 33, bytes[j + 3] - 33);
-          if (valid && btn & 3 == 3 && btn & 96 == 0) out.add(TermRelease(bytes[j + 2] - 33, bytes[j + 3] - 33)); // 3 is a release
+          if (valid && btn & 3 == 3 && btn & 96 == 0)
+            out.add(TermRelease(bytes[j + 2] - 33, bytes[j + 3] - 33)); // 3 is a release
           i = j + 4;
           continue;
         }

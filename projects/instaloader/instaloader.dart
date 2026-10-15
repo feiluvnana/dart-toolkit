@@ -3,7 +3,12 @@
 //
 //   dart run projects/instaloader/instaloader.dart download
 //       [--category=photo,reel,story,highlight,profile] <user>... [--all] [--reset]
+//   dart run projects/instaloader/instaloader.dart update [--all] [--reset]
 //
+// `update` re-downloads every user in downloads/ with the categories it
+// already has: a user first downloaded with only some categories keeps only
+// those.
+
 // Every user and category is fetched at once, and files download 8 at a
 // time. A full-screen dashboard shows each user's folders (bar, new/had/
 // failed, size, what its explorer is doing), every file in flight with its
@@ -61,28 +66,64 @@ Future<void> main(List<String> args) => Command(
       params: [kinds, all, reset, users],
       handler: run,
     ),
+    Command(
+      'update',
+      'Update every downloaded user with the categories it already has.',
+      params: [all, reset],
+      handler: update,
+    ),
   ],
 ).run(args);
 
 Future<void> run(Context c) async {
   final api = await instagram.login();
-  // all: whatever the login allows.
-  final want = {
-    for (final k in c(kinds))
-      ...(k == .all ? download.Kind.values.where((k) => k != .all && (api != null || !k.login)) : [k]),
-  };
-  if (api == null && want.any((k) => k.login)) {
-    throw const UsageException('Stories and highlights need a login: see .instaloader.session in instaloader.dart.');
+  try {
+    // all: whatever the login allows.
+    final want = {
+      for (final k in c(kinds))
+        ...(k == .all ? download.Kind.values.where((k) => k != .all && (api != null || !k.login)) : [k]),
+    };
+    if (api == null && want.any((k) => k.login)) {
+      throw const UsageException('Stories and highlights need a login: see .instaloader.session in instaloader.dart.');
+    }
+    await dashboard.watch(() async {
+      final added = await download.run(
+        c(users),
+        want,
+        api,
+        Fs.scriptDir().dir('downloads'),
+        all: c(all),
+        reset: c(reset),
+      );
+      Console.notify('instaloader: done, $added new files');
+    });
+  } finally {
+    // Release its sockets at once: otherwise the process lingers on the
+    // client's idle timer after the dashboard is gone.
+    await api?.close();
   }
-  await dashboard.watch(() async {
-    final added = await download.run(
-      c(users),
-      want,
-      api,
-      Fs.scriptDir().dir('downloads'),
-      all: c(all),
-      reset: c(reset),
-    );
-    Console.notify('instaloader: done, $added new files');
-  });
+}
+
+// Re-downloads every user in downloads/ with the categories it already has
+// (see download.discover): a user first downloaded with only some categories
+// keeps only those.
+Future<void> update(Context c) async {
+  final api = await instagram.login();
+  try {
+    final root = Fs.scriptDir().dir('downloads');
+    final wants = await download.discover(root);
+    if (wants.isEmpty) {
+      Console.log('instaloader: nothing downloaded yet, nothing to update.');
+      return;
+    }
+    if (api == null && wants.values.any((kinds) => kinds.any((k) => k.login))) {
+      throw const UsageException('Stories and highlights need a login: see .instaloader.session in instaloader.dart.');
+    }
+    await dashboard.watch(() async {
+      final added = await download.runEach(wants, api, root, all: c(all), reset: c(reset));
+      Console.notify('instaloader: done, $added new files');
+    });
+  } finally {
+    await api?.close();
+  }
 }

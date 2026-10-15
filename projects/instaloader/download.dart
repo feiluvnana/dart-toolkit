@@ -42,22 +42,48 @@ typedef Results = List<Outcome<media.Download, bool>>;
 // queue that downloads 8 files at a time, reporting into the dashboard.
 // Returns the new files. [reset] first deletes those folders of each user,
 // after asking.
-Future<int> run(
-  List<String> names,
-  Set<Kind> kinds,
-  Client? api,
-  Dir root, {
-  bool all = false,
-  bool reset = false,
-}) async {
+Future<int> run(List<String> names, Set<Kind> kinds, Client? api, Dir root, {bool all = false, bool reset = false}) =>
+    runEach({for (final name in names) name: kinds}, api, root, all: all, reset: reset);
+
+// Downloads each user with its own [kinds] into [root]/<user>/, all at once:
+// every user's explorers run concurrently and feed one queue that downloads
+// 8 files at a time. Returns the new files. [reset] first deletes those
+// folders of each user, after asking.
+Future<int> runEach(Map<String, Set<Kind>> wants, Client? api, Dir root, {bool all = false, bool reset = false}) async {
   if (reset) {
-    for (final name in names) {
-      await wipe(root.dir(Fs.sanitize(name.toLowerCase())), kinds);
+    for (final MapEntry(:key, :value) in wants.entries) {
+      await wipe(root.dir(Fs.sanitize(key.toLowerCase())), value);
     }
   }
   final q = Queue();
-  final added = await Future.wait([for (final name in names) user(name, kinds, api, root, q, all: all)]);
+  final added = await Future.wait([
+    for (final MapEntry(:key, :value) in wants.entries) user(key, value, api, root, q, all: all),
+  ]);
   return added.fold<int>(0, (a, b) => a + b);
+}
+
+// Every user downloaded into [root] before, with the categories it has: a
+// folder per category (photos, reels, stories, highlights, profiles), so a
+// user first downloaded with only some categories keeps only those on
+// `update`. Folders without .instaloader.json were never downloaded and are
+// skipped, as are users with none of the folders left.
+Future<Map<String, Set<Kind>>> discover(Dir root) async {
+  final out = <String, Set<Kind>>{};
+  if (!await root.exists()) return out;
+  for (final e in await root.list()) {
+    if (e is! Dir) continue;
+    if (!await e.file('.instaloader.json').exists()) continue;
+    final kinds = <Kind>{
+      for (final k in Kind.values)
+        if (k != Kind.all && await e.dir(k.folder).exists()) k,
+    };
+    if (kinds.isEmpty) {
+      board.note('@${e.name()} has nothing downloaded yet, skipped');
+      continue;
+    }
+    out[e.name()] = kinds;
+  }
+  return out;
 }
 
 // Downloads one user; returns the new files.
