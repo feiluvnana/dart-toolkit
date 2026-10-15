@@ -491,7 +491,7 @@ void main() {
           }
         }
       }
-    });
+    }, tags: 'slow');
 
     test('an encrypted or truncated zip is a FormatException', () async {
       if (!await has('zip')) markTestSkipped('needs zip');
@@ -903,6 +903,18 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       }
     });
 
+    test('members that climb out or are absolute are refused before anything is written', () async {
+      for (final name in ['../x', 'a/../../x', '..', '..\\x', '/tmp/x', '\\x', 'C:x']) {
+        final tar = [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits), ...List.filled(1024, 0)];
+        await expectLater(
+          Archive.unarchive(p('out')).consume(Stream.value(tar)),
+          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('escapes'))),
+          reason: name,
+        );
+        expect(await Fs.entry(p('out')), isNull, reason: name);
+      }
+    });
+
     test('M29: members that differ only in case are refused', () async {
       List<int> member(String name) => [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits)];
       final tar = [...member('A.txt'), ...member('a.txt'), ...List.filled(1024, 0)];
@@ -997,6 +1009,27 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       ];
       expect(sevenzip.readSevenZip(Uint8List.fromList(_sevenZip(real, encoded(crc32(real))))), isEmpty);
       await expectLater(unpack(_sevenZip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
+    });
+
+    test('7z data is checked against its file, folder and start-header CRCs', () async {
+      // One Copy folder holding "aa" and "bb"; CRCs per file, or one for the folder.
+      List<int> twoFiles({required bool perFile}) => _sevenZip('aabb'.codeUnits, [
+        ...[0x01, 0x04, 0x06, 0, 1, 0x09, 4, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 4],
+        if (!perFile) ...[0x0A, 1, ..._le32(crc32('aabb'.codeUnits))],
+        ...[0, 0x08, 0x0D, 2, 0x09, 2],
+        if (perFile) ...[0x0A, 1, ..._le32(crc32('aa'.codeUnits)), ..._le32(crc32('bb'.codeUnits))],
+        ...[0, 0, 0x05, 2, 0x11, 9, 0, 0x61, 0, 0, 0, 0x62, 0, 0, 0, 0, 0],
+      ]);
+      List<int> flip(List<int> b, int at) => [...b]..[at] ^= 1;
+      for (final perFile in [true, false]) {
+        await unpack(twoFiles(perFile: perFile));
+        expect(await Fs.file(p('out/b')).text(), 'bb');
+        await Fs.dir(p('out')).delete();
+      }
+      await expectLater(unpack(flip(twoFiles(perFile: true), 32)), throwsA(content('CRC of a')));
+      await expectLater(unpack(flip(twoFiles(perFile: false), 32)), throwsA(content('folder CRC')));
+      final b = twoFiles(perFile: true);
+      await expectLater(unpack(flip(b, b.length - 3)), throwsA(content('header CRC')));
     });
 
     test('7z counts and sizes past the header are damage, not a RangeError or an allocation', () async {

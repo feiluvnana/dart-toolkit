@@ -3,7 +3,22 @@ import 'dart:io';
 import 'package:dart_toolkit/cli.dart';
 import 'package:test/test.dart';
 
+import 'support/capture.dart';
 import 'support/child.dart';
+
+/// Run [cli] expecting exit [code]; returns what it printed to stderr.
+Future<String> fails(Command cli, List<String> argv, [int code = 64]) async {
+  final r = await capture(() => cli.run(argv));
+  expect(r.value, code, reason: r.err);
+  return r.err;
+}
+
+/// Run [cli] expecting exit 0; returns what it printed to stdout.
+Future<String> helps(Command cli, List<String> argv) async {
+  final r = await capture(() => cli.run(argv));
+  expect(r.value, 0, reason: r.err);
+  return r.out;
+}
 
 void main() {
   valuesTests();
@@ -18,7 +33,7 @@ void main() {
       expect(seen, 3);
       expect(await cli.run(['-n4']), 0);
       expect(seen, 4);
-      expect(await cli.run(['--top', 'soon']), 64);
+      expect(await fails(cli, ['--top', 'soon']), contains('option "--top": expected an integer'));
     });
 
     test('T is inferred from or: and parse:', () async {
@@ -93,7 +108,7 @@ void main() {
     test('--no-name is rejected on a Flag without or: true', () async {
       final v = Flag('verbose', 'V.');
       final cli = Command('app', 'X.', params: [v], handler: (_) {});
-      expect(await cli.run(['--no-verbose']), 64);
+      expect(await fails(cli, ['--no-verbose']), contains('Did you mean "--verbose"?'));
       expect(await cli.run(['--verbose']), 0);
     });
 
@@ -114,7 +129,7 @@ void main() {
     test('required Opt missing is 64', () async {
       final req = Opt<String>('token', 'T.', required: true);
       final cli = Command('app', 'X.', params: [req], handler: (_) {});
-      expect(await cli.run([]), 64);
+      expect(await fails(cli, []), contains('Missing option --token'));
       expect(await cli.run(['--token', 'x']), 0);
     });
 
@@ -126,7 +141,7 @@ void main() {
         params: [token],
         commands: [Command('go', 'Go.', handler: (_) {})],
       );
-      expect(await cli.run(['go']), 64);
+      expect(await fails(cli, ['go']), contains('Run "app go --help" for usage.'));
       expect(await cli.run(['--token', 'x', 'go']), 0);
     });
 
@@ -156,8 +171,8 @@ void main() {
     test('C5: a short h keeps --help', () async {
       final h = Opt<String>('host', 'H.', short: 'h', or: 'x');
       final cli = Command('app', 'X.', params: [h], handler: (_) {});
-      expect(await cli.run(['--help']), 0);
-      expect(await cli.run(['-h', 'y']), 0);
+      expect(await helps(cli, ['--help']), contains('-h, --host <value>'));
+      expect((await capture(() => cli.run(['-h', 'y']))).value, 0);
       expect(() => Flag('help', 'H.'), throwsArgumentError);
       expect(() => Opt<String>('help', 'H.', or: 'x'), throwsArgumentError);
     });
@@ -227,8 +242,8 @@ void main() {
       expect(await cli.run(['--uri', 'https://example.com/x', '--wait', '90']), 0);
       expect(u, Uri.parse('https://example.com/x'));
       expect(d, const Duration(seconds: 90));
-      expect(await cli.run(['--wait', 'soon']), 64);
-      expect(await cli.run(['--uri', 'notaurl']), 64);
+      expect(await fails(cli, ['--wait', 'soon']), contains('expected a duration such as 90s'));
+      expect(await fails(cli, ['--uri', 'notaurl']), contains('expected a URL'));
     });
 
     test('suggestions name options, not Args; -vh helps', () async {
@@ -236,8 +251,8 @@ void main() {
       final url = Opt<String>('url', 'U.', or: '');
       final q = Arg<String?>('q', 'Q.');
       final cli = Command('app', 'X.', params: [verbose, url, q], handler: (_) {});
-      expect(await cli.run(['--urlx', 'y']), 64);
-      expect(await cli.run(['-vh']), 0);
+      expect(await fails(cli, ['--urlx', 'y']), contains('Did you mean "--url"?'));
+      expect(await helps(cli, ['-vh']), contains('Usage: app [q] [options]'));
     });
 
     test('the hint names the deepest command reached', () async {
@@ -248,7 +263,7 @@ void main() {
           Command('remote', 'R.', commands: [Command('add', 'A.', handler: (_) {})]),
         ],
       );
-      expect(await cli.run(['remote', '--bogus']), 64);
+      expect(await fails(cli, ['remote', '--bogus']), contains('Unknown option --bogus'));
     });
   });
 
@@ -276,8 +291,8 @@ void main() {
       expect(await cli.run(['a']), 0);
       expect(s, 'a');
       expect(d, isNull);
-      expect(await cli.run([]), 64);
-      expect(await cli.run(['a', 'b', 'c']), 64);
+      expect(await fails(cli, []), contains('Missing argument <src>'));
+      expect(await fails(cli, ['a', 'b', 'c']), contains('Unexpected argument "c"'));
     });
 
     test('a query of help stays positional when Args exist', () async {
@@ -327,18 +342,18 @@ void main() {
           Command('remote', 'R.', commands: [Command('add', 'A.', handler: (_) {})]),
         ],
       );
-      expect(await cli.run(['help', 'remote', 'add']), 0);
-      expect(await cli.run(['remote', 'help', 'add']), 0);
-      expect(await cli.run(['help', 'rmove']), 64);
+      expect(await helps(cli, ['help', 'remote', 'add']), contains('Usage: tk remote add'));
+      expect(await helps(cli, ['remote', 'help', 'add']), contains('Usage: tk remote add'));
+      expect(await fails(cli, ['help', 'remot']), contains('Did you mean "remote"?'));
     });
 
     test('--help is 0, unknown command is 64, UsageException is 64', () async {
       final cli = Command('tk', 'Tool.', commands: [Command('build', 'Builds.', handler: (_) {})]);
-      expect(await cli.run(['--help']), 0);
-      expect(await cli.run(['help', 'build']), 0);
-      expect(await cli.run(['rmove']), 64);
+      expect(await helps(cli, ['--help']), contains('build               Builds.'));
+      expect(await helps(cli, ['help', 'build']), contains('Usage: tk build'));
+      expect(await fails(cli, ['rmove']), contains('Unknown command "rmove"'));
       final bad = Command('app', 'X.', handler: (_) => throw const UsageException('nope'));
-      expect(await bad.run([]), 64);
+      expect(await fails(bad, []), contains('nope'));
     });
 
     test('C10: handler Errors propagate with their stack', () async {
@@ -351,7 +366,7 @@ void main() {
       }
       expect(threw, isTrue);
       final exc = Command('app', 'X.', handler: (_) => throw FormatException('bad input'));
-      expect(await exc.run([]), 1);
+      expect(await fails(exc, [], 1), contains('FormatException: bad input'));
     });
 
     test('C14: children cannot redeclare ancestor options', () {
@@ -418,7 +433,7 @@ void main() {
       final bug = Opt<int>('n', 'N.', or: 0, parse: (_) => throw RangeError('bug'));
       expect(Command('app', 'X.', params: [bug]).run(['--n', '1']), throwsA(isA<RangeError>()));
       final bad = Opt<int>('n', 'N.', or: 0, parse: (_) => throw Exception('no'));
-      expect(await Command('app', 'X.', params: [bad]).run(['--n', '1']), 64);
+      expect(await fails(Command('app', 'X.', params: [bad]), ['--n', '1']), contains('option "--n": no'));
     });
   });
 
@@ -635,7 +650,7 @@ void valuesTests() {
       expect(got, _Section.reels);
       expect(await cli.run([]), 0);
       expect(got, _Section.photos);
-      expect(await cli.run(['stories']), 64);
+      expect(await fails(cli, ['stories']), contains('expected photos, reels'));
     });
 
     test('usage lists the values', () async {

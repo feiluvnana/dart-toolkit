@@ -88,6 +88,52 @@ void main() {
     });
   });
 
+  group('selectors', () {
+    test('structural, form, logical, relational, attribute and escaped selectors', () {
+      final doc = Html.parse('''
+<div id=root lang="en-GB">
+  <ul id=l><li id=a class="x Y">1</li><li id=b>2</li><li id=c class=x>3</li><li id=d>4</li><li id=e class=x>5</li></ul>
+  <p id=p1></p><span id=s1>t</span><p id=p2>x</p>
+  <form><fieldset disabled><input id=i1></fieldset><input id=i2 checked><input id=i3 disabled>
+  <select><option id=o1 selected>z</option></select></form>
+  <a id=k1 href="/x">l</a><a id=k2>n</a><b id="we:ird" lang=fr></b><b id="1st"></b>
+  <section id=h><b id=hb></b></section><section id=h2></section>
+</div>''');
+      final cases = {
+        'li:nth-child(2n+1)': 'a c e',
+        'li:nth-child(even)': 'b d',
+        'li:nth-child(-n+2)': 'a b',
+        'li:nth-last-child(1)': 'e',
+        'li:nth-child(2 of .x)': 'c',
+        'li:nth-of-type(2)': 'b',
+        'p:first-of-type, p:last-of-type': 'p1 p2',
+        'span:only-of-type': 's1',
+        'p:empty': 'p1',
+        ':root': 'root',
+        ':link': 'k1',
+        'input:checked, option:checked': 'i2 o1',
+        'input:disabled': 'i1 i3',
+        'input:enabled': 'i2',
+        'li:is(#a, #b)': 'a b',
+        'li:where(.x):not(#a)': 'c e',
+        'section:has(> b)': 'h',
+        'p:has(+ span)': 'p1',
+        'b:lang(fr)': 'we:ird',
+        'li[class~=y i]': 'a',
+        'li[class^=x]': 'a c e',
+        'li[class|=x]': 'c e',
+        r'#we\:ird, #\31 st': 'we:ird 1st',
+        'li::before, li:hover': '',
+      };
+      for (final MapEntry(key: sel, value: ids) in cases.entries) {
+        expect(doc.$(sel).attrs('id').join(' '), ids, reason: sel);
+      }
+      for (final bad in ['li:nth-child(x)', 'li:bogus', ':has(', 'li[', 'li >']) {
+        expect(() => doc.$(bad), throwsFormatException, reason: bad);
+      }
+    });
+  });
+
   group('deep documents', () {
     test('every query works 20,000 deep: parse, \$, not and text never recurse', () {
       final doc = Html.parse('${'<div>' * 20000}<a>x</a>${'</div>' * 20000}');

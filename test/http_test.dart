@@ -8,6 +8,7 @@ import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
+import 'support/capture.dart';
 import 'support/child.dart';
 
 /// Python-generated fixtures (codecs with the same names): `python3 -c
@@ -211,7 +212,7 @@ void main() {
       await once.post('$base/boom?code=502', body: Body.text('x'));
       await once.delete('$base/boom?code=502');
       expect((hits['POST'], hits['DELETE']), (3, 2));
-    });
+    }, tags: 'slow');
 
     test('post sends json and form bodies', () async {
       final j = await http.post('$base/echo', body: .json({'a': 1}));
@@ -260,7 +261,7 @@ void main() {
         Http.client(timeout: 1.seconds).put('$base/blackhole', body: Body.stream(_SlowReader())),
         throwsA(isA<TimeoutException>()),
       );
-    });
+    }, tags: 'slow');
 
     test('a streamed body is sent once, whatever retries says', () async {
       await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(_Mem('x')));
@@ -515,7 +516,7 @@ void abortTests() {
       await Future<void>.delayed(const Duration(milliseconds: 1500));
       expect(hits, 1);
       await slow.close(force: true);
-    });
+    }, tags: 'slow');
 
     test('abort wakes a pending retry backoff', () async {
       final bad = await HttpServer.bind('127.0.0.1', 0);
@@ -1194,34 +1195,37 @@ final class _Path with Writer {
 void serveTests() {
   group('Http.serve', () {
     test('answers text, json, streams, redirects and statuses; a handler error is a 500', () async {
-      final dir = await Directory.systemTemp.createTemp('serve');
-      addTearDown(() => dir.delete(recursive: true));
-      await File('${dir.path}/page.html').writeAsString('<p>hi</p>');
-      final server = await Http.serve(
-        (r) async => switch (r.path()) {
-          '/callback' => Reply.text('code ${r.query('code')}'),
-          '/json' => Reply.json({'method': r.method(), 'agent': r.header('x-a')}),
-          '/echo' => Reply.text('got ${await r.text()}', status: 201),
-          '/page' => Reply.stream(_Mem('<p>hi</p>'), type: 'text/html'),
-          '/go' => const Reply.redirect('/callback?code=7'),
-          '/boom' => throw StateError('handler failed'),
-          _ => const Reply.status(404),
-        },
-      );
-      addTearDown(server.close);
-      final c = Http.client(headers: {'x-a': 'me'});
-      final u = server.url();
-      expect(u, startsWith('http://127.0.0.1:'));
-      expect(await c.get('${u}callback?code=42').text(), 'code 42');
-      expect((await c.get('${u}json').json()).$('agent').text(), 'me');
-      final echo = await c.post('${u}echo', body: .text('body'));
-      expect((echo.status(), await echo.text()), (201, 'got body'));
-      final page = await c.get('${u}page');
-      expect((page.header('content-type'), await page.text()), ('text/html', '<p>hi</p>'));
-      expect(await c.get('${u}go').text(), 'code 7');
-      expect(await c.get('${u}boom').status(), 500);
-      expect(await c.get('${u}nope').status(), 404);
-      await c.close();
+      final log = await capture(() async {
+        final dir = await Directory.systemTemp.createTemp('serve');
+        addTearDown(() => dir.delete(recursive: true));
+        await File('${dir.path}/page.html').writeAsString('<p>hi</p>');
+        final server = await Http.serve(
+          (r) async => switch (r.path()) {
+            '/callback' => Reply.text('code ${r.query('code')}'),
+            '/json' => Reply.json({'method': r.method(), 'agent': r.header('x-a')}),
+            '/echo' => Reply.text('got ${await r.text()}', status: 201),
+            '/page' => Reply.stream(_Mem('<p>hi</p>'), type: 'text/html'),
+            '/go' => const Reply.redirect('/callback?code=7'),
+            '/boom' => throw StateError('handler failed'),
+            _ => const Reply.status(404),
+          },
+        );
+        addTearDown(server.close);
+        final c = Http.client(headers: {'x-a': 'me'});
+        final u = server.url();
+        expect(u, startsWith('http://127.0.0.1:'));
+        expect(await c.get('${u}callback?code=42').text(), 'code 42');
+        expect((await c.get('${u}json').json()).$('agent').text(), 'me');
+        final echo = await c.post('${u}echo', body: .text('body'));
+        expect((echo.status(), await echo.text()), (201, 'got body'));
+        final page = await c.get('${u}page');
+        expect((page.header('content-type'), await page.text()), ('text/html', '<p>hi</p>'));
+        expect(await c.get('${u}go').text(), 'code 7');
+        expect(await c.get('${u}boom').status(), 500);
+        expect(await c.get('${u}nope').status(), 404);
+        await c.close();
+      });
+      expect(log.err, contains('✗ GET /boom: Bad state: handler failed'));
     });
 
     test('close waits for a request in flight, then refuses new ones', () async {

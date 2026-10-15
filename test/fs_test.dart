@@ -404,7 +404,7 @@ void main() {
 
     test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
       final lock = p('run.lock');
-      // A child script holds the lock for 1.5 s.
+      // A child script holds the lock until its stdin closes.
       final dir = await Directory.systemTemp.createTemp('lockchild');
       addTearDown(() => dir.delete(recursive: true));
       await io.File('${dir.path}/main.dart').writeAsString('''
@@ -412,7 +412,7 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/fs.dart';
 Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
   print('held');
-  await Future<void>.delayed(const Duration(milliseconds: 1500));
+  await io.stdin.drain<void>();
 });
 ''');
       final holder = await Process.start(Platform.resolvedExecutable, [
@@ -425,7 +425,10 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
         Fs.file(lock).lock(() async => 1),
         throwsA(isA<FileSystemException>().having((e) => e.message, 'message', 'locked by another process')),
       );
-      expect(await Fs.file(lock).lock(() async => 2, wait: 5.seconds), 2);
+      final waited = Fs.file(lock).lock(() async => 2, wait: 5.seconds);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await holder.stdin.close();
+      expect(await waited, 2);
       expect(await holder.exitCode, 0);
     });
   });
