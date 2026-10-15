@@ -20,7 +20,8 @@ final class Board {
   final transfers = <Transfer>[]; // in flight, oldest first
   final events = <Event>[];
   final usersScroll = Scroll(follow: false), transfersScroll = Scroll(follow: false), log = Scroll();
-  var requests = 0, bytes = 0;
+  var requests = 0;
+  int get bytes => parts.fold(0, (n, p) => n + p.bytes);
   String? pause; // why Instagram calls are on hold
   Timer? _pauseTimer; // clears [pause]; cancelled on quit so it never keeps the process alive
   var done = false, failuresOnly = false, live = false;
@@ -28,13 +29,16 @@ final class Board {
   var retrying = 0;
   bool get finished => done && retrying == 0;
   final _samples = ListQueue<(DateTime, int)>();
+  var _transferred = 0;
 
-  // Instagram calls are on hold for [wait]: show why, then clear it. The
+  // Platform calls are on hold for [wait]: show why, then clear it. The
   // timer is cancelled on quit (see [clearPause]), so a run quit during a
   // rate-limit wait never keeps the process alive until it fires.
-  void holdPause(String why, Duration wait) {
-    pause = why;
-    note(why);
+  void holdPause(String why, Duration wait, {String? platform}) {
+    final plat = platform ?? _detectPlatform(why);
+    final prefix = plat != null && plat.isNotEmpty && !why.startsWith('[$plat]') ? '[$plat] ' : '';
+    pause = '$prefix$why';
+    note(why, platform: plat);
     _pauseTimer?.cancel();
     _pauseTimer = Timer(wait, () => pause = null);
   }
@@ -47,9 +51,9 @@ final class Board {
   }
 
   // A failure to report now and retry on r.
-  void fail(String line, Future<void> Function() retry) {
+  void fail(String line, Future<void> Function() retry, {String? platform}) {
     failures.add((line: line, retry: retry));
-    note(line, failed: true);
+    note(line, platform: platform, failed: true);
   }
 
   // Every failure again; one that fails again comes back to [failures].
@@ -62,22 +66,34 @@ final class Board {
     await Future.wait([for (final f in all) f.retry().whenComplete(() => retrying--)]);
   }
 
-  User user(String name) {
-    final u = User(name);
+  User user(String name, {String platform = ''}) {
+    final u = User(name, platform: platform);
     users.add(u);
     return u;
   }
 
   // A line in the log; without a terminal, printed as it happens.
-  void note(String line, {bool failed = false}) {
-    events.add((at: DateTime.now(), line: line, failed: failed));
-    if (!live) Console.log(line);
+  void note(String line, {String? platform, bool failed = false}) {
+    final plat = platform ?? _detectPlatform(line);
+    events.add((at: DateTime.now(), line: line, platform: plat, failed: failed));
+    if (!live) {
+      final tag = plat != null && plat.isNotEmpty && !line.startsWith('[$plat]') ? '[$plat] ' : '';
+      Console.log('$tag$line');
+    }
+  }
+
+  static String? _detectPlatform(String line) {
+    final lower = line.toLowerCase();
+    if (lower.startsWith('[ins]') || lower.contains('instagram')) return 'ins';
+    if (lower.startsWith('[twt]') || lower.contains('twitter')) return 'twt';
+    if (lower.startsWith('[fbk]') || lower.contains('facebook')) return 'fbk';
+    return null;
   }
 
   void count(int n) {
-    bytes += n;
+    _transferred += n;
     final now = DateTime.now();
-    _samples.add((now, bytes));
+    _samples.add((now, _transferred));
     while (_samples.length > 2 && now.difference(_samples.first.$1) > 5.seconds) {
       _samples.removeFirst();
     }
@@ -97,12 +113,13 @@ final class Board {
   int get queued => parts.fold(0, (n, p) => n + p.queued);
 }
 
-typedef Event = ({DateTime at, String line, bool failed});
+typedef Event = ({DateTime at, String line, String? platform, bool failed});
 typedef Failure = ({String line, Future<void> Function() retry});
 
 final class User {
-  User(this.name);
+  User(this.name, {this.platform = ''});
   String name;
+  String platform;
   String? id, error;
   final parts = <String, Part>{}; // by folder: photos, reels, …
   final changes = <String>[];
@@ -130,6 +147,7 @@ final class Transfer {
   final since = DateTime.now();
   var done = 0;
   int? total;
+  String? status;
 
   void update(int done, int? total) {
     board.count(done - this.done);
@@ -147,7 +165,9 @@ final class Transfer {
 Future<T> watch<T>(Future<T> Function() work) async {
   if (!stdout.hasTerminal) {
     try {
-      return await work();
+      final result = await work();
+      if (board.failures.isNotEmpty) exit(1);
+      return result;
     } finally {
       board.clearPause();
       summary();
@@ -156,7 +176,7 @@ Future<T> watch<T>(Future<T> Function() work) async {
   late final Future<T> job;
   board.live = true;
   try {
-    await Tui.run(board, accent: name, (b, app) {
+    await Tui.run(board, accent: Color.orange, (b, app) {
       return Screen(
         title: title(b),
         status: b.finished
@@ -196,17 +216,28 @@ Future<T> watch<T>(Future<T> Function() work) async {
   }
   summary();
   if (!board.finished) exit(130);
-  final result = await job;
-  if (board.failures.isNotEmpty) throw Exception('${board.failures.length} failed: run again to retry them.');
-  return result;
+  try {
+    await job;
+  } catch (_) {}
+  if (board.failures.isNotEmpty) exit(1);
+  exit(0);
 }
+
+Color platformColor(String code) => switch (code.toLowerCase()) {
+  'ins' || 'instagram' => Color.magenta,
+  'twt' || 'twitter' => Color.cyan,
+  'fbk' || 'facebook' => Color.blue,
+  _ => Color.white,
+};
 
 // instaloader · 2 users · 140/400 files · 31 new · 2 failed · 120.4 MB · 3.1 MB/s · 1 min 12 s
 String title(Board b) {
   final parts = b.parts.toList();
   int sum(int Function(Part p) f) => parts.fold(0, (n, p) => n + f(p));
+  final plats = {for (final u in b.users) if (u.platform.isNotEmpty) u.platform}.toList();
+  final platStr = plats.isNotEmpty ? ' [${plats.join(',')}]' : '';
   return [
-    'instaloader',
+    'medialoader$platStr',
     '${b.users.length} ${b.users.length == 1 ? 'user' : 'users'}',
     '${b.files}/${b.queued} files',
     '${sum((p) => p.added)} new',
@@ -223,20 +254,22 @@ void draw(Region r) {
   final b = board;
   final [top, bottom] = r.rows([0, (r.height() / 3).round().clamp(5, 14)]);
   final [left, right] = top.cols([0, (top.width() * 0.4).round()]);
-  users(left.box('users', color: name).scroll(b.usersScroll), b);
+  users(left.box('users', color: border).scroll(b.usersScroll), b);
   transfers(
     right
         .box(
           'downloading: ${b.transfers.length} of 8 lanes, ${max(0, b.queued - b.files - b.transfers.length)} waiting',
-          color: flow,
+          color: border,
         )
         .scroll(b.transfersScroll),
     b,
   );
-  // Clicking the log's header shows only the failures, and back.
-  final head = b.failuresOnly ? 'log: failures only (click for all)' : 'log (click for failures only)';
+  // Clicking the log's header shows only failures and rate limits, and back.
+  final head = b.failuresOnly
+      ? 'log: failures & rate limits only (click for all)'
+      : 'log (click for failures & rate limits only)';
   final toggle = {'click': ('', () => b.failuresOnly = !b.failuresOnly)};
-  events(bottom.box(head, color: Color.blue, on: toggle).scroll(b.log), b);
+  events(bottom.box(head, color: border, on: toggle).scroll(b.log), b);
 }
 
 // Per user a header, then per folder its bar and a line of what its
@@ -246,10 +279,26 @@ void users(Region r, Board b) {
   final lines = <void Function(Region)>[
     if (b.users.isEmpty) (r) => r.spin('looking up users', color: busy, style: {.bold}),
     for (final u in b.users) ...[
-      (r) => switch (u) {
-        User(:final error?) => r.write('@${u.name}  ✗ $error', color: bad, style: {.bold}),
-        User(id: null) => r.spin('@${u.name}  looking up the profile', color: name, style: {.bold}),
-        _ => r.write('@${u.name} (${u.id})  ${u.busy ? 'working' : '✓ done'}', color: name, style: {.bold}),
+      (r) {
+        final plat = u.platform;
+        final [tag, handleCol, status] = r.cols([
+          plat.isNotEmpty ? 6 : 0,
+          u.name.length + 3,
+          0,
+        ]);
+        if (plat.isNotEmpty) tag.write('[$plat]', color: platformColor(plat), style: {.bold});
+        handleCol.write('@${u.name}', color: handle, style: {.bold});
+        switch (u) {
+          case User(:final error?):
+            status.write('✗ $error', color: bad, style: {.bold});
+          case User(id: null):
+            status.spin('looking up profile', color: busy, style: {.bold});
+          case User(:final id):
+            final idStr = id != null ? ' ($id)' : '';
+            u.busy
+                ? status.write('$idStr  working', color: busy)
+                : status.write('$idStr  ✓ done', color: good);
+        }
       },
       for (final p in u.parts.values) ...[
         (r) {
@@ -257,7 +306,7 @@ void users(Region r, Board b) {
           label.write('  ${p.name}', style: {.bold});
           p.finished
               ? rest.write('✓ ${p.counts} · ${p.note}', color: good)
-              : rest.bar(p.done, p.queued, color: p.failed > 0 ? bad : flow);
+              : rest.bar(p.done, p.queued, label: '${p.done}/${p.queued}', color: p.failed > 0 ? bad : flow);
         },
         if (!p.finished)
           (r) {
@@ -284,13 +333,30 @@ void transfers(Region r, Board b) {
     for (final _ in b.transfers) ...[1, 1],
   ]);
   for (final (i, t) in b.transfers.indexed) {
-    final [who, path] = rows[2 * i].cols([t.user.name.length + 2, 0]);
-    who.write('@${t.user.name}', color: name, style: {.bold});
+    final plat = t.user.platform;
+    final [tag, who, path] = rows[2 * i].cols([
+      plat.isNotEmpty ? 6 : 0,
+      t.user.name.length + 2,
+      0,
+    ]);
+    if (plat.isNotEmpty) tag.write('[$plat]', color: platformColor(plat), style: {.bold});
+    who.write('@${t.user.name}', color: handle, style: {.bold});
     path.write(t.path);
     final secs = DateTime.now().difference(t.since).inMilliseconds / 1000;
-    final [bar, rate] = rows[2 * i + 1].cols([0, 12]);
-    bar.bar(t.done, t.total, label: ' ', bytes: true, color: flow);
-    rate.write(secs > 0 ? ' ${size((t.done / secs).round())}/s' : '', style: {.dim});
+    final [bar, rate] = rows[2 * i + 1].cols([0, 14]);
+    bar.bar(t.done, t.total, label: t.status != null ? ' ${t.status}' : ' ', bytes: true, color: flow);
+    if (t.status != null) {
+      rate.write(' ${t.status}', color: busy, style: {.bold});
+    } else {
+      rate.write(secs > 0 ? ' ${size((t.done / secs).round())}/s' : '', style: {.dim});
+    }
+  }
+}
+
+extension on Event {
+  bool get isRateLimit {
+    final lower = line.toLowerCase();
+    return lower.contains('rate limit') || lower.contains('ratelimit') || lower.contains('rate-limit');
   }
 }
 
@@ -298,46 +364,68 @@ void transfers(Region r, Board b) {
 void events(Region r, Board b) {
   final shown = [
     for (final e in b.events)
-      if (e.failed || !b.failuresOnly) e,
+      if (!b.failuresOnly || e.failed || e.isRateLimit) e,
   ];
   r.lines(shown.length, (row, i) {
     final e = shown[i];
-    final [time, line] = row.cols([10, 0]);
+    final plat = e.platform;
+    final [time, tag, line] = row.cols([
+      10,
+      plat != null && plat.isNotEmpty ? 6 : 0,
+      0,
+    ]);
     time.write(e.at.format('HH:mm:ss'), style: {.dim});
+    if (plat != null && plat.isNotEmpty) {
+      tag.write('[$plat]', color: platformColor(plat), style: {.bold});
+    }
+    var text = e.line;
+    if (plat != null && text.startsWith('[$plat] ')) {
+      text = text.substring(plat.length + 3);
+    }
     line.write(
-      e.line,
-      color: e.failed ? bad : (e.line.contains(' changed: ') || e.line.contains('rate limit') ? warn : null),
+      text,
+      color: e.failed ? bad : (text.contains(' changed: ') || e.isRateLimit ? warn : null),
       style: e.failed ? {.bold} : {},
     );
   });
 }
 
-// The palette: the accent (and user names) magenta, work in progress
-// yellow, data flowing cyan, finished green, failures red.
-const name = Color.magenta, busy = Color.yellow, flow = Color.cyan, good = Color.green, bad = Color.red;
-const warn = Color.yellow;
+// The palette: borders gray, platform tags unique, progress green,
+// working/waits yellow, failures red, usernames white.
+const border = Color.gray,
+    handle = Color.white,
+    busy = Color.yellow,
+    flow = Color.green,
+    good = Color.green,
+    bad = Color.red,
+    warn = Color.yellow;
 
-// Every log line so far into .instaloader.log next to the script; returns
+// Every log line so far into .medialoader.log next to the script; returns
 // its path.
 Future<String> saveLog() async {
-  final file = Fs.scriptDir().file('.instaloader.log');
-  await file.write([for (final e in board.events) '${e.at.format('yyyy-MM-dd HH:mm:ss')}  ${e.line}\n'].join());
+  final file = Fs.scriptDir().file('.medialoader.log');
+  await file.write([
+    for (final e in board.events)
+      '${e.at.format('yyyy-MM-dd HH:mm:ss')}  ${e.platform != null && e.platform!.isNotEmpty ? '[${e.platform}] ' : ''}${e.line}\n'
+  ].join());
   return file.path();
 }
 
 // After the dashboard: a table per user, what changed and what failed.
 void summary() {
   for (final u in board.users) {
+    final title = u.platform.isNotEmpty ? '[${u.platform}] @${u.name}' : '@${u.name}';
     Console.table(
       [
         for (final p in u.parts.values)
           [p.name, p.added, p.had, if (p.failed > 0) p.failed else null, size(p.bytes), p.note],
       ],
-      header: ['@${u.name}', 'new', 'had', 'failed', 'size', ''],
+      header: [title, 'new', 'had', 'failed', 'size', ''],
     );
-    if (u.error != null) Console.log('  ✗ ${u.error}');
+    final tag = u.platform.isNotEmpty ? '[${u.platform}] ' : '';
+    if (u.error != null) Console.log('  ✗ $tag${u.error}');
     for (final c in u.changes) {
-      Console.log('  changed: $c');
+      Console.log('  changed: $tag$c');
     }
   }
   for (final f in board.failures) {

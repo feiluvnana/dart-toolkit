@@ -869,7 +869,26 @@ extension on Reader { Future<Image> image(); }
 - `encode` is a lazy `Reader`. `quality` (1–100) applies to JPEG; `.webp` and `.ico` above 256 px are an
   `ArgumentError`. The work is CPU-bound, so batches go through `Pool.map(isolates: true)`.
 
-### 4.14 csv
+### 4.14 video
+
+```dart
+enum VideoFormat { mp4, webm, mkv, mov, avi }
+final class Video {
+  static Future<Video> decode(List<int> bytes);
+  static VideoFormat? sniff(List<int> bytes);
+  int width();  int height();  Duration duration();  double fps();
+  Reader encode(VideoFormat format, {int quality = 80, int? width, int? height});
+}
+extension on Reader { Future<Video> video(); }
+```
+
+- `decode` reads MP4, WebM, MKV, MOV, and AVI, probing metadata via FFmpeg. An unknown format or
+  corrupted stream is a `ContentException`.
+- `encode` is a lazy `Reader`. `quality` (1–100) maps inversely to CRF / quantizer scale across
+  codecs (H.264, VP9, MPEG-4). A bad quality or non-positive dimension is an `ArgumentError`.
+- FFmpeg is discovered from the system `PATH` or automatically downloaded into the user cache on first use.
+
+### 4.15 csv
 
 ```dart
 abstract final class Csv {
@@ -883,7 +902,7 @@ extension on Reader { Future<List<List<String>>> csv({String sep = ','}); }
 - RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM. An
   unterminated quote is a `ContentException`. `encode` writes CRLF and quotes only what needs it.
 
-### 4.15 yaml
+### 4.16 yaml
 
 ```dart
 abstract final class Yaml { static Json parse(String text, {String? from}); }

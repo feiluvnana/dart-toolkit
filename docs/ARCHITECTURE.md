@@ -20,6 +20,7 @@ image ────────────── core, src/pixels (+image)
 cli ──────────────── core, src/sanitize
 console ──────────── core, src/exit, src/format, src/keys, src/resume, src/terminal
 tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/pixels, src/terminal
+video ────────────── core, archive, http, shell, src/cache, src/posix (+path)
 chrome ───────────── core, html, json, src/cache, src/cookies, src/exit, src/glob, src/keys, src/origin, src/tabs (+path, +puppeteer)
 
 src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── sanitize, winconsole
@@ -35,7 +36,7 @@ No cycles. Cross-module edges are the compositions the API promises: `chrome →
 | core, csv | 21–24 | — |
 | json, pool, cli, shell, hash | 57–73 | crypto (hash) |
 | fs, http, html, console | 96–103 | path (fs); charset tables (http); parser and selectors (html) |
-| archive, yaml, tui | 208–239 | in-house codecs; package:yaml; widgets and markdown |
+| archive, yaml, tui, video | 208–239 | in-house codecs; package:yaml; widgets and markdown |
 | image | 892 | package:image |
 | chrome | 1197 | puppeteer |
 

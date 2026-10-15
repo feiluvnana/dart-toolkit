@@ -56,6 +56,7 @@ Future<void> main() async {
 | `console` | prompts and progress | `ask` `confirm` `choose` `spin` `bar` `log` `table` `notify` `copy` |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, mouse, markdown, diffs, ASCII and no-colour fallbacks |
 | `image` | decode, resize, encode | off the main isolate when large, EXIF orientation |
+| `video` | decode, compress, encode | MP4, WebM, MKV, MOV, AVI; quality mapping; auto-manages FFmpeg |
 | `chrome` | a real browser | pages, screenshots, PDFs, downloads, evaluated JS, `cookies()` for http, `responses()` capture |
 
 Each module is one import and pays only for what it loads (a script that imports `html` does not load Chromium's driver). [docs/VISION.md](docs/VISION.md) is the full API with its rules; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the module graph and startup costs.
