@@ -185,7 +185,7 @@ extension on _Session<dynamic> {
       }
       for (final rune in label.runes) {
         if (col >= w - 1) break;
-        if (rune < 0x20 || rune == 0x7f) continue;
+        if (_isControl(rune)) continue;
         final cw = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
         if (cw == 0 || col + cw > w - 1) continue;
         buf[r + 1][col] = _Cell(String.fromCharCode(rune), st, cw);

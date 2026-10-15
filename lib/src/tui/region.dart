@@ -1,6 +1,10 @@
 // Region: layout.
 part of '../tui.dart';
 
+/// C0, DEL and C1: never written raw (a lone U+009B starts a CSI on
+/// xterm-like terminals). Every painter skips or replaces them.
+bool _isControl(int rune) => rune < 0x20 || rune >= 0x7f && rune <= 0x9f;
+
 /// A rectangle of the screen to draw into; layout methods return sub-regions.
 final class Region {
   // ignore: prefer_initializing_formals – internal construction stays positional.
@@ -374,7 +378,7 @@ final class Region {
         }
         continue;
       }
-      if (rune < 0x20 || rune == 0x7f || (rune >= 0x80 && rune <= 0x9f)) {
+      if (_isControl(rune)) {
         _put(row, col++, '�', 1, style, link);
         continue;
       }
@@ -433,7 +437,7 @@ final class Region {
     var col = from;
     for (final r in text.runes) {
       if (col >= end || col >= grid[row].length) break;
-      if (r < 0x20 || r >= 0x7f && r <= 0x9f) continue; // C0, DEL, C1
+      if (_isControl(r)) continue; // C0, DEL, C1
       grid[row][col++] = _Cell(String.fromCharCode(r), style, 1, link: link);
     }
   }

@@ -252,7 +252,7 @@ extension on _Session<dynamic> {
       var col = 3;
       for (final rune in text.runes) {
         if (col >= w - 2) break;
-        if (rune < 0x20 || rune == 0x7f) continue;
+        if (_isControl(rune)) continue;
         final cw = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
         if (cw == 0 || col + cw > w - 2) continue;
         buf[r + 2][col] = _Cell(String.fromCharCode(rune), st, cw);

@@ -915,6 +915,41 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       }
     });
 
+    test('a target that is a link merges into its folder and keeps what was there', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      await Fs.file(p('src/secret.txt')).write('member');
+      await Fs.dir(p('src/sub')).create();
+      await Process.run('chmod', ['777', p('src/secret.txt'), p('src/sub')]);
+      final tar = await Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tar).bytes();
+      await Fs.file(p('real/secret.txt')).write('original');
+      await Fs.dir(p('real/sub')).create();
+      await Process.run('chmod', ['600', p('real/secret.txt')]);
+      await Process.run('chmod', ['700', p('real/sub')]);
+      await Process.run('ln', ['-s', p('real'), p('link')]);
+      await Archive.unarchive(p('link')).consume(Stream.value(tar));
+      expect(await Fs.file(p('real/secret.txt')).text(), 'original');
+      expect((await FileStat.stat(p('real/secret.txt'))).mode & 0x1ff, 0x180);
+      expect((await FileStat.stat(p('real/sub'))).mode & 0x1ff, 0x1c0);
+    });
+
+    test('members are private while the unpack runs (0700 staging, file modes first)', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      await Fs.file(p('src/id_rsa')).write('key');
+      await Process.run('chmod', ['600', p('src/id_rsa')]);
+      await Fs.file(p('src/z.bin')).write('z' * 200000);
+      final tar = await Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tar).bytes();
+      final feed = StreamController<List<int>>();
+      final done = Archive.unarchive(p('out')).consume(feed.stream);
+      feed.add(tar.sublist(0, 4096)); // id_rsa and the start of z.bin
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final staging = Directory(tmp.path).listSync().where((e) => e.path.contains('.out.tmp')).single;
+      expect(staging.statSync().mode & 0x1ff, 0x1c0);
+      feed.add(tar.sublist(4096));
+      await feed.close();
+      await done;
+      expect((await FileStat.stat(p('out/id_rsa'))).mode & 0x1ff, 0x180);
+    });
+
     test('M29: members that differ only in case are refused', () async {
       List<int> member(String name) => [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits)];
       final tar = [...member('A.txt'), ...member('a.txt'), ...List.filled(1024, 0)];
@@ -1016,6 +1051,33 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       final tooBig = isA<ContentException>().having((e) => e.message, 'message', contains('4 GiB'));
       expect(() => zip.writeZip([('f', 0x1A4, huge, DateTime(2020))]), throwsA(tooBig));
       expect(() => sevenzip.writeSevenZip([('f', 0x1A4, huge)]), throwsA(tooBig));
+    });
+
+    test('zip members that share bytes are refused (an overlap bomb)', () async {
+      final z = _zip(List.filled(5000, 0));
+      final cd = _central(z), end = z.length - 22;
+      final again = Uint8List.fromList(z.sublist(cd, end))..[46] = 0x67; // a second name for the same data
+      final eocd = ByteData.sublistView(Uint8List.fromList(z.sublist(end)))
+        ..setUint16(8, 2, Endian.little)
+        ..setUint16(10, 2, Endian.little)
+        ..setUint32(12, 2 * (end - cd), Endian.little);
+      final bomb = [...z.sublist(0, end), ...again, ...eocd.buffer.asUint8List()];
+      await expectLater(unpack(bomb), throwsA(content('overlapping members')));
+      await unpack(z); // the honest one still reads
+    });
+
+    test('a 7z asking for more than 2^24 key rounds is refused, not spun on', () {
+      final b = sevenzip.writeSevenZip([
+        ('a.txt', 0x1A4, [1, 2, 3]),
+      ], password: 'pw');
+      final bd = ByteData.sublistView(b);
+      final hs = 32 + bd.getUint64(12, Endian.little), hl = bd.getUint64(20, Endian.little);
+      b[b.indexOf(0x53, hs)] = 62 | 0x40; // the AES props byte: 2^19 rounds -> 2^62
+      bd.setUint32(28, crc32(b, start: hs, end: hs + hl), Endian.little);
+      bd.setUint32(8, crc32(b, start: 12, end: 32), Endian.little);
+      final sw = Stopwatch()..start();
+      expect(() => sevenzip.readSevenZip(b, password: 'pw').first.data(), throwsA(isContent));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
     });
 
     test('7z data is checked against its file, folder and start-header CRCs', () async {

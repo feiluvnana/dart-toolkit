@@ -520,9 +520,10 @@ Future<void> main(List<String> a) async {
 ''';
       expect((await runDart(script, env: {'APP_TOKEN': 'abc', 'APP_N': '7'})).stdout, 'abc 7\n');
       expect((await runDart(script, args: ['--token', 'cli'], env: {'APP_TOKEN': 'abc'})).stdout, 'cli 1\n');
-      final bad = await runDart(script, env: {'APP_N': 'x'});
+      final bad = await runDart(script, env: {'APP_N': 'sk-live-hunter2'});
       expect(bad.exitCode, 64);
-      expect(bad.stderr, contains(r'environment variable $APP_N'));
+      expect(bad.stderr, contains(r'Invalid value for environment variable $APP_N: expected an integer'));
+      expect(bad.stderr, isNot(contains('hunter2'))); // a value from the environment is never echoed
       expect((await runDart(script, args: ['--help'])).stdout, contains('[env: APP_TOKEN]'));
     });
 

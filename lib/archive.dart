@@ -239,6 +239,7 @@ final class _Extraction {
   // member), chunked under ARG_MAX inside `chmodBatched`.
   final _paths = <String>[];
   final _modes = <int>[];
+  final _isDir = <bool>[];
   final _folded = <String, String>{};
 
   // Every file this unpack wrote: an existing file under a path not in
@@ -251,8 +252,11 @@ final class _Extraction {
 
   Future<void> start() async {
     await tmp.create(recursive: true);
-    // A fresh folder is 0777 & ~umask: read the umask off it.
+    // A fresh folder is 0777 & ~umask: read the umask off it, then close
+    // the folder (0700): a 0600 member must not be readable while it is
+    // being written.
     _umask = posix.isPosix ? ~(await tmp.stat()).mode & 0x1FF : 0;
+    if (posix.isPosix) await posix.chmod(tmp.path, 0x1c0);
   }
 
   void _keepMode(String path, int mode, {required bool isDir}) {
@@ -261,6 +265,7 @@ final class _Extraction {
     if (isDir) m |= 0x40; // never leave a folder untraversable (S_IXUSR)
     _paths.add(path);
     _modes.add(m);
+    _isDir.add(isDir);
   }
 
   /// Sandbox-checks [name] (unless the in-memory readers already [checked]
@@ -377,25 +382,39 @@ final class _Extraction {
   /// at the same path is dropped. Every file/folder collision fails before
   /// the first rename, so a failed unpack leaves the target as it was.
   Future<void> merge(String d) async {
+    // A target that is a link to a folder merges into that folder: checked
+    // through the link, the collisions (and the files kept) went unseen.
+    if (await io.FileSystemEntity.isLink(d) && await io.FileSystemEntity.isDirectory(d)) {
+      d = await io.Directory(d).resolveSymbolicLinks();
+    }
     final existing = await _Unpacker._checkCollisions(tmp.path, d);
+    // Modes go through the umask like `tar` does. File modes go on in the
+    // temp tree, so a file is never in the target with looser ones (a
+    // rename keeps them); a file kept from the target drops its member and
+    // is never re-moded.
+    final mask = ~_umask & 0x1FF;
+    final files = <String>[], fileModes = <int>[];
+    for (var i = 0; i < _paths.length; i++) {
+      if (_isDir[i]) continue;
+      files.add(_paths[i]);
+      fileModes.add(_modes[i] & mask);
+    }
+    await posix.chmodBatched(posix.groupByMode(files, fileModes));
     await io.Directory(d).create(recursive: true);
     await for (final e in tmp.list(recursive: false, followLinks: false)) {
       await _Unpacker._moveInto(e.path, p.join(d, p.basename(e.path)));
     }
-    // Modes go on the final paths after the merge (a read-only member
-    // folder applied in the temp tree would refuse the merge's renames),
-    // only on what this unpack made (an archive never re-modes a folder
-    // that was already there), and through the umask like `tar` does.
-    final mask = ~_umask & 0x1FF;
-    final finalPaths = <String>[];
-    final finalModes = <int>[];
+    // Folder modes go on after the merge (a read-only member folder would
+    // refuse the merge's renames), only on folders this unpack made.
+    final dirs = <String>[], dirModes = <int>[];
     for (var i = 0; i < _paths.length; i++) {
+      if (!_isDir[i]) continue;
       final path = p.join(d, p.relative(_paths[i], from: tmp.path));
       if (existing.contains(path)) continue;
-      finalPaths.add(path);
-      finalModes.add(_modes[i] & mask);
+      dirs.add(path);
+      dirModes.add(_modes[i] & mask);
     }
-    await posix.chmodBatched(posix.groupByMode(finalPaths, finalModes));
+    await posix.chmodBatched(posix.groupByMode(dirs, dirModes));
   }
 
   Future<void> dispose() async {

@@ -228,6 +228,14 @@ void main() {
       expect(sw.elapsedMilliseconds, lessThan(3000));
     });
   });
+  test('a document deeper than the call stack still queries, compares and hashes', () {
+    final deep = '${'[' * 100000}{"x": 1}${']' * 100000}';
+    final a = Json.parse(deep), b = Json.parse(deep);
+    expect(a.$('**.x').asList<int>(), [1]);
+    expect(a == b, isTrue);
+    expect(a.hashCode, b.hashCode);
+    expect(a == Json.parse(deep.replaceFirst('1', '2')), isFalse);
+  });
 }
 
 final class _Mem with Reader {

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/cookies.dart' as jar;
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
@@ -992,6 +993,9 @@ void clientTests() {
           case '/vary':
             r.response.headers.set('vary', 'x-a');
             r.response.write('v${hits[path]}');
+          case '/me': // per-user, no Vary: the cache must key on the credentials itself
+            r.response.cookies.add(Cookie('sid', 'S3CRET'));
+            r.response.write('${hits[path]} ${r.headers.value('authorization')} ${r.headers.value('range')}');
           case '/banned':
             r.response
               ..statusCode = 429
@@ -1033,6 +1037,9 @@ void clientTests() {
       await c.post('$url/h').status();
       expect(seen['x-csrf'], 'T0K');
       expect(seen['cookie'], 'csrftoken=T0K');
+      // Another host (the same server by name) gets neither the cookie nor its copy.
+      await c.post('${url.replaceFirst('127.0.0.1', 'localhost')}/h').status();
+      expect((seen['x-csrf'], seen['cookie']), (null, null));
     });
 
     test('set-cookie: a bad one skips only itself; Domain needs a dot; longest path first', () async {
@@ -1145,6 +1152,22 @@ void clientTests() {
       expect(await c.post('$url/vary').text(), 'v4');
     });
 
+    test('cache: keyed by credentials, never a Range slice, no set-cookie on disk, a private folder', () async {
+      final dir = await Directory.systemTemp.createTemp('cache');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = '${dir.path}/c';
+      final alice = Http.client(cache: store, headers: {'authorization': 'Bearer A'});
+      final bob = Http.client(cache: store, headers: {'authorization': 'Bearer B'});
+      expect(await alice.get('$url/me').text(), '1 Bearer A null');
+      expect(await bob.get('$url/me').text(), '2 Bearer B null');
+      expect(await alice.get('$url/me').text(), '1 Bearer A null'); // a hit, still alice's
+      expect(await alice.get('$url/me', headers: {'range': 'bytes=1-'}).text(), '3 Bearer A bytes=1-');
+      expect(await alice.get('$url/me').text(), '1 Bearer A null');
+      final files = Directory(store).listSync().whereType<File>();
+      expect(files.where((f) => f.readAsStringSync().contains('S3CRET')), isEmpty);
+      if (!Platform.isWindows) expect(Directory(store).statSync().mode & 0x1ff, 0x1c0);
+    });
+
     test('pool: round-robin over idle members; a 429 benches a member and retries on another', () async {
       final a = Http.client(headers: {'x-a': 'a'});
       final b = Http.client(headers: {'x-a': 'b'});
@@ -1223,6 +1246,30 @@ final class _Path with Writer {
 }
 
 void serveTests() {
+  test('cookies: no registry domain like co.uk, no Secure cookie over http', () {
+    final c = Cookies();
+    jar.storeSetCookies(c, Uri.parse('https://evil.co.uk/'), ['sid=EVIL; Domain=co.uk']);
+    jar.storeSetCookies(c, Uri.parse('http://shop.example.com/'), ['s=1; Secure', 'p=2']);
+    jar.storeSetCookies(c, Uri.parse('https://a.example.com/'), ['d=3; Domain=example.com']);
+    expect(jar.headerFor(c, Uri.parse('https://bank.co.uk/')), isNull);
+    expect(jar.headerFor(c, Uri.parse('https://shop.example.com/')), 'p=2; d=3');
+  });
+
+  test('a transport error names the request without its credentials or tokens', () async {
+    final raw = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    raw.listen((s) async {
+      s.write('HTTP/1.1 200 OK\r\nx-half: ');
+      await s.flush();
+      await s.close();
+    });
+    addTearDown(raw.close);
+    final err = await Http.client(retries: 0)
+        .get('http://u:pw@127.0.0.1:${raw.port}/a?token=SECRET&page=2')
+        .then<Object?>((_) => null, onError: (Object e) => e);
+    expect(err, isA<HttpException>());
+    expect('$err', allOf(contains('token=***'), isNot(contains('SECRET')), isNot(contains('pw'))));
+  });
+
   group('Http.serve', () {
     test('answers text, json, streams, redirects and statuses; a handler error is a 500', () async {
       final log = await capture(() async {
@@ -1251,11 +1298,11 @@ void serveTests() {
         final page = await c.get('${u}page');
         expect((page.header('content-type'), await page.text()), ('text/html', '<p>hi</p>'));
         expect(await c.get('${u}go').text(), 'code 7');
-        expect(await c.get('${u}boom').status(), 500);
+        expect(await c.get('${u}boom?code=SECRET').status(), 500);
         expect(await c.get('${u}nope').status(), 404);
         await c.close();
       });
-      expect(log.err, contains('✗ GET /boom: Bad state: handler failed'));
+      expect(log.err, contains('✗ GET /boom?code=***: Bad state: handler failed'));
     });
 
     test('close waits for a request in flight, then refuses new ones', () async {

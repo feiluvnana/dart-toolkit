@@ -229,6 +229,12 @@ List<ZipEntry> readZip(Uint8List b) {
     );
     at = nameEnd + extraLen + commentLen;
   }
+  // Members may not share bytes: twenty entries pointing at one 5 MiB run of
+  // zeros made 100 MiB from 6 KiB, each one CRC-valid (a zip bomb).
+  final spans = [for (final e in out) (e._offset, e._offset + 30 + e._packed)]..sort((a, b) => a.$1.compareTo(b.$1));
+  for (var k = 1; k < spans.length; k++) {
+    if (spans[k].$1 < spans[k - 1].$2) _corrupt('overlapping members');
+  }
   return out;
 }
 

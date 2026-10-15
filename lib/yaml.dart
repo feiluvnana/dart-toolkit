@@ -25,18 +25,64 @@ abstract final class Yaml {
   /// The first document of [text] as a [Json] (maps, lists, scalars; anchors
   /// and aliases resolved). Throws [ContentException] naming the line.
   static Json parse(String text, {String? from}) {
+    final where = from == null ? '' : ' in $from';
+    if (_flowDepth(text) > 1000) throw ContentException('YAML$where nested too deep', text);
     try {
-      return Json.of(_plain(y.loadYaml(text)));
+      final doc = y.loadYaml(text);
+      // Aliases share nodes, so a few hundred bytes can stand for billions
+      // of them once copied out (an alias bomb): count first, with a memo.
+      if (_size(doc, Map.identity()) > _maxNodes) {
+        throw ContentException('YAML$where expands past $_maxNodes values (nested aliases)', text);
+      }
+      return Json.of(_plain(doc));
+    } on StackOverflowError {
+      throw ContentException('YAML$where nested too deep', text);
     } on y.YamlException catch (e) {
       final line = e.span == null ? '' : ' at line ${e.span!.start.line + 1}';
       throw ContentException(
-        'invalid YAML${from == null ? '' : ' in $from'}$line: ${e.message}',
+        'invalid YAML$where$line: ${e.message}',
         text,
         e.span?.start.offset,
         e,
       );
     }
   }
+}
+
+const _maxNodes = 1000000;
+
+/// The deepest `[`/`{` nesting in [text] (quotes not excluded: only a cap):
+/// `package:yaml` recurses per level and takes seconds to overflow.
+int _flowDepth(String text) {
+  var depth = 0, most = 0;
+  for (var i = 0; i < text.length; i++) {
+    final c = text.codeUnitAt(i);
+    if (c == 0x5B || c == 0x7B) {
+      if (++depth > most) most = depth;
+    } else if ((c == 0x5D || c == 0x7D) && depth > 0) {
+      depth--;
+    }
+  }
+  return most;
+}
+
+/// How many values [v] stands for once every alias is copied out; each
+/// shared node is counted once and then reused from [seen].
+int _size(Object? v, Map<Object, int> seen) {
+  if (v is! Map && v is! List) return 1;
+  final known = seen[v!];
+  if (known != null) return known;
+  var n = 1;
+  if (v is Map) {
+    for (final e in v.values) {
+      n += _size(e, seen);
+    }
+  } else {
+    for (final e in v as List) {
+      n += _size(e, seen);
+    }
+  }
+  return seen[v] = n > _maxNodes ? _maxNodes + 1 : n;
 }
 
 /// Plain Dart values: string keys, lists and maps the `Json` rules read.

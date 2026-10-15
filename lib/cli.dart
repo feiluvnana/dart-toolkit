@@ -1046,7 +1046,14 @@ void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
     if (v is Opt<Object?> && !params.containsKey(v)) {
       final name = v._env;
       final raw = name == null ? null : io.Platform.environment[name] ?? _dotenvValues[name];
-      if (raw != null && raw.isNotEmpty) params[v] = v._readOne!(raw, 'environment variable \$$name');
+      if (raw == null || raw.isEmpty) continue;
+      try {
+        params[v] = v._readOne!(raw, 'environment variable \$$name');
+      } on ContentException catch (e) {
+        // Environment variables hold tokens: the message names the
+        // variable, never its value.
+        throw ContentException(e.message.replaceFirst('Invalid value "$raw" ', 'Invalid value '));
+      }
     }
   }
 }

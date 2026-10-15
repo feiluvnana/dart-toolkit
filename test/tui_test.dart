@@ -650,6 +650,25 @@ void main() {
       expect(t.row(3), contains('hello there'));
     });
 
+    test('the status row writes no C1 control (a raw U+009B is a CSI)', () async {
+      late App<int> app;
+      final t = testSession<int>(
+        0,
+        (s, a) {
+          app = a;
+          return Screen((r) => r.write('x'));
+        },
+        width: 30,
+        height: 4,
+      );
+      await t.pump();
+      app.status('evil\u009b2J\u0085end');
+      await t.pump();
+      expect(t.output.runes.where((r) => r >= 0x80 && r <= 0x9f), isEmpty);
+      expect(t.row(3), contains('evil'));
+      t.close();
+    });
+
     test('click focuses and selects; hover restyles', () async {
       final p = Pick<String>(['a', 'b', 'c']);
       final t = testSession<int>(
@@ -1476,6 +1495,27 @@ void main() {
       await t.pump();
       expect(sent, 1);
       expect(f.text(), 'a b', reason: 'enter is never consumed by input');
+      t.close();
+    });
+
+    test('a paste that stalls over a second stays a paste (regression: its tail ran as keys)', () async {
+      var sent = 0;
+      final f = Field();
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.input(f), keys: {'enter': ('send', () => sent++)}),
+        width: 40,
+        height: 4,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('\x1b[200~echo safe'));
+      for (var i = 0; i < 6; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 220));
+        await t.pump();
+      }
+      t.bytes(utf8.encode('; rm -rf ~\r\x1b[201~'));
+      await t.pump();
+      expect((f.text(), sent), ('echo safe; rm -rf ~ ', 0));
       t.close();
     });
 

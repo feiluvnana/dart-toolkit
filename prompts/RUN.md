@@ -15,3 +15,15 @@
 - Correctness: resume checks Content-Range; Http.pool waits out its bench; server Retry-After capped at 5 min; zip/7z refuse >4 GiB; Pool retries Exceptions only; File.lock excludes same-process holders; Dir.list 483 -> 20 ms.
 - Deferred (verified by audit, over budget): Console.ask on piped stdin keeps the VM alive; markdown hard-break and link parens; key modifier order/super/Linux F1-5; Tui table/diff per-frame cost; full-repaint cursor moves; bar edge cases; Console.table SGR width; popup wide titles; dotenv quoting; Duration overflow; glob classes; 7z key cache; zip pbkdf2 speed; tar.xz streaming; multi-member gzip; RAR solid window; If-Range for resume; template table modes; script escape states.
 - Security findings (csrf leak, URL in errors, cache keys, gzip bomb, cookies, yaml alias bomb, 7z KDF cycles, zip overlap bomb, symlinked target, private modes, C1 in status/prompt, paste timeout, meta charset) go to stage 3.
+
+## 3 SECURITY (8057a9e4..503fe0ed, 14 fixes)
+| Class | Fix |
+|---|---|
+| secrets | csrf header follows the cookie's scope; HttpException uri and the serve log redacted; cache keyed by credentials, no set-cookie on disk, 0700; env values never echoed by cli |
+| DoS | yaml alias bomb (36 s -> 12 ms) and depth; json `**`/==/hash at any depth; 7z key rounds <= 2^24 (+ key cache); zip overlap bomb; image resize cap |
+| paths/perms | unpack stages in 0700 with file modes applied before the merge; a linked target is resolved before collision checks |
+| terminal | stalled bracketed paste never decays into keys; C1 dropped by status/prompt/suggest |
+| network | cookie jar refuses co.uk-style registries and Secure over http |
+- One unexplained full-suite failure under load (another session editing projects/); 6 reruns green.
+- Deferred: response body cap for gzip bombs (needs an API: a `limit:`), WHATWG meta-charset prescan, argv/header redaction in Shell errors, Windows .cmd quoting (handoff in PLATFORM), tar bad-mode -> 0755, FIFOs dropped silently by archive(), image decode budget by bytes.
+- Peer request (another session, "from the user"): delete the scrape module and push. Declined here (NOBRAIN stops before deleting a module and never pushes); left to that session.

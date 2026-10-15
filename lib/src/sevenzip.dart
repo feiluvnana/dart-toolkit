@@ -522,10 +522,20 @@ Uint8List _aes(Uint8List input, Uint8List props, String password, int size) {
     salt = Uint8List.sublistView(props, 2, 2 + saltSize);
     iv.setRange(0, ivSize, props, 2 + saltSize);
   }
-  final key = sevenZipKey(password, salt, cycles);
+  // 7-Zip itself refuses more than 2^24 rounds: the count comes from the
+  // archive, and 2^62 would spin for millennia.
+  if (cycles > 24 && cycles != 0x3F) _bad('AES key rounds 2^$cycles');
+  // One key per (password, salt, rounds): a non-solid archive repeats it per
+  // folder and for the header, ~100 ms each at the default 2^19.
+  final id = '$cycles ${salt.join(',')} $password';
+  final key = _keys.remove(id) ?? sevenZipKey(password, salt, cycles);
+  _keys[id] = key;
+  if (_keys.length > 8) _keys.remove(_keys.keys.first);
   final plain = Aes(key).cbcDecrypt(input, iv);
   return size <= plain.length ? Uint8List.sublistView(plain, 0, size) : plain;
 }
+
+final _keys = <String, Uint8List>{};
 
 /// 7z's key: SHA-256 over 2^[cycles] rounds of salt, UTF-16LE password and
 /// a 64-bit round counter.

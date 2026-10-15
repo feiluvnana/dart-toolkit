@@ -256,18 +256,19 @@ final class Json extends Iterable<Json> {
       if (seg == _Wild.deep) {
         final rest = segments.sublist(k + 1);
         final out = <Object?>[];
-        void visit(Object? node) {
+        // An explicit stack in document order: a parsed document may nest
+        // deeper than the call stack.
+        final stack = <Object?>[c];
+        while (stack.isNotEmpty) {
+          var node = stack.removeLast();
           if (node is Json) node = node._v;
           final hit = rest.isEmpty ? node : _walk(node, rest);
           if (hit != null) out.add(hit);
-          if (node is Map) {
-            node.values.forEach(visit);
-          } else if (node is List) {
-            node.forEach(visit);
+          final kids = node is Map ? node.values.toList() : (node is List ? node : const <Object?>[]);
+          for (var i = kids.length - 1; i >= 0; i--) {
+            stack.add(kids[i]);
           }
         }
-
-        visit(c);
         return out;
       }
       if (seg == _Wild.any) {
@@ -310,38 +311,47 @@ final class Json extends Iterable<Json> {
   }
 }
 
+/// Deep equality without recursion: a parsed document may nest deeper
+/// than the call stack.
 bool _deepEquals(Object? a, Object? b) {
-  if (a is Json) a = a._v;
-  if (b is Json) b = b._v;
-  if (identical(a, b)) return true;
-  if (a is Map) {
-    if (b is! Map || a.length != b.length) return false;
-    for (final MapEntry(:key, :value) in a.entries) {
-      if (!b.containsKey(key) || !_deepEquals(value, b[key])) return false;
+  final todo = <(Object?, Object?)>[(a, b)];
+  while (todo.isNotEmpty) {
+    var (x, y) = todo.removeLast();
+    if (x is Json) x = x._v;
+    if (y is Json) y = y._v;
+    if (identical(x, y)) continue;
+    if (x is Map) {
+      if (y is! Map || x.length != y.length) return false;
+      for (final MapEntry(:key, :value) in x.entries) {
+        if (!y.containsKey(key)) return false;
+        todo.add((value, y[key]));
+      }
+    } else if (x is List) {
+      if (y is! List || x.length != y.length) return false;
+      for (var i = 0; i < x.length; i++) {
+        todo.add((x[i], y[i]));
+      }
+    } else if (x != y) {
+      return false;
     }
-    return true;
   }
-  if (a is List) {
-    if (b is! List || a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (!_deepEquals(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  return a == b;
+  return true;
 }
 
-int _deepHash(Object? v) {
+/// Hashes the top 32 levels: deeper ones only refine it, and equality
+/// still decides, so a document deeper than the call stack hashes too.
+int _deepHash(Object? v, [int depth = 0]) {
   if (v is Json) v = v._v;
+  if (depth > 32) return v is Map || v is List ? 1 : v.hashCode;
   if (v is Map) {
     // Order-free: equal objects with different key order hash the same.
     var h = 0;
     for (final MapEntry(:key, :value) in v.entries) {
-      h = (h + Object.hash(key, _deepHash(value))) & 0x3FFFFFFF;
+      h = (h + Object.hash(key, _deepHash(value, depth + 1))) & 0x3FFFFFFF;
     }
     return Object.hash(Map, h);
   }
-  if (v is List) return Object.hashAll(v.map(_deepHash));
+  if (v is List) return Object.hashAll([for (final e in v) _deepHash(e, depth + 1)]);
   return v.hashCode;
 }
 

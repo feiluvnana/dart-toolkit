@@ -29,4 +29,19 @@ jobs:
   test('reader.yaml() with or: for a missing source', () async {
     expect((await Reader.of('k: v'.codeUnits).yaml()).$('k').text(), 'v');
   });
+
+  test('an alias bomb or deep nesting is a ContentException, quickly', () {
+    var bomb = 'a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n';
+    for (var i = 1; i < 9; i++) {
+      bomb += 'a$i: &a$i [${List.filled(10, '*a${i - 1}').join(', ')}]\n';
+    }
+    final sw = Stopwatch()..start();
+    expect(
+      () => Yaml.parse(bomb),
+      throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('aliases'))),
+    );
+    expect(sw.elapsedMilliseconds, lessThan(2000)); // was 36 s and GBs
+    expect(() => Yaml.parse('${'[' * 20000}${']' * 20000}'), throwsA(isA<ContentException>()));
+    expect(Yaml.parse('a: &x [1, 2]\nb: *x').$('b').length, 2); // ordinary aliases still resolve
+  });
 }

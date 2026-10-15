@@ -111,6 +111,13 @@ void main() {
       expect(() => img.resize(height: -1), throwsArgumentError);
     });
 
+    test('resize keeps a computed side at 1 or more and refuses a giant target', () {
+      final strip = Image.decode(img.encodePng(img.Image(width: 1000, height: 1)));
+      final one = strip.resize(width: 1);
+      expect((one.width(), one.height()), (1, 1));
+      expect(() => strip.resize(width: 20000, height: 20000), throwsArgumentError);
+    });
+
     test('F14: GIF decodes its first frame only', () async {
       // 1x1 two-frame GIF (red, then blue).
       final gif = base64Decode('R0lGODlhAQABAIAAAP///////yH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==');

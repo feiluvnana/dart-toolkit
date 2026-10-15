@@ -659,6 +659,10 @@ final class _Session<S> implements term.TuiBridge {
       return;
     }
     final waited = now - _heldSince!;
+    // An unterminated bracketed paste waits for its end however long a slow
+    // link takes: dropping its start would type the rest as keys, and a
+    // pasted newline would run enter.
+    if (_isPasteStart(_pending)) return;
     final maybeCsi = _pending.length >= 2 && _pending[0] == 0x1b && (_pending[1] == 0x5b || _pending[1] == 0x4f);
     if (maybeCsi) {
       if (waited < 1000) return;
@@ -679,6 +683,15 @@ final class _Session<S> implements term.TuiBridge {
     if (waited < 1000) return;
     _pending.clear();
     _heldSince = null;
+  }
+
+  static bool _isPasteStart(List<int> b) {
+    const start = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC [ 200 ~
+    if (b.length < start.length) return false;
+    for (var i = 0; i < start.length; i++) {
+      if (b[i] != start[i]) return false;
+    }
+    return true;
   }
 
   void _decode() {
@@ -1201,7 +1214,7 @@ final class _Session<S> implements term.TuiBridge {
     var col = from;
     for (final rune in text.runes) {
       if (col >= end) break;
-      if (rune < 0x20 || rune == 0x7f) continue;
+      if (_isControl(rune)) continue;
       final w = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
       if (w == 0) continue;
       if (col + w > end) break;

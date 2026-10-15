@@ -21,6 +21,7 @@ library;
 
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -154,14 +155,18 @@ final class Image implements Pixels {
     if ((width != null && width < 1) || (height != null && height < 1)) {
       throw ArgumentError.value(width ?? height, width != null ? 'width' : 'height', 'must be >= 1');
     }
-    final targetWidth = width ?? (height! * _inner.width / _inner.height).round();
-    final targetHeight = height ?? (width! * _inner.height / _inner.width).round();
+    // A computed side is at least 1: 1000x1 at width 1 is 1x1, not 1x0.
+    final targetWidth = width ?? math.max(1, (height! * _inner.width / _inner.height).round());
+    final targetHeight = height ?? math.max(1, (width! * _inner.height / _inner.width).round());
+    if (targetWidth * targetHeight > _maxPixels) {
+      throw ArgumentError.value('${targetWidth}x$targetHeight', 'width/height', 'is over $_maxPixels pixels');
+    }
     final shrinking = targetWidth * targetHeight < _inner.width * _inner.height;
     return Image._(
       img.copyResize(
         _inner,
-        width: width,
-        height: height,
+        width: targetWidth,
+        height: targetHeight,
         interpolation: shrinking ? img.Interpolation.average : img.Interpolation.cubic,
       ),
     );

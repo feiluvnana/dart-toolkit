@@ -705,7 +705,8 @@ final class _Client extends Client {
   }) async {
     if (_closed) throw _aborted(method, uri);
     final sent = _merge(_s.headers, headers ?? const {});
-    final cache = method == 'GET' ? _s.cache : null;
+    // A Range answer is a slice: neither served from nor stored under the URL.
+    final cache = method == 'GET' && !sent.keys.any((k) => k.toLowerCase() == 'range') ? _s.cache : null;
     if (cache != null) {
       final hit = await _Cache(cache).read(uri, sent, _s.ttl, this, method);
       if (hit != null) return _checked(hit, check);
@@ -740,7 +741,7 @@ final class _Client extends Client {
           attempt++;
           continue;
         }
-        if (cache != null && res.ok()) return await _checked(await _Cache(cache).write(uri, sent, res, this), check);
+        if (cache != null && code == 200) return await _checked(await _Cache(cache).write(uri, sent, res, this), check);
         res._prefetch();
         return await _checked(res, check);
       } on _Failed catch (f) {
@@ -854,7 +855,7 @@ final class _Client extends Client {
       if (cookie != null) req.headers.set('cookie', cookie);
       final csrf = _s.csrf;
       if (csrf != null && req.headers.value(csrf.header) == null) {
-        final token = _s.cookies[csrf.cookie];
+        final token = jar.valueFor(_s.cookies, uri, csrf.cookie);
         if (token != null) req.headers.set(csrf.header, token);
       }
       Stream<List<int>> upload;
@@ -1094,7 +1095,7 @@ final class Server implements Closeable {
       try {
         reply = await handler(Request._(req));
       } catch (e) {
-        stderr.writeln('✗ ${req.method} ${req.uri}: $e');
+        stderr.writeln('✗ ${req.method} ${names.redact(req.uri)}: $e'); // an OAuth code or token stays out of logs
         reply = const Reply.status(500);
       }
       res.statusCode = reply._status;
@@ -1286,16 +1287,21 @@ final class _Cache {
 
   final String _dir;
 
-  String _key(Uri uri) {
+  /// The entry for [uri] as these credentials see it: a page fetched
+  /// with one user's token or cookies is never served to another.
+  String _key(Uri uri, Map<String, String> sent, _Client client) {
+    final lower = {for (final e in sent.entries) e.key.toLowerCase(): e.value};
+    final who =
+        '${lower['authorization'] ?? ''}\n${lower['cookie'] ?? ''}\n${jar.headerFor(client._s.cookies, uri) ?? ''}';
     var h = 0xcbf29ce484222325;
-    for (final c in utf8.encode('GET $uri')) {
+    for (final c in utf8.encode('GET $uri\n$who')) {
       h = ((h ^ c) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
     }
     return '$_dir/${h.toUnsigned(64).toRadixString(16).padLeft(16, '0')}';
   }
 
   Future<Response?> read(Uri uri, Map<String, String> sent, Duration ttl, _Client client, String method) async {
-    final key = _key(uri);
+    final key = _key(uri, sent, client);
     try {
       final meta = jsonDecode(await File('$key.json').readAsString()) as Map<String, Object?>;
       final time = DateTime.fromMillisecondsSinceEpoch(meta['time'] as int);
@@ -1324,14 +1330,20 @@ final class _Cache {
   Future<Response> write(Uri uri, Map<String, String> sent, Response res, _Client client) async {
     final bytes = Uint8List.fromList(await res.bytes());
     final headers = <String, String>{};
-    res._resp?.headers.forEach((name, values) => headers[name] = values.join(', '));
+    res._resp?.headers.forEach((name, values) {
+      if (name != 'set-cookie') headers[name] = values.join(', '); // the jar has them; a file must not
+    });
     final lower = {for (final e in sent.entries) e.key.toLowerCase(): e.value};
     final vary = {
       for (final name in (headers['vary'] ?? '').split(',').map((s) => s.trim().toLowerCase()))
         if (name.isNotEmpty && name != '*') name: lower[name],
     };
-    final key = _key(uri);
-    await Directory(_dir).create(recursive: true);
+    final key = _key(uri, sent, client);
+    if (!await Directory(_dir).exists()) {
+      await Directory(_dir).create(recursive: true);
+      // 0700: bodies of authenticated pages live here.
+      if (!Platform.isWindows) await Process.run('chmod', ['700', _dir]);
+    }
     await File('$key.body').writeAsBytes(bytes);
     await File('$key.json').writeAsString(
       jsonEncode({
@@ -1820,7 +1832,7 @@ Object _naming(Object e, String method, Uri url) {
     CertificateException() => CertificateException('${e.message}: $what', e.osError),
     TlsException() => TlsException('${e.message}: $what', e.osError),
     TimeoutException() => Timeout('${e.message}: $what', e.duration),
-    HttpException() => HttpException('${e.message}: $what', uri: e.uri ?? url),
+    HttpException() => HttpException('${e.message}: $what', uri: Uri.tryParse(names.redact(e.uri ?? url))),
     _ => e,
   };
 }
