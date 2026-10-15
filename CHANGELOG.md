@@ -17,6 +17,7 @@
 - `core`: `Pipe.tap((done, total) {…})`, a pass-through progress probe for hand-drawn progress (a Tui); resumable like a bar, it hears the full length and replayed bytes.
 - `tui`: `Region.bar(done, total, bytes: true)` shows sizes (`1.5 KB/4.0 KB`).
 - `tui`: a scroll's scrollbar jumps on a click and follows a left drag.
+- `tui`: `Region.lines(count, (row, i) {…})`: one-row lines; in a scroll only those in view are drawn (a long log).
 - `tui`: colour everywhere: `box`, `popup`, `tabs`, `list`, `table`, `input`, `button`, `bar`, `spin`, `markdown` and `diff` take `write`'s `color`/`background`/`style`; `highlight:` backs the selection of `list`/`table`/`tabs` (default: the accent); `diff(removed:, added:)`. `box` takes its title positionally (`box('')` for none).
 - `tui`: `on:` on `write`, `box` (its header row), `bar`, `spin`, `markdown` and `diff` binds events (`click`, `rightclick`, keys …, as in `Region.on`) to what the widget drew.
 - `tui`: a left drag selects text (within the scroll it starts in) and letting go copies it to the clipboard (OSC 52).
@@ -86,6 +87,7 @@
 
 - `html`: deep and long documents parse and query in linear time (20,000 nested divs 4.9 s → 51 ms; `section div div div` on 1,000 nested divs 406 s → 5 ms; 52 real pages × 27 selectors 55.9 s → 0.9 s).
 - `fs`: `Dir.list` 483 → 20 ms on 20,000 entries.
+- instaloader: the dashboard log draws with `lines` (20,000 lines 300 → 1.2 ms a frame), so keys such as `l` (save log) answer at once; restyled panels (padding, aligned sizes and speeds, user names coloured in the log); `retrying N…` shows while `r` runs.
 - `tui`: a `table` frame costs the screen, not the rows (100k rows 35 → 0.95 ms); two `diff` panes keep their own memo (13.6 → 1.0 ms a frame); full repaints flow through box drawing and CJK (a 200x60 `─` frame 110 KB → 12 KB). Markdown breaks over-long words, keeps `(…)` in link URLs and nests `***x***`.
 - `archive`: WinZip AES key derivation 5.5 → 2.0 ms per member (in-house HMAC-SHA1 with the pad states hashed once).
 - `html`: an in-house HTML5 parser and selector engine replace package:html and csslib: startup ~770 → ~235 ms, chrome ~1750 → ~1300 ms; parsing and queries never recurse, so 20,000-deep pages work. A corpus test holds the tree to package:html's on 50 real pages.

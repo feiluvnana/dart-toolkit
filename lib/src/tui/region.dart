@@ -218,6 +218,33 @@ final class Region {
   /// Split below the cursor into columns.
   List<Region> cols(List<int> sizes) => _split(sizes, horizontal: false);
 
+  /// [count] one-row lines below the cursor, each drawn by [line]. In a
+  /// scroll only the lines in view are drawn, so a long log costs what the
+  /// screen shows; they should end the scroll's content.
+  Region lines(int count, void Function(Region row, int i) line) {
+    final top = _gy + _cursor;
+    var (from, to) = (0, math.min(count, math.max(0, _h - _cursor)));
+    final sc = _scroll;
+    if (sc != null && identical(_grid, sc.buf) && count > 0) {
+      final st = sc.scroll, end = top + count;
+      final off = math.max(0, st._follow && st._pinned ? end - sc.viewH : math.min(st._off, end - sc.viewH));
+      (from, to) = ((off - top).clamp(0, count), (off + sc.viewH - top).clamp(0, count));
+      // Lines out of view share one read-only blank row: nothing to allocate.
+      final blank = List<_Cell>.unmodifiable(List.filled(_grid.isEmpty ? _gx + _w : _grid.first.length, _Cell.blank));
+      while (_grid.length < end) {
+        _grid.add(blank);
+      }
+      for (var y = top + from; y < top + to; y++) {
+        _grid[y] = List.filled(blank.length, _Cell.blank);
+      }
+    }
+    for (var i = from; i < to; i++) {
+      line(_sub(_gx, top + i, _w, 1, open: false), i);
+    }
+    _take(count);
+    return this;
+  }
+
   /// A centered modal; drawn last. [color], [background] and [style] paint
   /// its border and title, as in [write].
   Region popup(

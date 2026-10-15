@@ -1754,6 +1754,34 @@ void main() {
       t.close();
     });
 
+    test('lines draws only the rows in view, following and scrolled back', () async {
+      final sc = Scroll();
+      final drawn = <int>{};
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.scroll(sc)
+            ..write('head')
+            ..lines(1000, (row, i) {
+              drawn.add(i);
+              row.write('line $i');
+            });
+        }),
+        width: 20,
+        height: 5,
+      );
+      await t.pump();
+      expect([for (var y = 0; y < 4; y++) t.row(y)], [for (var i = 996; i < 1000; i++) startsWith('line $i')]);
+      expect(drawn, {for (var i = 996; i < 1000; i++) i}, reason: 'off-screen lines are never drawn');
+      drawn.clear();
+      t.bytes(utf8.encode('\x1b[H')); // home: the top, with what came before the lines
+      await t.pump();
+      expect(t.row(0), startsWith('head'));
+      expect(t.row(3), startsWith('line 2'));
+      expect(drawn, {0, 1, 2});
+      t.close();
+    });
+
     test('the scrollbar owns the last column; content never reaches it', () async {
       final t = testSession<int>(
         0,

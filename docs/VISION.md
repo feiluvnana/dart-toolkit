@@ -713,6 +713,7 @@ final class Region {
   Region write(String text, {String? link});
   Region markdown(String source);  Region diff(String before, String after, {Color? removed, Color? added});
   Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
+  Region lines(int count, void Function(Region row, int i) line);  // in a scroll: only the lines in view draw
   Region tabs<T>(Pick<T> tabs, String Function(T tab) label, {Color? highlight});  Region scroll(Scroll scroll);
   Region popup(String title, {int width = 40, int height = 10});
   Region on(Map<String, Binding> events);                      // the rest of the region

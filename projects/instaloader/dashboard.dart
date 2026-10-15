@@ -100,7 +100,7 @@ final class Part {
   var queued = 0, added = 0, had = 0, failed = 0, bytes = 0;
   int get done => added + had + failed;
   bool get finished => !busy && done >= queued && failed == 0;
-  String get counts => '$added new · $had had${failed > 0 ? ' · $failed failed' : ''} · ${size(bytes)}';
+  String get counts => '$added new · $had had${failed > 0 ? ' · $failed failed' : ''}';
 }
 
 final class Transfer {
@@ -138,7 +138,11 @@ Future<T> watch<T>(Future<T> Function() work) async {
   await Tui.run(board, accent: name, (b, app) {
     return Screen(
       title: title(b),
-      status: b.finished ? 'done: press q to leave' : b.pause,
+      status: b.finished
+          ? 'done: press q to leave'
+          : b.retrying > 0
+          ? 'retrying ${b.retrying}…'
+          : b.pause,
       draw,
       keys: {
         'show': (
@@ -148,7 +152,7 @@ Future<T> watch<T>(Future<T> Function() work) async {
             job.then((_) {}, onError: (Object e, _) => b.note('✗ $e', failed: true)).whenComplete(() => b.done = true);
           },
         ),
-        'l': ('save log', () async => app.status('log saved to ${await saveLog()}')),
+        'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()} (${b.events.length} lines)')),
         if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
         'q escape': (
           'quit',
@@ -205,80 +209,98 @@ void draw(Region r) {
   events(bottom.box(head, color: Color.blue, on: toggle).scroll(b.log), b);
 }
 
-// Per user a header, then per folder its bar and a line of what its
-// explorer is doing and the counts; a folder done without failures is one
-// row. A user still being looked up is one row.
+// Per user a header (name, id, state on the right), then per folder its
+// bar and size, and a dim line of its counts and what its explorer is doing
+// (or found); a blank row between users.
 void users(Region r, Board b) {
   final lines = <void Function(Region)>[
     if (b.users.isEmpty) (r) => r.spin('looking up users', color: busy, style: {.bold}),
     for (final u in b.users) ...[
-      (r) => switch (u) {
-        User(:final error?) => r.write('@${u.name}  ✗ $error', color: bad, style: {.bold}),
-        User(id: null) => r.spin('@${u.name}  looking up the profile', color: name, style: {.bold}),
-        _ => r.write('@${u.name} (${u.id})  ${u.busy ? 'working' : '✓ done'}', color: name, style: {.bold}),
+      (r) {
+        final [who, state] = r.cols([0, 10]);
+        switch (u) {
+          case User(:final error?):
+            who.write('@${u.name}  ✗ $error', color: bad, style: {.bold});
+          case User(id: null):
+            who.spin('@${u.name}  looking up the profile', color: name, style: {.bold});
+          case _:
+            final [handle, id] = who.cols([u.name.length + 3, 0]);
+            handle.write('@${u.name}', color: name, style: {.bold});
+            id.write(u.id!, style: {.dim});
+            state.write(right(u.busy ? 'working' : '✓ done', 10), color: u.busy ? busy : good);
+        }
       },
       for (final p in u.parts.values) ...[
         (r) {
-          final [label, rest] = r.cols([13, 0]);
+          final [label, bar, bytes] = r.cols([10, 0, 10]);
           label.write('  ${p.name}', style: {.bold});
-          p.finished
-              ? rest.write('✓ ${p.counts} · ${p.note}', color: good)
-              : rest.bar(p.done, p.queued, color: p.failed > 0 ? bad : flow);
+          bar.bar(p.done, p.queued, color: p.failed > 0 ? bad : (p.finished ? good : flow));
+          bytes.write(right(size(p.bytes), 10), style: {.dim});
         },
-        if (!p.finished)
-          (r) {
-            final line = r.cols([4, 0]).last;
-            p.busy
-                ? line.spin('${p.counts} · ${p.phase}', color: busy)
-                : line.write('✓ ${p.counts} · ${p.note}', color: p.failed > 0 ? bad : good);
-          },
+        (r) {
+          final line = r.cols([10, 0]).last;
+          p.busy
+              ? line.spin('${p.counts} · ${p.phase}', color: busy, style: {.dim})
+              : line.write(
+                  '${p.failed > 0 ? '✗' : '✓'} ${p.counts} · ${p.note}',
+                  color: p.failed > 0 ? bad : good,
+                  style: {.dim},
+                );
+        },
       ],
-      for (final c in u.changes) (r) => r.write('  changed: $c', color: warn),
-      if (u.id != null) (r) {},
+      for (final c in u.changes) (r) => r.write('  ↻ $c', color: warn),
+      (r) {},
     ],
   ];
-  for (final (i, row) in r.rows([for (final _ in lines) 1]).indexed) {
-    lines[i](row);
-  }
+  r.lines(lines.length, (row, i) => lines[i](row.cols([1, 0]).last));
 }
 
-// Each file in flight: who and where, then its bytes and speed.
+// Each file in flight: who and where, then its bar, bytes and speed.
 void transfers(Region r, Board b) {
   if (b.transfers.isEmpty) {
-    r.write(b.finished ? 'nothing left' : 'waiting for files', style: {.dim});
+    r.cols([1, 0]).last.write(b.finished ? 'nothing left' : 'waiting for files', style: {.dim});
     return;
   }
-  final rows = r.rows([
-    for (final _ in b.transfers) ...[1, 1],
-  ]);
-  for (final (i, t) in b.transfers.indexed) {
-    final [who, path] = rows[2 * i].cols([t.user.name.length + 2, 0]);
-    who.write('@${t.user.name}', color: name, style: {.bold});
-    path.write(t.path);
+  r.lines(2 * b.transfers.length, (row, i) {
+    final t = b.transfers[i ~/ 2];
+    final line = row.cols([1, 0]).last;
+    if (i.isEven) {
+      final [who, path] = line.cols([t.user.name.length + 2, 0]);
+      who.write('@${t.user.name}', color: name, style: {.bold});
+      path.write(t.path);
+      return;
+    }
     final secs = DateTime.now().difference(t.since).inMilliseconds / 1000;
-    final [bar, rate] = rows[2 * i + 1].cols([0, 12]);
-    bar.bar(t.done, t.total, label: ' ', bytes: true, color: flow);
-    rate.write(secs > 0 ? ' ${size((t.done / secs).round())}/s' : '', style: {.dim});
-  }
+    final [bar, rate] = line.cols([0, 12]);
+    bar.bar(t.done, t.total, bytes: true, color: flow);
+    rate.write(right(secs > 0 ? '${size((t.done / secs).round())}/s' : '', 12), style: {.dim});
+  });
 }
 
-// Failures red, changes and waits yellow, saved files plain.
+// Time dim, the user magenta, failures red, changes and waits yellow.
 void events(Region r, Board b) {
   final shown = [
     for (final e in b.events)
       if (e.failed || !b.failuresOnly) e,
   ];
-  final rows = r.rows([for (final _ in shown) 1]);
-  for (final (i, e) in shown.indexed) {
-    final [time, line] = rows[i].cols([10, 0]);
+  r.lines(shown.length, (row, i) {
+    final e = shown[i];
+    final [_, time, line] = row.cols([1, 10, 0]);
     time.write(e.at.format('HH:mm:ss'), style: {.dim});
-    line.write(
-      e.line,
-      color: e.failed ? bad : (e.line.contains(' changed: ') || e.line.contains('rate limit') ? warn : null),
-      style: e.failed ? {.bold} : {},
-    );
-  }
+    final color = e.failed ? bad : (e.line.contains(' changed: ') || e.line.contains('rate limit') ? warn : null);
+    final handle = RegExp(r'^[✗ ]*@\S+').firstMatch(e.line)?[0];
+    if (handle == null || color != null) {
+      line.write(e.line, color: color, style: e.failed ? {.bold} : {});
+      return;
+    }
+    final [who, rest] = line.cols([handle.length + 1, 0]);
+    who.write(handle, color: name);
+    rest.write(e.line.substring(handle.length).trimLeft());
+  });
 }
+
+// [text] right-aligned in [width] cells.
+String right(String text, int width) => text.padLeft(width);
 
 // The palette: the accent (and user names) magenta, work in progress
 // yellow, data flowing cyan, finished green, failures red.
