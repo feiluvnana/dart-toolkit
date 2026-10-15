@@ -39,3 +39,9 @@
 | shell tree kill | ok (ps) | L4 BusyBox handed off | W4 handed off |
 | TERM=dumb / piped / LANG=C / NO_COLOR | ok (probed: plain lines, Tui refuses clearly) | same | unknown |
 - Deferred: piped `Console.ask` abandoned by a timeout keeps the VM alive (cannot tell abandoned from awaited); ZWJ/VS16 emoji widths (terminal-dependent); tmux not installed here.
+
+## 5 ARCHITECTURE (5e972c38..)
+- docs/ARCHITECTURE.md rewritten: generated import graph (no cycles), startup A/B per module, rules, findings A1-A7, migration order.
+- Pure refactors: posix.dart is SDK-only (path helpers to src/tree; http shares posix.chmod); Console line modes through terminal.dart; one SGR pattern (sanitize.unstyled).
+- The fs.dart refactor was committed hunk by hunk (git apply --cached) so another session's uncommitted Fs.scriptDir stayed out.
+- Deferred: A4 cli `_parseCommand` split (~300 lines), A5 http part files, A6 cancellable piped ask (an API change), A7 scrape removal (the user's call).

@@ -33,3 +33,7 @@ String safeText(String s) {
 }
 
 final _sgr = RegExp(r'\x1b\[[0-9;:]*m');
+
+/// [s] without its SGR styling (what [safeText] lets through), for
+/// measuring the cells it takes.
+String unstyled(String s) => s.contains('\x1b') ? s.replaceAll(_sgr, '') : s;

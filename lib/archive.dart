@@ -162,7 +162,7 @@ final class _Packed with Reader {
       await add(path);
     }
     final members = out.values.toList();
-    posix.sortByRelative(members, (m) => m.path, base);
+    tree.sortByRelative(members, (m) => m.path, base);
     return members;
   }
 
@@ -465,7 +465,7 @@ final class _Unpacker with Writer {
     // never inside it. Use the absolute path so '.' (whose dirname is
     // '.') still gets a sibling outside itself.
     final d = p.normalize(_dir);
-    final x = _Extraction(io.Directory(posix.tmpPath(p.normalize(p.absolute(d)))));
+    final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))));
     // An interrupt skips `finally`: the exit hook removes the temp folder.
     final token = exit.onExit(() async {
       try {

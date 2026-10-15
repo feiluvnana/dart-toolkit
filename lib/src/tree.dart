@@ -4,6 +4,7 @@
 library;
 
 import 'dart:io' as io;
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
@@ -112,4 +113,25 @@ Future<void> _checkDirCollisions(String from, String to) async {
       );
     }
   }
+}
+
+/// Sorts [items] depth-first by their path relative to [from]: one
+/// `p.relative` per item, and both separators compare lowest so `a/b` sorts
+/// before `a-b` and mixed `/` and `\\` paths order the same.
+void sortByRelative<T>(List<T> items, String Function(T) path, String from) {
+  final key = {for (final e in items) e: p.relative(path(e), from: from).replaceAll(_sep, '\x00')};
+  items.sort((a, b) => key[a]!.compareTo(key[b]!));
+}
+
+final _sep = RegExp(r'[\\/]');
+
+/// Unique temp sibling for [target]: `p.join(dir, '.base.tmp…')` so Windows
+/// never mixes separators; long names are cut so the temp still fits.
+String tmpPath(String target) {
+  final dir = p.dirname(target);
+  // At most 32 runes (128 bytes) of the name: the suffix adds ~40, and a
+  // 255-byte name must still get a temp under NAME_MAX.
+  final base = String.fromCharCodes(p.basename(target).runes.take(32));
+  final rand = Random().nextInt(1 << 32);
+  return p.join(dir, '.$base.tmp${io.pid}.${DateTime.now().microsecondsSinceEpoch}.$rand');
 }

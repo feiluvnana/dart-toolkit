@@ -350,7 +350,7 @@ final class File extends Entry with Reader, Writer {
     // Unique temp sibling (`p.join`, so Windows never mixes separators),
     // created exclusively (O_EXCL) so a collision retries with a fresh name
     // instead of clobbering.
-    var tmp = posix.tmpPath(target);
+    var tmp = tree.tmpPath(target);
     var tmpFile = io.File(tmp);
     for (var attempt = 0; ; attempt++) {
       try {
@@ -358,7 +358,7 @@ final class File extends Entry with Reader, Writer {
         break;
       } on io.FileSystemException {
         if (attempt >= 4) rethrow;
-        tmp = posix.tmpPath(target);
+        tmp = tree.tmpPath(target);
         tmpFile = io.File(tmp);
       }
     }
@@ -536,7 +536,7 @@ final class Link extends Entry {
   /// Returns this.
   Future<Link> create(String target) async {
     await _ensureParent(_path);
-    final tmp = posix.tmpPath(_path);
+    final tmp = tree.tmpPath(_path);
     final tmpLink = io.Link(tmp);
     await tmpLink.create(target, recursive: true);
     try {

@@ -43,6 +43,7 @@ export 'core.dart';
 import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
 import 'src/origin.dart' as names;
+import 'src/posix.dart' as posix;
 import 'src/rate.dart' as rate;
 import 'src/resume.dart';
 import 'src/retry.dart' as retry;
@@ -1341,8 +1342,7 @@ final class _Cache {
     final key = _key(uri, sent, client);
     if (!await Directory(_dir).exists()) {
       await Directory(_dir).create(recursive: true);
-      // 0700: bodies of authenticated pages live here.
-      if (!Platform.isWindows) await Process.run('chmod', ['700', _dir]);
+      await posix.chmod(_dir, 0x1c0); // 0700: bodies of authenticated pages live here
     }
     await File('$key.body').writeAsBytes(bytes);
     await File('$key.json').writeAsString(

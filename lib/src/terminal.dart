@@ -761,6 +761,17 @@ void setRawModes([TermModes? modes, bool signals = true]) {
   if (!signals && modes != null) modes.isigCleared = _isig(false);
 }
 
+/// Cooked input, line by line, echoed unless [echo] is false (a secret).
+/// Best-effort: a stdin that is not a terminal keeps its modes.
+void setLineModes({bool echo = true}) {
+  try {
+    io.stdin.echoMode = echo;
+  } catch (_) {}
+  try {
+    io.stdin.lineMode = true;
+  } catch (_) {}
+}
+
 /// Restore modes captured by [captureModes].
 void restoreModes(TermModes modes) {
   final saved = modes.stty;

@@ -1,65 +1,79 @@
 # Architecture
 
-Structure, not features: module edges, startup cost, dependencies and the seams that hold the library together. Numbers are JIT startup of a script that only imports the module (`void main() {}` baseline: 139 ms), median of 3 on an M-series Mac; they drift ±80 ms, so compare with back-to-back A/B runs.
+Structure, not features: module edges, startup cost, dependencies and the seams that hold the library together. Startup numbers are JIT `dart run` of a script that only imports the module, as the median of three back-to-back deltas against `void main() {}` (141 ms) on an M-series Mac. The machine drifts ±80 ms, so compare with A/B runs, never with a number from another day.
 
 ## Import graph
 
 ```
-core ─────────────── src/cookies, src/rate,     src/cache, src/exit, src/glob, src/keys,
-                     src/resume, src/time
-                                                src/pixels, src/retry, src/sanitize, src/tabs,
-                                                src/winconsole: no package imports
-json, hash ───────── core (+crypto)
+core ─────────────── src/resume, src/cookies, src/rate, src/time
+json ─────────────── core, src/names
+hash ─────────────── core, src/resume (+crypto)
 csv ──────────────── core
-scrape ───────────── core, src/rate, src/retry
 yaml ─────────────── json (+yaml)
-fs ───────────────── core, src/exit, src/glob, src/posix, src/tree
+scrape, pool ─────── core, src/rate, src/retry
+fs ───────────────── core, src/exit, src/glob, src/names, src/posix, src/tree (+path)
 shell ────────────── core, src/exit, src/timeout
-archive ──────────── core, src/exit, src/posix, src/tree, src/zip
-http ─────────────── core, src/charset, src/cookies, src/origin, src/rate, src/resume, src/retry, src/timeout
-html ─────────────── json, src/dom, src/html_parser (src/entities), src/selector, src/names
+archive ──────────── core, src/exit, src/posix, src/tree, src/zip, src/sevenzip, src/rar, src/xz (+path)
+http ─────────────── core, src/charset, src/cookies, src/origin, src/posix, src/rate, src/resume, src/retry, src/timeout
+html ─────────────── json, src/dom, src/html_parser, src/names, src/selector
 image ────────────── core, src/pixels (+image)
-pool ─────────────── core, src/rate, src/retry
 cli ──────────────── core, src/sanitize
-console ──────────── core, src/exit, src/keys, src/terminal
-tui ──────────────── src/tui (part files) → src/exit, src/keys, src/pixels, src/terminal
-chrome ───────────── core, html, json, src/cache, src/cookies, src/exit, src/glob, src/keys, src/origin, src/tabs (+puppeteer)
+console ──────────── core, src/exit, src/format, src/keys, src/resume, src/terminal
+tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/pixels, src/terminal
+chrome ───────────── core, html, json, src/cache, src/cookies, src/exit, src/glob, src/keys, src/origin, src/tabs (+path, +puppeteer)
+
+src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── sanitize, winconsole
+src/zip, src/xz ── aes, crc32, lzma (+crypto)   src/sevenzip, src/rar ── aes, crc32, lzma, ppmd, zip (+crypto)
 ```
-No cycles. The cross-module edges: `chrome → html, json` (a page's `html()`/`json()` return those types) and `html → json` (`Elements.json()` returns embedded data), the compositions the API promises. `Cookies` and `Rate` sit in core because two modules share each (chrome → http, http + pool); `src/glob.dart` serves fs (`list(match:)`) and chrome (`responses`). `src/resume.dart` is the private handshake behind `resume: true`: `Reader.to` asks the chain's source (a lazy GET) to deliver itself to a path, through pipes that declare `PassThrough` (console's `Bar`, hash's `Hasher`), so http never imports fs or console.
+
+No cycles. Cross-module edges are the compositions the API promises: `chrome → html, json` (a page's `html()`/`json()`), `html → json` (`Elements.json()`), `yaml → json` (a YAML document is a `Json`). `Cookies` and `Rate` live in core because two modules share each one. `src/resume.dart` is the private handshake behind `resume: true`, so http never imports fs or console.
 
 ## Startup per module
 
-| import | ms | what it costs |
+| import | +ms over an empty script | what it costs |
 |---|---|---|
-| core, csv, pool, scrape, shell | 150–170 | — |
-| json, hash, fs, cli | 185–230 | crypto ~15; path ~40–60 |
-| http, console, tui | 230–290 | — |
-| yaml | ~350 | package:yaml ~150 |
-| html | ~235 | in-house parser and selectors (was ~770 with package:html + csslib) |
-| archive | 228–256 | in-house codecs |
-| image | 977–1003 | package:image ~820 |
-| chrome | ~1300 | puppeteer ~1150 |
+| core, csv, scrape | 21–26 | — |
+| json, pool, cli, shell, hash | 57–73 | crypto (hash) |
+| fs, http, html, console | 96–103 | path (fs); charset tables (http); parser and selectors (html) |
+| archive, yaml, tui | 208–239 | in-house codecs; package:yaml; widgets and markdown |
+| image | 892 | package:image |
+| chrome | 1197 | puppeteer |
 
 ## Dependencies
 
-| package | used for | startup | note |
-|---|---|---|---|
-| path | joins, relative, normalize | ~40 ms | correct on every OS |
-| crypto | md5 … sha512 (`hash`) | ~15 ms | |
-| image | decode/encode/resize | ~820 ms | no in-house substitute for the codecs |
-| puppeteer | `chrome` | ~1150 ms | only chrome scripts pay it |
-| yaml | `Yaml.parse` | ~150 ms | only yaml scripts pay it; read only |
+| package | used for | note |
+|---|---|---|
+| path | joins, relative, normalize | fs, archive, chrome, src/tree, src/cache; correct on every OS |
+| crypto | md5 … sha512, the archive KDFs | |
+| image | decode/encode/resize | no in-house substitute for the codecs |
+| puppeteer | `chrome` | only chrome scripts pay it |
+| yaml | `Yaml.parse` | only yaml scripts pay it; read only |
 
-Archives (zip, 7z, RAR, xz), AES, isolate pools, the HTTP client, the HTML5 parser with its CSS selector engine, and CSV are in-house on the SDK. package:html stays a dev dependency: `test/html_corpus_test.dart` holds the in-house parser to its tree on 50 saved real pages (`test/fixtures/html`) plus edge-case snippets.
+Archives (zip, 7z, RAR, xz), AES, the HTTP client, the HTML5 parser with its selector engine, CSV and the isolate pool are in-house on the SDK. package:html stays a dev dependency: `test/html_corpus_test.dart` holds the in-house parser to its tree on 52 saved real pages.
 
 ## Rules
 
-- **One lifecycle owner.** Only `src/exit.dart` watches signals and calls `exit`; only `src/terminal.dart` reads stdin. Facades and `shell` children register exit hooks.
-- **One shared model.** `Reader`/`Writer`/`Pipe`/`Closeable`/`Origin` cross modules; no module has its own lookalike.
-- **Engines stay behind private interfaces.** `Region.picture` draws through `src/pixels.dart`, so the TUI never loads the image engine.
-- **Big files follow seams**: `charset.dart` (tables), `entities.dart` (the HTML5 entity table, parsed on first `&name;`), `html_parser.dart` (tokenizer, tree builder), `selector.dart`, `tui/session.dart` (loop, input routing, prompts bridge), `http.dart` (client, pool, `Response`, send/redirect, cache), `terminal.dart` (decoder, caps, widths).
-- **html never loads charset**: decoding belongs to the `Reader` (http), so `html` imports only the small `src/names.dart` (~100 ms saved).
+- **One lifecycle owner.** Only `src/exit.dart` watches signals and calls `exit`. Only `src/terminal.dart` reads stdin and sets its modes (capture, raw, line, restore). Child processes outside `shell` are named here: the tty reader (`terminal`), the Tui exit guard (`tui/session`), the Chromium watchdog (`chrome`) and the `chmod`/`touch` batches (`src/posix`).
+- **One shared model.** `Reader`/`Writer`/`Pipe`/`Closeable`/`Origin` cross modules; no module has a lookalike. Stopping is `src/rate.dart`'s `Halt`: http, pool and scrape end their waits through it.
+- **Engines stay behind private interfaces.** `Region.picture` draws through `src/pixels.dart`, so the TUI never loads the image engine. `html` never loads `charset`: decoding belongs to the `Reader`.
+- **Big files follow seams.** These are data or state machines: `charset.dart` (tables), `entities.dart`, `html_parser.dart` (tokenizer, tree builder), the archive decoders. The rest are facades: `http.dart` (client, pool, `Response`, send and redirect, cache), `terminal.dart` (decoder, caps, widths), `tui/session.dart` (loop, input, prompts bridge).
+- **SDK-only helpers stay SDK-only.** `src/posix.dart` imports no package, so a module that needs a `chmod` (http's cache) pays nothing for it. Path-shaped helpers (`tmpPath`, `sortByRelative`) live in `src/tree.dart`, next to their only users.
 
-## Next levers
+## Findings (2026-10-15)
 
-1. Split `tui/session.dart` along input routing vs the loop once a second consumer of either appears.
+| # | Finding | Status |
+|---|---|---|
+| A1 | `posix.dart` pulled in package:path for two helpers only fs and archive use; http re-implemented `chmod` to avoid it | done: 5e972c38 |
+| A2 | Console wrote `stdin.echoMode/lineMode` itself, bypassing the terminal owner | done: 4f8effaa |
+| A3 | The SGR pattern existed twice (sanitize, Console.table) | done: 6b417248 |
+| A4 | `cli.dart` `_parseCommand` is ~280 lines: options, positionals and sub-commands in one loop | open: split along those three seams (about 300 lines touched) |
+| A5 | `http.dart` is ~1,950 lines, five seams in one file | open: `_Cache` and `Response` to part files once a second change lands there |
+| A6 | `Console.ask` on a pipe reads through `Isolate.run(readLineSync)` per line: an abandoned prompt keeps the VM alive until a line arrives | open: needs a cancellable prompt (a `timeout:` on ask) |
+| A7 | `scrape` has no user in projects/ any more | open: the user's call (proposed by another session) |
+
+## Migration order
+
+1. A4: pure split of `_parseCommand` (parse state into a small class; options, args and commands as methods), suite green.
+2. A5: move `_Cache` (about 100 lines) and `Response` into `lib/src/http/` part files. No API change.
+3. A6: a `timeout:` on `Console.ask` that cancels the reader isolate. This changes the API, so ERGONOMIC decides it.
+4. Split `tui/session.dart` along input routing and the loop once a second consumer of either appears.

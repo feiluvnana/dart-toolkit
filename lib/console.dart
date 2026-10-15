@@ -179,12 +179,7 @@ abstract final class Console {
     if (bridge != null) return bridge.promptAsk(question, secret: secret);
     io.stderr.writeln(term.safeText(question));
     final modes = term.captureModes();
-    try {
-      io.stdin.echoMode = !secret;
-    } catch (_) {}
-    try {
-      io.stdin.lineMode = true;
-    } catch (_) {}
+    term.setLineModes(echo: !secret);
     // Terminal restore on signals (first), via the single owner in
     // src/exit.dart; browsers registered earlier run after us.
     final token = exit.onExit(() => term.restoreModes(modes));
@@ -293,7 +288,7 @@ abstract final class Console {
   /// wherever raw single-key mode is unavailable. Restores cooked, echoed
   /// input first (best effort), so typing stays visible and line-buffered.
   static Future<T> _chooseNumbered<T>(String question, List<T> items, List<String> labels) async {
-    _cooked();
+    term.setLineModes(); // undo a half-applied raw mode: fallback prompts stay visible
     io.stderr.writeln(term.safeText(question));
     for (var i = 0; i < labels.length; i++) {
       io.stderr.writeln('  ${i + 1}. ${labels[i]}');
@@ -306,17 +301,6 @@ abstract final class Console {
         return items[n - 1];
       }
     }
-  }
-
-  /// Best-effort cooked, echoed input: undoes a half-applied raw mode so
-  /// fallback prompts stay visible and line-buffered.
-  static void _cooked() {
-    try {
-      io.stdin.echoMode = true;
-    } catch (_) {}
-    try {
-      io.stdin.lineMode = true;
-    } catch (_) {}
   }
 
   /// True when single keypresses (arrows included) will actually arrive:
@@ -356,7 +340,7 @@ abstract final class Console {
   /// its first character counts as the key (an empty line counts as Enter).
   static Future<String> key({String? prompt}) async {
     if (!io.stdin.hasTerminal || !io.stderr.hasTerminal || !_rawKeys()) {
-      _cooked();
+      term.setLineModes(); // undo a half-applied raw mode: fallback prompts stay visible
       final line = await _ask(prompt ?? 'Press a key, then Enter:', secret: false);
       if (line == null) throw const io.StdinException('stdin is closed');
       if (line.isEmpty) return 'enter';
@@ -416,7 +400,6 @@ abstract final class Console {
   }
 
   static final _blank = RegExp('[\n\t]');
-  static final _sgr = RegExp(r'\x1b\[[0-9;:]*m');
 
   /// Print [rows] to stdout as aligned columns, two spaces apart, sized by
   /// cell width (wide characters count twice); numbers align right. The
@@ -428,7 +411,7 @@ abstract final class Console {
     ];
     if (cells.isEmpty) return;
     // Colour codes take no cells.
-    int cellWidth(String c) => term.displayWidth(c.contains('\x1b') ? c.replaceAll(_sgr, '') : c);
+    int cellWidth(String c) => term.displayWidth(term.unstyled(c));
     final widths = <int>[];
     for (final row in cells) {
       for (final (i, c) in row.indexed) {
