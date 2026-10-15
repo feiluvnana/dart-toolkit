@@ -588,9 +588,9 @@ final class FacebookPlatform implements Platform {
       ];
 
       final seen = <String>{};
-      final filesToAdd = <media.Download>[];
       var count = 0;
       var qIdx = 0;
+      var consecutiveExisting = 0;
 
       while (qIdx < queueIds.length) {
         final currentId = queueIds[qIdx++];
@@ -606,14 +606,26 @@ final class FacebookPlatform implements Platform {
         final file = targetDir.file('${photo.id}.$ext');
 
         if (!all && await file.exists()) {
-          // Reached already downloaded media in incremental sync
-          break;
+          consecutiveExisting++;
+          if (consecutiveExisting >= 3) {
+            // Reached already downloaded media in incremental sync
+            break;
+          }
+          if (photo.nextPhotoId case final nextId?) {
+            if (!seen.contains(nextId) && !queueIds.contains(nextId)) {
+              queueIds.add(nextId);
+            }
+          }
+          continue;
         }
+        consecutiveExisting = 0;
 
-        filesToAdd.add((to: file, url: photo.url, text: null));
-        if (photo.caption case final caption?) {
-          filesToAdd.add((to: targetDir.file('${photo.id}.txt'), url: null, text: caption));
-        }
+        final currentFiles = <media.Download>[
+          (to: file, url: photo.url, text: null),
+          if (photo.caption case final caption?)
+            (to: targetDir.file('${photo.id}.txt'), url: null, text: caption),
+        ];
+        add(currentFiles);
 
         count++;
         phase(part, '$count photos discovered');
@@ -632,7 +644,6 @@ final class FacebookPlatform implements Platform {
         }
       }
 
-      if (filesToAdd.isNotEmpty) add(filesToAdd);
       await mark.delete();
       phase(part, '$count photos listed', done: true);
     }
@@ -662,7 +673,6 @@ final class FacebookPlatform implements Platform {
         for (final m in RegExp(r'"video_id":"(\d+)"').allMatches(combinedHtml)) m[1]!,
       };
 
-      final filesToAdd = <media.Download>[];
       var count = 0;
 
       for (final vid in videoIds) {
@@ -674,15 +684,16 @@ final class FacebookPlatform implements Platform {
 
         if (!all && await file.exists()) continue;
 
-        filesToAdd.add((to: file, url: v.url, text: null));
-        if (v.title case final title?) {
-          filesToAdd.add((to: targetDir.file('${v.id}.txt'), url: null, text: title));
-        }
+        final toAdd = <media.Download>[
+          (to: file, url: v.url, text: null),
+          if (v.title case final title?)
+            (to: targetDir.file('${v.id}.txt'), url: null, text: title),
+        ];
+        add(toAdd);
         count++;
         phase(part, '$count videos discovered');
       }
 
-      if (filesToAdd.isNotEmpty) add(filesToAdd);
       phase(part, '$count videos listed', done: true);
     }
 
@@ -746,7 +757,6 @@ final class FacebookPlatform implements Platform {
             album.title;
         final cleanTitle = decodeFacebookText(albumTitle);
         final aDir = albumsDir.dir(Fs.sanitize(cleanTitle));
-        final filesToAdd = <media.Download>[];
 
         final firstPhotoId = extractFirstPhotoId(setHtml);
         final queueIds = <String>[
@@ -756,6 +766,7 @@ final class FacebookPlatform implements Platform {
 
         final aSeen = <String>{};
         var aIdx = 0;
+        var aConsecutiveExisting = 0;
 
         while (aIdx < queueIds.length) {
           final pid = queueIds[aIdx++];
@@ -768,24 +779,30 @@ final class FacebookPlatform implements Platform {
           final ext = photo.url.split('?').first.split('.').lastOrNull ?? 'jpg';
           final file = aDir.file('${photo.id}.$ext');
           if (!all && await file.exists()) {
-            break;
+            aConsecutiveExisting++;
+            if (aConsecutiveExisting >= 3) break;
+            if (photo.nextPhotoId case final nextId?) {
+              if (!aSeen.contains(nextId) && !queueIds.contains(nextId)) {
+                queueIds.add(nextId);
+              }
+            }
+            continue;
           }
+          aConsecutiveExisting = 0;
 
-          filesToAdd.add((to: file, url: photo.url, text: null));
-          if (photo.caption case final cap?) {
-            filesToAdd.add((to: aDir.file('${photo.id}.txt'), url: null, text: cap));
-          }
+          final toAdd = <media.Download>[
+            (to: file, url: photo.url, text: null),
+            if (photo.caption case final cap?)
+              (to: aDir.file('${photo.id}.txt'), url: null, text: cap),
+          ];
+          add(toAdd);
+          totalPhotos++;
 
           if (photo.nextPhotoId case final nextId?) {
             if (!aSeen.contains(nextId) && !queueIds.contains(nextId)) {
               queueIds.add(nextId);
             }
           }
-        }
-
-        if (filesToAdd.isNotEmpty) {
-          totalPhotos += filesToAdd.length;
-          add(filesToAdd);
         }
       }
 

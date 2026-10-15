@@ -163,6 +163,23 @@ void main() {
     });
   });
 
+  test('Queue logs compression effectiveness even when file does not shrink', () async {
+    await Fs.tempDir((tempDir) async {
+      final q = Queue(imageQuality: 100);
+      final destFile = tempDir.file('photo.jpg');
+      final u = board.user('testuser', platform: 'ins');
+      final part = u.parts.putIfAbsent('photos', () => Part('photos'));
+      final transfer = Transfer(u, part, 'photos/photo.jpg');
+
+      final media.Download download = (to: destFile, url: '$base/photo.jpg', text: null);
+      final isNew = await q.save(download, transfer);
+
+      expect(isNew, isTrue);
+      expect(await destFile.exists(), isTrue);
+      expect(board.events.any((e) => e.line.contains('(compressed from')), isTrue);
+    });
+  });
+
   group('CLI options validation', () {
     test('parses quality and aliases properly', () async {
       int? capturedImg;

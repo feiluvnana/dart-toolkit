@@ -398,11 +398,13 @@ class Queue {
       t.status = null;
       board.transfers.remove(t);
     }
-    if (originalSize > 0 && t.done < originalSize) {
+    final compressed = imageQuality != null || videoQuality != null;
+    if (compressed && originalSize > 0) {
       final saved = originalSize - t.done;
       final pct = (saved * 100 / originalSize).round();
+      final effectiveness = pct > 0 ? '-$pct%' : (pct < 0 ? '+${-pct}%' : '0%');
       board.note(
-        '@${t.user.name} ${t.path}  ${size(t.done)} (compressed from ${size(originalSize)}, -$pct%)',
+        '@${t.user.name} ${t.path}  ${size(t.done)} (compressed from ${size(originalSize)}, $effectiveness)',
         platform: t.user.platform,
       );
     } else {
