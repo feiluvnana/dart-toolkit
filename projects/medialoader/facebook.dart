@@ -311,6 +311,220 @@ Future<FacebookVideo?> videoPage(Client client, String videoId) async {
   return (id: videoId, url: videoUrl, title: title, date: date);
 }
 
+typedef FacebookTimelinePost = ({
+  String id,
+  int date,
+  String? caption,
+  List<String> photoIds,
+  List<String> videoIds,
+  List<String> directUrls,
+});
+
+List<FacebookTimelinePost> extractTimelinePosts(String html) {
+  final scripts = RegExp(r'<script type="application/json"[^>]*>(.*?)</script>', dotAll: true).allMatches(html);
+  final posts = <FacebookTimelinePost>[];
+  final seenIds = <String>{};
+
+  for (final s in scripts) {
+    final text = s.group(1)!;
+    if (!text.contains('timeline_list_feed_units') &&
+        !text.contains('profile_pinned_post') &&
+        !text.contains('ProfileCometTimelineFeedQuery')) {
+      continue;
+    }
+
+    try {
+      final json = jsonDecode(text);
+
+      void inspectStory(Map<String, dynamic> story) {
+        final postId = story['post_id']?.toString() ??
+            story['legacy_token']?.toString() ??
+            (story['id'] != null && RegExp(r'^\d+$').hasMatch(story['id'].toString()) ? story['id'].toString() : null);
+
+        final creationTime = story['creation_time'] as int?;
+        final date = creationTime ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+        String? caption;
+        String? extractText(Object? m) {
+          if (m is Map && m['text'] is String) return m['text'] as String;
+          return null;
+        }
+
+        final cometSec = story['comet_sections'] as Map<String, dynamic>?;
+        final contentStory = cometSec?['content'] is Map ? (cometSec!['content'] as Map)['story'] as Map<String, dynamic>? : null;
+        final msgStory = cometSec?['message'] is Map ? (cometSec!['message'] as Map)['story'] as Map<String, dynamic>? : null;
+        final msgContainer = cometSec?['message_container'] is Map ? (cometSec!['message_container'] as Map)['story'] as Map<String, dynamic>? : null;
+
+        if (extractText(story['message']) case final t?) {
+          caption = decodeFacebookText(t);
+        } else if (extractText(msgStory?['message']) case final t?) {
+          caption = decodeFacebookText(t);
+        } else if (extractText(msgContainer?['message']) case final t?) {
+          caption = decodeFacebookText(t);
+        } else if (contentStory != null) {
+          final cComet = contentStory['comet_sections'] as Map<String, dynamic>?;
+          final cMsg = cComet?['message'] is Map ? (cComet!['message'] as Map)['story'] as Map<String, dynamic>? : null;
+          final cCnt = cComet?['message_container'] is Map ? (cComet!['message_container'] as Map)['story'] as Map<String, dynamic>? : null;
+          if (extractText(contentStory['message']) case final t?) {
+            caption = decodeFacebookText(t);
+          } else if (extractText(cMsg?['message']) case final t?) {
+            caption = decodeFacebookText(t);
+          } else if (extractText(cCnt?['message']) case final t?) {
+            caption = decodeFacebookText(t);
+          }
+        }
+
+        final photoIds = <String>[];
+        final videoIds = <String>[];
+        final directUrls = <String>[];
+
+        void findMedia(Object? mObj) {
+          if (mObj is Map) {
+            final map = mObj is Map<String, dynamic> ? mObj : Map<String, dynamic>.from(mObj);
+            final typename = map['__typename']?.toString() ?? '';
+            final id = map['id']?.toString();
+
+            if (typename == 'Photo' || typename == 'CometPhoto') {
+              if (id != null && !photoIds.contains(id)) photoIds.add(id);
+              if (map['photo_image'] is Map && (map['photo_image'] as Map)['uri'] is String) {
+                directUrls.add(unescapeUrl((map['photo_image'] as Map)['uri'] as String));
+              }
+              if (map['image'] is Map && (map['image'] as Map)['uri'] is String) {
+                directUrls.add(unescapeUrl((map['image'] as Map)['uri'] as String));
+              }
+            } else if (typename == 'Video' || typename == 'CometVideo') {
+              if (id != null && !videoIds.contains(id)) videoIds.add(id);
+              if (map['playable_url'] is String) directUrls.add(unescapeUrl(map['playable_url'] as String));
+              if (map['browser_native_hd_url'] is String) directUrls.add(unescapeUrl(map['browser_native_hd_url'] as String));
+              if (map['browser_native_sd_url'] is String) directUrls.add(unescapeUrl(map['browser_native_sd_url'] as String));
+            }
+
+            for (final val in map.values) {
+              findMedia(val);
+            }
+          } else if (mObj is List) {
+            for (final item in mObj) {
+              findMedia(item);
+            }
+          }
+        }
+
+        findMedia(story);
+
+        final effectiveId =
+            postId ?? (photoIds.isNotEmpty ? photoIds.first : (videoIds.isNotEmpty ? videoIds.first : null));
+        if (effectiveId != null && (photoIds.isNotEmpty || videoIds.isNotEmpty || caption != null)) {
+          if (seenIds.add(effectiveId)) {
+            posts.add((
+              id: effectiveId,
+              date: date,
+              caption: caption,
+              photoIds: photoIds,
+              videoIds: videoIds,
+              directUrls: directUrls,
+            ));
+          }
+        }
+      }
+
+      void search(Object? obj) {
+        if (obj is Map) {
+          final map = obj is Map<String, dynamic> ? obj : Map<String, dynamic>.from(obj);
+          if (map['__typename'] == 'Story' &&
+              (map.containsKey('post_id') || map.containsKey('comet_sections') || map.containsKey('creation_time'))) {
+            inspectStory(map);
+          } else if (map.containsKey('timeline_list_feed_units')) {
+            final tUnits = map['timeline_list_feed_units'] as Map?;
+            final edges = tUnits?['edges'] as List?;
+            if (edges != null) {
+              for (final e in edges) {
+                if (e is Map && e['node'] is Map) {
+                  final node = Map<String, dynamic>.from(e['node'] as Map);
+                  final nodeComet = node['comet_sections'] as Map?;
+                  final nodeContent = nodeComet?['content'] as Map?;
+                  if (nodeContent?['story'] is Map) {
+                    final sMap = Map<String, dynamic>.from(nodeContent!['story'] as Map);
+                    sMap['post_id'] ??= node['post_id'];
+                    sMap['creation_time'] ??= node['creation_time'];
+                    inspectStory(sMap);
+                  } else {
+                    inspectStory(node);
+                  }
+                }
+              }
+            }
+          } else if (map['profile_pinned_post'] is Map) {
+            final pinned = map['profile_pinned_post'] as Map;
+            if (pinned['post'] is Map) {
+              final sMap = Map<String, dynamic>.from(pinned['post'] as Map);
+              sMap['post_id'] ??= pinned['id'];
+              sMap['creation_time'] ??= pinned['creation_time'];
+              inspectStory(sMap);
+            } else {
+              inspectStory(Map<String, dynamic>.from(pinned));
+            }
+          }
+          for (final val in map.values) {
+            search(val);
+          }
+        } else if (obj is List) {
+          for (final item in obj) {
+            search(item);
+          }
+        }
+      }
+
+      search(json);
+    } catch (_) {}
+  }
+
+  return posts;
+}
+
+typedef FacebookStoryMedia = ({String id, bool isVideo, String url, int? date});
+
+List<FacebookStoryMedia> extractStoryMedia(String html) {
+  final items = <FacebookStoryMedia>[];
+  final seenIds = <String>{};
+
+  // 1. Extract videos (pick HD over SD)
+  final videoUrls = <String>[
+    for (final m in RegExp(r'"progressive_url"\s*:\s*"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
+    for (final m in RegExp(r'"browser_native_hd_url"\s*:\s*"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
+    for (final m in RegExp(r'"playable_url"\s*:\s*"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
+  ];
+
+  for (final url in videoUrls) {
+    final assetId = RegExp(r'xpv_asset_id%22%3A(\d+)').firstMatch(url)?[1] ??
+        RegExp(r'/m\d+/([a-zA-Z0-9_-]+)\.mp4').firstMatch(url)?[1] ??
+        url.split('?').first.split('/').last.split('.').first;
+
+    if (seenIds.add(assetId)) {
+      items.add((id: assetId, isVideo: true, url: url, date: null));
+    }
+  }
+
+  // 2. Extract photos
+  final photoUrls = <String>[
+    for (final m in RegExp(r'"image"\s*:\s*\{\s*"uri"\s*:\s*"(https:[^"]+t39\.30808-6[^"]+)"').allMatches(html))
+      unescapeUrl(m[1]!),
+    for (final m in RegExp(r'"uri"\s*:\s*"(https:[^"]+t39\.30808-6[^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
+    for (final m in RegExp(r'"(?:viewer_image|image)"\s*:\s*\{\s*"uri"\s*:\s*"([^"]+)"').allMatches(html))
+      unescapeUrl(m[1]!),
+  ];
+
+  for (final url in photoUrls) {
+    final filename = url.split('?').first.split('/').last;
+    final photoId = RegExp(r'^\d+_(\d+)_').firstMatch(filename)?[1] ?? filename.split('.').first;
+
+    if (seenIds.add(photoId)) {
+      items.add((id: photoId, isVideo: false, url: url, date: null));
+    }
+  }
+
+  return items;
+}
+
 Object explain(Object e) => switch (e) {
   HttpStatusException(status: 404, :final url) => 'Facebook user not found: $url',
   HttpStatusException(status: final status && (401 || 403), :final url) =>
@@ -331,6 +545,7 @@ final class FacebookPlatform implements Platform {
 
   @override
   List<Category> get categories => const [
+    Category('post', folder: 'posts', help: 'Timeline posts (captions, images, videos)'),
     Category('photo', folder: 'photos', help: 'User photos and uploads'),
     Category('video', folder: 'videos', help: 'User videos and reels'),
     Category('album', folder: 'albums', help: 'Photo albums'),
@@ -430,6 +645,7 @@ final class FacebookPlatform implements Platform {
       ..name = p.name
       ..id = p.id;
 
+    final postsDir = categories.contains('post') ? userDir.dir('posts') : null;
     final photosDir = categories.contains('photo') ? userDir.dir('photos') : null;
     final videosDir = categories.contains('video') ? userDir.dir('videos') : null;
     final albumsDir = categories.contains('album') ? userDir.dir('albums') : null;
@@ -471,6 +687,69 @@ final class FacebookPlatform implements Platform {
       }
       if (toAdd.isNotEmpty) add(toAdd);
       phase(part, '${toAdd.length} profile ${toAdd.length == 1 ? 'asset' : 'assets'}', done: true);
+    }
+
+    // 2. Explore Posts
+    Future<void> explorePosts() async {
+      if (postsDir == null) return;
+      final part = [?u.parts['posts']];
+      phase(part, 'fetching timeline posts');
+
+      final posts = extractTimelinePosts(p.html);
+      var totalPosts = 0;
+      var consecutiveExisting = 0;
+
+      for (final post in posts) {
+        final month = DateTime.fromMillisecondsSinceEpoch(post.date * 1000).format('yyyy-MM');
+        final targetDir = postsDir.dir(month);
+        final postFiles = <media.Download>[];
+
+        // 1. Photo attachments
+        for (final (idx, pid) in post.photoIds.indexed) {
+          final name = post.photoIds.length > 1 ? '${post.id}_${idx + 1}' : post.id;
+          final photo = await photoPage(client, pid, '');
+          if (photo != null) {
+            final ext = photo.url.split('?').first.split('.').lastOrNull ?? 'jpg';
+            postFiles.add((to: targetDir.file('$name.$ext'), url: photo.url, text: null));
+          } else if (post.directUrls.firstOrNull case final dUrl?) {
+            postFiles.add((to: targetDir.file('$name.jpg'), url: dUrl, text: null));
+          }
+        }
+
+        // 2. Video attachments
+        for (final (idx, vid) in post.videoIds.indexed) {
+          final name = post.videoIds.length > 1 ? '${post.id}_${idx + 1}' : post.id;
+          final video = await videoPage(client, vid);
+          if (video != null) {
+            postFiles.add((to: targetDir.file('$name.mp4'), url: video.url, text: null));
+          } else if (post.directUrls.where((u) => u.contains('.mp4')).firstOrNull case final dUrl?) {
+            postFiles.add((to: targetDir.file('$name.mp4'), url: dUrl, text: null));
+          }
+        }
+
+        // 3. Caption text
+        if (post.caption case final cap?) {
+          if (cap.trim().isNotEmpty) {
+            postFiles.add((to: targetDir.file('${post.id}.txt'), url: null, text: cap));
+          }
+        }
+
+        if (postFiles.isEmpty) continue;
+
+        // Incremental sync skip
+        final primaryFile = postFiles.firstWhere((f) => f.url != null, orElse: () => postFiles.first).to;
+        if (!all && await primaryFile.exists()) {
+          consecutiveExisting++;
+          if (consecutiveExisting >= 3) break;
+          continue;
+        }
+        consecutiveExisting = 0;
+
+        add(postFiles);
+        totalPosts++;
+      }
+
+      phase(part, '$totalPosts posts', done: true);
     }
 
     Set<String> extractPhotoIds(String html) {
@@ -815,25 +1094,35 @@ final class FacebookPlatform implements Platform {
       final part = [?u.parts['stories']];
       phase(part, 'fetching active stories');
 
-      board.requests++;
-      final storyUrl = RegExp(r'^\d+$').hasMatch(p.id) ? '/stories/${p.id}/' : '/stories/${p.name}/';
-      final response = await client.get(storyUrl);
-      final html = await response.text();
+      final bucketIds = <String>{
+        for (final m in RegExp(r'"story_bucket":\{"nodes":\[\{[^{}]*"id":"(\d+)"').allMatches(p.html)) m[1]!,
+        for (final m in RegExp(r'"story_bucket":\{"id":"(\d+)"').allMatches(p.html)) m[1]!,
+      };
 
-      final storyMediaUrls = <String>[
-        for (final m in RegExp(r'"uri":"(https:[^"]+t39\.30808-6[^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
-        for (final m in RegExp(r'"progressive_url":"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
-        for (final m in RegExp(r'"(?:viewer_image|image)":\{"uri":"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
-        for (final m in RegExp(r'"playable_url":"([^"]+)"').allMatches(html)) unescapeUrl(m[1]!),
+      final storyUrls = <String>[
+        for (final b in bucketIds) '/stories/$b/',
+        RegExp(r'^\d+$').hasMatch(p.id) ? '/stories/${p.id}/' : '/stories/${p.name}/',
       ];
 
       final filesToAdd = <media.Download>[];
       final month = DateTime.now().format('yyyy-MM');
       final sDir = userDir.dir('stories').dir(month);
+      final seenMediaIds = <String>{};
 
-      for (final (i, url) in storyMediaUrls.indexed) {
-        final ext = url.contains('.mp4') ? 'mp4' : 'jpg';
-        filesToAdd.add((to: sDir.file('story_${i + 1}.$ext'), url: url, text: null));
+      for (final sUrl in storyUrls) {
+        board.requests++;
+        final response = await client.get(sUrl);
+        final html = await response.text();
+        final items = extractStoryMedia(html);
+
+        for (final item in items) {
+          if (!seenMediaIds.add(item.id)) continue;
+          final ext = item.isVideo ? 'mp4' : 'jpg';
+          final file = sDir.file('${item.id}.$ext');
+          if (!all && await file.exists()) continue;
+          filesToAdd.add((to: file, url: item.url, text: null));
+        }
+        if (filesToAdd.isNotEmpty) break;
       }
 
       if (filesToAdd.isNotEmpty) add(filesToAdd);
@@ -846,7 +1135,6 @@ final class FacebookPlatform implements Platform {
       final part = [?u.parts['highlights']];
       phase(part, 'listing highlights');
 
-      // Discover highlight IDs and titles from profile HTML
       final foundHighlights = <({String id, String title})>[];
       final seenIds = <String>{};
 
@@ -876,6 +1164,16 @@ final class FacebookPlatform implements Platform {
         }
       }
 
+      for (final m in RegExp(
+        r'\{[^{}]*"id":"(\d+)"[^{}]*"title":\{"text":"((?:[^"\\]|\\.)*)"\}[^{}]*\}',
+      ).allMatches(p.html)) {
+        final hid = m[1]!;
+        final title = decodeFacebookText(m[2]!);
+        if (seenIds.add(hid)) {
+          foundHighlights.add((id: hid, title: title));
+        }
+      }
+
       final now = <String, Set<String>>{};
       var totalMedia = 0;
 
@@ -888,25 +1186,15 @@ final class FacebookPlatform implements Platform {
         board.requests++;
         final hRes = await client.get('/stories/highlights/${h.id}/');
         final hHtml = await hRes.text();
+        final items = extractStoryMedia(hHtml);
 
-        final mediaUrls = <String>{
-          for (final m in RegExp(r'"uri":"(https:[^"]+t39\.30808-6[^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-          for (final m in RegExp(r'"progressive_url":"([^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-          for (final m in RegExp(r'"(?:viewer_image|image)":\{"uri":"([^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-          for (final m in RegExp(r'"browser_native_hd_url":"([^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-          for (final m in RegExp(r'"playable_url":"([^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-          for (final m in RegExp(r'"browser_native_sd_url":"([^"]+)"').allMatches(hHtml)) unescapeUrl(m[1]!),
-        };
-
-        for (final (i, url) in mediaUrls.indexed) {
-          final rawId = Uri.tryParse(url)?.pathSegments.where((s) => s.isNotEmpty).lastOrNull ?? '$i';
-          final mediaId = Fs.sanitize(rawId.split('?').first);
-          final ext = url.contains('.mp4') ? 'mp4' : (url.split('?').first.split('.').lastOrNull ?? 'jpg');
-          final file = hDir.file('$mediaId.$ext');
-          currentItemIds.add(mediaId);
+        for (final item in items) {
+          final ext = item.isVideo ? 'mp4' : 'jpg';
+          final file = hDir.file('${item.id}.$ext');
+          currentItemIds.add(item.id);
 
           if (!all && await file.exists()) continue;
-          filesToAdd.add((to: file, url: url, text: null));
+          filesToAdd.add((to: file, url: item.url, text: null));
         }
 
         if (filesToAdd.isNotEmpty) {
@@ -937,6 +1225,7 @@ final class FacebookPlatform implements Platform {
 
     await Future.wait([
       if (categories.contains('profile')) exploreProfile(),
+      if (postsDir != null) explorePosts(),
       if (photosDir != null) explorePhotos(),
       if (videosDir != null) exploreVideos(),
       if (albumsDir != null) exploreAlbums(),
