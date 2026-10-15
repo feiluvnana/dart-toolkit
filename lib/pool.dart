@@ -30,8 +30,9 @@ import 'src/retry.dart' as retry;
 ///
 /// - [limit] caps the jobs in flight: 4 lanes by default (I/O: the core
 ///   count says nothing), or the core count with `isolates: true`.
-/// - [retries] re-runs a failing job with the shared jittered backoff
-///   (1 s, 2 s … ±25%); [rate] paces job starts (each attempt takes a slot).
+/// - [retries] re-runs a job that threw an Exception with the shared
+///   jittered backoff (1 s, 2 s … ±25%); an Error is a bug and fails at once.
+///   [rate] paces job starts (each attempt takes a slot).
 /// - `isolates: true` runs the jobs on `limit` long-lived worker isolates
 ///   that pull items: the job and every item must be sendable (a top-level
 ///   function or a closure over plain data). A value that cannot cross is an
@@ -94,6 +95,8 @@ abstract final class Pool {
     final workers = <_Worker>[];
     var next = 0;
     var failed = false;
+    // Fail-fast ends the other lanes' rate waits and backoffs at once.
+    final halt = rate.Halt();
 
     Future<void> lane() async {
       _Worker? worker;
@@ -104,7 +107,8 @@ abstract final class Pool {
         Outcome<T, R> result;
         try {
           for (var attempt = 0; ; attempt++) {
-            if (pace != null) await rate.take(pace, null);
+            if (pace != null) await rate.take(pace, failFast ? halt : null);
+            if (failFast && failed) return; // the map throws the first failure
             try {
               final R value;
               if (isolates) {
@@ -118,9 +122,12 @@ abstract final class Pool {
               break;
             } on _Unsendable {
               rethrow;
-            } catch (_) {
-              if (attempt >= retries || (failFast && failed)) rethrow;
-              await Future<void>.delayed(retry.backoff(attempt, null));
+            } catch (e) {
+              if (worker?.dead ?? false) worker = null; // the next attempt or item gets a fresh one
+              // An Error is a bug in the job: running it again cannot help.
+              if (attempt >= retries || (failFast && failed) || e is Error) rethrow;
+              await rate.sleep(retry.backoff(attempt, null), failFast ? halt : null);
+              if (failFast && failed) rethrow;
             }
           }
         } on _Unsendable catch (e, st) {
@@ -129,7 +136,10 @@ abstract final class Pool {
           result = Failed._(item, e, st);
         }
         out[i] = result;
-        if (result is Failed) failed = true;
+        if (result is Failed) {
+          failed = true;
+          if (failFast) halt.fire();
+        }
         onDone?.call();
       }
     }
@@ -199,17 +209,30 @@ final class _Worker {
   final SendPort _send;
   final StreamIterator<Object?> _replies;
 
+  /// The isolate died (an uncaught async error, `Isolate.exit`).
+  var dead = false;
+
   static Future<_Worker> start<T, R>(FutureOr<R> Function(T item) job) async {
     final port = ReceivePort();
     final replies = StreamIterator<Object?>(port);
     Isolate isolate;
     try {
-      isolate = await Isolate.spawn(_main, (port.sendPort, (Object? item) => job(item as T)));
+      // Its exit and uncaught errors arrive on the reply port too, so a
+      // worker that dies fails its item instead of hanging the pool.
+      isolate = await Isolate.spawn(
+        _main,
+        (port.sendPort, (Object? item) => job(item as T)),
+        onExit: port.sendPort,
+        onError: port.sendPort,
+      );
     } on ArgumentError catch (e) {
       port.close();
       throw _Unsendable(ArgumentError.value(job, 'job', 'cannot be sent to a worker isolate (${e.message})'));
     }
-    await replies.moveNext();
+    if (!await replies.moveNext() || replies.current is! SendPort) {
+      port.close();
+      throw RemoteError('worker isolate died while starting', '');
+    }
     return _Worker._(isolate, replies.current! as SendPort, replies);
   }
 
@@ -221,8 +244,15 @@ final class _Worker {
         ArgumentError.value(item, 'items[$index]', 'cannot be sent to a worker isolate (${e.message})'),
       );
     }
-    await _replies.moveNext();
-    final reply = _replies.current! as List<Object?>;
+    final reply = await _replies.moveNext() ? _replies.current : null;
+    if (reply is! List<Object?> || reply[0] is String) {
+      // null: the isolate exited; [error, stack] strings: it died of an
+      // uncaught error outside the job's own future.
+      dead = true;
+      throw reply is List<Object?>
+          ? RemoteError(reply[0]! as String, (reply[1] as String?) ?? '')
+          : RemoteError('worker isolate exited while running items[$index]', '');
+    }
     if (reply[0] == true) return reply[1];
     final error = reply[1]!;
     final stack = StackTrace.fromString(reply[2]! as String);

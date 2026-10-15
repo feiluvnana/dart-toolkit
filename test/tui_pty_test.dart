@@ -51,6 +51,36 @@ void main() {
       expect(stty, contains(' echo '));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    test('exit() in a handler still restores the modes and leaves the alternate screen', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      await _needPython();
+      final root = Directory.current.path;
+      final log = File('${Directory.systemTemp.path}/tui-exit-$pid.log');
+      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final res = await Process.run('python3', [
+        '$root/test/tui_pty/drive.py',
+        '--size',
+        '10',
+        '40',
+        '--feed',
+        '0.5',
+        'q',
+        '--',
+        '/bin/sh',
+        '-c',
+        '"\$0" "\$1" "\$2" late; sleep 0.3; stty -a',
+        Platform.resolvedExecutable,
+        '$root/test/tui_pty/probe.dart',
+        log.path,
+      ], workingDirectory: root);
+      expect('${res.stderr}', contains('exit=0'));
+      final out = '${res.stdout}';
+      expect(out.substring(out.lastIndexOf('\x1b[?1049h')), contains('\x1b[?1049l'));
+      expect(out, contains(' icanon'));
+      expect(out, contains(' isig'));
+      expect(out, contains(' echo '));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('modifiers, insert, SS3, alt; focus reports and clicks add no keys', () async {
       final (log, _, _) = await _pty(
         mode: 'keys',

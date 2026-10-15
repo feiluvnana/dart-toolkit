@@ -743,6 +743,11 @@ Uint8List writeSevenZip(List<(String, int, List<int>)> entries, {String? passwor
     for (final f in files)
       if (!f.dir && f.data.isNotEmpty) f,
   ];
+  // The SDK's one-shot deflate keeps only the low 32 bits of its input
+  // length: past 4 GiB it would write a short stream without an error.
+  if (streams.fold(0, (n, f) => n + f.data.length) > 0xFFFFFFFF) {
+    throw const ContentException('7z over 4 GiB of data: use ArchiveFormat.tgz');
+  }
   final plain = BytesBuilder(copy: false);
   for (final f in streams) {
     plain.add(f.data);

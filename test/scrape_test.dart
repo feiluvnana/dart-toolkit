@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:dart_toolkit/scrape.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 sealed class Job {}
 
 final class Listing extends Job {
@@ -141,5 +143,23 @@ void main() {
     expect(await run.take(3).toList(), [0, 1, 2]);
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(handled, lessThanOrEqualTo(4));
+  });
+
+  test('a cancelled run ends its rate waits and backoffs, so the script exits at once', () async {
+    final sw = Stopwatch()..start();
+    final r = await runDart('''
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/scrape.dart';
+Future<void> main() async {
+  final paced = Scrape<int, int>(rate: Rate(1, const Duration(seconds: 20)));
+  print(await paced.run([1, 2, 3], onItem: (v) => v.emit(v.item)).first);
+  final failing = Scrape<int, int>(retries: 8);
+  final sub = failing.run([1], onItem: (v) => throw Exception('down')).listen((_) {}, onError: (_) {});
+  await Future<void>.delayed(const Duration(milliseconds: 200));
+  await sub.cancel();
+}
+''', timeout: const Duration(seconds: 15));
+    expect((r.exitCode, '${r.stdout}'.trim()), (0, '1'), reason: '${r.stderr}');
+    expect(sw.elapsed, lessThan(const Duration(seconds: 8)));
   });
 }

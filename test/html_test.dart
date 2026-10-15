@@ -143,6 +143,37 @@ void main() {
       expect(doc.text(), 'x');
     });
 
+    test('a page 20,000 deep parses in linear time (regression: every tag walked the open stack)', () {
+      final sw = Stopwatch()..start();
+      Html.parse('${'<div>' * 20000}${'<b>' * 20000}x<table><tr><td>y</table>');
+      expect(sw.elapsedMilliseconds, lessThan(1500)); // was ~7 s
+    });
+
+    test('chained descendant combinators never backtrack exponentially', () {
+      final doc = Html.parse('<section>${'<div>' * 1000}x${'</div>' * 1000}</section>');
+      final sw = Stopwatch()..start();
+      expect(doc.$('section div div div'), hasLength(998));
+      expect(doc.$('section div div div p'), isEmpty);
+      expect(sw.elapsedMilliseconds, lessThan(1000)); // was 400 s
+    });
+
+    test('sibling combinators and :nth-* stay linear on a long list', () {
+      final doc = Html.parse('<ul>${'<li>x</li>' * 20000}</ul>');
+      final sw = Stopwatch()..start();
+      expect(doc.$('li + li'), hasLength(19999));
+      expect(doc.$('li:first-child, li:nth-last-child(1)'), hasLength(2));
+      expect(doc.$('li:nth-child(2n) ~ li'), hasLength(19998));
+      expect(sw.elapsedMilliseconds, lessThan(1500)); // was ~17 s
+    });
+
+    test('text merging, adoption and foster parenting stay linear', () {
+      final sw = Stopwatch()..start();
+      expect(Html.parse('xy</q>' * 50000).text(), hasLength(100000));
+      expect(Html.parse('<b><div>${'<br>' * 30000}</b>').$('br'), hasLength(30000));
+      expect(Html.parse('<table>${'<i></i>' * 30000}').$('i'), hasLength(30000));
+      expect(sw.elapsedMilliseconds, lessThan(1500)); // was ~5 s
+    });
+
     test('nested roots are walked once (regression: one walk per root)', () {
       final doc = Html.parse('${'<div>' * 3000}<a>x</a>${'</div>' * 3000}<div><a>y</a></div>');
       final divs = doc.$('div');

@@ -55,12 +55,24 @@ final class Rate {
 final class Halt {
   final _done = Completer<void>();
 
+  /// The waits in flight: each removes itself when its timer fires, so a
+  /// long-lived halt holds nothing per finished wait.
+  final _waits = <void Function()>{};
+
   bool get fired => _done.isCompleted;
+
+  /// How many waits are in flight.
+  int get pending => _waits.length;
 
   Future<void> get future => _done.future;
 
   void fire() {
-    if (!_done.isCompleted) _done.complete();
+    if (_done.isCompleted) return;
+    _done.complete();
+    for (final end in [..._waits]) {
+      end();
+    }
+    _waits.clear();
   }
 }
 
@@ -70,11 +82,15 @@ Future<void> sleep(Duration d, Halt? halt) {
   if (halt == null) return Future<void>.delayed(d);
   if (halt.fired) return Future.value();
   final done = Completer<void>();
-  final timer = Timer(d, done.complete);
-  halt.future.then((_) {
+  late final Timer timer;
+  void end() {
     timer.cancel();
+    halt._waits.remove(end);
     if (!done.isCompleted) done.complete();
-  });
+  }
+
+  timer = Timer(d, end);
+  halt._waits.add(end);
   return done.future;
 }
 
@@ -105,9 +121,13 @@ bool free(Rate rate) {
 }
 
 /// The wait after a 429: until the oldest start leaves the window, or the
-/// server's `Retry-After` when longer (uncapped: the window is the memory).
+/// server's `Retry-After` when longer. The window is our own memory and is
+/// never capped; the server's value is capped at 5 minutes, as in
+/// `retry.backoff`, so a hostile header cannot park a script for years.
 Duration ban(Rate rate, Duration? server) {
   var wait = rate._sent.isEmpty ? rate.per : rate._sent.first.add(rate.per).difference(DateTime.now());
+  const cap = Duration(minutes: 5);
+  if (server != null && server > cap) server = cap;
   if (server != null && server > wait) wait = server;
   if (wait < Duration.zero) wait = Duration.zero;
   if (wait >= const Duration(seconds: 1)) rate.onWait?.call(wait);

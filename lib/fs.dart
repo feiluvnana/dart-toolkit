@@ -246,29 +246,46 @@ final class File extends Entry with Reader, Writer {
   /// the file itself stays (deleting it would race the next run).
   Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async {
     await _ensureParent(_path);
-    final raf = await io.File(_path).open(mode: io.FileMode.append);
-    try {
-      final until = wait == null ? null : DateTime.now().add(wait);
-      while (true) {
-        try {
-          await raf.lock(io.FileLock.exclusive);
-          break;
-        } on io.FileSystemException {
-          if (until == null || DateTime.now().isAfter(until)) {
-            throw io.FileSystemException('locked by another process', _path);
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }
+    // OS locks never conflict within one process, so holders here are
+    // tracked too: two lock() bodies in one script exclude each other.
+    final key = p.canonicalize(_path);
+    final until = wait == null ? null : DateTime.now().add(wait);
+    Future<void> retry(String holder) async {
+      if (until == null || DateTime.now().isAfter(until)) {
+        throw io.FileSystemException('locked by $holder', _path);
       }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+
+    while (!_locked.add(key)) {
+      await retry('this process');
+    }
+    try {
+      final raf = await io.File(_path).open(mode: io.FileMode.append);
       try {
-        return await body();
+        while (true) {
+          try {
+            await raf.lock(io.FileLock.exclusive);
+            break;
+          } on io.FileSystemException {
+            await retry('another process');
+          }
+        }
+        try {
+          return await body();
+        } finally {
+          await raf.unlock();
+        }
       } finally {
-        await raf.unlock();
+        await raf.close();
       }
     } finally {
-      await raf.close();
+      _locked.remove(key);
     }
   }
+
+  /// Paths this process holds a [lock] on.
+  static final _locked = <String>{};
 
   @override
   Origin origin() => Origin(path: _path, name: p.basename(_path));
@@ -407,21 +424,28 @@ final class Dir extends Entry {
     if (t != io.FileSystemEntityType.directory) {
       throw io.FileSystemException('not a directory', _path);
     }
-    final out = <Entry>[];
+    // Entries come back as `_path` + separator + relative name: cut the
+    // prefix once per entry instead of `p.relative` (a getcwd each time on
+    // a relative path; 25x slower than the listing itself).
+    final cut = _path.endsWith('/') || _path.endsWith(r'\') ? _path.length : _path.length + 1;
+    final found = <(String, Entry)>[];
     await for (final e in io.Directory(_path).list(recursive: recursive, followLinks: false)) {
+      final rel = (e.path.startsWith(_path) ? e.path.substring(cut) : p.relative(e.path, from: _path)).replaceAll(
+        r'\',
+        '/',
+      );
+      if (pattern != null && !pattern.hasMatch(rel)) continue;
       // With followLinks:false the stream never descends through links,
       // and its runtime type already tells links apart: no extra stat.
-      if (pattern != null && !pattern.hasMatch(p.relative(e.path, from: _path).replaceAll(r'\', '/'))) continue;
-      if (e is io.Link) {
-        out.add(Link._(e.path));
-      } else if (e is io.File) {
-        out.add(File._(e.path));
-      } else if (e is io.Directory) {
-        out.add(Dir._(e.path));
-      }
+      final Entry entry = switch (e) {
+        io.Link() => Link._(e.path),
+        io.File() => File._(e.path),
+        _ => Dir._(e.path),
+      };
+      found.add((rel.replaceAll('/', '\x00'), entry)); // separators sort lowest: a/b before a-b
     }
-    posix.sortByRelative(out, (e) => e.path(), _path);
-    return out;
+    found.sort((a, b) => a.$1.compareTo(b.$1));
+    return [for (final (_, e) in found) e];
   }
 
   /// `mkdir -p`. A no-op when the folder exists. Returns this.

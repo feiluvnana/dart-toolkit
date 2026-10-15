@@ -62,7 +62,23 @@ Element? up(Element e) {
   return p == null || p.localName == '#root' ? null : p;
 }
 
-List<Element> _siblings(Element e) => e.parent?.children.toList() ?? [e];
+/// [e]'s element siblings (itself included) and its index among them,
+/// cached per parent until the parent's children change: every `+`, `~`
+/// and `:nth-*` test asks, and a fresh list per test was O(n²) over a long
+/// list (`li + li` on 20,000 items took 5 s).
+(List<Element>, int) _position(Element e) {
+  final p = e.parent;
+  if (p == null) return ([e], 0);
+  var c = _positions[p];
+  if (c == null || c.$1 != p.edits) {
+    final list = p.children.toList();
+    c = (p.edits, list, Map<Element, int>.identity()..addAll({for (var i = 0; i < list.length; i++) list[i]: i}));
+    _positions[p] = c;
+  }
+  return (c.$2, c.$3[e]!);
+}
+
+final _positions = Expando<(int, List<Element>, Map<Element, int>)>();
 
 enum _Comb { descendant, child, adjacent, sibling }
 
@@ -77,39 +93,38 @@ final class _Complex {
   /// first part, from the scope element.
   final _Comb? lead;
 
-  bool matches(Element e, Element? scope) => _at(parts.length - 1, e, scope);
+  bool matches(Element e, Element? scope) => _at(parts.length - 1, e, scope) == _matched;
 
-  bool _at(int k, Element e, Element? scope) {
-    if (!parts[k].matches(e)) return false;
+  // How a failed match may resume (Servo's matching results): from the
+  // closest later sibling, from the closest descendant combinator, or not
+  // at all. Without them a chain of descendant combinators retries every
+  // ancestor at every level: `section div div div` on 1,000 nested divs
+  // took 400 s.
+  static const _matched = 0, _laterSibling = 1, _descendant = 2, _globally = 3;
+
+  int _at(int k, Element e, Element? scope) {
+    if (!parts[k].matches(e)) return _laterSibling;
     if (k == 0) {
       final l = lead;
-      if (l == null || scope == null) return true;
-      return _joined(l, e, (x) => identical(x, scope));
+      if (l == null || scope == null) return _matched;
+      return _joined(l, e, (x) => identical(x, scope) ? _matched : _laterSibling);
     }
     return _joined(combs[k - 1], e, (x) => _at(k - 1, x, scope));
   }
 
-  static bool _joined(_Comb comb, Element e, bool Function(Element x) left) {
-    switch (comb) {
-      case _Comb.descendant:
-        for (var p = up(e); p != null; p = up(p)) {
-          if (left(p)) return true;
-        }
-        return false;
-      case _Comb.child:
-        final p = up(e);
-        return p != null && left(p);
-      case _Comb.adjacent:
-        final sib = _siblings(e);
-        final i = sib.indexOf(e);
-        return i > 0 && left(sib[i - 1]);
-      case _Comb.sibling:
-        final sib = _siblings(e);
-        for (var i = sib.indexOf(e) - 1; i >= 0; i--) {
-          if (left(sib[i])) return true;
-        }
-        return false;
+  static int _joined(_Comb comb, Element e, int Function(Element x) left) {
+    final sibling = comb == _Comb.adjacent || comb == _Comb.sibling;
+    List<Element>? sib;
+    var i = 0;
+    if (sibling) (sib, i) = _position(e);
+    for (Element? x = sibling ? (i > 0 ? sib![--i] : null) : up(e); x != null;) {
+      final r = left(x);
+      if (r == _matched || r == _globally || comb == _Comb.adjacent) return r;
+      if (comb == _Comb.child) return _descendant;
+      if (comb == _Comb.sibling && r == _descendant) return r;
+      x = sibling ? (i > 0 ? sib![--i] : null) : up(x);
     }
+    return sibling ? _descendant : _globally;
   }
 }
 
@@ -500,8 +515,8 @@ bool _has(_Complex c, Element scope) {
       }
       return false;
     case _Comb.adjacent || _Comb.sibling:
-      final sib = _siblings(scope);
-      for (var k = sib.indexOf(scope) + 1; k < sib.length; k++) {
+      final (sib, at) = _position(scope);
+      for (var k = at + 1; k < sib.length; k++) {
         final stack = [sib[k]];
         while (stack.isNotEmpty) {
           final e = stack.removeLast();
@@ -542,7 +557,8 @@ bool _hasWord(String? value, String word) {
 /// [e]'s 1-based position among its element siblings (from the end when
 /// [last]), counting only its type when [type], or only those matching [of].
 int _index(Element e, bool last, bool type, [List<_Complex>? of]) {
-  final sib = _siblings(e);
+  final (sib, at) = _position(e);
+  if (!type && of == null) return last ? sib.length - at : at + 1;
   var n = 0;
   final range = last ? sib.reversed : sib;
   for (final x in range) {

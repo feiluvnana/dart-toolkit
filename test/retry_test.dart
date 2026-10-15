@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dart_toolkit/src/rate.dart' as rate;
 import 'package:dart_toolkit/src/retry.dart';
 import 'package:test/test.dart';
 
@@ -42,5 +43,22 @@ void main() {
     expect(isRetryable(const HttpException('CERTIFICATE_VERIFY_FAILED')), isFalse);
     expect(isRetryable(const FormatException('x')), isFalse);
     expect(isRetryable(ArgumentError('x')), isFalse);
+  });
+
+  test('a halt holds no finished waits; firing it ends the ones in flight', () async {
+    final halt = rate.Halt();
+    await Future.wait([for (var i = 0; i < 100; i++) rate.sleep(const Duration(milliseconds: 1), halt)]);
+    expect(halt.pending, 0);
+    final sw = Stopwatch()..start();
+    final long = rate.sleep(const Duration(seconds: 30), halt);
+    expect(halt.pending, 1);
+    halt.fire();
+    await long;
+    expect((halt.pending, sw.elapsed < const Duration(seconds: 1)), (0, true));
+  });
+
+  test('a server Retry-After is capped at 5 minutes; the own window is not', () {
+    expect(rate.ban(rate.Rate(1, const Duration(seconds: 1)), const Duration(days: 365)), const Duration(minutes: 5));
+    expect(rate.ban(rate.Rate(1, const Duration(hours: 1)), const Duration(seconds: 1)), const Duration(hours: 1));
   });
 }

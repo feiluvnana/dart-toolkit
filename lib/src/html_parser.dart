@@ -8,6 +8,8 @@
 /// with JavaScript: `noscript` content is raw text. Private to the toolkit: `html` is the facade.
 library;
 
+import 'dart:collection';
+
 import 'dom.dart';
 import 'entities.dart';
 
@@ -503,7 +505,7 @@ final class _Builder {
   final bool fragment;
   late _Tokenizer tok;
 
-  final open = <Element>[];
+  final open = _Open();
 
   /// The active formatting elements; null is a marker.
   final formatting = <Element?>[];
@@ -1235,9 +1237,9 @@ final class _Builder {
       final table = open.lastWhere((e) => e.localName == 'table', orElse: () => open.first);
       final holder = table.parent;
       if (table.localName == 'table' && holder != null) {
-        final at = holder.nodes.indexOf(table);
+        final at = holder.nodes.lastIndexOf(table); // the table is usually the last child
         if (node is Text && at > 0 && holder.nodes[at - 1] is Text) {
-          (holder.nodes[at - 1] as Text).data += node.data;
+          (holder.nodes[at - 1] as Text).add(node.data);
           return;
         }
         holder.insertBefore(node, table);
@@ -1248,7 +1250,7 @@ final class _Builder {
       return;
     }
     if (node is Text && parent.nodes.isNotEmpty && parent.nodes.last is Text) {
-      (parent.nodes.last as Text).data += node.data;
+      (parent.nodes.last as Text).add(node.data);
       return;
     }
     parent.append(node);
@@ -1265,6 +1267,7 @@ final class _Builder {
   /// The nearest open element named in [names] before a [boundary]; null
   /// when it is not in scope.
   Element? _inScope(Set<String> names, Set<String> boundary) {
+    if (!names.any(open.has)) return null;
     for (var k = open.length - 1; k >= 0; k--) {
       final node = open[k];
       if (node.space == Space.html) {
@@ -1307,6 +1310,7 @@ final class _Builder {
   /// it: the nearest `tr`, section (`tbody`…), `colgroup` or `table`; null
   /// when a cell, a caption or the body comes first (body rules).
   String? _tableMode() {
+    if (!open.has('table')) return null; // every tr, tbody, … or colgroup counted here sits in one
     for (var k = open.length - 1; k >= 0; k--) {
       final e = open[k];
       if (e.space != Space.html) continue;
@@ -1494,10 +1498,15 @@ final class _Builder {
         common.append(last);
       }
       final copy = Element(fe.localName, Map.of(fe.attributes), fe.space);
-      for (final child in [...furthest.nodes]) {
-        child.remove();
-        copy.append(child);
+      // Move every child at once: one remove() each was O(n²) (a <b><div>
+      // holding 100,000 <br> took 15 s).
+      for (final child in furthest.nodes) {
+        child.parent = copy;
       }
+      copy.nodes.addAll(furthest.nodes);
+      furthest.nodes.clear();
+      copy.edits++;
+      furthest.edits++;
       furthest.append(copy);
       final feIndex = formatting.indexOf(fe);
       if (feIndex < bookmark) bookmark--;
@@ -1507,4 +1516,78 @@ final class _Builder {
       open.insert(open.indexOf(furthest) + 1, copy);
     }
   }
+}
+
+/// The stack of open elements, counting the HTML ones by name, so asking
+/// whether an element that is not open is in scope costs O(1) instead of a
+/// walk to the root (every `<div>` asks for a `<p>`).
+final class _Open extends ListBase<Element> {
+  final _items = <Element>[];
+  final _count = <String, int>{};
+
+  bool has(String name) => (_count[name] ?? 0) > 0;
+
+  void _in(Element e) {
+    if (e.space == Space.html) _count[e.localName] = (_count[e.localName] ?? 0) + 1;
+  }
+
+  void _out(Element e) {
+    if (e.space == Space.html) _count[e.localName] = _count[e.localName]! - 1;
+  }
+
+  @override
+  int get length => _items.length;
+
+  @override
+  set length(int n) => throw UnsupportedError('length');
+
+  @override
+  Element operator [](int i) => _items[i];
+
+  @override
+  void operator []=(int i, Element e) {
+    _out(_items[i]);
+    _items[i] = e;
+    _in(e);
+  }
+
+  @override
+  void add(Element e) {
+    _items.add(e);
+    _in(e);
+  }
+
+  @override
+  void insert(int i, Element e) {
+    _items.insert(i, e);
+    _in(e);
+  }
+
+  @override
+  Element removeAt(int i) {
+    final e = _items.removeAt(i);
+    _out(e);
+    return e;
+  }
+
+  @override
+  Element removeLast() {
+    final e = _items.removeLast();
+    _out(e);
+    return e;
+  }
+
+  @override
+  bool remove(Object? e) {
+    final i = _items.indexOf(e as Element);
+    if (i < 0) return false;
+    removeAt(i);
+    return true;
+  }
+
+  @override
+  int indexOf(Object? e, [int start = 0]) => _items.indexOf(e as Element, start);
+
+  @override
+  bool contains(Object? e) => _items.contains(e);
 }

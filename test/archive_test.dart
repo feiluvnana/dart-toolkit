@@ -1011,6 +1011,13 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       await expectLater(unpack(_sevenZip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
     });
 
+    test('zip and 7z refuse data over 4 GiB instead of writing it short', () {
+      final huge = Uint8List((1 << 32) + 10); // untouched pages: costs no memory
+      final tooBig = isA<ContentException>().having((e) => e.message, 'message', contains('4 GiB'));
+      expect(() => zip.writeZip([('f', 0x1A4, huge, DateTime(2020))]), throwsA(tooBig));
+      expect(() => sevenzip.writeSevenZip([('f', 0x1A4, huge)]), throwsA(tooBig));
+    });
+
     test('7z data is checked against its file, folder and start-header CRCs', () async {
       // One Copy folder holding "aa" and "bb"; CRCs per file, or one for the folder.
       List<int> twoFiles({required bool perFile}) => _sevenZip('aabb'.codeUnits, [

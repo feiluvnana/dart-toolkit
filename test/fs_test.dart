@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:io' as io;
@@ -402,6 +403,26 @@ void main() {
       await expectLater(Fs.file(p('none')).modified(), throwsA(isA<PathNotFoundException>()));
     });
 
+    test('lock: two holders in one process exclude each other too', () async {
+      var inside = 0, most = 0;
+      Future<int> hold(int n) async {
+        most = max(most, ++inside);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        inside--;
+        return n;
+      }
+
+      final lock = Fs.file(p('one.lock'));
+      expect(await Future.wait([for (var i = 0; i < 3; i++) lock.lock(() => hold(i), wait: 5.seconds)]), [0, 1, 2]);
+      expect(most, 1);
+      final held = lock.lock(() => hold(9));
+      await expectLater(
+        lock.lock(() async => 0),
+        throwsA(isA<FileSystemException>().having((e) => e.message, 'message', 'locked by this process')),
+      );
+      expect(await held, 9);
+    });
+
     test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
       final lock = p('run.lock');
       // A child script holds the lock until its stdin closes.
@@ -434,6 +455,24 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
   });
 
   group('Dir', () {
+    test('list keys entries by their path under the folder, however it was spelled', () async {
+      for (final f in ['a/b', 'a-b', 'a.txt', 'z/y.txt']) {
+        await Fs.file(p('l/$f')).write(f);
+      }
+      for (final spelled in [p('l'), '${p('l')}/', '${p('l')}/.']) {
+        final d = Fs.dir(spelled);
+        expect(
+          [for (final e in await d.list(recursive: true)) e.path(from: d)],
+          ['a', 'a/b', 'a-b', 'a.txt', 'z', 'z/y.txt'],
+        );
+        expect(
+          [for (final e in await d.list(match: '**.txt')) e.path(from: d)],
+          ['a.txt', 'z/y.txt'],
+          reason: spelled,
+        );
+      }
+    });
+
     test('list(match:) filters by a glob; ** recurses, {a,b} picks', () async {
       for (final f in ['a.jpg', 'b.png', 'c.txt', 'x/d.jpg', 'x/y/e.png', 'x/f.gif']) {
         await Fs.file(p('shots/$f')).write(f);

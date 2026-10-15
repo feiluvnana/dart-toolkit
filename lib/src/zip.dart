@@ -247,6 +247,11 @@ Uint8List writeZip(List<(String, int, List<int>, DateTime)> entries, {String? pa
     var method = 0;
     List<int> body = data;
     var crc = 0;
+    // The SDK's one-shot deflate keeps only the low 32 bits of its input
+    // length: past 4 GiB it would write a short member without an error.
+    if (data.length > 0xFFFFFFFF) {
+      throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
+    }
     if (!isDir && data.isNotEmpty) {
       // One native pass gives the deflate stream and its CRC: a gzip member
       // is a 10-byte header, raw deflate, then CRC-32 and size. Level 1 is

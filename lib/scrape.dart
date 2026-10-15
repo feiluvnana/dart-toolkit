@@ -126,6 +126,10 @@ final class _Run<T, R> {
   Object? _error;
   StackTrace? _stack;
 
+  /// Ends rate waits and backoffs once the run stops, so a cancelled or
+  /// failed run leaves no timer keeping the VM alive.
+  final _halt = rate.Halt();
+
   bool add(T item) {
     if (_stopped) return false;
     final k = s.key;
@@ -148,6 +152,7 @@ final class _Run<T, R> {
   void cancel() {
     _stopped = true;
     _queue.clear();
+    _halt.fire();
   }
 
   void pump() {
@@ -167,7 +172,7 @@ final class _Run<T, R> {
     try {
       for (var attempt = 0; ; attempt++) {
         final pace = s.rate;
-        if (pace != null) await rate.take(pace, null);
+        if (pace != null) await rate.take(pace, _halt);
         if (_stopped) return;
         try {
           await onItem(visit);
@@ -175,7 +180,8 @@ final class _Run<T, R> {
         } catch (e, st) {
           if (_stopped) return;
           if (attempt < s.retries) {
-            await Future<void>.delayed(retry.backoff(attempt, null));
+            await rate.sleep(retry.backoff(attempt, null), _halt);
+            if (_stopped) return;
             continue;
           }
           final handler = onError;
@@ -205,5 +211,6 @@ final class _Run<T, R> {
     _stack = st;
     _queue.clear();
     _stopped = true;
+    _halt.fire();
   }
 }

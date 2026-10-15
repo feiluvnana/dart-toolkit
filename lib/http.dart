@@ -594,6 +594,16 @@ final class _Client extends Client {
     var have = await part.exists() ? await part.length() : 0;
     var res = await fetch(have);
     if (have > 0 && res.status() != 206) {
+      // No range support: a 200 is the whole body, so use it from 0.
+      if (res.status() == 200) {
+        have = 0;
+      } else {
+        await res.close();
+        have = 0;
+        res = await fetch(0);
+      }
+    } else if (have > 0 && !(res.header('content-range') ?? '').startsWith('bytes $have-')) {
+      // A 206 for some other range would splice the wrong bytes on.
       await res.close();
       have = 0;
       res = await fetch(0);
@@ -709,11 +719,7 @@ final class _Client extends Client {
     while (true) {
       if (attempt > 0) {
         final server = retryAfter;
-        final wait = banned && pace != null
-            ? rate.ban(pace, server)
-            : pace != null && server != null
-            ? server
-            : retry.backoff(attempt - 1, server);
+        final wait = banned && pace != null ? rate.ban(pace, server) : retry.backoff(attempt - 1, server);
         await rate.sleep(wait, _halt);
         if (_closed) throw _aborted(method, uri);
       }
@@ -1001,6 +1007,13 @@ final class _Pool extends Client {
   }) async {
     for (var attempt = 0; ; attempt++) {
       final m = _pick();
+      // Every member benched: wait for the first to come back instead of
+      // sending into its ban at once.
+      final bench = m._benched?.difference(DateTime.now());
+      if (bench != null && bench > Duration.zero) {
+        await rate.sleep(bench, m._halt);
+        if (m._closed) throw m._aborted(method, Uri.parse(url));
+      }
       final res = await m._send(method, url, body: body, query: query, headers: headers, check: false, retry429: false);
       if (res.status() == 429 && attempt < m._s.retries && body is! _StreamBody) {
         final server = retry.parseRetryAfter(res.header('retry-after'));

@@ -264,8 +264,9 @@ void main() {
     }, tags: 'slow');
 
     test('a streamed body is sent once, whatever retries says', () async {
+      final before = hits['PUT'] ?? 0;
       await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(_Mem('x')));
-      expect(hits['PUT'], 4); // 1 + 2 from the in-memory 503 test above, + this single send
+      expect(hits['PUT'], before + 1);
     });
   });
 
@@ -963,6 +964,15 @@ void clientTests() {
             r.response
               ..contentLength = 1000
               ..add(file);
+          case '/wrongrange': // answers any Range with the whole file as a 206
+            if (r.headers.value('range') != null) {
+              r.response
+                ..statusCode = 206
+                ..headers.set('content-range', 'bytes 0-999/1000');
+            }
+            r.response
+              ..contentLength = 1000
+              ..add(file);
           case '/token':
             r.response.cookies.add(Cookie('csrftoken', 'T0K')..path = '/');
           case '/cookies':
@@ -982,6 +992,10 @@ void clientTests() {
           case '/vary':
             r.response.headers.set('vary', 'x-a');
             r.response.write('v${hits[path]}');
+          case '/banned':
+            r.response
+              ..statusCode = 429
+              ..headers.set('retry-after', '1');
           case '/busy':
             r.response.statusCode = r.headers.value('x-a') == 'busy' ? 429 : 200;
             r.response.write(r.headers.value('x-a'));
@@ -1063,6 +1077,13 @@ void clientTests() {
       await File('${other.path}.part').writeAsBytes([9, 9, 9]);
       await (c.get('$url/norange') > other);
       expect(await File(other.path).readAsBytes(), body);
+      expect(hits['/norange'], 1); // its 200 is the whole body, not fetched again
+
+      // A 206 for another range restarts instead of splicing it on.
+      final wrong = _Path('${dir.path}/w.bin');
+      await File('${wrong.path}.part').writeAsBytes(body.sublist(0, 5));
+      await (c.get('$url/wrongrange') > wrong);
+      expect(await File(wrong.path).readAsBytes(), body);
 
       await expectLater(
         c.get('$url/missing') > _Path('${dir.path}/m'),
@@ -1135,6 +1156,15 @@ void clientTests() {
       expect(hits['/busy'], 4 + 4); // one 429 from `busy`, then it stays benched
       await p.close();
       await both.close();
+    });
+
+    test('pool: with every member benched, a retry waits for the first one back', () async {
+      final p = Http.pool([Http.client(retries: 2), Http.client(retries: 2)]);
+      final sw = Stopwatch()..start();
+      expect(await p.get('$url/banned').status(), 429);
+      expect(hits['/banned'], 3);
+      expect(sw.elapsed, greaterThan(const Duration(milliseconds: 900))); // was ~10 ms: straight into the ban
+      await p.close();
     });
 
     test('size() is null for a body decoded on the fly', () async {

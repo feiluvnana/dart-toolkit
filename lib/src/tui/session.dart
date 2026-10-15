@@ -1289,6 +1289,7 @@ final class _Session<S> implements term.TuiBridge {
     // Keys come from the terminal even when stdin is a pipe (`ls | app`).
     term.ttyInput = true;
     _modes = term.captureModes();
+    await _startGuard();
     term.setRawModes(_modes, false);
     _listenStdin();
     _watchSignals();
@@ -1329,6 +1330,37 @@ final class _Session<S> implements term.TuiBridge {
     _resizeToken = null;
     if (resizeToken != null) exit.offResize(resizeToken);
     exit.claimInterrupt(null);
+  }
+
+  io.Process? _guard;
+
+  /// A watchdog shell that puts the terminal back if this process dies
+  /// without leaving (`exit()` in a handler, a VM crash), when no Dart code
+  /// runs to do it: it saves the `stty` state before raw mode, then waits
+  /// for its stdin to close and, unless `done` came first, restores the
+  /// modes and writes the leave codes. POSIX with a terminal only.
+  Future<void> _startGuard() async {
+    if (io.Platform.isWindows || !io.stdout.hasTerminal) return;
+    try {
+      final g = await io.Process.start('/bin/sh', ['-c', _guardScript, 'tui', _leaveCodes]);
+      unawaited(g.stderr.drain<void>());
+      await g.stdout.first.timeout(const Duration(seconds: 2)); // the state is saved
+      _guard = g;
+    } catch (_) {}
+  }
+
+  static const _guardScript =
+      'trap "" INT; s=\$(stty -g </dev/tty) || exit 0; echo; l=; while IFS= read -r x; do l=\$x; done; '
+      '[ "\$l" = done ] || { stty "\$s" </dev/tty; printf %s "\$1" >/dev/tty; }';
+
+  void _stopGuard() {
+    final g = _guard;
+    _guard = null;
+    if (g == null) return;
+    try {
+      g.stdin.writeln('done');
+      unawaited(g.stdin.close().catchError((_) {}));
+    } catch (_) {}
   }
 
   static const _enterCodes =
@@ -1372,6 +1404,7 @@ final class _Session<S> implements term.TuiBridge {
       final modes = _modes;
       if (modes != null) term.restoreModes(modes);
     } catch (_) {}
+    _stopGuard();
     if (identical(term.TuiBridge.current, this)) {
       term.TuiBridge.current = null;
     }

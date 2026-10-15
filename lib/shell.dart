@@ -43,8 +43,8 @@ abstract final class Shell {
   /// still holds both. With [check] a non-zero exit throws
   /// [io.ProcessException] carrying the exit code and the last 64 KB of
   /// stderr (as `check:` does for a non-2xx response). With [timeout] a
-  /// run that takes longer is killed (only the child this call started) and
-  /// throws [TimeoutException] naming the command.
+  /// run that takes longer is killed with everything it started and throws
+  /// [TimeoutException] naming the command.
   static Future<Output> run(
     List<String> command, {
     String? dir,
@@ -72,9 +72,9 @@ abstract final class Shell {
         e.errorCode,
       );
     }
-    // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child too,
-    // instead of leaving it orphaned under init.
-    final token = exit.onExit(() => proc.kill());
+    // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child and
+    // its descendants too, instead of leaving them orphaned under init.
+    final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
     try {
       try {
         await proc.stdin.close();
@@ -82,17 +82,31 @@ abstract final class Shell {
       final out = BytesBuilder(copy: false);
       final err = BytesBuilder(copy: false);
       // With [live] each chunk also tees to our stdout/stderr.
-      Future<void> collect(Stream<List<int>> src, BytesBuilder buf, io.IOSink? tee) async {
+      // Subscriptions, not `await for`: a timeout cancels them, so a
+      // descendant that still holds the pipes cannot keep the VM alive.
+      final subs = <StreamSubscription<List<int>>>[];
+      Future<void> collect(Stream<List<int>> src, BytesBuilder buf, io.IOSink? tee) {
         final lines = onLine == null
             ? null
             : const Utf8Decoder(allowMalformed: true)
                   .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
-        await for (final chunk in src) {
-          buf.add(chunk);
-          tee?.add(chunk);
-          lines?.add(chunk);
-        }
-        lines?.close();
+        final done = Completer<void>();
+        subs.add(
+          src.listen(
+            (chunk) {
+              buf.add(chunk);
+              tee?.add(chunk);
+              lines?.add(chunk);
+            },
+            onError: done.completeError,
+            onDone: () {
+              lines?.close();
+              done.complete();
+            },
+            cancelOnError: true,
+          ),
+        );
+        return done.future;
       }
 
       try {
@@ -104,18 +118,19 @@ abstract final class Shell {
         if (timeout == null) {
           await work;
         } else {
-          // A grandchild may keep the pipes open after the kill: stop
-          // waiting for them instead of hanging past the deadline.
           await work.timeout(
             timeout,
-            onTimeout: () {
-              proc.kill(io.ProcessSignal.sigkill);
+            onTimeout: () async {
+              await _killTree(proc, io.ProcessSignal.sigkill);
+              for (final sub in subs) {
+                await sub.cancel();
+              }
               throw Timeout('${command.join(' ')} ran over ${timeout.human()}', timeout);
             },
           );
         }
       } catch (_) {
-        proc.kill(io.ProcessSignal.sigkill);
+        await _killTree(proc, io.ProcessSignal.sigkill);
         rethrow;
       } finally {
         if (live) {
@@ -337,6 +352,38 @@ extension OutputFuture on Future<Output> {
   Future<String> err() async => (await this).err();
 }
 
+/// Signal [proc] and every process below it, deepest first, so a `sh -c`
+/// or a build tool cannot leave grandchildren running under init. The tree
+/// is read before anything dies (an orphan loses its parent link). Windows
+/// has no `ps`: only [proc] is signalled there.
+Future<void> _killTree(io.Process proc, io.ProcessSignal signal) async {
+  final below = <int>[];
+  if (!io.Platform.isWindows) {
+    try {
+      final ps = await io.Process.run('ps', ['-A', '-o', 'pid=,ppid=']);
+      final kids = <int, List<int>>{};
+      for (final line in (ps.stdout as String).split('\n')) {
+        final f = line.trim().split(RegExp(r'\s+'));
+        if (f.length != 2) continue;
+        final pid = int.tryParse(f[0]), parent = int.tryParse(f[1]);
+        if (pid != null && parent != null) (kids[parent] ??= []).add(pid);
+      }
+      void walk(int pid) {
+        for (final k in kids[pid] ?? const <int>[]) {
+          walk(k);
+          below.add(k);
+        }
+      }
+
+      walk(proc.pid);
+    } catch (_) {}
+  }
+  for (final pid in below) {
+    if (pid > 1 && pid != io.pid) io.Process.killPid(pid, signal);
+  }
+  proc.kill(signal);
+}
+
 final class _Filter implements Pipe {
   _Filter(this._command, {this._dir, this._env});
 
@@ -372,7 +419,7 @@ final class _Filter implements Pipe {
     }
     // A signal that ends this script ends the child too; the hook goes
     // when the child exits.
-    final token = exit.onExit(() => proc.kill());
+    final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
     unawaited(proc.exitCode.then((_) => exit.offExit(token)));
     // A downstream cancel tears this generator down without an error, so
     // track normal completion and kill in the finally: without this the
@@ -424,10 +471,10 @@ final class _Filter implements Pipe {
       }
       ok = true;
     } catch (_) {
-      proc.kill(io.ProcessSignal.sigkill);
+      await _killTree(proc, io.ProcessSignal.sigkill);
       rethrow;
     } finally {
-      if (!ok) proc.kill(io.ProcessSignal.sigkill);
+      if (!ok) await _killTree(proc, io.ProcessSignal.sigkill);
       try {
         await proc.stdin.close();
       } catch (_) {}

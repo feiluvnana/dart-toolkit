@@ -21,6 +21,13 @@ int boom(int x) => throw StateError('bad $x');
 
 int argBoom(int x) => throw ArgumentError('mine');
 
+/// Kills its worker with an error outside the job's future, except for 2.
+Future<int> crashIsolate(int x) async {
+  if (x != 2) scheduleMicrotask(() => throw StateError('crashed on $x'));
+  await Future<void>.delayed(const Duration(milliseconds: 50));
+  return x;
+}
+
 int isolateHash(int x) {
   sleep(const Duration(milliseconds: 30));
   return Isolate.current.hashCode;
@@ -68,6 +75,17 @@ void main() {
         Pool.map([1], argBoom, isolates: true),
         throwsA(isA<ArgumentError>().having((e) => e.message, 'message', 'mine')),
       );
+    });
+
+    test('a worker that dies fails its item; the next item gets a fresh worker', () async {
+      final out = await Pool.settle(
+        [1, 2, 3],
+        crashIsolate,
+        limit: 1,
+        isolates: true,
+      ).timeout(const Duration(seconds: 10));
+      expect(out.values(), [2]);
+      expect(out.failures().map((f) => '${f.error}'), [contains('crashed on 1'), contains('crashed on 3')]);
     });
 
     test('the first error stops new jobs and is rethrown', () async {
@@ -154,14 +172,26 @@ void main() {
       await expectLater(Pool.map([1], boom), throwsA(isA<StateError>().having((e) => '$e', 'text', contains('bad 1'))));
     });
 
-    test('retries re-run a failing job; rate paces starts', () async {
+    test('retries re-run a job that threw an Exception, never an Error; rate paces starts', () async {
       var calls = 0;
-      final out = await Pool.map([1], (x) => ++calls < 2 ? throw StateError('flaky') : x, retries: 1);
+      final out = await Pool.map([1], (x) => ++calls < 2 ? throw Exception('flaky') : x, retries: 1);
       expect(out, [1]);
       expect(calls, 2);
+      calls = 0;
+      await expectLater(Pool.map([1], (x) => ++calls > 0 ? throw StateError('bug') : x, retries: 3), throwsStateError);
+      expect(calls, 1); // an Error is not retried
       final starts = <DateTime>[];
       await Pool.map([1, 2, 3], (x) => starts.add(DateTime.now()), rate: Rate(1, 150.milliseconds));
       expect(starts.last.difference(starts.first), greaterThanOrEqualTo(const Duration(milliseconds: 290)));
+    });
+
+    test('fail-fast ends the other lanes\' rate waits instead of sitting them out', () async {
+      final sw = Stopwatch()..start();
+      await expectLater(
+        Pool.map([1, 2, 3], (x) => x == 1 ? throw StateError('bad') : x, limit: 3, rate: Rate(1, 5.seconds)),
+        throwsStateError,
+      );
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2))); // was 10 s: two lanes queued for the window
     });
 
     test('the first error stops new jobs and is rethrown', () async {

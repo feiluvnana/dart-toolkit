@@ -137,14 +137,14 @@ Future<void> main() => Shell.open('https://example.com');
       expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
     });
 
-    test('a SIGTERM that ends the script ends its running child', () async {
+    test('a SIGTERM that ends the script ends its running child and grandchildren', () async {
       if (Platform.isWindows) markTestSkipped('POSIX signals');
       final dir = await Directory.systemTemp.createTemp('shell_orphan');
       addTearDown(() => dir.delete(recursive: true));
       await Fs.file('${dir.path}/main.dart').write('''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
-  await Shell.run(['sh', '-c', r'echo \$\$; exec sleep 20'], live: true);
+  await Shell.run(['sh', '-c', r'sleep 20 & echo \$!; wait'], live: true);
 }
 ''');
       final p = await Process.start(Platform.resolvedExecutable, [
@@ -268,6 +268,29 @@ void timeoutTests() {
       );
       expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
       expect((await Shell.run(['echo', 'hi'], timeout: 5.seconds)).ok(), isTrue);
+    });
+
+    test('a timeout kills the grandchildren too, and the script exits at once', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      final dir = await Directory.systemTemp.createTemp('shell_tree');
+      addTearDown(() => dir.delete(recursive: true));
+      final sw = Stopwatch()..start();
+      final r = await runDart('''
+import 'dart:async';
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  try {
+    await Shell.run(['sh', '-c', r'sleep 20 & echo \$! > ${dir.path}/pid; wait'], timeout: const Duration(milliseconds: 500));
+  } on TimeoutException {
+    print('timed out');
+  }
+}
+''', timeout: const Duration(seconds: 8));
+      expect((r.exitCode, '${r.stdout}'.trim()), (0, 'timed out'), reason: '${r.stderr}');
+      expect(sw.elapsed, lessThan(const Duration(seconds: 6)));
+      final pid = (await Fs.file('${dir.path}/pid').text()).trim();
+      final ps = await Process.run('ps', ['-p', pid, '-o', 'pid=']);
+      expect('${ps.stdout}'.trim(), isEmpty, reason: 'sleep $pid outlived the timeout');
     });
 
     test('which finds installed programs on PATH, null otherwise', () async {

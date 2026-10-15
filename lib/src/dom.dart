@@ -9,7 +9,10 @@ sealed class Node {
 
   /// Detach from the parent. A no-op at the top.
   void remove() {
-    parent?.nodes.remove(this);
+    final p = parent;
+    if (p == null) return;
+    p.nodes.remove(this);
+    p.edits++;
     parent = null;
   }
 
@@ -19,9 +22,29 @@ sealed class Node {
 
 /// A run of text.
 final class Text extends Node {
-  Text(this.data);
+  Text(this._data);
 
-  String data;
+  String _data;
+  StringBuffer? _more;
+
+  /// The text; what [add] appended is joined on first read.
+  String get data {
+    final more = _more;
+    if (more != null) {
+      _data = more.toString();
+      _more = null;
+    }
+    return _data;
+  }
+
+  set data(String s) {
+    _data = s;
+    _more = null;
+  }
+
+  /// Append [s] in amortised O(|s|): the parser merges adjacent text runs
+  /// one token at a time, and `data += s` was quadratic.
+  void add(String s) => (_more ??= StringBuffer(_data)).write(s);
 
   @override
   Text clone(bool deep) => Text(data);
@@ -44,6 +67,10 @@ final class Element extends Node {
   final Map<String, String> attributes;
 
   final nodes = <Node>[];
+
+  /// Bumped by [append], [insertBefore] and a child's [remove], so caches
+  /// over [nodes] (sibling positions) know when they are stale.
+  int edits = 0;
 
   /// The child elements.
   Iterable<Element> get children => nodes.whereType<Element>();
@@ -69,11 +96,13 @@ final class Element extends Node {
   void append(Node child) {
     child.parent = this;
     nodes.add(child);
+    edits++;
   }
 
   void insertBefore(Node child, Node ref) {
     child.parent = this;
-    nodes.insert(nodes.indexOf(ref), child);
+    nodes.insert(nodes.lastIndexOf(ref), child); // the insertion point is usually near the end
+    edits++;
   }
 
   @override
