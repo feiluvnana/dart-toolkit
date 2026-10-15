@@ -45,3 +45,35 @@
 - Pure refactors: posix.dart is SDK-only (path helpers to src/tree; http shares posix.chmod); Console line modes through terminal.dart; one SGR pattern (sanitize.unstyled).
 - The fs.dart refactor was committed hunk by hunk (git apply --cached) so another session's uncommitted Fs.scriptDir stayed out.
 - Deferred: A4 cli `_parseCommand` split (~300 lines), A5 http part files, A6 cancellable piped ask (an API change), A7 scrape removal (the user's call).
+
+## 6 ERGONOMIC (478e5bb8)
+- README tour: the only place the ideal did not compile was a missing `html` import (`get(u).html()`); fixed and checked with `dart analyze`.
+- Param names are consistent across modules (retries, check, timeout, cache, ttl, resume, proxy; `limit` = jobs in flight, `connections` = sockets).
+- Rejected (no net call-site saving): a required Json reading for `x.text() ?? (throw …)` (3 sites, same line count, and Json no longer knows its path); `Console.ask(timeout:)` (rare); an http body `limit:` (security value, no call-site saving: left to the user, see stage 3).
+- projects/ were being rewritten by another session during this run and were not touched here.
+
+## 7 FEATURE (5eaa3dac; proposal kept here, no PROPOSAL.md)
+| Kind | Item | Evidence | Verdict |
+|---|---|---|---|
+| Remove | `scrape` | no project uses it; mediapure's crawl is a plain loop + Pool.map with identical output (another session's report) | user decides (A7) |
+| Add | http body cap (`limit:` on the client) | 305 KB gzip -> 300 MB in `bytes()` | M; needed for hostile sites, adds one param |
+| Change | gzip: multi-member (bgzip, pigz -i, `cat a.gz b.gz`) | SDK decodes them but the ISIZE check fails | L: needs in-house gzip framing to keep the truncation check |
+| Change | `.tar.xz` streaming | 200 MB: 706 MiB RSS vs 23 MiB for tgz | M: xzDecode as a block generator |
+| Change | zip AES pbkdf2 speed | 6 ms/member (1,000 files: 6 s each way) | M: in-house SHA-1 with precomputed pads |
+| Change | archive() refuses special files; damaged tar mode is no mode | silent FIFO drop; 0777 from a bad field | done (5eaa3dac) |
+| Add | `Console.ask(timeout:)` | piped ask abandoned by `.timeout` keeps the VM alive | S; only if a script needs it |
+| Default | `Http.client(check:)` false | the README tour sets `check: true`; projects branch on HttpStatusException | keep: flipping breaks every `status()` reader |
+Modules judged: config/env (cli `dotenv:` + yaml cover it), kv/sqlite (no; json files + `Fs.file().lock`), logging (Console.log), scheduling (no), websocket/SSE (`lines()` reads SSE; websocket no evidence), diff (tui has it), dates (core `format`/`human`).
+Do next: limit: on http (M), tar.xz streaming (M), pbkdf2 (M), gzip framing (L), cli _parseCommand split (M), scrape removal (user), Console.ask timeout (S), If-Range resume (M), WHATWG meta charset (M), template table modes in the parser (M).
+
+## 8 DOGFOOD (02680769; scripts in projects/_dogfood, uncommitted)
+Five scripts on loopback servers: mirror (51 lines), watch+upload (50 -> 47), Tui dashboard over parallel Shell.run (34 -> 33), paginated listing -> JSON + table (47), release download + sha256 + unpack + run (44). All compiled on the first or second try.
+| # | Friction | Hits | Lines | Outcome |
+|---|---|---|---|---|
+| 1 | watching a folder needs dart:io, event types and an isFile check; sees atomic-write temp files | 1 | 5 | fixed: `Dir.watch()` |
+| 2 | quitting a Tui when outside work ends | 1 | 2 | plain Dart: keep `app` in a `late` (no change) |
+| 3 | showing the last lines of a pane | 1 | 3 | exists: `.scroll(Scroll())` follows the end (discoverability only) |
+| 4 | mirror: link -> local path and same-site filter by hand | 1 | 3 | open; also the BFS dedupe loop that Scrape existed for |
+| 5 | `attr('x')!` repeated | 3 | 0 | keep (nullable is honest) |
+| 6 | `chmod +x` through Shell | 1 | 1 | keep |
+| 7 | `Fs.temp` is a scope, not a handle | 1 | 0 | by design |

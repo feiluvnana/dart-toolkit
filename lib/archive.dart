@@ -151,6 +151,9 @@ final class _Packed with Reader {
         }
       } else if (t == io.FileSystemEntityType.file) {
         out[rel] = (name: rel, path: path, dir: false);
+      } else {
+        // A FIFO, socket or device: refused, never silently left out.
+        throw ContentException('archive refuses special files: $path');
       }
     }
 
@@ -924,11 +927,11 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {required bool fromGzip}) a
       if (typeflag == 0x35 || regular && name.endsWith('/')) {
         seen++;
         emit = false;
-        yield _TarHeader(name, _tarOctal(h, 100, 8), isDir: true);
+        yield _TarHeader(name, _tarMode(h), isDir: true);
       } else if (regular) {
         seen++;
         emit = true;
-        yield _TarHeader(name, _tarOctal(h, 100, 8), isDir: false);
+        yield _TarHeader(name, _tarMode(h), isDir: false);
         if (size == 0) yield _TarEnd();
       } else if (typeflag == 0x31 || typeflag == 0x32) {
         throw ContentException('archive member is a link: $name');
@@ -952,6 +955,13 @@ String _tarString(List<int> buf, int offset, int length) {
     end++;
   }
   return utf8.decode(buf.sublist(offset, end), allowMalformed: true);
+}
+
+/// The mode field; a damaged one is no mode (the umask default), never the
+/// 0777 that -1 & 0x1FF would give.
+int _tarMode(List<int> h) {
+  final m = _tarOctal(h, 100, 8);
+  return m < 0 ? 0 : m;
 }
 
 /// Octal field (NUL/space padded); empty means 0 for mode/mtime.

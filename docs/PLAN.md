@@ -68,3 +68,6 @@ puppeteer's downloader throws `FormatException: Unknown 'linux_arm64' from Platf
 
 ### L4. Process-tree kill with BusyBox `ps`
 `_killTree` in `lib/shell.dart` runs `ps -A -o pid=,ppid=`. BusyBox (Alpine, many Docker images) has no `-A` and may reject `-o pid=,ppid=`, so the tree is empty and only the direct child dies. In an `alpine` container run `dart test test/shell_test.dart -n grandchildren`. If it fails, fall back to reading `/proc/*/stat` (field 4 is the ppid) when `ps` exits non-zero: list `/proc`, keep numeric names, parse `stat` after the last `)`.
+
+### L5. `Dir.watch()` on Linux
+`lib/fs.dart` `watch()` passes `recursive: !io.Platform.isLinux` because the SDK's inotify watcher is documented as not recursive there. On Linux run `dart test test/fs_test.dart -n "watch reports"`, then check by hand: a file written in a subfolder of the watched one is not reported. If the SDK does recurse on your version, drop the platform check and update the doc comment ("Linux watches this folder only").

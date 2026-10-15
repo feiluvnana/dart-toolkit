@@ -473,6 +473,19 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       }
     });
 
+    test('watch reports files created or changed, not temp files or deletes', () async {
+      final d = await Fs.dir(p('w')).create();
+      final seen = <String>[];
+      final sub = d.watch().listen((f) => seen.add(f.path(from: d)));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await d.file('a.txt').write('one'); // atomic: a temp file, then a rename
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await d.file('a.txt').delete();
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      await sub.cancel();
+      expect(seen.toSet(), {'a.txt'});
+    });
+
     test('list(match:) filters by a glob; ** recurses, {a,b} picks', () async {
       for (final f in ['a.jpg', 'b.png', 'c.txt', 'x/d.jpg', 'x/y/e.png', 'x/f.gif']) {
         await Fs.file(p('shots/$f')).write(f);

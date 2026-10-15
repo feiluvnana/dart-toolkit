@@ -448,6 +448,21 @@ final class Dir extends Entry {
     return [for (final (_, e) in found) e];
   }
 
+  /// The files created or changed under this folder, as they happen:
+  /// `dir.watch().listen(upload)`. Deletions and folders are left out, and so
+  /// are the temp files of atomic writes (the finished file is reported).
+  /// Recursive on macOS and Windows; Linux watches this folder only. Cancel
+  /// the subscription to stop.
+  Stream<File> watch() =>
+      io.Directory(_path)
+          .watch(recursive: !io.Platform.isLinux)
+          .where((e) => e.type != io.FileSystemEvent.delete && !e.isDirectory)
+          .map((e) => e is io.FileSystemMoveEvent ? e.destination ?? e.path : e.path)
+          .where((path) => !posix.isTmpName(p.basename(path)))
+          .asyncExpand((path) async* {
+            if (await io.FileSystemEntity.isFile(path)) yield File._(path);
+          });
+
   /// `mkdir -p`. A no-op when the folder exists. Returns this.
   Future<Dir> create() async {
     await io.Directory(_path).create(recursive: true);

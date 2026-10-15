@@ -14,6 +14,7 @@ import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/pool.dart';
 
@@ -47,7 +48,7 @@ Future<void> main() async {
 | `json` | reading JSON | dotted paths with `*`, `**`, `a\|b`, typed `value<T>()`, `text()`, `max`/`min` |
 | `csv` | CSV | RFC 4180 `parse`, `records`, `encode`, `reader.csv()` |
 | `yaml` | reading YAML | `file.yaml().$('version').text()`: the `json` reading API |
-| `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `Fs.temp`, `file.lock`, `modified()`, `Fs.sanitize(name)` |
+| `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `watch()`, `Fs.temp`, `file.lock`, `modified()`, `Fs.sanitize(name)` |
 | `archive` | zip, tar, tgz, 7z, RAR | `archive(paths, password:)`, `unarchive(dir)` for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 |
 | `hash` | md5 … sha512 | in a pipe, `expect:` to verify, `of(reader)` |
 | `shell` | programs | `Shell.run(cmd, check:, timeout:, onLine:)`, `Shell.which`, `Shell.filter` as a `Pipe`, `Shell.open` |

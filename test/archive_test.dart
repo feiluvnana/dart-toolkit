@@ -17,10 +17,10 @@ import 'package:test/test.dart';
 
 import 'support/child.dart';
 
-List<int> _tarBlock(String name, int size, int typeflag) {
+List<int> _tarBlock(String name, int size, int typeflag, {String mode = '0000644'}) {
   final b = List<int>.filled(512, 0);
   b.setRange(0, name.length, name.codeUnits);
-  b.setRange(100, 107, '0000644'.codeUnits);
+  b.setRange(100, 107, mode.codeUnits);
   b.setRange(124, 135, size.toRadixString(8).padLeft(11, '0').codeUnits);
   b[156] = typeflag;
   b.setRange(257, 263, 'ustar\x00'.codeUnits);
@@ -948,6 +948,23 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       await feed.close();
       await done;
       expect((await FileStat.stat(p('out/id_rsa'))).mode & 0x1ff, 0x180);
+    });
+
+    test('a damaged tar mode field unpacks as a plain file, not 0777', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      final tar = [..._tarBlock('bad', 1, 0x30, mode: '0000z00'), ..._tarBody('x'.codeUnits), ...List.filled(1024, 0)];
+      await Archive.unarchive(p('out')).consume(Stream.value(tar));
+      expect((await FileStat.stat(p('out/bad'))).mode & 0x49, 0); // no execute bit
+    });
+
+    test('archiving a FIFO is refused, not silently skipped', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX FIFOs');
+      await Fs.file(p('src/a.txt')).write('a');
+      await Process.run('mkfifo', [p('src/pipe')]);
+      await expectLater(
+        Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tar).bytes(),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('special files'))),
+      );
     });
 
     test('M29: members that differ only in case are refused', () async {

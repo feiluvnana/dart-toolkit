@@ -15,7 +15,7 @@
 - `chrome`: `page.cookie(name, timeout:)` waits for a cookie; `page.responses(glob)` streams XHR/fetch responses as `Capture` readers.
 - `json`: `|` alternatives in a path segment (`$('pk|id')`), `text()` for any scalar, `max`/`min`, `json(or:)` for a missing source.
 - `html`: `Elements.json()` (embedded JSON/ld+json/`__NEXT_DATA__`), `table()`, `form()`; full CSS selectors (`:nth-child(An+B of S)`, `:is`, `:where`, `:has`, `:lang`, attribute `i` flag …).
-- `fs`: `File.text(or:)`, `bytes(or:)`; `Dir.list(match: '**/*.{jpg,png}')` (in-house globs).
+- `fs`: `File.text(or:)`, `bytes(or:)`; `Dir.list(match: '**/*.{jpg,png}')` (in-house globs); `Dir.watch()` streams files created or changed.
 - `csv`: new module: RFC 4180 `Csv.parse`/`records`/`encode`, `reader.csv()`.
 - `console`: `Console.table(rows, header:)`.
 - `cli`: `Command(dotenv: '.env')`.

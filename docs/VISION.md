@@ -155,7 +155,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `csv`     | `Csv.parse` `records` `encode` · `Reader.csv`                                                                                                     | in-house              |
 | `scrape`  | `Scrape` `run` · `Visit` `item` `add` `emit`                                                                                                     | in-house              |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                       | `package:yaml`        |
-| `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `temp` `home` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
+| `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `temp` `home` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
 | `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`) · `Hasher` `add` `addBytes` `hex` `of`                                                                                        | `package:crypto`      |
@@ -437,7 +437,7 @@ final class File extends Entry with Reader, Writer {
 }
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
-  Future<List<Entry>> list({bool recursive = false, String? match});  Future<Dir> create();
+  Future<List<Entry>> list({bool recursive = false, String? match});  Stream<File> watch();  Future<Dir> create();
 }
 final class Link extends Entry {
   Future<String> target();  Future<Entry?> resolve();  Future<Link> create(String target);
