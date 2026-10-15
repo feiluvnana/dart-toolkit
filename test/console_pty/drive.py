@@ -2,7 +2,7 @@
 """Run a command under a real pty, feeding input bytes and signals.
 
 Usage: drive.py --size ROWS COLS [--ready TEXT] [--feed DELAY_SECS PY_ESCAPED_BYTES]...
-                [--signal DELAY_SECS NAME]... -- CMD...
+                [--signal DELAY_SECS NAME]... [--resize DELAY_SECS ROWS COLS]... -- CMD...
 
 Delays count from the moment the app is ready: its output first contains
 `--ready` (default: the TUI's `CSI ? 2004 h`, written once raw mode and the
@@ -38,6 +38,9 @@ def main():
         elif argv[i] == '--ready':
             ready_mark = argv[i + 1].encode('utf-8')
             i += 2
+        elif argv[i] == '--resize':
+            events.append((float(argv[i + 1]), ('resize', int(argv[i + 2]), int(argv[i + 3]))))
+            i += 4
         elif argv[i] == '--signal':
             events.append((float(argv[i + 1]), getattr(signal, 'SIG' + argv[i + 2])))
             i += 3
@@ -73,6 +76,9 @@ def main():
                 try:
                     if isinstance(what, bytes):
                         os.write(fd, what)
+                    elif isinstance(what, tuple):
+                        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', what[1], what[2], 0, 0))
+                        os.kill(pid, signal.SIGWINCH)
                     else:
                         os.kill(pid, what)
                 except OSError:

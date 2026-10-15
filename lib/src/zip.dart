@@ -19,6 +19,8 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'aes.dart';
 import 'crc32.dart';
 
+import '../core.dart';
+
 /// One member as read.
 final class ZipEntry {
   ZipEntry._(
@@ -52,8 +54,9 @@ final class ZipEntry {
   final int _time;
   final int _flags;
 
-  /// WinZip AES: key strength (1-3) and the method under the encryption.
-  final ({int strength, int method})? _aes;
+  /// WinZip AES: version (AE-1 keeps the CRC, AE-2 zeroes it), key
+  /// strength (1-3) and the method under the encryption.
+  final ({int version, int strength, int method})? _aes;
 
   /// Needs a password: WinZip AES or legacy ZipCrypto.
   final bool encrypted;
@@ -61,7 +64,8 @@ final class ZipEntry {
   bool get isDir => name.endsWith('/') || mode & 0xF000 == 0x4000;
   bool get isLink => mode & 0xF000 == 0xA000;
 
-  /// The member's bytes, decrypted with [password] and inflated.
+  /// The member's bytes, decrypted with [password], inflated and checked
+  /// against the CRC-32 (an AE-2 member is checked by its MAC instead).
   Uint8List data({String? password}) {
     final b = _bytes;
     if (_offset + 30 > b.length || _u32(b, _offset) != 0x04034b50) _corrupt('bad local header for $name');
@@ -69,9 +73,9 @@ final class ZipEntry {
     if (start + _packed > b.length) _corrupt('member runs past the end: $name');
     var raw = Uint8List.sublistView(b, start, start + _packed);
     var method = _method;
+    final aes = _aes;
     if (encrypted) {
-      if (password == null) throw FormatException('archive member is encrypted: $name (pass password:)');
-      final aes = _aes;
+      if (password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
       if (aes != null) {
         raw = _aesDecrypt(raw, utf8.encode(password), aes.strength);
         method = aes.method;
@@ -84,16 +88,15 @@ final class ZipEntry {
       case 0:
         out = raw;
       case 8:
-        try {
-          final inflated = io.ZLibDecoder(raw: true).convert(raw);
-          out = inflated is Uint8List ? inflated : Uint8List.fromList(inflated);
-        } on FormatException catch (e) {
-          _corrupt('bad deflate data in $name (${e.message})');
-        }
+        out = inflateRaw(raw, _size, name);
       default:
-        throw FormatException('corrupt archive: unsupported zip method $method for $name');
+        throw ContentException('corrupt archive: unsupported zip method $method for $name');
     }
     if (out.length != _size) _corrupt('$name inflates to ${out.length} bytes, not $_size');
+    if (!(encrypted && aes != null && aes.version == 2) && crc32(out) != _crc) {
+      // ZipCrypto's one-byte check passes a wrong password 1 time in 256.
+      throw ContentException(encrypted ? 'wrong password or corrupt data: $name' : 'corrupt archive: CRC of $name');
+    }
     return out;
   }
 
@@ -104,7 +107,7 @@ final class ZipEntry {
     if (raw.length < saltLen + 12) _corrupt('encrypted member too short: $name');
     final keys = pbkdf2(crypto.sha1, password, Uint8List.sublistView(raw, 0, saltLen), 1000, 2 * keyLen + 2);
     if (keys[2 * keyLen] != raw[saltLen] || keys[2 * keyLen + 1] != raw[saltLen + 1]) {
-      throw FormatException('wrong password for $name');
+      throw ContentException('wrong password for $name');
     }
     final body = Uint8List.sublistView(raw, saltLen + 2, raw.length - 10);
     final mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, keyLen, 2 * keyLen)).convert(body).bytes;
@@ -125,7 +128,7 @@ final class ZipEntry {
     // The last header byte repeats the CRC's high byte (or the time's,
     // when sizes trail the data).
     final check = _flags & 8 != 0 ? _time >> 8 & 0xFF : _crc >> 24 & 0xFF;
-    if (head[11] != check) throw FormatException('wrong password for $name');
+    if (head[11] != check) throw ContentException('wrong password for $name');
     final out = Uint8List(raw.length - 12);
     for (var i = 0; i < out.length; i++) {
       out[i] = keys.decrypt(raw[12 + i]);
@@ -153,7 +156,7 @@ List<ZipEntry> readZip(Uint8List b) {
     final loc = eocd - 20;
     if (loc < 0 || _u32(b, loc) != 0x07064b50) _corrupt('missing zip64 locator');
     final rec = _u64(b, loc + 8);
-    if (rec + 56 > b.length || _u32(b, rec) != 0x06064b50) _corrupt('bad zip64 record');
+    if (rec < 0 || rec + 56 > b.length || _u32(b, rec) != 0x06064b50) _corrupt('bad zip64 record');
     count = _u64(b, rec + 32);
     dir = _u64(b, rec + 48);
   }
@@ -173,12 +176,19 @@ List<ZipEntry> readZip(Uint8List b) {
     if (nameEnd + extraLen > b.length) _corrupt('bad central directory');
     final rawName = Uint8List.sublistView(b, at + 46, nameEnd);
     final name = flags & 0x800 != 0 ? utf8.decode(rawName, allowMalformed: true) : _legacyName(rawName);
-    ({int strength, int method})? aes;
+    ({int version, int strength, int method})? aes;
     // Zip64 extra field (0x0001): the 64-bit values, in order, for each
-    // field that holds 0xFFFFFFFF.
+    // field that holds 0xFFFFFFFF. WinZip AES (0x9901): version, "AE",
+    // strength, method.
     for (var e = nameEnd; e + 4 <= nameEnd + extraLen;) {
       final id = _u16(b, e), len = _u16(b, e + 2);
-      if (id == 0x9901 && len >= 7) aes = (strength: b[e + 8], method: _u16(b, e + 9));
+      if (id == 0x9901) {
+        final version = _u16(b, e + 4), strength = _u16(b, e + 8) & 0xFF;
+        if (len != 7 || version < 1 || version > 2 || _u16(b, e + 6) != 0x4541 || strength < 1 || strength > 3) {
+          _corrupt('bad AES extra field: $name');
+        }
+        aes = (version: version, strength: strength, method: _u16(b, e + 9));
+      }
       if (id == 1) {
         var f = e + 4;
         final end = e + 4 + len;
@@ -196,6 +206,11 @@ List<ZipEntry> readZip(Uint8List b) {
     }
     final mode = madeBy == 3 ? external >> 16 & 0xFFFF : 0;
     if (method == 99 && aes == null) _corrupt('AES member without its extra field: $name');
+    // Real sizes and offsets stay under 2^48; a bigger one (or a zip64
+    // value that wrapped negative) is damage.
+    if (size < 0 || packed < 0 || offset < 0 || size > 1 << 48 || offset >= b.length) {
+      _corrupt('bad sizes for $name');
+    }
     out.add(
       ZipEntry._(
         name,
@@ -217,15 +232,16 @@ List<ZipEntry> readZip(Uint8List b) {
   return out;
 }
 
-/// A zip of [entries] (name, unix permission bits, bytes); a name ending in
-/// `/` is a folder. With [password], files are WinZip AES-256 (AE-2).
-Uint8List writeZip(List<(String, int, List<int>)> entries, {String? password}) {
+/// A zip of [entries] (name, unix permission bits, bytes, modified time); a
+/// name ending in `/` is a folder. With [password], files are WinZip
+/// AES-256 (AE-2).
+Uint8List writeZip(List<(String, int, List<int>, DateTime)> entries, {String? password}) {
   final pw = password == null ? null : utf8.encode(password);
   final random = Random.secure();
   final out = BytesBuilder(copy: false);
   final central = BytesBuilder(copy: false);
-  final (time, date) = _dosNow();
-  for (final (name, mode, data) in entries) {
+  for (final (name, mode, data, mtime) in entries) {
+    final (time, date) = _dosTime(mtime);
     final isDir = name.endsWith('/');
     final nameBytes = utf8.encode(name);
     var method = 0;
@@ -251,9 +267,14 @@ Uint8List writeZip(List<(String, int, List<int>)> entries, {String? password}) {
     if (pw != null && !isDir) {
       final salt = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
       final keys = pbkdf2(crypto.sha1, pw, salt, 1000, 66);
-      final encrypted = Aes(Uint8List.sublistView(keys, 0, 32)).ctrLittleEndian(Uint8List.fromList(body));
+      final plain = body is Uint8List ? body : Uint8List.fromList(body);
+      final encrypted = Aes(Uint8List.sublistView(keys, 0, 32)).ctrLittleEndian(plain);
       final mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, 32, 64)).convert(encrypted).bytes;
-      body = [...salt, keys[64], keys[65], ...encrypted, ...mac.take(10)];
+      body = Uint8List(18 + encrypted.length + 10)
+        ..setRange(0, 16, salt)
+        ..setRange(16, 18, keys, 64)
+        ..setRange(18, 18 + encrypted.length, encrypted)
+        ..setRange(18 + encrypted.length, 28 + encrypted.length, mac);
       extra = [0x01, 0x99, 7, 0, 2, 0, 0x41, 0x45, 3, method & 0xFF, method >> 8];
       method = 99;
       crc = 0;
@@ -261,7 +282,7 @@ Uint8List writeZip(List<(String, int, List<int>)> entries, {String? password}) {
     }
     final offset = out.length;
     if (offset > 0xFFFFFFFF || body.length > 0xFFFFFFFF || entries.length > 0xFFFF) {
-      throw const FormatException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
+      throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
     }
     final local = ByteData(30)
       ..setUint32(0, 0x04034b50, Endian.little)
@@ -304,7 +325,7 @@ Uint8List writeZip(List<(String, int, List<int>)> entries, {String? password}) {
   final dirOffset = out.length;
   final dirBytes = central.takeBytes();
   if (dirOffset + dirBytes.length > 0xFFFFFFFF) {
-    throw const FormatException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
+    throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
   }
   final end = ByteData(22)
     ..setUint32(0, 0x06054b50, Endian.little)
@@ -355,13 +376,51 @@ String _legacyName(Uint8List raw) {
   }
 }
 
-(int, int) _dosNow() {
-  final t = DateTime.now();
+/// [t] as DOS time and date (local, 2-second steps, 1980 to 2107).
+(int, int) _dosTime(DateTime t) {
+  t = t.toLocal();
+  if (t.year < 1980) return (0, 1 << 5 | 1);
+  if (t.year > 2107) return (23 << 11 | 59 << 5 | 29, 127 << 9 | 12 << 5 | 31);
   return (t.hour << 11 | t.minute << 5 | t.second ~/ 2, (t.year - 1980) << 9 | t.month << 5 | t.day);
 }
 
-Never _corrupt(String why) => throw FormatException('corrupt archive: $why');
+/// Inflates the raw deflate [input], stopping as soon as the output passes
+/// [size] (a bomb never gets past its declared size) and naming [what] in
+/// the error. Returns what inflated, which may be short of [size].
+Uint8List inflateRaw(Uint8List input, int size, String what) {
+  // Deflate's best ratio is 1032:1, so no real stream outgrows that.
+  final most = input.length * 1032 + 1024;
+  final out = Uint8List(size < most ? size : most);
+  final filter = io.RawZLibFilter.inflateFilter(raw: true);
+  var n = 0;
+  void take(List<int>? piece) {
+    if (piece == null) return;
+    if (n + piece.length > out.length) _corrupt('$what inflates past its declared $size bytes');
+    out.setRange(n, n + piece.length, piece);
+    n += piece.length;
+  }
 
-int _u16(Uint8List b, int i) => i + 2 > b.length ? 0 : b[i] | b[i + 1] << 8;
-int _u32(Uint8List b, int i) => i + 4 > b.length ? 0 : b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
+  try {
+    const step = 1 << 16;
+    for (var i = 0; i < input.length; i += step) {
+      filter.process(input, i, i + step < input.length ? i + step : input.length);
+      for (List<int>? piece; (piece = filter.processed(flush: false)) != null;) {
+        take(piece);
+      }
+    }
+    for (List<int>? piece; (piece = filter.processed(end: true)) != null;) {
+      take(piece);
+    }
+  } on ContentException {
+    rethrow;
+  } on FormatException catch (e) {
+    _corrupt('bad deflate data in $what (${e.message})');
+  }
+  return n == out.length ? out : Uint8List.sublistView(out, 0, n);
+}
+
+Never _corrupt(String why) => throw ContentException('corrupt archive: $why');
+
+int _u16(Uint8List b, int i) => i < 0 || i + 2 > b.length ? 0 : b[i] | b[i + 1] << 8;
+int _u32(Uint8List b, int i) => i < 0 || i + 4 > b.length ? 0 : b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
 int _u64(Uint8List b, int i) => _u32(b, i) + _u32(b, i + 4) * 0x100000000;

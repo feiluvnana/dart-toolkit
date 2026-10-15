@@ -150,7 +150,7 @@ final class _Boom with Reader {
 
 /// Fails before ever listening to the input stream (a missing parent, an
 /// unwritable target): the pipe must still poison its stages.
-final class _ThrowBeforeRead implements Writer {
+final class _ThrowBeforeRead with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {
     throw ArgumentError('cannot open target');

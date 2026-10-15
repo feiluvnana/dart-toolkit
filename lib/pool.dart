@@ -1,17 +1,18 @@
-/// Fan work out: async lanes for I/O on this isolate, worker isolates for
-/// CPU work, results in input order. Pure `dart:isolate`.
+/// Fan work out: async lanes for I/O on this isolate, or long-lived worker
+/// isolates for CPU work; results in input order. Pure `dart:isolate`.
 ///
 /// ```dart
-/// await Pool.map(urls, fetchPage, onResult: (_) => bar.tick()); // 4 lanes
-/// final thumbs = await Pool.runAll(paths, makeThumb, onResult: (_) => bar.tick());
-/// final digest = await Isolate.run(() => hashFile(path)); // one job: the SDK's
+/// await Pool.map(urls, fetchPage, onDone: bar.tick);                     // 4 lanes, fail fast
+/// final done = await Pool.settle(files, (f) => cdn.save(f.url, f.to));   // never throws
+/// for (final Failed(:item, :error) in done.failures()) Console.log('✗ $item: $error');
+/// final thumbs = await Pool.map(paths, makeThumb, isolates: true);       // CPU work
 /// ```
 ///
-/// Public surface is exactly: [Pool].
-/// - `Pool.map()` runs async lanes on this isolate (for I/O: the job can
-///   capture anything).
-/// - `Pool.runAll()` runs a job per item on worker isolates (for CPU work:
-///   the job and items must be sendable).
+/// Public surface is exactly: [Pool], [Outcome], [Done], [Failed], [Outcomes].
+/// - `Pool.map()` fails fast: the first error is rethrown with its type and
+///   stack once the jobs in flight finish.
+/// - `Pool.settle()` never throws: one [Outcome] per item, in input order.
+/// - Both take `limit` `retries` `rate` `isolates` `onDone`.
 /// Nothing stays running between calls, so nothing needs closing.
 library;
 
@@ -21,94 +22,245 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:isolate';
 
-/// Entry point: lanes here, CPU jobs on worker isolates.
+import 'core.dart';
+import 'src/rate.dart' as rate;
+import 'src/retry.dart' as retry;
+
+/// Entry point: [map] (fail fast) and [settle] (an outcome per item).
+///
+/// - [limit] caps the jobs in flight: 4 lanes by default (I/O: the core
+///   count says nothing), or the core count with `isolates: true`.
+/// - [retries] re-runs a failing job with the shared jittered backoff
+///   (1 s, 2 s … ±25%); [rate] paces job starts (each attempt takes a slot).
+/// - `isolates: true` runs the jobs on `limit` long-lived worker isolates
+///   that pull items: the job and every item must be sendable (a top-level
+///   function or a closure over plain data). A value that cannot cross is an
+///   [ArgumentError] naming the item; an `ArgumentError` the job itself
+///   throws stays as it is.
+/// - [onDone] runs after every job, success or failure, so a bar's
+///   `onDone: bar.tick` tear-off fits.
 abstract final class Pool {
-  /// Run [job] over every item on async lanes on this isolate, results in
-  /// input order. [limit] caps the lanes in flight (4 by default:
-  /// lanes are I/O, so the core count says nothing; raise it for
-  /// high-latency fan-out).
-  /// [onResult] runs as each job finishes.
-  /// The first error stops new jobs, waits for the lanes in flight, rethrows.
-  ///
-  /// For I/O: unlike [runAll], the job can capture anything (a client, a
-  /// bar, a database handle), since nothing crosses isolates.
+  /// Run [job] over every item, results in input order. The first error
+  /// stops new jobs, waits for those in flight, and is rethrown with its
+  /// original type and stack.
   static Future<List<R>> map<T, R>(
     Iterable<T> items,
     FutureOr<R> Function(T item) job, {
     int? limit,
-    void Function(R result)? onResult,
-  }) => _lanes(items, (item, _) async => job(item), limit ?? 4, limit, onResult);
+    int retries = 0,
+    Rate? rate,
+    bool isolates = false,
+    void Function()? onDone,
+  }) async {
+    final out = await _run(items, job, limit, retries, rate, isolates, onDone, failFast: true);
+    return [
+      for (final o in out)
+        switch (o) {
+          Done(:final value) => value,
+          Failed(:final error, :final stack) => Error.throwWithStackTrace(error, stack),
+        },
+    ];
+  }
 
-  /// Run [job] once per item on worker isolates, results in input order.
-  /// [limit] caps the jobs in flight (the core count by default).
-  /// [onResult] runs on this isolate as each job finishes. The first error
-  /// stops new jobs and is rethrown.
-  ///
-  /// For CPU work: [job] and each item cross to another isolate, so they
-  /// must be sendable (a top-level function or a closure over plain data);
-  /// a port, a socket or a closure over one is an [ArgumentError]. Each job
-  /// runs in a fresh isolate (`Isolate.run`), so a crashed job never takes a
-  /// worker down and nothing is left running afterwards.
-  static Future<List<R>> runAll<T, R>(
+  /// Run [job] over every item and never throw: one [Outcome] per item, in
+  /// input order, each carrying its item, because "which one failed" is the
+  /// first question.
+  static Future<List<Outcome<T, R>>> settle<T, R>(
     Iterable<T> items,
     FutureOr<R> Function(T item) job, {
     int? limit,
-    void Function(R result)? onResult,
-  }) => _lanes(
-    items,
-    (item, i) async {
-      try {
-        return await Isolate.run(() => job(item));
-      } on ArgumentError catch (e) {
-        // Isolate.run rejects what cannot cross: name the item.
-        throw ArgumentError.value(item, 'items[$i]', 'cannot be sent to a worker isolate (${e.message})');
-      }
-    },
-    limit ?? io.Platform.numberOfProcessors,
-    limit,
-    onResult,
-  );
+    int retries = 0,
+    Rate? rate,
+    bool isolates = false,
+    void Function()? onDone,
+  }) => _run(items, job, limit, retries, rate, isolates, onDone, failFast: false);
 
-  /// [width] lanes over [items]; one isolate, so the shared `next++` needs
-  /// no lock (it runs synchronously between awaits).
-  static Future<List<R>> _lanes<T, R>(
+  static Future<List<Outcome<T, R>>> _run<T, R>(
     Iterable<T> items,
-    Future<R> Function(T item, int index) run,
-    int width,
+    FutureOr<R> Function(T item) job,
     int? limit,
-    void Function(R result)? onResult,
-  ) async {
-    if (limit != null && limit < 1) {
-      throw ArgumentError.value(limit, 'limit', 'must be at least 1');
-    }
+    int retries,
+    Rate? pace,
+    bool isolates,
+    void Function()? onDone, {
+    required bool failFast,
+  }) async {
+    if (limit != null && limit < 1) throw ArgumentError.value(limit, 'limit', 'must be at least 1');
+    if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
     final list = items.toList();
-    if (list.isEmpty) return <R>[];
-    final out = List<R?>.filled(list.length, null);
+    if (list.isEmpty) return [];
+    final width = (limit ?? (isolates ? io.Platform.numberOfProcessors : 4)).clamp(1, list.length);
+    final out = List<Outcome<T, R>?>.filled(list.length, null);
+    final workers = <_Worker>[];
     var next = 0;
-    Object? error;
-    StackTrace? stack;
+    var failed = false;
 
     Future<void> lane() async {
-      while (error == null) {
+      _Worker? worker;
+      while (!(failFast && failed)) {
         final i = next++;
         if (i >= list.length) return;
+        final item = list[i];
+        Outcome<T, R> result;
         try {
-          final r = await run(list[i], i);
-          out[i] = r;
-          if (error == null) onResult?.call(r);
-        } catch (e, st) {
-          if (error == null) {
-            error = e;
-            stack = st;
+          for (var attempt = 0; ; attempt++) {
+            if (pace != null) await rate.take(pace, null);
+            try {
+              final R value;
+              if (isolates) {
+                final w = worker ??= await _Worker.start(job);
+                if (workers.isEmpty || !identical(workers.last, w)) workers.add(w);
+                value = await w.run(item, i) as R;
+              } else {
+                value = await job(item);
+              }
+              result = Done._(item, value);
+              break;
+            } on _Unsendable {
+              rethrow;
+            } catch (_) {
+              if (attempt >= retries || (failFast && failed)) rethrow;
+              await Future<void>.delayed(retry.backoff(attempt, null));
+            }
           }
-          return;
+        } on _Unsendable catch (e, st) {
+          result = Failed._(item, e.error, st);
+        } catch (e, st) {
+          result = Failed._(item, e, st);
         }
+        out[i] = result;
+        if (result is Failed) failed = true;
+        onDone?.call();
       }
     }
 
-    await Future.wait([for (var k = 0; k < width.clamp(1, list.length); k++) lane()]);
-    final e = error;
-    if (e != null) Error.throwWithStackTrace(e, stack!);
-    return [for (final r in out) r as R];
+    try {
+      await Future.wait([for (var k = 0; k < width; k++) lane()]);
+    } finally {
+      for (final w in workers.toSet()) {
+        w.stop();
+      }
+    }
+    if (failFast) {
+      final first = out.whereType<Failed<T, R>>().firstOrNull;
+      if (first != null) Error.throwWithStackTrace(first.error, first.stack);
+    }
+    return [for (final o in out) o!];
+  }
+}
+
+/// What one item came to: [Done] or [Failed].
+sealed class Outcome<T, R> {
+  const Outcome._(this.item);
+
+  /// The item the job ran on.
+  final T item;
+}
+
+/// A job that returned [value].
+final class Done<T, R> extends Outcome<T, R> {
+  const Done._(super.item, this.value) : super._();
+
+  final R value;
+}
+
+/// A job that threw [error] (after its retries).
+final class Failed<T, R> extends Outcome<T, R> {
+  const Failed._(super.item, this.error, this.stack) : super._();
+
+  final Object error;
+  final StackTrace stack;
+}
+
+/// `outcomes.values()`, `outcomes.failures()`.
+extension Outcomes<T, R> on List<Outcome<T, R>> {
+  /// The values of the jobs that succeeded, in input order.
+  List<R> values() => [
+    for (final o in this)
+      if (o case Done(:final value)) value,
+  ];
+
+  /// The jobs that failed, in input order.
+  List<Failed<T, R>> failures() => whereType<Failed<T, R>>().toList();
+}
+
+/// A value that cannot cross to or from a worker isolate.
+final class _Unsendable {
+  _Unsendable(this.error);
+
+  final ArgumentError error;
+}
+
+/// One long-lived worker isolate: receives the job once, then items.
+final class _Worker {
+  _Worker._(this._isolate, this._send, this._replies);
+
+  final Isolate _isolate;
+  final SendPort _send;
+  final StreamIterator<Object?> _replies;
+
+  static Future<_Worker> start<T, R>(FutureOr<R> Function(T item) job) async {
+    final port = ReceivePort();
+    final replies = StreamIterator<Object?>(port);
+    Isolate isolate;
+    try {
+      isolate = await Isolate.spawn(_main, (port.sendPort, (Object? item) => job(item as T)));
+    } on ArgumentError catch (e) {
+      port.close();
+      throw _Unsendable(ArgumentError.value(job, 'job', 'cannot be sent to a worker isolate (${e.message})'));
+    }
+    await replies.moveNext();
+    return _Worker._(isolate, replies.current! as SendPort, replies);
+  }
+
+  Future<Object?> run(Object? item, int index) async {
+    try {
+      _send.send(item);
+    } on ArgumentError catch (e) {
+      throw _Unsendable(
+        ArgumentError.value(item, 'items[$index]', 'cannot be sent to a worker isolate (${e.message})'),
+      );
+    }
+    await _replies.moveNext();
+    final reply = _replies.current! as List<Object?>;
+    if (reply[0] == true) return reply[1];
+    final error = reply[1]!;
+    final stack = StackTrace.fromString(reply[2]! as String);
+    if (reply.length > 3) {
+      throw _Unsendable(ArgumentError.value(item, 'items[$index]', 'result cannot be sent back ($error)'));
+    }
+    Error.throwWithStackTrace(error, stack);
+  }
+
+  void stop() {
+    _isolate.kill(priority: Isolate.immediate);
+    unawaited(_replies.cancel());
+  }
+}
+
+/// The worker loop: hand back its port, then answer each item with
+/// `[true, value]` or `[false, error, stack]` (a [RemoteError] when the
+/// error itself cannot cross; a fourth entry marks an unsendable result).
+Future<void> _main((SendPort, FutureOr<Object?> Function(Object? item)) start) async {
+  final (reply, job) = start;
+  final inbox = ReceivePort();
+  reply.send(inbox.sendPort);
+  await for (final item in inbox) {
+    Object? value;
+    try {
+      value = await job(item);
+    } catch (e, st) {
+      try {
+        reply.send([false, e, '$st']);
+      } on ArgumentError {
+        reply.send([false, RemoteError('$e', '$st'), '$st']);
+      }
+      continue;
+    }
+    try {
+      reply.send([true, value]);
+    } on ArgumentError catch (e) {
+      reply.send([false, '${e.message}', '', true]);
+    }
   }
 }

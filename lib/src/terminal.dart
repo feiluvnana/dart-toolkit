@@ -5,11 +5,10 @@
 /// broadcast stdin, one key decoder, and saving/restoring terminal modes.
 library;
 
-// ignore_for_file: avoid_dynamic_calls
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:isolate';
 
 import 'winconsole.dart' as win;
 
@@ -23,9 +22,15 @@ export 'sanitize.dart';
 /// `dart:io` allows one listener on stdin per process, and that listener
 /// keeps the process alive even when paused. So on a POSIX terminal the
 /// bytes come from a child `cat -u /dev/tty`, started on the first listen
-/// and killed on the last cancel. The child ignores SIGINT, so Ctrl-C still
+/// and stopped on the last cancel. The child ignores SIGINT, so Ctrl-C still
 /// reaches us (as a key, or as the prompt's exit). Piped stdin, Windows, or
 /// a missing `cat` fall back to stdin itself, which ends at EOF.
+///
+/// The child must never outlive us: an orphaned `cat` keeps reading the
+/// terminal and eats the shell's keystrokes. Its wrapper shell watches the
+/// pipe we hold open on its stdin and kills `cat` when that pipe closes,
+/// which the kernel does on any exit: `exit()`, a crash, a signal, even
+/// SIGKILL. A cancel closes the pipe too.
 Stream<List<int>> sharedStdin() {
   if (_input.isClosed) _input = _makeInput();
   return _input.stream;
@@ -42,6 +47,15 @@ Stream<List<int>>? _stdinFallback;
 /// True while no listener has taken stdin itself (the piped fallback), so a
 /// synchronous `readLineSync` is still allowed and loses nothing.
 bool get stdinUnclaimed => _stdinFallback == null;
+
+/// One line of piped stdin (null at EOF) without blocking the event loop:
+/// a helper isolate does the blocking `readLineSync`. It reads byte by
+/// byte, so nothing past the line is consumed, and unlike a subscription it
+/// neither drops lines that arrive between prompts nor keeps the script
+/// alive until the writer closes the pipe. Only while [stdinUnclaimed].
+Future<String?> pipedLine() => Isolate.run(_readLineSync);
+
+String? _readLineSync() => io.stdin.readLineSync(encoding: const Utf8Codec(allowMalformed: true));
 var _session = 0;
 
 /// Set by the Tui while it runs: keys come from the terminal even when
@@ -56,10 +70,10 @@ Future<void> _startInput() async {
   final session = ++_session;
   if (!io.Platform.isWindows && (io.stdin.hasTerminal || ttyInput && _pipedWithTty)) {
     try {
-      final tty = await io.Process.start('/bin/sh', ['-c', 'trap "" INT; exec cat -u /dev/tty']);
+      final tty = await io.Process.start('/bin/sh', ['-c', _ttyScript]);
       unawaited(tty.stderr.drain<void>());
       if (session != _session) {
-        tty.kill(); // cancelled (and maybe restarted) while starting
+        _endTty(tty); // cancelled (and maybe restarted) while starting
         return;
       }
       _tty = tty;
@@ -85,13 +99,23 @@ Future<void> _startInput() async {
   );
 }
 
+/// `cat` reads the terminal in the background; the foreground `cat` waits
+/// for EOF on our pipe, then the reader is killed. Only that child.
+const _ttyScript = 'trap "" INT; cat -u /dev/tty & c=\$!; cat >/dev/null; kill \$c 2>/dev/null';
+
+/// Stop a tty child by closing its stdin pipe (its script then kills `cat`).
+void _endTty(io.Process tty) {
+  unawaited(tty.stdin.close().catchError((_) {}));
+}
+
 Future<void> _stopInput() async {
   _session++;
   final sub = _ttySub;
   _ttySub = null;
-  _tty?.kill();
+  final tty = _tty;
   _tty = null;
   await sub?.cancel();
+  if (tty != null) _endTty(tty);
 }
 
 /// A decoded input event.
@@ -1651,16 +1675,26 @@ final class TerminalCaps {
   }
 
   /// Detect from the process environment and [io.stderr] (console default).
-  static TerminalCaps get current => of(
-    io.Platform.environment,
-    hasTerminal: () {
-      try {
-        return io.stderr.hasTerminal;
-      } catch (_) {
-        return false;
-      }
-    }(),
-  );
+  /// Computed once per run (the environment and the terminal-ness of a
+  /// stream do not change); [invalidate] drops it.
+  static TerminalCaps get current => _stderr ??= of(io.Platform.environment, hasTerminal: _isTerminal(io.stderr));
+
+  /// As [current], for [io.stdout] (what the Tui draws on).
+  static TerminalCaps get forStdout => _stdout ??= of(io.Platform.environment, hasTerminal: _isTerminal(io.stdout));
+
+  static TerminalCaps? _stderr;
+  static TerminalCaps? _stdout;
+
+  /// Drop the cached [current]/[forStdout] (the Tui calls this on resize).
+  static void invalidate() => _stderr = _stdout = null;
+
+  static bool _isTerminal(io.Stdout s) {
+    try {
+      return s.hasTerminal;
+    } catch (_) {
+      return false;
+    }
+  }
 
   final bool truecolor;
   final bool color256;
@@ -1670,7 +1704,8 @@ final class TerminalCaps {
   /// Colour codes may be emitted.
   final bool styled;
 
-  /// Live redraw may animate (needs a terminal plus styling).
+  /// Live redraw may animate: a terminal that takes escapes. Independent
+  /// of [styled]: `NO_COLOR` drops colour, not motion.
   final bool animated;
 }
 

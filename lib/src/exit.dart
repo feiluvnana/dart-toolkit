@@ -9,7 +9,8 @@
 /// `SIGINT`/`SIGTERM`/`SIGHUP` watchers (only the signals the OS has —
 /// Windows only `SIGINT`); the last removal cancels them so the script may
 /// exit. On a signal the hooks run in reverse order (terminal restore first,
-/// then browsers), awaited and bounded, then `exit` is called once.
+/// then browsers), awaited and bounded, then `exit` is called once. A
+/// second signal during the hooks exits at once.
 ///
 /// `tui` in raw mode reports Ctrl-C as a key, not termination: it calls
 /// [claimInterrupt] with a predicate (usually `() => !stdin.echoMode`);
@@ -121,7 +122,9 @@ void _uninstallSignals() {
 }
 
 Future<void> _handle(int code, {required bool isSigint}) async {
-  if (_exiting) return;
+  // A second signal while the hooks run: the user insists, exit now (the
+  // hooks that already ran stay done; the rest are skipped).
+  if (_exiting) io.exit(code);
   if (isSigint) {
     try {
       if (_interruptClaim?.call() == true) return;

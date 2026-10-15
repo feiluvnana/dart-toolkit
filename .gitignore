@@ -3,3 +3,8 @@
 .packages
 build/
 coverage/
+
+# Script
+.chrome/
+.session
+downloads/

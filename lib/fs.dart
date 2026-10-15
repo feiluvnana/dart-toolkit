@@ -31,6 +31,7 @@ import 'core.dart';
 export 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/glob.dart';
 import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/tree.dart' as tree;
@@ -60,6 +61,34 @@ abstract final class Fs {
   /// A link handle. No I/O; the target need not exist.
   static Link link(String path) => Link._(path);
 
+  /// Run [body] with a fresh folder under the system temp dir, then delete
+  /// it (Ctrl-C included) and return what [body] returned. A scope, not a
+  /// handle: nothing to forget, and nothing keeps the script alive.
+  static Future<T> temp<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'}) async {
+    final made = await io.Directory.systemTemp.createTemp('$prefix-');
+    final token = exit.onExit(() async {
+      try {
+        await made.delete(recursive: true);
+      } catch (_) {}
+    });
+    try {
+      return await body(Dir._(made.path));
+    } finally {
+      exit.offExit(token);
+      try {
+        await made.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// The user's home folder (`HOME`; `USERPROFILE` on Windows).
+  static Dir home() {
+    final env = io.Platform.environment;
+    final home = io.Platform.isWindows ? env['USERPROFILE'] : env['HOME'];
+    if (home == null || home.isEmpty) throw const io.FileSystemException('no home folder (HOME is unset)');
+    return Dir._(home);
+  }
+
   /// [name] (a scraped title, a header value) as one file name that is safe
   /// on every OS: `/`, `\\`, `:*?"<>|` and controls become `_`, trailing dots
   /// and spaces go, `CON`-style device names and a leading `.` or `-` get a
@@ -88,57 +117,61 @@ sealed class Entry {
   /// The containing folder. The root's parent is the root.
   Dir parent() => Dir._(p.dirname(_path));
 
-  /// True only when something of this handle's kind is there.
+  /// True only when something of this handle's kind is there. A [File] or
+  /// [Dir] follows links (a link to a file is a file, as for reading); a
+  /// [Link] asks about the link itself.
   Future<bool> exists();
 
-  /// Remove a file, a link (never its target) or a whole folder.
-  /// A no-op when nothing is there.
+  /// Remove a file, a link (never its target) or a whole folder. A no-op
+  /// when nothing is there; another kind throws a [io.FileSystemException]
+  /// (`Fs.dir(file).delete()` never silently keeps the file).
   Future<void> delete();
 
   /// Filesystem copy to [to]: keeps metadata, creates parents, recursive for
-  /// folders (links as links). Returns a handle of the same type at [to].
+  /// folders (links inside as links). A [File] or [Dir] handle on a link
+  /// copies what the link points at. Returns a handle of the same type at [to].
   Future<Entry> copy(String to);
 
-  /// Rename to [to], falling back to copy-then-delete across devices.
-  /// Returns a handle of the same type at [to].
+  /// Rename to [to], falling back to copy-then-delete across devices. A link
+  /// moves as the link. Returns a handle of the same type at [to].
   Future<Entry> move(String to);
 
+  /// When the content last changed (links followed). A missing entry
+  /// throws [io.PathNotFoundException].
+  Future<DateTime> modified() async {
+    final st = await io.FileStat.stat(_path);
+    if (st.type == io.FileSystemEntityType.notFound) {
+      throw io.PathNotFoundException(_path, const io.OSError('No such file or directory', 2));
+    }
+    return st.modified;
+  }
+
+  late final String _key = p.normalize(_path);
+
+  /// Same type and the same normalized path (`a/./b` is `a/b`).
   @override
-  bool operator ==(Object other) => other is Entry && other.runtimeType == runtimeType && other._path == _path;
+  bool operator ==(Object other) => other is Entry && other.runtimeType == runtimeType && other._key == _key;
 
   @override
-  int get hashCode => Object.hash(runtimeType, _path);
+  int get hashCode => Object.hash(runtimeType, _key);
 }
 
 /// A file: a [Reader] in 64 KiB chunks, a [Writer] written atomically.
-final class File extends Entry with Reader implements Writer {
+final class File extends Entry with Reader, Writer {
   File._(super.path) : super._();
 
   @override
-  Future<bool> exists() async {
-    final t = await io.FileSystemEntity.type(_path, followLinks: false);
-    return t == io.FileSystemEntityType.file;
-  }
+  Future<bool> exists() async => await io.FileSystemEntity.type(_path) == io.FileSystemEntityType.file;
 
   @override
-  Future<void> delete() async {
-    try {
-      final t = await io.FileSystemEntity.type(_path, followLinks: false);
-      if (t == io.FileSystemEntityType.notFound) return;
-      if (t != io.FileSystemEntityType.file) return;
-      await io.File(_path).delete();
-    } on io.PathNotFoundException {
-      // no-op when nothing is there
-    } on io.FileSystemException catch (e) {
-      if (!await _missing(e)) rethrow;
-    }
-  }
+  Future<void> delete() => _delete(_path, io.FileSystemEntityType.file);
 
   @override
   Future<File> copy(String to) async {
     await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
     await _removeDestLink(to);
+    // `File.copy` and the stat behind preserveFileMeta follow a source link.
     await io.File(_path).copy(to);
     await tree.preserveFileMeta(_path, to);
     return File._(to);
@@ -146,7 +179,10 @@ final class File extends Entry with Reader implements Writer {
 
   @override
   Future<File> move(String to) async {
-    await _checkSource(_path, to, io.FileSystemEntityType.file);
+    if (await _checkSource(_path, to, io.FileSystemEntityType.file) == io.FileSystemEntityType.link) {
+      await Link._(_path).move(to);
+      return File._(to);
+    }
     await _ensureParent(to);
     await _removeDestLink(to);
     try {
@@ -202,14 +238,67 @@ final class File extends Entry with Reader implements Writer {
   /// Size in bytes.
   Future<int> size() => io.File(_path).length();
 
+  /// Run [body] holding an exclusive OS lock on this file (created when
+  /// missing), then release it, and return what [body] returned: one cron
+  /// run at a time. Another holder fails at once with
+  /// [io.FileSystemException] `locked by another process`, or, with [wait],
+  /// after retrying that long. The OS drops the lock if the process dies;
+  /// the file itself stays (deleting it would race the next run).
+  Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async {
+    await _ensureParent(_path);
+    final raf = await io.File(_path).open(mode: io.FileMode.append);
+    try {
+      final until = wait == null ? null : DateTime.now().add(wait);
+      while (true) {
+        try {
+          await raf.lock(io.FileLock.exclusive);
+          break;
+        } on io.FileSystemException {
+          if (until == null || DateTime.now().isAfter(until)) {
+            throw io.FileSystemException('locked by another process', _path);
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+      try {
+        return await body();
+      } finally {
+        await raf.unlock();
+      }
+    } finally {
+      await raf.close();
+    }
+  }
+
   @override
   Origin origin() => Origin(path: _path, name: p.basename(_path));
 
   @override
   Stream<List<int>> stream() => io.File(_path).openRead();
 
+  /// The bytes; [or] is returned when the file does not exist (every other
+  /// failure still throws).
   @override
-  Future<List<int>> bytes() => io.File(_path).readAsBytes();
+  Future<List<int>> bytes({List<int>? or}) async {
+    try {
+      return await io.File(_path).readAsBytes();
+    } on io.PathNotFoundException {
+      if (or != null) return or;
+      rethrow;
+    }
+  }
+
+  /// UTF-8 text (malformed bytes replaced); [or] is returned when the file
+  /// does not exist (every other failure still throws).
+  @override
+  Future<String> text({String? or}) async {
+    try {
+      return await super.text();
+    } on io.PathNotFoundException {
+      if (or != null) return or;
+      rethrow;
+    }
+  }
 
   @override
   Future<void> consume(Stream<List<int>> input) async {
@@ -307,8 +396,13 @@ final class Dir extends Entry {
   Dir dir(String name) => Dir._(p.join(_path, name));
 
   /// Typed children, sorted by relative path (depth-first when [recursive]).
-  /// Never descends through links.
-  Future<List<Entry>> list({bool recursive = false}) async {
+  /// Never descends through links. [match] keeps the entries whose path
+  /// relative to this folder matches a glob: `*` and `?` stay within one
+  /// folder, `**` crosses folders (and implies [recursive]), `{jpg,png}`
+  /// picks alternatives: `list(match: '**/*.{jpg,png}')`.
+  Future<List<Entry>> list({bool recursive = false, String? match}) async {
+    final pattern = match == null ? null : glob(match);
+    if (match != null && match.contains('**')) recursive = true;
     final t = await io.FileSystemEntity.type(_path, followLinks: false);
     if (t != io.FileSystemEntityType.directory) {
       throw io.FileSystemException('not a directory', _path);
@@ -317,6 +411,7 @@ final class Dir extends Entry {
     await for (final e in io.Directory(_path).list(recursive: recursive, followLinks: false)) {
       // With followLinks:false the stream never descends through links,
       // and its runtime type already tells links apart: no extra stat.
+      if (pattern != null && !pattern.hasMatch(p.relative(e.path, from: _path).replaceAll(r'\', '/'))) continue;
       if (e is io.Link) {
         out.add(Link._(e.path));
       } else if (e is io.File) {
@@ -336,28 +431,17 @@ final class Dir extends Entry {
   }
 
   @override
-  Future<bool> exists() async {
-    final t = await io.FileSystemEntity.type(_path, followLinks: false);
-    return t == io.FileSystemEntityType.directory;
-  }
+  Future<bool> exists() async => await io.FileSystemEntity.type(_path) == io.FileSystemEntityType.directory;
 
   @override
-  Future<void> delete() async {
-    try {
-      final t = await io.FileSystemEntity.type(_path, followLinks: false);
-      if (t == io.FileSystemEntityType.notFound) return;
-      if (t != io.FileSystemEntityType.directory) return;
-      await io.Directory(_path).delete(recursive: true);
-    } on io.PathNotFoundException {
-      // no-op
-    } on io.FileSystemException catch (e) {
-      if (!await _missing(e)) rethrow;
-    }
-  }
+  Future<void> delete() => _delete(_path, io.FileSystemEntityType.directory);
 
   @override
   Future<Dir> copy(String to) async {
-    await _checkSource(_path, to, io.FileSystemEntityType.directory);
+    final kind = await _checkSource(_path, to, io.FileSystemEntityType.directory);
+    // A handle on a link copies the folder it points at (`cp -P` and the
+    // walk below would copy the link itself).
+    final from = kind == io.FileSystemEntityType.link ? await io.Directory(_path).resolveSymbolicLinks() : _path;
     await _ensureParent(to);
     await _removeDestLink(to);
     // One `cp -pPR` keeps modes, times and links with a single fork. It
@@ -365,15 +449,18 @@ final class Dir extends Entry {
     // existing tree `cp` would nest instead), so an existing target, a
     // missing `cp`, or Windows falls back to the in-process loop below.
     if (await io.FileSystemEntity.type(to, followLinks: false) == io.FileSystemEntityType.notFound) {
-      if (await posix.copyTreeWithCp(_path, to)) return Dir._(to);
+      if (await posix.copyTreeWithCp(from, to)) return Dir._(to);
     }
-    await tree.copyTree(_path, to);
+    await tree.copyTree(from, to);
     return Dir._(to);
   }
 
   @override
   Future<Dir> move(String to) async {
-    await _checkSource(_path, to, io.FileSystemEntityType.directory);
+    if (await _checkSource(_path, to, io.FileSystemEntityType.directory) == io.FileSystemEntityType.link) {
+      await Link._(_path).move(to);
+      return Dir._(to);
+    }
     await _ensureParent(to);
     await _removeDestLink(to);
     try {
@@ -467,18 +554,7 @@ final class Link extends Entry {
   }
 
   @override
-  Future<void> delete() async {
-    try {
-      final t = await io.FileSystemEntity.type(_path, followLinks: false);
-      if (t == io.FileSystemEntityType.notFound) return;
-      if (t != io.FileSystemEntityType.link) return;
-      await io.Link(_path).delete();
-    } on io.PathNotFoundException {
-      // no-op
-    } on io.FileSystemException catch (e) {
-      if (!await _missing(e)) rethrow;
-    }
-  }
+  Future<void> delete() => _delete(_path, io.FileSystemEntityType.link);
 
   @override
   Future<Link> copy(String to) async {
@@ -505,6 +581,7 @@ final class Link extends Entry {
 /// Future mirrors (rule 4). The extension name is import-only; never reference it. Sync members come back as Futures.
 /// [Reader]/[Writer]/[Closeable] members come from `Future<Reader>`.
 extension EntryFuture on Future<Entry> {
+  Future<DateTime> modified() async => (await this).modified();
   Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
@@ -516,6 +593,10 @@ extension EntryFuture on Future<Entry> {
 
 /// Future mirrors for [File].
 extension FileFuture on Future<File> {
+  Future<DateTime> modified() async => (await this).modified();
+  Future<String> text({String? or}) async => (await this).text(or: or);
+  Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async => (await this).lock(body, wait: wait);
+  Future<List<int>> bytes({List<int>? or}) async => (await this).bytes(or: or);
   Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
@@ -530,6 +611,7 @@ extension FileFuture on Future<File> {
 
 /// Future mirrors for [Dir].
 extension DirFuture on Future<Dir> {
+  Future<DateTime> modified() async => (await this).modified();
   Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
@@ -539,12 +621,14 @@ extension DirFuture on Future<Dir> {
   Future<Dir> move(String to) async => (await this).move(to);
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
-  Future<List<Entry>> list({bool recursive = false}) async => (await this).list(recursive: recursive);
+  Future<List<Entry>> list({bool recursive = false, String? match}) async =>
+      (await this).list(recursive: recursive, match: match);
   Future<Dir> create() async => (await this).create();
 }
 
 /// Future mirrors for [Link].
 extension LinkFuture on Future<Link> {
+  Future<DateTime> modified() async => (await this).modified();
   Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
@@ -619,16 +703,17 @@ Future<void> _removeDestLink(String to) async {
 /// Throw before creating anything when the source is missing or of the wrong
 /// kind, and reject a destination inside (or equal to) the source. Must run
 /// before [_ensureParent] so a missing source never leaves an empty
-/// destination. Symlinks are resolved so `link->real` + `to=real/sub` is
-/// still a self-copy.
-Future<void> _checkSource(String from, String to, [io.FileSystemEntityType? expected]) async {
-  final t = await io.FileSystemEntity.type(from, followLinks: false);
-  if (t == io.FileSystemEntityType.notFound) {
-    throw io.PathNotFoundException(from, const io.OSError());
-  }
-  if (expected != null && t != expected) {
-    throw io.FileSystemException('source is $t, not $expected', from);
-  }
+/// destination. A file or folder [expected] is judged through links (a link
+/// to a file is a file); a link is judged as itself. Symlinks are resolved so
+/// `link->real` + `to=real/sub` is still a self-copy. Returns what is at
+/// [from] itself (`link` for a link to the expected kind).
+Future<io.FileSystemEntityType> _checkSource(String from, String to, io.FileSystemEntityType expected) async {
+  final own = await io.FileSystemEntity.type(from, followLinks: false);
+  final t = own == io.FileSystemEntityType.link && expected != io.FileSystemEntityType.link
+      ? await io.FileSystemEntity.type(from)
+      : own;
+  if (t == io.FileSystemEntityType.notFound) await _notFound(from);
+  if (t != expected) throw io.FileSystemException('source is $t, not $expected', from);
   final nf = p.normalize(p.absolute(from));
   final nt = p.normalize(p.absolute(to));
   if (p.equals(nf, nt) || p.isWithin(nf, nt)) {
@@ -655,18 +740,58 @@ Future<void> _checkSource(String from, String to, [io.FileSystemEntityType? expe
   } catch (e) {
     if (e is ArgumentError) rethrow;
   }
+  return own;
 }
 
-Future<bool> _missing(io.FileSystemException e) async {
-  // Already handled PathNotFoundException; other "not found" OS errors
-  // (e.g. delete on a missing dir on some platforms) are also a no-op.
-  return e.osError?.errorCode == 2;
+/// Throw the OS's own "not found" for [path] (its errno and message).
+Future<Never> _notFound(String path) async {
+  io.OSError? os;
+  try {
+    await io.File(path).resolveSymbolicLinks();
+  } on io.FileSystemException catch (e) {
+    os = e.osError;
+  }
+  throw io.PathNotFoundException(path, os ?? io.OSError('No such file or directory', 2));
 }
+
+/// Remove what is at [path] when it is a [kind] (a [File]/[Dir] handle on a
+/// link to its kind, or a broken link, removes the link and never the
+/// target). Nothing there is a no-op; another kind throws.
+Future<void> _delete(String path, io.FileSystemEntityType kind) async {
+  const link = io.FileSystemEntityType.link, missing = io.FileSystemEntityType.notFound;
+  try {
+    final own = await io.FileSystemEntity.type(path, followLinks: false);
+    if (own == missing) return;
+    final t = own == link && kind != link ? await io.FileSystemEntity.type(path) : own;
+    if (t != kind && !(own == link && t == missing)) {
+      throw io.FileSystemException('is a $t, not a $kind', path);
+    }
+    if (own == link) {
+      await io.Link(path).delete();
+    } else if (kind == io.FileSystemEntityType.directory) {
+      await io.Directory(path).delete(recursive: true);
+    } else {
+      await io.File(path).delete();
+    }
+  } on io.FileSystemException catch (e) {
+    // Gone in between: still a no-op.
+    if (e is! io.PathNotFoundException && !_missing(e)) rethrow;
+  }
+}
+
+/// A "not found" OS error: `ENOENT` (2) on POSIX; `ERROR_FILE_NOT_FOUND` (2)
+/// or `ERROR_PATH_NOT_FOUND` (3) on Windows.
+bool _missing(io.FileSystemException e) {
+  final code = e.osError?.errorCode;
+  return code == 2 || (code == 3 && !posix.isPosix);
+}
+
+final _driveRoot = RegExp(r'^[A-Za-z]:[\\/]?$');
 
 /// The string as given, without trailing separators (the root keeps one).
 /// Windows drive roots (`C:\`, `C:/`) keep their separator.
 String _strip(String path) {
-  if (RegExp(r'^[A-Za-z]:[\\/]?$').hasMatch(path)) return path;
+  if (path.length <= 3 && _driveRoot.hasMatch(path)) return path;
   if (path.length > 1) {
     var end = path.length;
     while (end > 1 && (path.codeUnitAt(end - 1) == 0x2f || path.codeUnitAt(end - 1) == 0x5c)) {

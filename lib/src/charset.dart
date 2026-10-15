@@ -22,9 +22,11 @@
 /// section of the standard). The tables below are used under that
 /// BSD-3-Clause grant.
 ///
-/// Behaviour: a byte-order mark wins over every other hint; then the charset
-/// in `content-type`, then `<meta charset>` sniffed from the first 1024
-/// bytes, then UTF-8. An unknown charset label falls back to UTF-8.
+/// Behaviour: a byte-order mark wins over every other hint; JSON
+/// (`application/json`, `*+json`) is always UTF-8; then the charset in
+/// `content-type`, then `<meta charset>` sniffed from the first 1024 bytes
+/// (HTML, XHTML or no type only: a JSON or text body that mentions a meta
+/// tag is not HTML), then UTF-8. An unknown charset label falls back to UTF-8.
 /// Malformed bytes become U+FFFD; decoding never throws.
 ///
 /// This file is private to the package: `http.dart` imports it with a
@@ -36,8 +38,9 @@ import 'dart:typed_data';
 
 /// Charset-aware decoding. The single choke point for response bodies.
 abstract final class Charset {
-  /// Decode [bytes]: BOM, then the charset in [contentType], then a
-  /// `<meta charset>` in the first 1024 bytes, then UTF-8.
+  /// Decode [bytes]: BOM, then UTF-8 for JSON, then the charset in
+  /// [contentType], then a `<meta charset>` in the first 1024 bytes of an
+  /// HTML (or untyped) body, then UTF-8.
   static String decode(List<int> bytes, {String? contentType}) {
     var start = 0;
     String name;
@@ -51,12 +54,19 @@ abstract final class Charset {
       name = 'utf-16be';
       start = 2;
     } else {
+      final mime = _mime(contentType);
       final header = headerCharset(contentType);
       final known = header == null ? null : _labels[header.trim().toLowerCase()];
-      if (known != null) {
+      if (mime == 'application/json' || mime.endsWith('+json')) {
+        // RFC 8259: JSON exchanged between systems is UTF-8, whatever the
+        // header or a stray `<meta>` inside a string says.
+        name = 'utf-8';
+      } else if (known != null) {
         name = known;
+      } else if (mime.isNotEmpty && mime != 'text/html' && mime != 'application/xhtml+xml') {
+        name = 'utf-8';
       } else {
-        // No header, or one we do not know: fall through to the <meta> hint.
+        // HTML (or no type) with no usable charset: the <meta> hint.
         final meta = metaCharset(bytes);
         name = meta == null ? 'utf-8' : canonical(meta);
         // A meta tag is ASCII-readable, so it cannot name UTF-16 (WHATWG).
@@ -67,15 +77,25 @@ abstract final class Charset {
     if (name == 'utf-8') {
       return const Utf8Decoder(allowMalformed: true).convert(bytes, start);
     }
+    final body = start == 0
+        ? bytes
+        : bytes is Uint8List
+        ? Uint8List.sublistView(bytes, start)
+        : bytes.sublist(start);
+    // Single-byte encodings hold no state: one table pass, no flush.
+    final high = _highTable(name);
+    if (high != null) return _mapSingle(body, high);
     final decoder = IncrementalDecoder(name);
-    final text = decoder.add(
-      start == 0
-          ? bytes
-          : bytes is Uint8List
-          ? Uint8List.sublistView(bytes, start)
-          : bytes.sublist(start),
-    );
-    return text + decoder.finish();
+    final text = decoder.add(body);
+    final rest = decoder.finish();
+    return rest.isEmpty ? text : text + rest;
+  }
+
+  /// The lowercase media type of a `content-type` value (`''` when absent).
+  static String _mime(String? contentType) {
+    if (contentType == null) return '';
+    final semi = contentType.indexOf(';');
+    return (semi < 0 ? contentType : contentType.substring(0, semi)).trim().toLowerCase();
   }
 
   /// Map a charset [label] to a canonical encoding name. Unknown labels
@@ -89,39 +109,23 @@ abstract final class Charset {
   /// the header is absent or names none.
   static String? headerCharset(String? header) {
     if (header == null) return null;
-    final match = RegExp(
-      r'charset\s*=\s*["'
-      ']?([^;"'
-      ']+)',
-      caseSensitive: false,
-    ).firstMatch(header);
-    return match?.group(1)?.trim();
+    return _headerLabel.firstMatch(header)?.group(1)?.trim();
   }
 
   /// Sniff `<meta charset=…>` / `<meta http-equiv="content-type" …>` in the
   /// first 1024 bytes. Returns the raw label, or null when there is none.
   static String? metaCharset(List<int> bytes) {
     final n = bytes.length < 1024 ? bytes.length : 1024;
-    final head = String.fromCharCodes(bytes.sublist(0, n));
-    final tags = RegExp(r'<meta\b[^>]{0,500}>?', caseSensitive: false).allMatches(head);
-    for (final tag in tags) {
+    final head = String.fromCharCodes(bytes is Uint8List ? Uint8List.sublistView(bytes, 0, n) : bytes.sublist(0, n));
+    for (final tag in _metaTag.allMatches(head)) {
       final text = tag.group(0)!;
-      final charset = RegExp(
-        r'''charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"';/]+))''',
-        caseSensitive: false,
-      ).firstMatch(text);
+      final charset = _metaCharset.firstMatch(text);
       if (charset != null) {
         final label = (charset.group(1) ?? charset.group(2) ?? charset.group(3) ?? '').trim();
         if (label.isNotEmpty) return label;
       }
-      if (RegExp(
-        r'''http-equiv\s*=\s*(?:"content-type"|'content-type'|content-type)''',
-        caseSensitive: false,
-      ).hasMatch(text)) {
-        final content = RegExp(
-          r'''content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
-          caseSensitive: false,
-        ).firstMatch(text);
+      if (_httpEquiv.hasMatch(text)) {
+        final content = _metaContent.firstMatch(text);
         if (content != null) {
           final value = content.group(1) ?? content.group(2) ?? content.group(3) ?? '';
           final label = headerCharset(value);
@@ -131,6 +135,48 @@ abstract final class Charset {
     }
     return null;
   }
+}
+
+final _headerLabel = RegExp(
+  r'charset\s*=\s*["'
+  ']?([^;"'
+  ']+)',
+  caseSensitive: false,
+);
+final _metaTag = RegExp(r'<meta\b[^>]{0,500}>?', caseSensitive: false);
+final _metaCharset = RegExp(r'''charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"';/]+))''', caseSensitive: false);
+final _httpEquiv = RegExp(r'''http-equiv\s*=\s*(?:"content-type"|'content-type'|content-type)''', caseSensitive: false);
+final _metaContent = RegExp(r'''content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''', caseSensitive: false);
+
+/// Code units for bytes 0x80–0xFF of a single-byte encoding, or null when
+/// [name] is not one. Built once per encoding.
+Uint16List? _highTable(String name) {
+  final hit = _highTables[name];
+  if (hit != null) return hit;
+  final Uint16List table;
+  if (name == 'windows-1252') {
+    table = Uint16List(128);
+    for (var i = 0; i < 128; i++) {
+      table[i] = i >= 0x20 ? 0x80 + i : _win1252[i] ?? 0xFFFD;
+    }
+  } else {
+    final units = _singleByte[name];
+    if (units == null) return null;
+    table = Uint16List.fromList(units.codeUnits);
+  }
+  return _highTables[name] = table;
+}
+
+final _highTables = <String, Uint16List>{};
+
+/// [bytes] through a single-byte [high] table, into one string.
+String _mapSingle(List<int> bytes, Uint16List high) {
+  final units = Uint16List(bytes.length);
+  for (var i = 0; i < bytes.length; i++) {
+    final b = bytes[i];
+    units[i] = b < 0x80 ? b : high[b - 0x80];
+  }
+  return String.fromCharCodes(units);
 }
 
 /// Chunk-friendly decoder: feed bytes with [add], then [finish] to flush a
@@ -153,6 +199,8 @@ final class IncrementalDecoder {
   /// Decode one chunk. May return less than the chunk holds when a trailing
   /// lead byte (or UTF-8 tail) is buffered for the next chunk.
   String add(List<int> chunk) {
+    final high = _highTable(_name);
+    if (high != null) return _mapSingle(chunk, high);
     final out = StringBuffer();
     switch (_name) {
       case 'utf-8':
@@ -161,8 +209,6 @@ final class IncrementalDecoder {
         _utf16(chunk, true, false, out);
       case 'utf-16be':
         _utf16(chunk, false, false, out);
-      case 'windows-1252':
-        _single(chunk, out);
       case 'replacement':
         for (var i = 0; i < chunk.length; i++) {
           out.writeCharCode(0xFFFD);
@@ -182,14 +228,7 @@ final class IncrementalDecoder {
       case 'big5':
         _big5(chunk, out);
       default:
-        final table = _singleByte[_name];
-        if (table == null) {
-          _utf8(chunk, false, out);
-        } else {
-          for (final byte in chunk) {
-            out.writeCharCode(byte < 0x80 ? byte : table.codeUnitAt(byte - 0x80));
-          }
-        }
+        _utf8(chunk, false, out);
     }
     return out.toString();
   }
@@ -343,16 +382,6 @@ final class IncrementalDecoder {
         _hi = 0;
         out.writeCharCode(0xFFFD);
       }
-    }
-  }
-
-  void _single(List<int> chunk, StringBuffer out) {
-    for (final byte in chunk) {
-      if (byte <= 0x7F || byte >= 0xA0) {
-        out.writeCharCode(byte);
-        continue;
-      }
-      out.writeCharCode(_win1252[byte - 0x80] ?? 0xFFFD);
     }
   }
 

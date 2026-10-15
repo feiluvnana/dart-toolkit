@@ -1,7 +1,12 @@
+import 'dart:convert';
+
+import 'package:dart_toolkit/src/charset.dart';
 import 'package:dart_toolkit/src/origin.dart';
 import 'package:test/test.dart';
 
 void main() {
+  redactTests();
+  charsetTests();
   group('fileName is portable', () {
     test('never returns .. or empty', () {
       expect(fileName(url: 'http://x/a%2F..'), 'download');
@@ -49,6 +54,59 @@ void main() {
     test('fileName falls back to the URL tail, decoded', () {
       expect(fileName(url: 'https://x/a/b%20c.tar.gz?q=1'), 'b c.tar.gz');
       expect(fileName(url: 'https://x/'), 'download');
+    });
+  });
+}
+
+void redactTests() {
+  group('redact', () {
+    test('masks exact secret names only (regression: shortcode/keyword/author were masked)', () {
+      expect(
+        redact('https://u:p@x.com/p?shortcode=ABC&keyword=dart&author=me&access_token=T&API-Key=K&code=C&sig=S'),
+        'https://x.com/p?shortcode=ABC&keyword=dart&author=me&access_token=***&API-Key=***&code=***&sig=***',
+      );
+      expect(redact('https://x.com/?page=2'), 'https://x.com/?page=2');
+    });
+  });
+
+  group('filename* astral', () {
+    test('an emoji survives raw and percent-encoded (regression: raw astral became U+FFFD)', () {
+      expect(dispositionName("attachment; filename*=UTF-8''%F0%9F%98%80.txt"), '😀.txt');
+      expect(dispositionName("attachment; filename*=UTF-8''😀 x.txt"), '😀 x.txt');
+      expect(percentDecode('😀'), utf8.encode('😀'));
+    });
+  });
+}
+
+void charsetTests() {
+  group('Charset', () {
+    final jsonWithMeta = utf8.encode('{"html": "<meta charset=windows-1252>", "name": "café"}');
+
+    test('JSON is UTF-8 whatever a meta tag says (regression: windows-1252 mojibake)', () {
+      expect(Charset.decode(jsonWithMeta, contentType: 'application/json'), contains('café'));
+      expect(Charset.decode(jsonWithMeta, contentType: 'application/ld+json; charset=iso-8859-1'), contains('café'));
+      expect(Charset.decode(jsonWithMeta, contentType: 'text/plain'), contains('café'));
+    });
+
+    test('<meta charset> is sniffed for HTML and untyped bodies only', () {
+      final page = [...ascii.encode('<html><meta charset="windows-1252">caf'), 0xE9];
+      expect(Charset.decode(page, contentType: 'text/html'), endsWith('café'));
+      expect(Charset.decode(page, contentType: 'application/xhtml+xml'), endsWith('café'));
+      expect(Charset.decode(page), endsWith('café'));
+      expect(Charset.decode(page, contentType: 'text/plain'), endsWith('caf\uFFFD'));
+    });
+
+    test('single-byte decoding maps every byte (one table pass)', () {
+      final bytes = List.generate(256, (i) => i);
+      final text = Charset.decode(bytes, contentType: 'text/plain; charset=windows-1252');
+      expect(text.length, 256);
+      expect(text.codeUnitAt(0x41), 0x41);
+      expect(text.codeUnitAt(0x80), 0x20AC);
+      expect(text.codeUnitAt(0xE9), 0xE9);
+      final koi = Charset.decode([0xC1, 0x41], contentType: 'text/plain; charset=koi8-r');
+      expect(koi, 'аA');
+      final chunked = IncrementalDecoder('windows-1252');
+      expect(chunked.add([0x80]) + chunked.add([0x41]) + chunked.finish(), '€A');
     });
   });
 }

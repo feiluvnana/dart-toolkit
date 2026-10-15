@@ -1,7 +1,7 @@
 /// Decode, transform, and encode images. Thin facade over `package:image`.
 ///
 /// ```dart
-/// final avatar = await Http.get(avatarUrl).image().crop(0, 0, 256, 256);
+/// final avatar = await http.get(avatarUrl).image().crop(0, 0, 256, 256);
 /// await (avatar.encode(ImageFormat.png) > Fs.file('avatar.png'));
 /// await (avatar.resize(width: 64).encode(ImageFormat.png) > Fs.file('icon.png'));
 /// ```
@@ -15,7 +15,7 @@
 /// Small images convert inline. Above 1 M pixels (decode reads the size
 /// from the header) the work runs on a worker isolate, so a large photo never freezes
 /// the event loop under a `Console` spinner or a `Tui` frame.
-/// CPU-bound batches go through Pool.runAll (see pool.dart).
+/// CPU-bound batches go through Pool.map(isolates: true) (see pool.dart).
 /// Everything else is private.
 library;
 
@@ -79,28 +79,40 @@ final class Image implements Pixels {
 
   /// Decode [bytes] (PNG, JPEG, GIF first frame, BMP, WebP, TIFF, ICO).
   /// Applies the EXIF orientation, so [width]/[height] are the size as
-  /// displayed. An unknown format is a [FormatException].
+  /// displayed. An unknown or broken format is a [ContentException], and so
+  /// is an image over 100 M pixels (judged from the header, or after the
+  /// decode when the header declares no size); a decoder [Error] is a bug
+  /// and passes through.
   ///
   /// Inline, on this isolate: for a large photo prefer `Reader.image()`,
   /// which decodes off the main isolate.
   static Image decode(List<int> bytes) {
+    // Inputs arrive as Uint8List through the zero-copy readers, so this
+    // takes them as is; anything else is converted once.
+    final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+    return _decode(raw, _declaredSize(raw));
+  }
+
+  /// [decode] with the header size already read (null when unknown).
+  static Image _decode(Uint8List raw, (int, int)? size) {
+    if (size != null && size.$1 * size.$2 > _maxPixels) {
+      throw ContentException('image too large: ${size.$1}x${size.$2}');
+    }
     img.Image? decoded;
     try {
       // frame: 0 keeps GIF to its first frame (an animated GIF otherwise
       // decodes every frame and re-encodes as animated).
-      // Inputs arrive as Uint8List through the zero-copy readers, so this
-      // takes them as is; anything else is converted once.
-      final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
-      final (w, h) = _declaredSize(raw);
-      if (w * h > _maxPixels) throw FormatException('image too large: ${w}x$h');
       decoded = img.decodeImage(raw, frame: 0);
     } on FormatException {
       rethrow;
-    } catch (e) {
-      throw FormatException('unknown image format: $e');
+    } on Exception catch (e) {
+      throw ContentException('unknown image format: $e');
     }
     if (decoded == null) {
-      throw const FormatException('unknown image format');
+      throw const ContentException('unknown image format');
+    }
+    if (decoded.width * decoded.height > _maxPixels) {
+      throw ContentException('image too large: ${decoded.width}x${decoded.height}');
     }
     // bakeOrientation always copies the pixels; most images need no turn.
     final ifd = decoded.exif.imageIfd;
@@ -132,7 +144,7 @@ final class Image implements Pixels {
   /// is an [ArgumentError]. Shrinking averages the source area (nearest
   /// neighbour aliases); enlarging uses cubic interpolation.
   ///
-  /// Inline, on this isolate: batch resizes go through Pool.runAll
+  /// Inline, on this isolate: batch resizes go through Pool.map(isolates: true)
   /// (see pool.dart), and the `Future<Image>` mirror below offloads large
   /// images to a worker isolate.
   Image resize({int? width, int? height}) {
@@ -173,43 +185,64 @@ final class Image implements Pixels {
   /// A [Reader] of the encoded image, encoded when read (lazily: nothing
   /// runs until the reader is stored). Large images encode on a worker
   /// isolate. Store it with `> Fs.file(…)`, hash it, or upload it.
-  /// [quality] applies to JPEG (1–100, else [ArgumentError]).
+  /// [quality] applies to JPEG (1–100). A bad quality, [ImageFormat.webp]
+  /// (decoded, never encoded) or an `.ico` over 256x256 is an
+  /// [ArgumentError] here, not when the reader is read.
   Reader encode(ImageFormat format, {int quality = 90}) {
-    if (quality < 1 || quality > 100) {
-      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
-    }
+    _checkEncode(format, quality, this);
     return _Encoded(this, format, quality: quality);
   }
 }
 
-/// Declared size from the header, `(0, 0)` when it cannot be read.
-(int, int) _declaredSize(Uint8List raw) {
+/// Refuse what [_encode] cannot write, up front.
+void _checkEncode(ImageFormat format, int quality, Image? image) {
+  if (quality < 1 || quality > 100) {
+    throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+  }
+  if (format == ImageFormat.webp) {
+    throw ArgumentError.value(format, 'format', 'webp can be decoded, not encoded: use png or jpg');
+  }
+  if (format == ImageFormat.ico && image != null && (image.width() > 256 || image.height() > 256)) {
+    throw ArgumentError.value('${image.width()}x${image.height()}', 'image', '.ico supports at most 256x256');
+  }
+}
+
+/// Declared size from the header, null when it cannot be read.
+(int, int)? _declaredSize(Uint8List raw) {
   try {
     final info = img.findDecoderForData(raw)?.startDecode(raw);
     if (info is img.IcoInfo) {
       // An ICO reports 0x0; the first entry (the one decoded) may wrap a PNG
       // that declares any size, so judge that entry's own header.
-      if (info.images.isEmpty) return (0, 0);
+      if (info.images.isEmpty) return null;
       final e = info.images.first;
       final end = e.bytesOffset + e.bytesSize;
-      if (e.bytesOffset < 0 || end > raw.length) return (0, 0);
+      if (e.bytesOffset < 0 || end > raw.length) return null;
       final inner = Uint8List.sublistView(raw, e.bytesOffset, end);
       final png = img.PngDecoder().startDecode(inner);
       return png != null ? (png.width, png.height) : (e.width == 0 ? 256 : e.width, e.height == 0 ? 256 : e.height);
     }
-    return info == null ? (0, 0) : (info.width, info.height);
-  } catch (_) {
-    return (0, 0);
+    return info == null ? null : (info.width, info.height);
+  } on Exception {
+    return null;
+  } on RangeError {
+    // A header cut short: the size is unknown, not a bug.
+    return null;
   }
 }
 
-/// Decode on a worker isolate when the header declares a large image.
+/// Decode on a worker isolate when the header declares a large image, or
+/// declares none on a large input (it may be large). The header is read once.
 Future<Image> _decodeAsync(Uint8List bytes) {
-  final (w, h) = _declaredSize(bytes);
-  if (w * h <= _isolatePixels) {
-    return Future.value(Image.decode(bytes));
+  final size = _declaredSize(bytes);
+  // Unknown and small (not an image, mostly) stays inline: no isolate spawn.
+  if (size == null ? bytes.length < 1 << 20 : size.$1 * size.$2 <= _isolatePixels) {
+    return Future.value(Image._decode(bytes, size));
   }
-  return Isolate.run(() => Image.decode(bytes));
+  if (size != null && size.$1 * size.$2 > _maxPixels) {
+    return Future.error(ContentException('image too large: ${size.$1}x${size.$2}'));
+  }
+  return Isolate.run(() => Image._decode(bytes, size));
 }
 
 /// Resize on a worker isolate for large images.
@@ -256,9 +289,7 @@ extension ImageFuture on Future<Image> {
   Future<Image> resize({int? width, int? height}) async => _resizeAsync(await this, width: width, height: height);
   Future<Image> crop(int x, int y, int width, int height) async => (await this).crop(x, y, width, height);
   Reader encode(ImageFormat format, {int quality = 90}) {
-    if (quality < 1 || quality > 100) {
-      throw ArgumentError.value(quality, 'quality', 'must be 1..100');
-    }
+    _checkEncode(format, quality, null);
     return _FutureEncoded(this, format, quality: quality);
   }
 }

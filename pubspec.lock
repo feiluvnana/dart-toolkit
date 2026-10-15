@@ -90,7 +90,7 @@ packages:
     source: hosted
     version: "3.0.7"
   csslib:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: csslib
       sha256: "09bad715f418841f976c77db72d5398dc1253c21fb9c0c7f0b0b985860b2d58e"
@@ -130,7 +130,7 @@ packages:
     source: hosted
     version: "2.2.0"
   html:
-    dependency: "direct main"
+    dependency: "direct dev"
     description:
       name: html
       sha256: "43b67b8f43321ab066817dfac5619596c98bb1b61624e77203bb4351785f9699"
@@ -450,7 +450,7 @@ packages:
     source: hosted
     version: "1.2.1"
   yaml:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: yaml
       sha256: f67cdd8e07d3c6329146aaef1ba043542b3134c12489f553ca9a7435d1068aea

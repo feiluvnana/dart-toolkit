@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'dart:convert';
 
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 void main() {
+  deepPathTests();
+  valueTests();
   group('Json.parse', () {
     test('parses values', () {
       expect(Json.parse('{"a": 1}').$('a').value<int>(), 1);
@@ -138,9 +141,12 @@ void main() {
     test('asList reads REST shapes in one pass', () {
       expect(Json.parse('[{"a":1},{"b":2}]').asList<Map<String, Object?>>(), isNotNull);
       expect(Json.parse('[{"a":1},{"b":2}]').asList<Map<String, dynamic>>(), isNotNull);
-      // value<List<...>> is not the typed read; debug builds say so.
-      expect(() => Json.parse('[1,2]').value<List<int>>(), throwsA(isA<AssertionError>()));
-      expect(() => Json.parse('{"a":1}').value<Map<String, int>>(), throwsA(isA<AssertionError>()));
+      // value<List<...>> is not the typed read; every build mode says so
+      // (regression: debug asserted, release returned null).
+      expect(() => Json.parse('[1,2]').value<List<int>>(), throwsArgumentError);
+      expect(() => Json.parse('{"a":1}').value<Map<String, int>>(), throwsArgumentError);
+      expect(Json.parse('{"a":1}').value<Map<String, dynamic>>(), {'a': 1});
+      expect(Json.parse('[1]').value<List<dynamic>>(), [1]);
     });
 
     test('Json.of wraps a held value', () {
@@ -227,6 +233,142 @@ void main() {
 final class _Mem with Reader {
   _Mem(this._text);
   final String _text;
+  @override
+  Stream<List<int>> stream() => Stream.value(_text.codeUnits);
+}
+
+void deepPathTests() {
+  group('json **', () {
+    final doc = Json.of({
+      'pk': 1,
+      'a': [
+        {'pk': 2},
+        {
+          'b': {'pk': 3, 'x': null},
+        },
+      ],
+      '*': 'star',
+    });
+
+    test('collects a key at every depth, in document order', () {
+      expect(doc.$('**.pk').asList<int>(), [1, 2, 3]);
+      expect(doc.$('a.**.pk').asList<int>(), [2, 3]);
+      expect(doc.$('**.missing').asList<Object>(), isEmpty);
+    });
+
+    test('a Json inside Json.of reads as its value (regression: paths stopped at it)', () {
+      final outer = Json.of([
+        Json.parse('{"k": {"pk": 7}}'),
+        Json.of({'pk': 8}),
+      ]);
+      expect(outer.$('**.pk').asList<int>(), [7, 8]);
+      expect(outer.$('0.k.pk').value<int>(), 7);
+      expect(Json.of(Json.of(3)).value<int>(), 3);
+    });
+
+    test(r'\* stays a literal key (regression: it read as a wildcard)', () {
+      expect(doc.$(r'\*').value<String>(), 'star');
+      expect(Json.of({'**': 1}).$(r'\*\*').value<int>(), 1);
+    });
+  });
+}
+
+void valueTests() {
+  group('Json as a value', () {
+    test('toString is the JSON text (regression: printed "(())")', () {
+      expect(Json.parse('{"a": [1, "x", null]}').toString(), '{"a":[1,"x",null]}');
+      expect('${Json.parse('3')}', '3');
+      expect(Json.of(null).toString(), 'null');
+    });
+
+    test('== and hashCode are deep (regression: identity)', () {
+      final a = Json.parse('{"a": [1, {"b": 2}], "c": "x"}');
+      final b = Json.parse('{"c": "x", "a": [1.0, {"b": 2}]}');
+      // `==` directly: the matchers compare Iterables element by element.
+      expect(a == b, isTrue);
+      expect(a.hashCode, b.hashCode);
+      expect(a == Json.parse('{"a": [1, {"b": 3}], "c": "x"}'), isFalse);
+      expect(Json.parse('[1,2]') == Json.parse('[2,1]'), isFalse);
+      expect(Json.parse('{"a": 1}') == Json.parse('{"b": 1}'), isFalse);
+      expect({a, b}, hasLength(1));
+      expect(a.$('a.1') == Json.of({'b': 2}), isTrue);
+    });
+
+    test('a plain key reads like the path (fast path)', () {
+      final doc = Json.parse('{"name": "n", "nil": null, "list": [5, 6], "a*b": 1}');
+      expect(doc.$('name').value<String>(), 'n');
+      expect(doc.$('nil').value<Object>(), isNull);
+      expect(doc.$('missing').value<Object>(), isNull);
+      expect(doc.$('a*b').value<int>(), 1);
+      expect(doc.$('list').$('1').value<int>(), 6);
+      expect(doc.$('list').$('01').value<int>(), isNull);
+      expect(doc.$('list').$('9').value<int>(), isNull);
+      expect(Json.parse('3').$('x').value<Object>(), isNull);
+    });
+
+    test('json() names the source and status once (regression: no URL, wrapped twice)', () async {
+      final e = await _Page(
+        '<html>oops</html>',
+        const Origin(url: 'https://u:p@x.com/api?token=T', status: 503),
+      ).json().then<Object?>((_) => null, onError: (Object e) => e);
+      expect(e, isA<ContentException>());
+      final c = e as ContentException;
+      expect(c.message, startsWith('invalid JSON from https://x.com/api?token=*** (HTTP 503): '));
+      expect(c.cause, isNot(isA<ContentException>()));
+      final ok = await _Page(
+        '<html>',
+        const Origin(url: 'https://x.com/', status: 200),
+      ).json().then<Object?>((_) => null, onError: (Object e) => e);
+      expect((ok as ContentException).message, contains('https://x.com/ (HTTP 200)'));
+    });
+  });
+
+  group('alternatives, text, extremes', () {
+    final doc = Json.parse(
+      '{"a":{"shortcode":"S","pk":787132},"v":[{"w":3,"u":"x"},{"config_width":9,"src":"y"},{"w":9,"u":"z"}],"t":true}',
+    );
+
+    test('a | segment tries alternatives in order, with the rest of the path', () {
+      expect(doc.$('a.code|shortcode').text(), 'S');
+      expect(doc.$('a.pk|id').text(), '787132');
+      expect(doc.$('nope|a.shortcode').text(), 'S', reason: 'alternatives are keys of one segment');
+      expect(doc.$('a.code|nope').text(), isNull);
+      expect(Json.parse(r'{"a|b":1}').$(r'a\|b').value<int>(), 1);
+    });
+
+    test('text() reads any scalar, null for collections and misses', () {
+      expect(
+        [doc.$('a.pk').text(), doc.$('t').text(), doc.$('a').text(), doc.$('zz').text()],
+        ['787132', 'true', null, null],
+      );
+      expect(Json.parse('1.5').text(), '1.5');
+    });
+
+    test('max/min return the extreme item, the first on a tie, null when empty', () {
+      expect(doc.$('v').max((c) => c.$('w|config_width').or(0)).$('u|src').text(), 'y');
+      expect(doc.$('v').min((c) => c.$('w|config_width').or(0)).$('u').text(), 'x');
+      expect(Json.parse('[]').max((c) => 1).value<Object>(), isNull);
+    });
+
+    test('json(or:) answers a missing file, other failures still throw', () async {
+      expect((await _Missing().json(or: Json.of({'k': 1}))).$('k').value<int>(), 1);
+      await expectLater(_Missing().json(), throwsA(isA<PathNotFoundException>()));
+      await expectLater(_Page('{', const Origin()).json(or: Json.of(1)), throwsA(isA<ContentException>()));
+    });
+  });
+}
+
+final class _Missing with Reader {
+  @override
+  Stream<List<int>> stream() => throw const PathNotFoundException('gone', OSError('no such file', 2));
+}
+
+final class _Page with Reader {
+  _Page(this._text, this._origin);
+  final String _text;
+  final Origin _origin;
+  @override
+  Origin origin() => _origin;
   @override
   Stream<List<int>> stream() => Stream.value(_text.codeUnits);
 }

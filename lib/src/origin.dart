@@ -10,6 +10,8 @@ import 'dart:convert';
 import 'charset.dart' as charset;
 import 'names.dart';
 
+export 'names.dart' show redact;
+
 /// A file name for a body: the `content-disposition` filename
 /// (`filename*=` wins over `filename=`, paths stripped), else the final
 /// URL's last segment, else `'download'`.
@@ -36,7 +38,7 @@ String fileName({required String url, String? contentDisposition}) {
 /// `filename*=` (RFC 6266/8187) wins over `filename=`; paths are stripped.
 String? dispositionName(String? header) {
   if (header == null) return null;
-  final star = RegExp(r'''filename\*\s*=\s*([^;]+)''', caseSensitive: false).firstMatch(header);
+  final star = _starName.firstMatch(header);
   if (star != null) {
     var value = star.group(1)!.trim();
     if (value.length >= 2 &&
@@ -57,10 +59,7 @@ String? dispositionName(String? header) {
     final name = stripPath(decoded.trim());
     if (name.isNotEmpty) return name;
   }
-  final plain = RegExp(
-    r'''filename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]+))''',
-    caseSensitive: false,
-  ).firstMatch(header);
+  final plain = _plainName.firstMatch(header);
   if (plain != null) {
     // `filename=` cannot match inside `filename*=` (the `*` breaks it).
     final name = stripPath((plain.group(1) ?? plain.group(2) ?? plain.group(3) ?? '').trim());
@@ -69,14 +68,21 @@ String? dispositionName(String? header) {
   return null;
 }
 
+final _starName = RegExp(r'''filename\*\s*=\s*([^;]+)''', caseSensitive: false);
+final _plainName = RegExp(r'''filename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]+))''', caseSensitive: false);
+
 /// The last path segment of `a/b\\c`, made portable by [safeName]. Empty
 /// when nothing usable is left (callers fall back to `download`/`upload`).
 /// Used for header filenames and upload staging alike.
 String stripPath(String name) {
-  final parts = name.split(RegExp(r'[\\/]'));
+  final parts = name.split(_separator);
   return safeName(parts.isEmpty ? name : parts.last);
 }
 
+final _separator = RegExp(r'[\\/]');
+
+/// `%XX` escapes as bytes; any other character as its UTF-8 bytes (a
+/// surrogate pair is one character, so astral text survives).
 List<int> percentDecode(String s) {
   final out = <int>[];
   for (var i = 0; i < s.length; i++) {
@@ -92,7 +98,10 @@ List<int> percentDecode(String s) {
     if (c < 0x80) {
       out.add(c);
     } else {
-      out.addAll(utf8.encode(String.fromCharCode(c)));
+      final pair = c >= 0xD800 && c < 0xDC00 && i + 1 < s.length && (s.codeUnitAt(i + 1) & 0xFC00) == 0xDC00;
+      final end = pair ? i + 2 : i + 1;
+      out.addAll(utf8.encode(s.substring(i, end)));
+      i = end - 1;
     }
   }
   return out;
@@ -129,48 +138,6 @@ String percentDecodeString(String s) {
   }
   return out.toString();
 }
-
-/// Base URL for `html()` from a typed [Origin]-like pair: the final URL when
-/// present, else the file path as a `file:` URI. Callers pass
-/// `reader.origin().url` / `.path` so this module never imports `http`/`fs`.
-String? baseUrlFor({String? url, String? path}) {
-  if (url != null && url.isNotEmpty) return url;
-  if (path != null) {
-    try {
-      return Uri.file(path).toString();
-    } catch (_) {
-      return null;
-    }
-  }
-  return null;
-}
-
-/// [url] fit for an error message or log: no `user:password@`, and the
-/// values of credential-looking query parameters (`token`, `key`, `sig`,
-/// `password`, …) shown as `***`. Not a URL to request.
-String redact(Object url) {
-  final uri = url is Uri ? url : Uri.tryParse('$url');
-  if (uri == null) return '$url';
-  var out = uri.userInfo.isEmpty ? uri : uri.replace(userInfo: '');
-  if (uri.hasQuery && _secretParam.hasMatch(uri.query)) {
-    final masked = uri.query
-        .split('&')
-        .map((pair) {
-          final eq = pair.indexOf('=');
-          if (eq < 0 || !_secretKey.hasMatch(pair.substring(0, eq))) return pair;
-          return '${pair.substring(0, eq)}=***';
-        })
-        .join('&');
-    out = out.replace(query: masked);
-  }
-  return out.toString();
-}
-
-final _secretKey = RegExp(r'(token|key|secret|passw|pwd|auth|sig|session|code|credential)', caseSensitive: false);
-final _secretParam = RegExp(
-  r'(?:^|&)[^=&]*(token|key|secret|passw|pwd|auth|sig|session|code|credential)[^=&]*=',
-  caseSensitive: false,
-);
 
 /// True for a request header that carries credentials: the standard ones
 /// and any custom one named like a secret (`X-Api-Key`, `Private-Token`).

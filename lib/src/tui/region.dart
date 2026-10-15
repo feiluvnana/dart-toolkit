@@ -87,16 +87,19 @@ final class Region {
     final lines = parts.isNotEmpty && parts.last.isEmpty ? parts.sublist(0, parts.length - 1) : parts;
     var overflow = false;
     for (final line in lines) {
-      var rest = line;
+      // One rune list per line and a moving index: each wrapped row costs
+      // its own runes, not a re-split of the rest (linear, not quadratic).
+      final runes = line.runes.toList();
+      var at = 0;
       do {
         if (_cursor >= _h) {
           overflow = true;
           _cursor++;
           break;
         }
-        _writeLine(_gy + _cursor++, _gx, _gx + _w, rest, st, link);
-        if (_used >= rest.runes.length) break;
-        rest = String.fromCharCodes(rest.runes.skip(math.max(_used, 1)));
+        _writeRunes(_gy + _cursor++, _gx, _gx + _w, runes, at, st, link);
+        if (_used >= runes.length) break;
+        at = math.max(_used, at + 1);
       } while (_w > 0);
     }
     if (overflow && _h > 0 && _w > 0) {
@@ -333,10 +336,15 @@ final class Region {
     return out;
   }
 
-  int _used = 0; // runes the last _writeLine consumed
+  int _used = 0; // rune index the last _writeLine/_writeRunes stopped at
 
-  int _writeLine(int row, int from, int end, String text, int style, String? link) {
-    _used = text.runes.length;
+  int _writeLine(int row, int from, int end, String text, int style, String? link) =>
+      _writeRunes(row, from, end, text.runes.toList(), 0, style, link);
+
+  /// [_writeLine] over `runes[start..]`; [_used] ends as the absolute index
+  /// of the first rune not drawn.
+  int _writeRunes(int row, int from, int end, List<int> runes, int start, int style, String? link) {
+    _used = runes.length;
     if (row < _gy || row >= _gy + _h) return from;
     if (link != null && link.codeUnits.any((c) => c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f))) {
       link = null;
@@ -346,11 +354,10 @@ final class Region {
     final cap = _grid == _s._grid ? _s._w : _grid[row].length;
     end = math.min(end, _gx + _w);
     if (_grid == _s._grid) end = math.min(end, cap);
-    final runes = text.runes.toList();
     var col = from;
-    var i = 0;
+    var i = start;
     while (i < runes.length && col < end) {
-      final start = i;
+      final at = i;
       final rune = runes[i++];
       if (rune == 0x1b && i < runes.length && runes[i] == 0x5b) {
         i++;
@@ -379,7 +386,7 @@ final class Region {
       final w = term.cellWidth(rune);
       if (col + w > end) {
         _put(row, col++, ' ', 1, style, link);
-        i = start;
+        i = at;
         break;
       }
       _put(row, col, cluster.toString(), w, style, link);

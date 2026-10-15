@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dart_toolkit/json.dart';
@@ -8,6 +9,7 @@ import 'package:test/test.dart';
 import 'support/child.dart';
 
 void main() {
+  timeoutTests();
   group('Shell.run', () {
     test('runs a program and returns stdout', () async {
       final out = await Shell.run(['echo', 'hi']);
@@ -58,6 +60,18 @@ void main() {
         ),
       );
       expect(await Shell.run(['echo', 'ok'], check: true).text(), 'ok');
+    });
+
+    test('check: keeps only the last 64 KB of stderr (regression: unbounded message)', () async {
+      final e = await Shell.run([
+        'sh',
+        '-c',
+        'i=0; while [ \$i -lt 4000 ]; do echo "noise line \$i ................................" >&2; i=\$((i+1)); done; echo LAST >&2; exit 3',
+      ], check: true).then<Object?>((_) => null, onError: (Object e) => e);
+      final message = (e as ProcessException).message;
+      expect(message.length, lessThan(66 * 1024));
+      expect(message, startsWith('exit 3: …noise line'));
+      expect(message, endsWith('LAST'));
     });
 
     test('a null env value unsets the variable', () async {
@@ -207,6 +221,17 @@ Future<void> main() async {
       }
     });
 
+    test('a failing filter keeps the last 64 KB of stderr', () async {
+      final big = List.generate(4000, (i) => 'noise line $i ................................').join('\n');
+      final e = await (_Mem('$big\nLAST\n') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null).then<Object?>(
+        (_) => null,
+        onError: (Object e) => e,
+      );
+      final message = (e as ProcessException).message;
+      expect(message.length, lessThan(66 * 1024));
+      expect(message.trim(), endsWith('LAST'));
+    });
+
     test('F12: late stderr survives into the exception', () async {
       await expectLater(
         _Mem('x') | Shell.filter(['sh', '-c', 'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2']) > null,
@@ -231,4 +256,25 @@ final class _Boom with Reader {
     yield [1, 2, 3];
     throw StateError('reader blew up mid-write');
   }
+}
+
+void timeoutTests() {
+  group('timeout and which', () {
+    test('timeout kills a run that takes too long and names the command', () async {
+      final sw = Stopwatch()..start();
+      await expectLater(
+        Shell.run(['sleep', '5'], timeout: 300.milliseconds),
+        throwsA(isA<TimeoutException>().having((e) => '$e', 'text', 'TimeoutException: sleep 5 ran over 300 ms')),
+      );
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+      expect((await Shell.run(['echo', 'hi'], timeout: 5.seconds)).ok(), isTrue);
+    });
+
+    test('which finds installed programs on PATH, null otherwise', () async {
+      expect(await Shell.which('sh'), endsWith('/sh'));
+      expect(await Shell.which('definitely-not-a-program-x9'), isNull);
+      expect(await Shell.which('/bin/sh'), '/bin/sh');
+      expect(await Shell.which('/etc/hosts'), isNull, reason: 'not executable');
+    });
+  });
 }

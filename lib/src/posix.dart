@@ -32,17 +32,13 @@ bool isCrossDevice(io.FileSystemException e) {
   return false;
 }
 
-/// `chmod <mode> <path>`, best-effort. No-op on Windows (no POSIX modes).
-Future<void> chmod(String path, int mode) async {
-  if (!isPosix) return;
-  try {
-    final perms = mode & 0xFFF;
-    final r = await io.Process.run('chmod', [perms.toRadixString(8), '--', path]);
-    if (r.exitCode != 0) return;
-  } catch (_) {}
-}
+/// `chmod <mode> <path>`. No-op on Windows (no POSIX modes). A non-zero
+/// exit throws a [io.FileSystemException] with the tool's message.
+Future<void> chmod(String path, int mode) => chmodBatched({
+  mode: [path],
+});
 
-/// Batched chmod: one `chmod <mode> p1 p2 …` per distinct mode, chunked so
+/// Batched chmod (throws like [chmod]): one `chmod <mode> p1 p2 …` per distinct mode, chunked so
 /// each argv stays well under `ARG_MAX`. Usually 2–3 forks per archive.
 Future<void> chmodBatched(Map<int, List<String>> byMode) async {
   if (!isPosix) return;
@@ -53,9 +49,9 @@ Future<void> chmodBatched(Map<int, List<String>> byMode) async {
     for (var i = 0; i < paths.length; i += 200) {
       final chunk = paths.sublist(i, i + 200 > paths.length ? paths.length : i + 200);
       if (chunk.isEmpty) continue;
-      try {
-        await io.Process.run('chmod', [mode.toRadixString(8), '--', ...chunk]);
-      } catch (_) {}
+      // `--` goes before the mode: BSD chmod reads the operand after the mode
+      // as a file, so `chmod 644 -- f` fails on `--` (exit 1).
+      await _run('chmod', ['--', mode.toRadixString(8), ...chunk], chunk);
     }
   }
 }
@@ -71,12 +67,12 @@ Map<int, List<String>> groupByMode(List<String> paths, List<int> modes) {
 }
 
 /// Set a folder's mtime (`dart:io` has no `Directory.setLastModified`).
-/// No-op on Windows. Best-effort; precision differs per OS (macOS `touch -t`
+/// No-op on Windows; a failed `touch` throws. Precision differs per OS (macOS `touch -t`
 /// keeps whole seconds only; Linux `touch -d @s.frac` keeps milliseconds)
 /// and callers document that.
 Future<void> setDirMtime(String path, DateTime mtime) => setDirMtimes({path: mtime});
 
-/// [setDirMtime] for many folders: one `touch` per distinct stamp (at the
+/// [setDirMtime] for many folders (a failed `touch` throws): one `touch` per distinct stamp (at the
 /// precision `touch` keeps) and ~200 paths, not one fork per folder.
 Future<void> setDirMtimes(Map<String, DateTime> mtimes) async {
   if (!isPosix) return;
@@ -87,11 +83,18 @@ Future<void> setDirMtimes(Map<String, DateTime> mtimes) async {
   for (final MapEntry(key: stamp, value: paths) in byStamp.entries) {
     for (var i = 0; i < paths.length; i += 200) {
       final chunk = paths.sublist(i, min(i + 200, paths.length));
-      try {
-        await io.Process.run('touch', [io.Platform.isMacOS ? '-t' : '-d', stamp, '--', ...chunk]);
-      } catch (_) {}
+      await _run('touch', [io.Platform.isMacOS ? '-t' : '-d', stamp, '--', ...chunk], chunk);
     }
   }
+}
+
+/// Run a POSIX tool; a non-zero exit throws with its stderr and the first
+/// path it was given.
+Future<void> _run(String tool, List<String> args, List<String> paths) async {
+  final r = await io.Process.run(tool, args);
+  if (r.exitCode == 0) return;
+  final err = '${r.stderr}'.trim();
+  throw io.FileSystemException('$tool failed (exit ${r.exitCode})${err.isEmpty ? '' : ': $err'}', paths.first);
 }
 
 String _touchStamp(DateTime mtime) {
@@ -120,10 +123,11 @@ Future<bool> copyTreeWithCp(String from, String to) async {
 /// `p.relative` per item, and both separators compare lowest so `a/b` sorts
 /// before `a-b` and mixed `/` and `\\` paths order the same.
 void sortByRelative<T>(List<T> items, String Function(T) path, String from) {
-  final sep = RegExp(r'[\\/]');
-  final key = {for (final e in items) e: p.relative(path(e), from: from).replaceAll(sep, '\x00')};
+  final key = {for (final e in items) e: p.relative(path(e), from: from).replaceAll(_sep, '\x00')};
   items.sort((a, b) => key[a]!.compareTo(key[b]!));
 }
+
+final _sep = RegExp(r'[\\/]');
 
 /// Unique temp sibling for [target]: `p.join(dir, '.base.tmp…')` so Windows
 /// never mixes separators; long names are cut so the temp still fits.

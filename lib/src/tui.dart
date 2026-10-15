@@ -9,7 +9,9 @@ import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../core.dart' show ToolkitException;
 import 'exit.dart' as exit;
+import 'format.dart' as fmt;
 import 'keys.dart' as keys;
 import 'pixels.dart';
 import 'terminal.dart' as term;

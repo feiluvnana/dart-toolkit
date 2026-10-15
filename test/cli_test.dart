@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:dart_toolkit/cli.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
 
 void main() {
+  valuesTests();
   group('options', () {
     test('typed Opt with default, reads and coerces', () async {
       final top = Opt<int>('top', 'N.', short: 'n', or: 10);
@@ -85,6 +88,27 @@ void main() {
       expect(seen, 0);
       expect(await cli.run([]), 0);
       expect(seen, 1);
+    });
+
+    test('--no-name is rejected on a Flag without or: true', () async {
+      final v = Flag('verbose', 'V.');
+      final cli = Command('app', 'X.', params: [v], handler: (_) {});
+      expect(await cli.run(['--no-verbose']), 64);
+      expect(await cli.run(['--verbose']), 0);
+    });
+
+    test('a Duration default shows in parser syntax', () async {
+      late String usage;
+      final w = Opt('wait', 'W.', or: const Duration(minutes: 1, seconds: 30));
+      final t = Opt('tick', 'T.', or: const Duration(milliseconds: 250));
+      final z = Opt('zero', 'Z.', or: Duration.zero);
+      await Command('app', 'X.', params: [w, t, z], handler: (c) => usage = c.usage()).run([]);
+      expect(usage, contains('[default: 1m30s]'));
+      expect(usage, contains('[default: 250ms]'));
+      expect(usage, contains('[default: 0s]'));
+      Duration? got;
+      await Command('app', 'X.', params: [w], handler: (c) => got = c(w)).run(['--wait', '1m30s']);
+      expect(got, const Duration(seconds: 90));
     });
 
     test('required Opt missing is 64', () async {
@@ -431,6 +455,43 @@ Future<void> main() async {
     });
   });
 
+  group('message style', () {
+    const script = '''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  final port = Opt<int>('port', 'P.', short: 'p', or: 1);
+  final file = Arg<String>('file', 'F.', required: true);
+  exitCode = await Command('app', 'X.', params: [port, file], handler: (_) {}).run(a);
+}
+''';
+    Future<String> err(List<String> args) async {
+      final r = await runDart(script, args: args);
+      expect(r.exitCode, 64);
+      return (r.stderr as String).split('\n').first;
+    }
+
+    test('one style, no trailing period on single-sentence errors', () async {
+      expect(await err(['f', '--port']), 'Option --port needs a value');
+      expect(await err(['f', '-p']), 'Option -p needs a value');
+      expect(await err([]), 'Missing argument <file>');
+      expect(await err(['f', 'g']), 'Unexpected argument "g"');
+    });
+
+    test('a bare group prints usage to stderr and exits 64', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  exitCode = await Command('tk', 'Tool.', commands: [Command('build', 'B.', handler: (_) {})]).run(a);
+}
+''');
+      expect(r.exitCode, 64);
+      expect(r.stdout, isEmpty);
+      expect(r.stderr, contains('Usage: tk'));
+    });
+  });
+
   group('environment', () {
     test('env: fills an option not given; the flag still wins; help names it', () async {
       const script = '''
@@ -448,6 +509,27 @@ Future<void> main(List<String> a) async {
       expect(bad.exitCode, 64);
       expect(bad.stderr, contains(r'environment variable $APP_N'));
       expect((await runDart(script, args: ['--help'])).stdout, contains('[env: APP_TOKEN]'));
+    });
+
+    test('dotenv: loads KEY=VALUE before parsing, never over the real environment', () async {
+      final dir = await Directory.systemTemp.createTemp('dotenv');
+      addTearDown(() => dir.delete(recursive: true));
+      await File('${dir.path}/.env')
+          .writeAsString('# comment\nexport APP_TOKEN="from file"\nAPP_N=5 # five\nAPP_X=\'raw \\n\'\n');
+      const script = '''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  final token = Opt<String?>('token', 'API token.', env: 'APP_TOKEN');
+  final n = Opt('n', 'Count.', or: 1, env: 'APP_N');
+  final x = Opt<String?>('x', 'Raw.', env: 'APP_X');
+  await Command('app', 'X.', params: [token, n, x], dotenv: '.env', handler: (c) => print('\${c(token)} \${c(n)} \${c(x)}')).run(a);
+}
+''';
+      expect((await runDart(script, cwd: dir.path)).stdout, 'from file 5 raw \\n\n');
+      expect((await runDart(script, cwd: dir.path, env: {'APP_N': '9'})).stdout, startsWith('from file 9 '));
+      await File('${dir.path}/.env').delete();
+      expect((await runDart(script, cwd: dir.path)).stdout, 'null 1 null\n');
     });
   });
 
@@ -539,4 +621,72 @@ class Color {
 
   @override
   String toString() => 'Color($rgb)';
+}
+
+enum _Section { photos, reels }
+
+void valuesTests() {
+  group('cli values:', () {
+    test('parses an enum by name, case-insensitive, and rejects the rest', () async {
+      _Section? got;
+      final s = Arg('section', 'What.', values: _Section.values, or: _Section.photos);
+      final cli = Command('app', 'X.', params: [s], handler: (c) => got = c(s));
+      expect(await cli.run(['REELS']), 0);
+      expect(got, _Section.reels);
+      expect(await cli.run([]), 0);
+      expect(got, _Section.photos);
+      expect(await cli.run(['stories']), 64);
+    });
+
+    test('usage lists the values', () async {
+      late String usage;
+      final s = Arg('section', 'What.', values: _Section.values, or: _Section.photos);
+      await Command('app', 'X.', params: [s], handler: (c) => usage = c.usage()).run([]);
+      expect(usage, contains('<photos|reels>'));
+    });
+
+    test('values and parse together are an ArgumentError', () {
+      expect(
+        () => Arg<_Section>('s', 'S.', values: _Section.values, parse: _Section.values.byName),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  test('cli prints a failure as its message, not the SDK toString', () async {
+    final r = await runDart(
+      '''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/json.dart';
+Future<void> main(List<String> a) async {
+  exitCode = await Command('app', 'X.', handler: (c) {
+    if (a.first == 'json') Json.parse('{bad');
+    throw Exception('plain failure');
+  }).run(a);
+}
+''',
+      args: ['plain'],
+    );
+    expect(r.exitCode, 1);
+    expect(r.stderr, 'plain failure\n');
+    final j = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/json.dart';
+Future<void> main(List<String> a) async {
+  await Command('app', 'X.', handler: (c) => Json.parse('{bad')).run(a);
+}
+''');
+    expect(j.exitCode, 1, reason: 'run sets exitCode itself');
+    expect(j.stderr, startsWith('invalid JSON'));
+    final ok = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  await Command('app', 'X.', handler: (c) => exitCode = 3).run(a);
+}
+''');
+    expect(ok.exitCode, 3, reason: 'a success leaves the handler\'s code alone');
+  });
 }

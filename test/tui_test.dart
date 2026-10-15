@@ -443,6 +443,55 @@ void main() {
       expect(f.text(), '');
     });
 
+    test('a toolkit error shows its message; SDK prefixes are dropped', () async {
+      Object toThrow = const ContentException('invalid JSON at 3');
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {}, keys: {'a': ('', () => throw toThrow)}),
+        width: 50,
+        height: 3,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('a'));
+      await t.pump();
+      expect(t.row(2), contains('✗ invalid JSON at 3'));
+      expect(t.row(2), isNot(contains('FormatException')));
+      toThrow = const HttpException('connection reset');
+      t.bytes(utf8.encode('a'));
+      await t.pump();
+      expect(t.row(2), contains('✗ connection reset'));
+      expect(t.row(2), isNot(contains('HttpException')));
+      t.close();
+    });
+
+    test('a failing suggest shows in the status row', () async {
+      final f = Field();
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.input(f, suggest: (w) => throw Exception('index offline'))),
+        width: 40,
+        height: 5,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('/a'));
+      await t.pump();
+      expect(t.row(4), contains('✗ index offline'));
+      final async = Field();
+      final t2 = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.input(async, suggest: (w) => Future.error(Exception('slow fail')))),
+        width: 40,
+        height: 5,
+      );
+      await t2.pump();
+      t2.bytes(utf8.encode('/a'));
+      await t2.pump();
+      await t2.pump();
+      expect(t2.row(4), contains('✗ slow fail'));
+      t.close();
+      t2.close();
+    });
+
     test('handler Exception goes to the status row, Error ends the run', () async {
       var n = 0;
       final t = testSession<int>(
@@ -822,7 +871,7 @@ void main() {
       await t.pump();
       await Future<void>.delayed(const Duration(milliseconds: 5));
       await t.pump();
-      expect(t.row(2), contains('✗ FormatException: bad'));
+      expect(t.row(2), contains('✗ bad'), reason: 'no SDK type prefix');
       expect(t.quitRequested, isFalse);
       app.status('hi');
       await t.pump();
@@ -1613,6 +1662,85 @@ void main() {
   });
 
   group('drawing (in-memory)', () {
+    test('write wraps in linear time and keeps the cells', () async {
+      final small = testSession<int>(
+        0,
+        (s, a) => Screen((r) {
+          r.write('abcdefghijkl');
+          r.write('abcd中e');
+        }),
+        width: 5,
+        height: 6,
+      );
+      await small.pump();
+      expect([for (var i = 0; i < 5; i++) small.row(i)], ['abcde', 'fghij', 'kl', 'abcd', '中e']);
+      small.close();
+      final text = 'abcdefghij' * 8000; // 80,000 chars, one line
+      final t = testSession<int>(0, (s, a) => Screen((r) => r.scroll(Scroll()).write(text)), width: 80, height: 24);
+      final sw = Stopwatch()..start();
+      await t.pump();
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)), reason: 'was ~6.7 s a frame (quadratic)');
+      t.close();
+    });
+
+    test('streamed markdown appends match a full render', () async {
+      const doc =
+          '# Title\n\nSome *prose* with `code` and a [link](http://x).\n\n'
+          '- one\n- two\n  - nested\n\n```dart\nfinal a = 1;\n```\n\n> quoted\n> more\n\n'
+          '| a | b |\n|---|---|\n| 1 | 2 |\n\nlast paragraph that wraps across the narrow width\n';
+      List<String> rows(TestSession<int> t) => [for (var i = 0; i < 40; i++) t.row(i)];
+      var shown = '';
+      final streamed = testSession<int>(0, (s, a) => Screen((r) => r.markdown(shown)), width: 30, height: 40);
+      for (var at = 0; at <= doc.length; at += 7) {
+        shown = doc.substring(0, at);
+        streamed.resize(30, 40);
+        await streamed.pump();
+        final full = testSession<int>(
+          0,
+          (s, a) => Screen((r) => r.markdown(doc.substring(0, at))),
+          width: 30,
+          height: 40,
+        );
+        await full.pump();
+        expect(rows(streamed), rows(full), reason: 'after $at chars');
+        full.close();
+      }
+      streamed.close();
+      // Many small appends stay linear: each costs its tail.
+      var long = '';
+      final t = testSession<int>(0, (s, a) => Screen((r) => r.markdown(long)), width: 80, height: 5);
+      final sw = Stopwatch()..start();
+      for (var k = 0; k < 3000; k++) {
+        long = '${long}line $k of a growing answer\n\n';
+        t.resize(80, 5);
+        await t.pump();
+      }
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+      t.close();
+    });
+
+    test('the screen function runs once per frame, refocus included', () async {
+      var calls = 0;
+      var withField = false;
+      final f = Field();
+      final t = testSession<int>(
+        0,
+        (s, a) {
+          calls++;
+          return Screen((r) => withField ? r.input(f) : r.write('-'));
+        },
+        width: 20,
+        height: 4,
+      );
+      await t.pump();
+      withField = true; // the next frame focuses a new widget: a refocus pass
+      t.resize(20, 4);
+      calls = 0;
+      await t.pump();
+      expect(calls, 1);
+      expect(t.focus, same(f), reason: 'the refocus pass still focuses the field');
+      t.close();
+    });
     test('markdown of 40,000 brackets or underscores renders at once', () async {
       for (final c in ['[', '_', '*']) {
         final text = c * 40000;

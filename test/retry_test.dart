@@ -5,9 +5,12 @@ import 'package:dart_toolkit/src/retry.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('backoff doubles and honours Retry-After', () {
-    expect(backoff(0, null), const Duration(seconds: 1));
-    expect(backoff(2, null), const Duration(seconds: 4));
+  test('backoff doubles with ±25% jitter and honours Retry-After', () {
+    for (var i = 0; i < 50; i++) {
+      expect(backoff(0, null).inMilliseconds, inInclusiveRange(750, 1250));
+      expect(backoff(2, null).inMilliseconds, inInclusiveRange(3000, 5000));
+    }
+    expect({for (var i = 0; i < 20; i++) backoff(1, null)}.length, greaterThan(1));
     expect(backoff(0, const Duration(seconds: 30)), const Duration(seconds: 30));
   });
 

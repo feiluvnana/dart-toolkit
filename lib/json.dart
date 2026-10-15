@@ -8,30 +8,37 @@
 /// Public surface is exactly: [Json].
 /// - `Json.parse()` parses text, `Json.encode()` renders it, `Json.of()`
 ///   wraps a value you already hold.
-/// - [Json] supports `$` (dotted path) `[]` (index the iteration) `value`
-///   (typed scalar read) `or` (read with a default) `asList`/`asMap` (flat collections).
-/// - `toJson` lets `jsonEncode` read a nested [Json].
+/// - [Json] supports `$` (dotted path, `a|b` alternatives) `[]` (index the
+///   iteration) `value` (typed scalar read) `or` (read with a default) `text`
+///   (any scalar as a string) `max`/`min` (the extreme item) `asList`/`asMap`
+///   (flat collections).
+/// - `toJson` lets `jsonEncode` read a nested [Json]; `toString` is the
+///   JSON text; `==` compares values deeply.
 /// Everything else is private.
 library;
 
 import 'dart:convert';
+import 'dart:io' show PathNotFoundException;
 
 import 'core.dart';
 export 'core.dart';
 
+import 'src/names.dart' as names;
+
 /// A JSON value: an object, array, scalar, or null.
 final class Json extends Iterable<Json> {
-  Json._(this._v);
+  // A Json held inside another (`Json.of([Json.parse(a), …])`) reads as its value.
+  Json._(Object? v) : _v = v is Json ? v._v : v;
 
   final Object? _v;
   List<dynamic>? _valuesCache;
 
-  /// Parse [json]. Throws [FormatException] on invalid JSON.
+  /// Parse [json]. Throws [ContentException] on invalid JSON.
   static Json parse(String json) {
     try {
       return Json._(jsonDecode(json));
     } on FormatException catch (e) {
-      throw FormatException('invalid JSON: ${e.message}', e.source, e.offset);
+      throw ContentException('invalid JSON: ${e.message}', e.source, e.offset, e);
     }
   }
 
@@ -54,17 +61,27 @@ final class Json extends Iterable<Json> {
   /// Dotted path (`users.0.name`); a numeric segment indexes an array. A `*`
   /// segment maps over every item: `$('data.users.*.name')` is a [Json] of
   /// the list of names. `*` over an object maps over its values in iteration
-  /// order. A missing path (or a missing key inside `*`) gives a [Json]
-  /// holding null, never a throw. Use `\` to escape ( `\.` for a literal dot,
-  /// `\*` for a literal star, `\\` for a backslash).
+  /// order. A `**` segment searches every depth: `$('**.pk')` is a [Json]
+  /// list of each `pk` anywhere in the document (document order, nulls and
+  /// misses dropped). A missing path (or a missing key inside `*`) gives a
+  /// [Json] holding null, never a throw. A `|` in a segment tries
+  /// alternatives in order (`code|shortcode`, `pk|id`): the first that
+  /// leads to a value with the rest of the path wins. Use `\` to escape
+  /// (`\.` for a literal dot, `\*` a literal star, `\|` a literal bar, `\\`
+  /// a backslash).
   Json $(String path) {
     if (path.isEmpty) return Json._(_v);
+    // One plain key (`name`, `0`): no split, no segment list.
+    if (!path.contains('.') && !path.contains(r'\') && !path.contains('|') && path != '*' && path != '**') {
+      return Json._(_step(_v, path));
+    }
     return Json._(_walk(_v, _splitPath(path)));
   }
 
   /// Index the iteration (array items or object values), O(1) per item
   /// after the first (object values are cached).
-  /// Throws [RangeError] when out of range or on a scalar.
+  /// Throws [RangeError] when out of range or on a scalar, like a [List]
+  /// index; the never-throwing read is the path: `$('items.0')`.
   Json operator [](int index) {
     final v = _v;
     if (v is List) return Json._(v[index]);
@@ -83,6 +100,36 @@ final class Json extends Iterable<Json> {
   /// non-null `int`. See [value] for the coercions.
   T or<T>(T fallback) => value<T>() ?? fallback;
 
+  /// Any scalar as a `String` (`787132` → `'787132'`, `true` → `'true'`);
+  /// null for null, a missing path or a collection. Not [toString], which
+  /// renders JSON.
+  String? text() => switch (_v) {
+    final String s => s,
+    final num n => '$n',
+    final bool b => '$b',
+    _ => null,
+  };
+
+  /// The item (array item or object value) with the largest [by], or a null
+  /// [Json] when there are none; the first wins a tie.
+  Json max(num Function(Json item) by) => _extreme(by, 1);
+
+  /// The item with the smallest [by], or a null [Json] when there are none.
+  Json min(num Function(Json item) by) => _extreme(by, -1);
+
+  Json _extreme(num Function(Json item) by, int sign) {
+    Json? best;
+    num? score;
+    for (final item in this) {
+      final s = by(item);
+      if (score == null || (s - score) * sign > 0) {
+        best = item;
+        score = s;
+      }
+    }
+    return best ?? Json._(null);
+  }
+
   /// The value when it is a `T`, else null.
   /// Scalars: integral numbers read as both `int` and `double`, so `3`,
   /// `3.0`, `value<int>()` and `value<double>()` all agree (a non-integral
@@ -98,13 +145,17 @@ final class Json extends Iterable<Json> {
   ///     (name: u.$('name').or(''), age: u.$('age').or(0)),
   /// ];
   /// ```
+  ///
+  /// A typed collection that the value is not (`value<List<int>>()` on a
+  /// JSON array) is an [ArgumentError] in every build mode: that read is
+  /// [asList]/[asMap]. The raw shapes (`value<List>()`, `value<Map>()`)
+  /// read as they are.
   T? value<T>() {
     final v = _v;
-    assert(
-      v is T || !((v is List || v is Map) && (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)),
-      'value<$T>() reads scalars; use asList/asMap',
-    );
     if (v is T) return v;
+    if ((v is List || v is Map) && (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)) {
+      throw ArgumentError('value<$T>() reads scalars and raw shapes; use asList/asMap');
+    }
     if (v is num) {
       if (v is int) {
         final d = v.toDouble();
@@ -167,6 +218,25 @@ final class Json extends Iterable<Json> {
     return 0;
   }
 
+  /// The JSON text (`{"a":1}`); a value `dart:convert` cannot encode
+  /// prints as Dart would.
+  @override
+  String toString() {
+    try {
+      return jsonEncode(_v);
+    } on JsonUnsupportedObjectError {
+      return '$_v';
+    }
+  }
+
+  /// Deep equality: the same JSON value (object key order does not matter;
+  /// `1` and `1.0` are equal, as in Dart).
+  @override
+  bool operator ==(Object other) => other is Json && _deepEquals(_v, other._v);
+
+  @override
+  int get hashCode => _deepHash(_v);
+
   /// An array's items or an object's values, wrapped lazily (O(1) per item).
   @override
   Iterator<Json> get iterator {
@@ -176,12 +246,31 @@ final class Json extends Iterable<Json> {
     return const <Json>[].iterator;
   }
 
-  /// Walk [segments] from [cur]; a `*` maps over items and collects a list.
-  static Object? _walk(Object? cur, List<String> segments) {
+  /// Walk [segments] from [cur]; a `*` maps over items and collects a list,
+  /// a `**` collects the rest's matches at every depth.
+  static Object? _walk(Object? cur, List<Object> segments) {
     Object? c = cur;
     for (var k = 0; k < segments.length; k++) {
+      if (c is Json) c = c._v;
       final seg = segments[k];
-      if (seg == '*') {
+      if (seg == _Wild.deep) {
+        final rest = segments.sublist(k + 1);
+        final out = <Object?>[];
+        void visit(Object? node) {
+          if (node is Json) node = node._v;
+          final hit = rest.isEmpty ? node : _walk(node, rest);
+          if (hit != null) out.add(hit);
+          if (node is Map) {
+            node.values.forEach(visit);
+          } else if (node is List) {
+            node.forEach(visit);
+          }
+        }
+
+        visit(c);
+        return out;
+      }
+      if (seg == _Wild.any) {
         final Iterable<Object?> items;
         if (c is List) {
           items = c;
@@ -193,20 +282,67 @@ final class Json extends Iterable<Json> {
         final rest = segments.sublist(k + 1);
         return [for (final item in items) _walk(item, rest)];
       }
-      if (c is Map) {
-        if (!c.containsKey(seg)) return null;
-        c = c[seg];
-      } else if (c is List) {
-        if (!_isIndex(seg)) return null;
-        final i = int.tryParse(seg);
-        if (i == null || i < 0 || i >= c.length) return null;
-        c = c[i];
-      } else {
+      if (seg is _Alt) {
+        final rest = segments.sublist(k + 1);
+        for (final key in seg.keys) {
+          final hit = _walk(_step(c, key), rest);
+          if (hit != null) return hit;
+        }
         return null;
       }
+      if (seg is! String) return null;
+      c = _step(c, seg);
+      if (c == null) return null;
     }
     return c;
   }
+
+  /// One key or index into [c]; null when it is not there.
+  static Object? _step(Object? c, String seg) {
+    if (c is Json) c = c._v;
+    if (c is Map) return c[seg];
+    if (c is List) {
+      if (!_isIndex(seg)) return null;
+      final i = int.tryParse(seg);
+      return i == null || i >= c.length ? null : c[i];
+    }
+    return null;
+  }
+}
+
+bool _deepEquals(Object? a, Object? b) {
+  if (a is Json) a = a._v;
+  if (b is Json) b = b._v;
+  if (identical(a, b)) return true;
+  if (a is Map) {
+    if (b is! Map || a.length != b.length) return false;
+    for (final MapEntry(:key, :value) in a.entries) {
+      if (!b.containsKey(key) || !_deepEquals(value, b[key])) return false;
+    }
+    return true;
+  }
+  if (a is List) {
+    if (b is! List || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_deepEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
+}
+
+int _deepHash(Object? v) {
+  if (v is Json) v = v._v;
+  if (v is Map) {
+    // Order-free: equal objects with different key order hash the same.
+    var h = 0;
+    for (final MapEntry(:key, :value) in v.entries) {
+      h = (h + Object.hash(key, _deepHash(value))) & 0x3FFFFFFF;
+    }
+    return Object.hash(Map, h);
+  }
+  if (v is List) return Object.hashAll(v.map(_deepHash));
+  return v.hashCode;
 }
 
 /// True for canonical array indexes (`0`, `1`, …): no `+`, no leading
@@ -222,17 +358,43 @@ bool _isIndex(String seg) {
   return true;
 }
 
-/// Split a dotted path, honouring `\` escapes (`\.`, `\*`, `\\`).
-List<String> _splitPath(String path) {
-  final out = <String>[];
+/// A path segment that matches more than one key: `*` (one level) or `**`
+/// (every depth). Escaped stars (`\*`) stay literal keys.
+enum _Wild { any, deep }
+
+/// A segment with `|` alternatives: the first key that leads somewhere wins.
+final class _Alt {
+  _Alt(this.keys);
+
+  final List<String> keys;
+}
+
+/// Split a dotted path, honouring `\` escapes (`\.`, `\*`, `\|`, `\\`).
+List<Object> _splitPath(String path) {
+  final out = <Object>[];
   final buf = StringBuffer();
+  final alts = <String>[];
+  var escaped = false;
+  void end() {
+    final seg = buf.toString();
+    if (alts.isNotEmpty) {
+      out.add(_Alt([...alts, seg]));
+      alts.clear();
+    } else {
+      out.add(escaped ? seg : (seg == '*' ? _Wild.any : (seg == '**' ? _Wild.deep : seg)));
+    }
+    buf.clear();
+    escaped = false;
+  }
+
   var i = 0;
   while (i < path.length) {
     final c = path.codeUnitAt(i);
     if (c == 0x5C && i + 1 < path.length) {
       final n = path.codeUnitAt(i + 1);
-      if (n == 0x2E || n == 0x2A || n == 0x5C) {
+      if (n == 0x2E || n == 0x2A || n == 0x5C || n == 0x7C) {
         buf.writeCharCode(n);
+        escaped = true;
         i += 2;
         continue;
       }
@@ -241,7 +403,12 @@ List<String> _splitPath(String path) {
       continue;
     }
     if (c == 0x2E) {
-      out.add(buf.toString());
+      end();
+      i++;
+      continue;
+    }
+    if (c == 0x7C) {
+      alts.add(buf.toString());
       buf.clear();
       i++;
       continue;
@@ -249,7 +416,7 @@ List<String> _splitPath(String path) {
     buf.writeCharCode(c);
     i++;
   }
-  out.add(buf.toString());
+  end();
   return out;
 }
 
@@ -322,33 +489,37 @@ Object? _scalar<E>(Object? e) {
   return _mismatch;
 }
 
-/// Bytes → a value. Throws [FormatException] on invalid JSON; a failure
-/// on an error page names the HTTP status in the message.
+/// Bytes → a value. Throws one [ContentException] on invalid JSON, naming
+/// where the bytes came from: `invalid JSON from https://x/api (HTTP 503):
+/// Unexpected character` (URL credentials redacted; a file names its path).
+///
+/// [or] is returned when the source does not exist (a missing file:
+/// `PathNotFoundException`); every other failure still throws.
 extension ReaderJson on Reader {
-  Future<Json> json() async {
-    final text = await this.text();
+  Future<Json> json({Json? or}) async {
+    final String text;
     try {
-      return Json.parse(text);
+      text = await this.text();
+    } on PathNotFoundException {
+      if (or != null) return or;
+      rethrow;
+    }
+    try {
+      return Json._(jsonDecode(text));
     } on FormatException catch (e) {
-      throw _withStatus(this, e);
+      // Typed via [Origin]; no `dynamic` probe.
+      final o = origin();
+      final url = o.url(), path = o.path(), status = o.status();
+      final from = url != null ? ' from ${names.redact(url)}' : (path != null ? ' from $path' : '');
+      final http = status == null ? '' : ' (HTTP $status)';
+      throw ContentException('invalid JSON$from$http: ${e.message}', e.source, e.offset, e);
     }
   }
 }
 
-/// Annotate a content [FormatException] with the HTTP status when the
-/// reader is an error page. Typed via [Origin]; no `dynamic` probe.
-FormatException _withStatus(Reader reader, FormatException e) {
-  final status = reader.origin().status();
-  if (status == null) return e;
-  // Only error pages are annotated; a 2xx body that isn't JSON is just
-  // invalid content.
-  if (status >= 200 && status < 300) return e;
-  return FormatException('${e.message} (HTTP $status)', e.source, e.offset);
-}
-
 /// Same, from an async reader.
 extension ReaderFutureJson on Future<Reader> {
-  Future<Json> json() async => (await this).json();
+  Future<Json> json({Json? or}) async => (await this).json(or: or);
 }
 
 /// The Future mirror (rule 4). The extension name is import-only; never reference it.
@@ -357,6 +528,9 @@ extension JsonFuture on Future<Json> {
   Future<Json> operator [](int index) async => (await this)[index];
   Future<T?> value<T>() async => (await this).value<T>();
   Future<T> or<T>(T fallback) async => (await this).or(fallback);
+  Future<String?> text() async => (await this).text();
+  Future<Json> max(num Function(Json item) by) async => (await this).max(by);
+  Future<Json> min(num Function(Json item) by) async => (await this).min(by);
   Future<List<T>> asList<T>() async => (await this).asList<T>();
   Future<Map<String, T>> asMap<T>() async => (await this).asMap<T>();
 }

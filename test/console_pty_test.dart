@@ -80,6 +80,54 @@ void main() {
       expect(await run('choose', accent: true), contains('38;5;173'));
     }, timeout: const Timeout(Duration(seconds: 120)));
 
+    test('live lines stack: a bar and two spinners each keep a row', () async {
+      final out = await _ptyBar(cols: 40, mode: 'stack');
+      expect(out, contains('stacked'));
+      // The block redraws from its top row: one move-up per extra row.
+      expect(out, contains('\x1b[2A'));
+      for (final done in ['✓ beta', '✓ alpha', 'files ━']) {
+        expect(out, contains(done));
+      }
+      for (final chunk in out.split(RegExp('[\r\n]'))) {
+        expect(_cells(chunk.split('\x1b[').first), lessThanOrEqualTo(39), reason: chunk);
+      }
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    test('the tty reader child dies with us: exit(), a crash, a cancel', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      for (final mode in ['orphan-exit', 'orphan-crash', 'orphan-cancel']) {
+        final log = File('${Directory.systemTemp.path}/console-orphan-${DateTime.now().microsecondsSinceEpoch}.log');
+        addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+        // A shell owns the pty (like a login shell), so our exit sends no
+        // SIGHUP that would end an orphan for us; it holds the pty open
+        // while the probe's detached checker looks.
+        final res = await Process.run('python3', [
+          '${root.path}/test/console_pty/drive.py',
+          '--size',
+          '24',
+          '80',
+          '--ready',
+          'cat=',
+          '--',
+          '/bin/sh',
+          '-c',
+          r'"$@"; sleep 1.5',
+          'sh',
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          log.path,
+          mode,
+        ], workingDirectory: root.path);
+        expect(res.stdout, matches(RegExp(r'cat=\d+')), reason: mode);
+        if (mode == 'orphan-cancel') {
+          expect(res.stdout, contains('alive=false'));
+        } else {
+          expect((await log.readAsString()).trim(), 'gone', reason: mode);
+        }
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
     test('H15: an unclosed bar does not keep the process alive', () async {
       if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
@@ -109,6 +157,43 @@ void main() {
       final burst = await _ptyChoose(feeds: const [(1.5, r'\x1b[B\x1b[B'), (2.0, r'\x0d')]);
       expect(burst, 'pick=blue');
     }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('a menu repaint after a resize clears the rows the old paint left', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      final res = await Process.run(
+        'python3',
+        [
+          '${root.path}/test/console_pty/drive.py',
+          '--size',
+          '24',
+          '80',
+          '--ready',
+          'blue',
+          '--resize',
+          '0.5',
+          '5',
+          '80',
+          '--feed',
+          '1.5',
+          r'\x1b[B',
+          '--feed',
+          '2.5',
+          r'\x0d',
+          '--',
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          '${Directory.systemTemp.path}/probe_nosuch.log',
+          'choose',
+        ],
+        workingDirectory: root.path,
+        stdoutEncoding: null,
+      );
+      final out = utf8.decode(res.stdout as List<int>, allowMalformed: true);
+      // Three items and the hint were painted at 24 rows; at 5 rows only two
+      // items fit, so the repaint goes up four rows and clears below.
+      expect(out, contains('\x1b[4A\r\x1b[J'));
+    }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('piped choose reads a number; ask reads a line', () async {
       final root = Directory.current;

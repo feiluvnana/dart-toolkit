@@ -1,8 +1,9 @@
 /// A RAR reader in pure Dart for `archive` (read only: the compressor is
 /// proprietary). RAR5: block headers, header encryption, the LZ + Huffman
 /// decoder with its Delta/E8/E8E9/ARM filters, solid runs, AES-256 with
-/// PBKDF2-HMAC-SHA256 and the password check value; every file's CRC is
-/// checked (MAC-tweaked under encryption). RAR4 lives in `rar4.dart`.
+/// PBKDF2-HMAC-SHA256 and the password check value; every file's CRC or
+/// BLAKE2sp hash is checked (MAC-tweaked under encryption). RAR4 lives in
+/// `rar4.dart`.
 library;
 
 import 'dart:convert';
@@ -12,7 +13,10 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import 'aes.dart';
 import 'crc32.dart';
+import 'lzma.dart' show declaredCeiling;
 import 'ppmd.dart';
+
+import '../core.dart';
 
 part 'rar4.dart';
 
@@ -47,7 +51,7 @@ final class RarEntry {
   Uint8List data() => _data();
 }
 
-Never _bad(String why) => throw FormatException('corrupt archive: RAR $why');
+Never _bad(String why) => throw ContentException('corrupt archive: RAR $why');
 
 /// The members of the RAR archive in [b].
 List<RarEntry> readRar(Uint8List b, {String? password}) {
@@ -66,9 +70,9 @@ List<RarEntry> readRar(Uint8List b, {String? password}) {
     switch (h.type) {
       case 1: // main
         final flags = h.vint();
-        if (flags & 0x1 != 0) throw const FormatException('multi-volume RAR archives are not supported');
+        if (flags & 0x1 != 0) throw const ContentException('multi-volume RAR archives are not supported');
       case 4: // archive encryption: every later header is encrypted
-        if (password == null) throw const FormatException('archive is encrypted (pass password:)');
+        if (password == null) throw const ContentException('archive is encrypted (pass password:)');
         final version = h.vint();
         if (version != 0) _bad('encryption version $version');
         final flags = h.vint();
@@ -87,7 +91,8 @@ List<RarEntry> readRar(Uint8List b, {String? password}) {
     }
     r.pos = h.dataEnd;
   }
-  return out;
+  // Every RAR ends with an end block: without it the archive was cut short.
+  _bad('archive ends without its end block (truncated)');
 }
 
 RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
@@ -100,20 +105,24 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   final host = h.vint();
   final name = utf8.decode(h.bytes(h.vint()), allowMalformed: true).replaceAll('\\', '/');
   final isDir = flags & 0x1 != 0;
-  if (h.flags & 0x18 != 0) throw const FormatException('multi-volume RAR archives are not supported');
+  if (h.flags & 0x18 != 0) throw const ContentException('multi-volume RAR archives are not supported');
   // Extra records: encryption, hash, redirection (links are refused).
   _Key? key;
   var isLink = false;
   var iv = Uint8List(0);
   var tweaked = false;
+  Uint8List? blake2;
   var e = h.extraStart;
   while (e < h.extraEnd) {
     final x = _Reader(h.raw, e);
     final recSize = x.vint();
     final recEnd = x.pos + recSize;
+    // A record holds at least its type, inside the extra area: every
+    // step moves forward.
+    if (recSize < 1 || recEnd > h.extraEnd) _bad('extra record size $recSize');
     final type = x.vint();
     if (type == 1) {
-      if (password == null) throw FormatException('archive member is encrypted: $name (pass password:)');
+      if (password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
       if (x.vint() != 0) _bad('encryption version');
       final f = x.vint();
       final kdf = x.byte();
@@ -122,6 +131,8 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
       key = _Key.derive(password, salt, kdf);
       if (f & 1 != 0) key.check(x.bytes(12), member: name);
       tweaked = f & 2 != 0;
+    } else if (type == 2) {
+      if (x.vint() == 0) blake2 = x.bytes(32); // BLAKE2sp; other hashes are unknown
     } else if (type == 5) {
       isLink = true;
     }
@@ -132,7 +143,7 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   final version = info & 0x3F;
   final isSolid = info & 0x40 != 0;
   final method = info >> 7 & 7;
-  if (version > 1) throw FormatException('unsupported RAR compression version $version: $name');
+  if (version > 1) throw ContentException('unsupported RAR compression version $version: $name');
   final packed = Uint8List.sublistView(b, h.dataStart, h.dataEnd);
   final k = key;
   // Members decode in archive order, so a solid run's window is ready by
@@ -143,25 +154,39 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
     return (plain, method, size, version);
   });
   if (isLink) return RarEntry(name, false, mode, () => Uint8List(0), isLink: true);
+  final hash = blake2;
   return RarEntry(name, false, mode, () {
     final data = run.data(index);
+    var ok = true;
     if (crc != null) {
       var got = crc32(data);
       if (tweaked && k != null) got = k.tweakCrc(got);
-      if (got != crc) {
-        throw FormatException(
-          k == null ? 'corrupt archive: RAR CRC of $name' : 'wrong password or corrupt archive: $name',
-        );
+      ok = got == crc;
+    }
+    if (ok && hash != null) {
+      var got = blake2sp(data);
+      if (tweaked && k != null) got = k.tweakHash(got);
+      for (var i = 0; i < 32; i++) {
+        if (got[i] != hash[i]) ok = false;
       }
+    }
+    if (!ok) {
+      throw ContentException(
+        k == null ? 'corrupt archive: RAR checksum of $name' : 'wrong password or corrupt archive: $name',
+      );
     }
     return data;
   });
 }
 
 /// The members of one solid run, decoded together through one window.
+/// A member's bytes are kept only until it takes them; asking again
+/// decodes the run afresh.
 final class _Run {
   final _inputs = <(Uint8List, int, int, int) Function()>[];
-  final _done = <Uint8List>[];
+  final _ready = <int, Uint8List>{}; // decoded, not yet taken
+  final _taken = <int>{};
+  var _next = 0;
   _Unpack5? _unpack;
 
   int add((Uint8List, int, int, int) Function() input) {
@@ -170,20 +195,33 @@ final class _Run {
   }
 
   Uint8List data(int index) {
-    while (_done.length <= index) {
-      final (packed, method, size, version) = _inputs[_done.length]();
+    final ready = _ready.remove(index);
+    if (ready != null) return _hand(index, ready);
+    if (index < _next) {
+      _unpack = null;
+      _next = 0;
+    }
+    while (true) {
+      final i = _next++;
+      final (packed, method, size, version) = _inputs[i]();
       final u = _unpack ??= _Unpack5(extended: version == 1);
+      final Uint8List bytes;
       if (method == 0) {
         // Stored members still join the window for the ones after them.
-        if (packed.length < size) _bad('stored member is short');
-        final bytes = Uint8List.sublistView(packed, 0, size);
+        if (size < 0 || packed.length < size) _bad('stored member is short');
+        bytes = Uint8List.sublistView(packed, 0, size);
         u.append(bytes);
-        _done.add(bytes);
       } else {
-        _done.add(u.decode(packed, size));
+        bytes = u.decode(packed, size);
       }
+      if (i == index) return _hand(i, bytes);
+      if (!_taken.contains(i)) _ready[i] = bytes;
     }
-    return _done[index];
+  }
+
+  Uint8List _hand(int index, Uint8List bytes) {
+    _taken.add(index);
+    return bytes;
   }
 }
 
@@ -228,9 +266,9 @@ final class _Header {
     final size = src.vint();
     final start = src.pos;
     final end = start + size;
-    if (end > src.b.length) _bad('header past the end');
+    if (size < 1 || end > src.b.length) _bad('header past the end');
     if (crc32(src.b, start: base + 4, end: end) != crc) {
-      if (key != null) throw const FormatException('wrong password or corrupt archive');
+      if (key != null) throw const ContentException('wrong password or corrupt archive');
       _bad('header CRC');
     }
     final h = _Reader(src.b, start);
@@ -238,9 +276,10 @@ final class _Header {
     final flags = h.vint();
     final extraSize = flags & 1 != 0 ? h.vint() : 0;
     final dataSize = flags & 2 != 0 ? h.vint() : 0;
+    if (extraSize > end - h.pos) _bad('extra area past its header');
     if (key == null) r.pos = end;
     final dataStart = r.pos;
-    if (dataStart + dataSize > r.b.length) _bad('data past the end');
+    if (dataSize > r.b.length - dataStart) _bad('data past the end');
     return _Header(src.b, type, flags, h, end - extraSize, end, dataStart, dataStart + dataSize);
   }
 }
@@ -259,12 +298,17 @@ final class _Key {
   final Uint8List _hashKey;
   final Uint8List _check;
 
+  // Keyed by salt and password: solid and header-encrypted archives reuse
+  // one salt. Bounded, oldest out.
   static final _cache = <String, _Key>{};
 
   static _Key derive(String password, Uint8List salt, int kdf) {
     if (kdf > 24) _bad('KDF count $kdf');
     final id = '$kdf:${salt.join(',')}:$password';
-    return _cache[id] ??= () {
+    final hit = _cache[id];
+    if (hit != null) return hit;
+    if (_cache.length >= 16) _cache.remove(_cache.keys.first);
+    return _cache[id] = () {
       final hmac = crypto.Hmac(crypto.sha256, utf8.encode(password));
       var u = hmac.convert([...salt, 0, 0, 0, 1]).bytes;
       final fn = Uint8List.fromList(u);
@@ -294,7 +338,7 @@ final class _Key {
     final sum = crypto.sha256.convert(stored.sublist(0, 8)).bytes;
     if (sum[0] != stored[8] || sum[1] != stored[9] || sum[2] != stored[10] || sum[3] != stored[11]) return;
     for (var i = 0; i < 8; i++) {
-      if (value[i] != stored[i]) throw FormatException('wrong password${member == null ? '' : ' for $member'}');
+      if (value[i] != stored[i]) throw ContentException('wrong password${member == null ? '' : ' for $member'}');
     }
   }
 
@@ -310,6 +354,9 @@ final class _Key {
     }
     return out & 0xFFFFFFFF;
   }
+
+  /// The BLAKE2sp hash as stored under a MAC: HMAC-SHA256 of it.
+  Uint8List tweakHash(Uint8List hash) => Uint8List.fromList(crypto.Hmac(crypto.sha256, _hashKey).convert(hash).bytes);
 }
 
 final class _Reader {
@@ -339,13 +386,14 @@ final class _Reader {
     return Uint8List.sublistView(b, pos, pos + n);
   }
 
-  /// 7 bits per byte, little-endian, high bit = more.
+  /// 7 bits per byte, little-endian, high bit = more. Sizes never reach
+  /// 2^63: one that wraps negative is damage.
   int vint() {
     var v = 0;
     for (var shift = 0; shift < 64; shift += 7) {
       final c = byte();
       v |= (c & 0x7F) << shift;
-      if (c & 0x80 == 0) return v;
+      if (c & 0x80 == 0) return v < 0 ? _bad('number out of range') : v;
     }
     _bad('varint too long');
   }
@@ -481,8 +529,11 @@ final class _Unpack5 {
   }
 
   Uint8List decode(Uint8List input, int size) {
+    if (size < 0) _bad('size $size');
     final begin = _pos;
-    _grow(_pos + size);
+    // A header can claim any size: past the ceiling the window grows only
+    // as the data really decodes.
+    _grow(_pos + (size < declaredCeiling ? size : declaredCeiling));
     final filters = <_Filter>[];
     var at = 0; // byte offset of the next block header
     var last = false;
@@ -573,6 +624,7 @@ final class _Unpack5 {
     final from = _pos - distance;
     if (from < 0) _bad('distance before the start');
     if (_pos + length > limit) length = limit - _pos;
+    _grow(_pos + length);
     final w = _window;
     if (distance >= length) {
       w.setRange(_pos, _pos + length, w, from);
@@ -586,12 +638,12 @@ final class _Unpack5 {
 
   void _block(_Bits r, int limit, List<_Filter> filters) {
     final main = _main!, dist = _dist!, low = _low!, rep = _rep!;
-    final w = _window;
     while (_pos < limit) {
       if (r.pos >= r.end) return;
+      if (_pos == _window.length) _grow(_pos + 1);
       final slot = main.decode(r);
       if (slot < 256) {
-        w[_pos++] = slot;
+        _window[_pos++] = slot;
       } else if (slot >= 262) {
         var length = _length(r, slot - 262);
         final ds = dist.decode(r);
@@ -710,5 +762,120 @@ final class _Unpack5 {
           }
         }
     }
+  }
+}
+
+// --- BLAKE2sp (RAR5's optional file hash) -------------------------------------
+
+const _b2Iv = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19];
+
+const _b2Sigma = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+  [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+  [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+  [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+  [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+  [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+  [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+  [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+  [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+];
+
+/// BLAKE2sp-256 of [data]: eight BLAKE2s leaves, leaf i taking 64-byte
+/// blocks i, i+8, …, then a root over their digests.
+Uint8List blake2sp(Uint8List data) {
+  final root = Uint8List(8 * 32);
+  for (var i = 0; i < 8; i++) {
+    final leaf = _Blake2s(offset: i, depth: 0, last: i == 7);
+    final blocks = <int>[for (var at = i * 64; at < data.length; at += 8 * 64) at];
+    for (var k = 0; k < blocks.length; k++) {
+      final at = blocks[k];
+      final end = at + 64 < data.length ? at + 64 : data.length;
+      leaf.block(data, at, end, k == blocks.length - 1);
+    }
+    if (blocks.isEmpty) leaf.block(data, 0, 0, true);
+    root.setRange(i * 32, i * 32 + 32, leaf.digest());
+  }
+  final r = _Blake2s(offset: 0, depth: 1, last: true);
+  for (var at = 0; at < root.length; at += 64) {
+    r.block(root, at, at + 64, at + 64 == root.length);
+  }
+  return r.digest();
+}
+
+/// One BLAKE2s node of BLAKE2sp's tree (fanout 8, depth 2, 32-byte digests).
+final class _Blake2s {
+  _Blake2s({required int offset, required int depth, required bool last}) : _lastNode = last {
+    _h.setAll(0, _b2Iv);
+    _h[0] ^= 32 | 8 << 16 | 2 << 24;
+    _h[2] ^= offset;
+    _h[3] ^= depth << 16 | 32 << 24;
+  }
+
+  final bool _lastNode;
+  final _h = Uint32List(8);
+  final _m = Uint32List(16);
+  final _v = Uint32List(16);
+  var _t = 0;
+
+  /// Compress [b]'s bytes [at]..[end] (at most 64; zero-padded), the final
+  /// block when [last].
+  void block(Uint8List b, int at, int end, bool last) {
+    final m = _m..fillRange(0, 16, 0);
+    for (var i = at; i < end; i++) {
+      m[(i - at) >> 2] |= b[i] << (8 * ((i - at) & 3));
+    }
+    _t += end - at;
+    final v = _v
+      ..setAll(0, _h)
+      ..setAll(8, _b2Iv);
+    v[12] ^= _t & 0xFFFFFFFF;
+    v[13] ^= _t >> 32;
+    if (last) {
+      v[14] ^= 0xFFFFFFFF;
+      if (_lastNode) v[15] ^= 0xFFFFFFFF;
+    }
+    for (final s in _b2Sigma) {
+      _g(v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+      _g(v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+      _g(v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+      _g(v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+      _g(v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+      _g(v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+      _g(v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+      _g(v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+    }
+    for (var i = 0; i < 8; i++) {
+      _h[i] ^= v[i] ^ v[i + 8];
+    }
+  }
+
+  static void _g(Uint32List v, int a, int b, int c, int d, int x, int y) {
+    var va = v[a], vb = v[b], vc = v[c], vd = v[d];
+    va = (va + vb + x) & 0xFFFFFFFF;
+    vd ^= va;
+    vd = (vd >> 16 | vd << 16) & 0xFFFFFFFF;
+    vc = (vc + vd) & 0xFFFFFFFF;
+    vb ^= vc;
+    vb = (vb >> 12 | vb << 20) & 0xFFFFFFFF;
+    va = (va + vb + y) & 0xFFFFFFFF;
+    vd ^= va;
+    vd = (vd >> 8 | vd << 24) & 0xFFFFFFFF;
+    vc = (vc + vd) & 0xFFFFFFFF;
+    vb ^= vc;
+    vb = (vb >> 7 | vb << 25) & 0xFFFFFFFF;
+    v[a] = va;
+    v[b] = vb;
+    v[c] = vc;
+    v[d] = vd;
+  }
+
+  Uint8List digest() {
+    final out = Uint8List(32);
+    for (var i = 0; i < 32; i++) {
+      out[i] = _h[i >> 2] >> (8 * (i & 3)) & 0xFF;
+    }
+    return out;
   }
 }

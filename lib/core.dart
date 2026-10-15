@@ -1,17 +1,26 @@
 /// Core pipeline: bytes flow from a [Reader], through [Pipe]s, into a [Writer].
 ///
 /// ```dart
-/// await (Http.get(url) | hash > Fs.file('a.zip'));
-/// await (Http.get(url) | hash > null);   // checksum only, nothing stored
-/// final text = await Http.get(url).text();
+/// final http = Http.client();
+/// await (http.get(url) | hash > Fs.file('a.zip'));
+/// await (http.get(url) | hash > null);   // checksum only, nothing stored
+/// final text = await http.get(url).text();
 /// ```
 ///
-/// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin].
+/// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin],
+/// [Cookies], [Rate], [Durations], [Times], [Spans], [ToolkitException],
+/// [ContentException].
 /// - [Reader]: `stream` `bytes` `text` `lines` `pipe` `|` `to` `>` (+ `origin`, `of`).
-/// - [Writer]: `consume`.
+/// - [Writer]: `consume` (+ `origin`).
+/// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `encode` `[]` `header` `set`.
+/// - [Rate]: paces the work that shares it (`wait`).
+/// - [Durations]: `3.seconds`, `11.minutes`: unit literals for every timeout.
+/// - [Times] / [Spans]: `now.format('yyyy-MM-dd')`, `wait.human()` (`11 min 5 s`).
 /// - [Pipe]: `transform` `abort`.
 /// - [Closeable]: `close`.
 /// - [Origin]: typed `url()` / `status()` / `name()` / `path()` for a reader.
+/// - [ToolkitException]: the base of every failure the toolkit itself reports.
+/// - [ContentException]: a value the toolkit rejects (bad JSON, archive, image…).
 /// Everything else is private.
 library;
 
@@ -21,6 +30,12 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+
+import 'src/resume.dart';
+
+export 'src/cookies.dart' show Cookies;
+export 'src/rate.dart' show Rate;
+export 'src/time.dart' show Spans, Times;
 
 /// What a reader knows about its source: URL, status, file name, path.
 ///
@@ -97,6 +112,26 @@ abstract mixin class Reader {
   /// kill it, an http source is not marked streaming by the failure path,
   /// and broadcast sources poison their stages too.
   Future<void> to(Writer? writer) async {
+    // Synchronously, before any await: a resumable GET (http `resume: true`)
+    // piped into a path through pass-through pipes delivers itself.
+    final path = writer?.origin().path();
+    if (path != null) {
+      final pipes = <Pipe>[];
+      Reader cur = this;
+      while (cur is _PipedReader) {
+        pipes.insert(0, cur._pipe);
+        cur = cur._source;
+      }
+      final source = cur is _FutureReader ? cur._future : cur;
+      if (source is Resumable && pipes.every((p) => p is PassThrough) && source.claim()) {
+        try {
+          return await source.resume(path, pipes);
+        } catch (e) {
+          _abortChain(this, e);
+          rethrow;
+        }
+      }
+    }
     Stream<List<int>>? s;
     try {
       // [_PipedReader.stream] is lazy (async*): creating [s] starts nothing.
@@ -164,10 +199,27 @@ Future<void> _closeRoot(Reader reader) async {
   } catch (_) {}
 }
 
-/// Somewhere bytes end up: a file, a hash, an unpacked folder.
-abstract interface class Writer {
+/// Somewhere bytes end up: a file, a hash, an unpacked folder. Implement
+/// [consume]; [origin] mirrors [Reader.origin].
+abstract mixin class Writer {
   /// Store [input]; complete when the last byte is stored.
   Future<void> consume(Stream<List<int>> input);
+
+  /// Where the bytes go; empty unless the writer overrides it (a `File`
+  /// reports its path, which is how `Client.save` skips and resumes).
+  Origin origin() => const Origin();
+}
+
+/// Unit literals: `3.seconds`, `1.5.seconds`, `250.milliseconds`,
+/// `11.minutes`. Fractions round to the microsecond.
+extension Durations on num {
+  Duration get milliseconds => _us(Duration.microsecondsPerMillisecond);
+  Duration get seconds => _us(Duration.microsecondsPerSecond);
+  Duration get minutes => _us(Duration.microsecondsPerMinute);
+  Duration get hours => _us(Duration.microsecondsPerHour);
+  Duration get days => _us(Duration.microsecondsPerDay);
+
+  Duration _us(int per) => Duration(microseconds: this is int ? (this as int) * per : (this * per).round());
 }
 
 /// Something bytes pass through: a hash, a progress bar, gzip, a process.
@@ -192,7 +244,7 @@ abstract interface class Closeable {
   Future<void> close();
 }
 
-/// `Http.get(u).text()`, `Http.get(u) | hash > file`.
+/// `http.get(u).text()`, `http.get(u) | hash > file`.
 extension ReaderFuture on Future<Reader> {
   Future<List<int>> bytes() async => (await this).bytes();
   Future<String> text() async => (await this).text();
@@ -208,9 +260,9 @@ extension ReaderFuture on Future<Reader> {
 
   Reader pipe(Pipe? pipe) => _FutureReader(this).pipe(pipe);
   Reader operator |(Pipe? pipe) => _FutureReader(this) | pipe;
-  Future<void> to(Writer? writer) async => (await this).to(writer);
+  Future<void> to(Writer? writer) => _FutureReader(this).to(writer);
 
-  Future<void> operator >(Writer? writer) async => (await this).to(writer);
+  Future<void> operator >(Writer? writer) => _FutureReader(this).to(writer);
 }
 
 /// `Chrome.launch().close()`; one mirror for every type.
@@ -259,7 +311,12 @@ final class _FutureReader with Reader {
   Future<String> text() async => (await _get()).text();
 
   @override
-  Future<void> to(Writer? writer) => _get().then((r) => r.to(writer));
+  Future<void> to(Writer? writer) {
+    final Object source = _future;
+    final path = writer?.origin().path();
+    if (path != null && source is Resumable && source.claim()) return source.resume(path, const <Pipe>[]);
+    return _get().then((r) => r.to(writer));
+  }
 }
 
 /// In-memory bytes behind [Reader.of].
@@ -276,4 +333,34 @@ final class _Memory with Reader {
 
   @override
   Future<String> text() async => utf8.decode(_bytes, allowMalformed: true);
+}
+
+/// Base for every failure the toolkit itself reports, so scripts catch one
+/// family instead of parsing message strings. A `cause` carries the engine
+/// error underneath when there is one (the `dart:convert` error behind a bad
+/// document, the action that failed behind a bad tab click).
+/// Engine failures that reach the caller unwrapped (a refused connection, a
+/// program that won't start) and Dart-idiom guards (`ArgumentError` for a bad
+/// argument, `TimeoutException` for a wait that runs out) keep their SDK
+/// types; see §5 of docs/VISION.md.
+abstract class ToolkitException implements Exception {
+  const ToolkitException(this.message, {this.cause});
+
+  /// One line saying what failed and where.
+  final String message;
+
+  /// The engine error underneath, or null when the toolkit detected the
+  /// failure alone.
+  final Object? cause;
+}
+
+/// A value the toolkit itself rejects: invalid JSON, a bad selector, a
+/// corrupt archive or image, a checksum mismatch. Extends [FormatException],
+/// so an existing `on FormatException` keeps catching it; prefer matching the
+/// specific type. The offending `source`/`offset` ride along when known.
+final class ContentException extends FormatException implements ToolkitException {
+  const ContentException([super.message = '', super.source, super.offset, this.cause]);
+
+  @override
+  final Object? cause;
 }

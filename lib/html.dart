@@ -1,36 +1,29 @@
-/// Minimal HTML scraping. Thin facade over `package:html`.
+/// Minimal HTML scraping: an in-house HTML5 parser (`src/html_parser.dart`)
+/// and CSS selector engine (`src/selector.dart`).
 ///
 /// ```dart
-/// final doc = await Http.get('https://example.com/article').html();
+/// final doc = await http.get('https://example.com/article').html();
 /// final body = doc.not('script, style, nav').$('article').text();
-/// final next = await Http.get(url).html().$('a.next').attr('href');
+/// final next = await http.get(url).html().$('a.next').attr('href');
 /// ```
 ///
 /// Public surface is exactly: [Html], [Elements], [Element].
 /// - `Html.parse()` parses HTML and returns [Elements].
 /// - [Elements] supports `$` `[]` `not` `text` `texts` `attr` `attrs`
+///   `json` (embedded data) `table` (rows as maps) `form` (fields to post)
 ///   (plus [Iterable] helpers).
 /// - [Element] supports `$` `not` `text` `attr` `parent`.
-/// A selector the engine rejects is a [FormatException] naming the selector.
+/// A selector the engine rejects is a [ContentException] naming the selector.
 /// Everything else is private.
 library;
 
-import 'package:csslib/parser.dart' as css;
-import 'package:csslib/visitor.dart' as css;
-import 'package:html/dom.dart' as dom;
-import 'package:html/parser.dart' as parser;
-// `query_selector.dart` is engine-internal: package:html offers no public
-// `matches`, so `$` cannot test the element itself without it. The import is
-// private (nothing is re-exported) and holds no public surface. Pinned to
-// `html >=0.15.7 <0.16.0` (see pubspec.yaml) so a minor bump cannot break it;
-// `matches` on a root element is covered in tests (self-matching groups).
-// ignore: implementation_imports
-import 'package:html/src/query_selector.dart' as query;
-
-import 'core.dart';
+import 'json.dart';
 export 'core.dart';
 
-import 'src/origin.dart' as names;
+import 'src/dom.dart' as dom;
+import 'src/html_parser.dart' as parser;
+import 'src/names.dart' as names;
+import 'src/selector.dart' as sel;
 
 /// Entry point: parse HTML source into top-level [Elements].
 abstract final class Html {
@@ -42,7 +35,8 @@ abstract final class Html {
   /// absolute. The base is parsed once per [Elements] and shared with every
   /// child. A document's
   /// `<base href>` overrides it. A fragment with loose top-level text is
-  /// wrapped in one `div`, so the text is kept.
+  /// returned as its root, which holds the text and every element (and
+  /// matches no selector itself).
   static Elements parse(String html, {String? base}) {
     final baseUri = _parseBase(base);
     var s = html.replaceFirst('﻿', '').trimLeft();
@@ -53,27 +47,42 @@ abstract final class Html {
     }
     final head = s.length <= 9 ? s.toLowerCase() : s.substring(0, 9).toLowerCase();
     if (head.startsWith('<!doctype') || head.startsWith('<html')) {
-      final doc = parser.parse(html);
-      final declared = doc.querySelector('base[href]')?.attributes['href']?.trim();
-      final base = declared == null || declared.isEmpty
-          ? baseUri
-          : baseUri?.resolve(declared) ?? Uri.tryParse(declared);
-      return Elements._([
-        for (final n in doc.nodes)
-          if (n is dom.Element) Element._(n, base),
-      ], base);
+      final root = _hold(parser.parseDocument(html));
+      final found = <dom.Element>[];
+      _baseHref.collect(root, found);
+      final declared = found.firstOrNull?.attributes['href']?.trim();
+      final base = declared == null || declared.isEmpty ? baseUri : _resolveBase(baseUri, declared) ?? baseUri;
+      return Elements._([for (final n in root.children) Element._(n, base)], base);
     }
-    final frag = parser.parseFragment(html);
-    if (frag.nodes.any((n) => n is dom.Text && n.data.trim().isNotEmpty)) {
-      // Loose text (`Tom &amp; Jerry`) has no element to live in: keep it
-      // under one synthetic root so text() reads it.
-      final root = dom.Element.tag('div')..nodes.addAll(frag.nodes.toList());
+    final nodes = parser.parseFragment(html);
+    final root = _hold(nodes);
+    if (nodes.any((n) => n is dom.Text && n.data.trim().isNotEmpty)) {
+      // Loose text (`Tom &amp; Jerry`) has no element to live in: the
+      // fragment's root holds it, so text() reads it. The root itself never
+      // matches a selector, so no element appears that the source lacks.
       return Elements._([Element._(root, baseUri)], baseUri);
     }
-    return Elements._([
-      for (final n in frag.nodes)
-        if (n is dom.Element) Element._(n, baseUri),
-    ], baseUri);
+    return Elements._([for (final n in root.children) Element._(n, baseUri)], baseUri);
+  }
+}
+
+final _baseHref = sel.Selector.parse('base[href]');
+
+/// The top-level [nodes] under one holder, so they are siblings (for
+/// `:first-child`, `+`, `~`) without a parent element.
+dom.Element _hold(List<dom.Node> nodes) {
+  final root = dom.Element('#root');
+  nodes.forEach(root.append);
+  return root;
+}
+
+/// A document's `<base href>` against [base]; null when it is not a URL
+/// (a bad base is ignored, as browsers do: parse never throws).
+Uri? _resolveBase(Uri? base, String declared) {
+  try {
+    return base?.resolve(declared) ?? Uri.parse(declared);
+  } on FormatException {
+    return null;
   }
 }
 
@@ -111,23 +120,24 @@ final class Elements extends Iterable<Element> {
   /// is unchanged. A top-level element that matches is dropped whole.
   Elements not(String selector) {
     final group = _parseSelector(selector);
-    final evaluator = query.SelectorEvaluator();
     final out = <Element>[];
     try {
       for (final item in _items) {
-        if (evaluator.matches(item._el, group)) continue;
+        if (group.matches(item._el)) continue;
         final clone = item._el.clone(true);
         final found = <dom.Element>[];
-        evaluator.querySelectorAll(clone, group, found);
+        group.collect(clone, found);
         for (final m in found) {
           m.remove();
         }
         out.add(Element._(clone, _baseUri));
       }
     } on FormatException catch (e) {
-      throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
+      throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
+    } on StackOverflowError {
+      rethrow; // a document nested too deep, not a bad selector
     } catch (e) {
-      throw FormatException("invalid selector '$selector': $e");
+      throw ContentException("invalid selector '$selector': $e");
     }
     return Elements._(out, _baseUri);
   }
@@ -156,6 +166,98 @@ final class Elements extends Iterable<Element> {
   /// Links resolve against the base, so `$('a.item').attrs('href')` is the
   /// list of links to follow.
   List<String> attrs(String name) => [for (final e in _items) ?e.attr(name)];
+
+  /// The embedded data in these elements: every `<script>` of type
+  /// `application/json` or `application/ld+json`, or with id
+  /// `__NEXT_DATA__`, parsed into one [Json] list in document order.
+  /// Invalid ones are skipped. `page.json().$('**.user')` searches them all.
+  Json json() {
+    final out = <Object?>[];
+    for (final el in _queryRoots([for (final e in _items) e._el], 'script')) {
+      final type = (el.attributes['type'] ?? '').trim().toLowerCase();
+      if (type != 'application/json' && type != 'application/ld+json' && el.attributes['id'] != '__NEXT_DATA__') {
+        continue;
+      }
+      try {
+        out.add(Json.parse(el.text).value<Object>());
+      } on ContentException {
+        continue;
+      }
+    }
+    return Json.of(out);
+  }
+
+  /// The first table among these elements as rows of `header → cell text`.
+  /// The first row (`<th>` or `<td>`) names the columns; a `colspan`
+  /// repeats its cell; a nested table belongs to its own cell.
+  /// Empty when there is no table.
+  List<Map<String, String>> table() {
+    final table = _queryRoots([for (final e in _items) e._el], 'table').firstOrNull;
+    if (table == null) return const [];
+    final rows = <List<String>>[];
+    void collect(dom.Element parent) {
+      for (final child in parent.children) {
+        switch (child.localName) {
+          case 'thead' || 'tbody' || 'tfoot':
+            collect(child);
+          case 'tr':
+            final cells = <String>[];
+            for (final cell in child.children) {
+              if (cell.localName != 'td' && cell.localName != 'th') continue;
+              final span = (int.tryParse(cell.attributes['colspan'] ?? '') ?? 1).clamp(1, 1000);
+              final text = Element._(cell, _baseUri).text();
+              for (var k = 0; k < span; k++) {
+                cells.add(text);
+              }
+            }
+            rows.add(cells);
+        }
+      }
+    }
+
+    collect(table);
+    if (rows.isEmpty) return const [];
+    // The first row names the columns, <th> or not.
+    final header = rows.first;
+    return [
+      for (final row in rows.skip(1)) {for (var k = 0; k < row.length && k < header.length; k++) header[k]: row[k]},
+    ];
+  }
+
+  /// The first form among these elements, ready to post:
+  /// `client.post(f.action, body: .form({...f.fields, 'user': u}))`. The
+  /// [action] resolves against the base (the page itself when absent), the
+  /// method is upper case (`GET` by default), and [fields] holds every named
+  /// control's current value, hidden ones included (unchecked boxes, buttons
+  /// and file inputs left out). Null when there is no form.
+  ({String action, String method, Map<String, String> fields})? form() {
+    final form = _queryRoots([for (final e in _items) e._el], 'form').firstOrNull;
+    if (form == null) return null;
+    final fields = <String, String>{};
+    for (final c in _queryRoots([form], 'input, select, textarea')) {
+      final name = c.attributes['name'];
+      if (name == null || name.isEmpty || c.attributes.containsKey('disabled')) continue;
+      switch (c.localName) {
+        case 'textarea':
+          fields[name] = c.text;
+        case 'select':
+          final options = _queryRoots([c], 'option');
+          final chosen = options.where((o) => o.attributes.containsKey('selected')).firstOrNull ?? options.firstOrNull;
+          if (chosen != null) fields[name] = chosen.attributes['value'] ?? Element._(chosen, null).text();
+        default:
+          final type = (c.attributes['type'] ?? 'text').toLowerCase();
+          if (const {'submit', 'button', 'image', 'reset', 'file'}.contains(type)) continue;
+          if ((type == 'checkbox' || type == 'radio') && !c.attributes.containsKey('checked')) continue;
+          fields[name] = c.attributes['value'] ?? (type == 'checkbox' || type == 'radio' ? 'on' : '');
+      }
+    }
+    final action = Element._(form, _baseUri).attr('action');
+    return (
+      action: action == null || action.isEmpty ? (_baseUri?.toString() ?? '') : action,
+      method: (form.attributes['method'] ?? 'get').trim().toUpperCase(),
+      fields: fields,
+    );
+  }
 
   @override
   int get length => _items.length;
@@ -189,18 +291,19 @@ final class Element {
     List<dom.Element> found;
     try {
       final group = _parseSelector(selector);
-      final evaluator = query.SelectorEvaluator();
       found = [];
-      if (evaluator.matches(clone, group)) {
+      if (group.matches(clone)) {
         // Self matches whole (like Elements.without drops it): clear content.
         clone.nodes.clear();
         return Element._(clone, _baseUri);
       }
-      evaluator.querySelectorAll(clone, group, found);
+      group.collect(clone, found);
     } on FormatException catch (e) {
-      throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
+      throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
+    } on StackOverflowError {
+      rethrow; // a document nested too deep, not a bad selector
     } catch (e) {
-      throw FormatException("invalid selector '$selector': $e");
+      throw ContentException("invalid selector '$selector': $e");
     }
     for (final m in found) {
       m.remove();
@@ -269,7 +372,7 @@ final class Element {
             gap(newline: true);
             continue;
           }
-          final isBlock = tag != null && _blocks.contains(tag);
+          final isBlock = _blocks.contains(tag);
           if (isBlock && !pre && out.isNotEmpty) gap(newline: true);
           if ((tag == 'td' || tag == 'th') && !pre && out.isNotEmpty) gap(newline: false);
           final inner = pre || tag == 'pre';
@@ -306,7 +409,7 @@ final class Element {
 
   /// Parent element, or `null` at top level.
   Element? parent() {
-    final p = _el.parent;
+    final p = sel.up(_el);
     return p == null ? null : Element._(p, _baseUri);
   }
 }
@@ -358,21 +461,21 @@ const _blocks = {
 /// Parsed selectors, keyed by the selector string. Scrapes run the same
 /// handful of selectors on every page, so repeats are O(1). Bounded at 64
 /// entries (LRU: a hit moves to the end, a miss evicts the oldest).
-final _selectorCache = <String, css.SelectorGroup>{};
+final _selectorCache = <String, sel.Selector>{};
 
-/// Parse [selector] with the engine's parser; a bad selector is a
-/// [FormatException] naming it.
-css.SelectorGroup _parseSelector(String selector) {
+/// Parse [selector]; a bad selector is a [ContentException] naming it.
+sel.Selector _parseSelector(String selector) {
   final hit = _selectorCache.remove(selector);
   if (hit != null) {
     // Re-insert to mark most-recently-used.
     _selectorCache[selector] = hit;
     return hit;
   }
-  final errors = <css.Message>[];
-  final group = css.parseSelectorGroup(selector, errors: errors);
-  if (group == null || errors.isNotEmpty) {
-    throw FormatException("invalid selector '$selector': $errors");
+  final sel.Selector group;
+  try {
+    group = sel.Selector.parse(selector);
+  } on FormatException catch (e) {
+    throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset, e);
   }
   _selectorCache[selector] = group;
   if (_selectorCache.length > 64) {
@@ -384,10 +487,25 @@ css.SelectorGroup _parseSelector(String selector) {
 /// One query path for [Element.$] and [Elements.$]: every root that matches
 /// plus every matching descendant, in document order without duplicates.
 /// Roots match through the engine's `matches`, so no wrapper stands between
-/// a combinator and the real tree.
+/// a combinator and the real tree. A root inside another root is dropped
+/// first: the outer walk already covers it (`$('div').$('a')` on nested
+/// divs walks the tree once, not once per div).
 List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
   final group = _parseSelector(selector);
-  final evaluator = query.SelectorEvaluator();
+  if (roots.length > 1) {
+    final all = roots.toSet();
+    bool nested(dom.Element el) {
+      for (var p = sel.up(el); p != null; p = sel.up(p)) {
+        if (all.contains(p)) return true;
+      }
+      return false;
+    }
+
+    roots = [
+      for (final r in roots)
+        if (!nested(r)) r,
+    ];
+  }
   final seen = <dom.Element>{};
   final out = <dom.Element>[];
   void add(dom.Element el) {
@@ -396,19 +514,19 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
 
   try {
     for (final root in roots) {
-      if (evaluator.matches(root, group)) add(root);
+      if (group.matches(root)) add(root);
       final found = <dom.Element>[];
-      evaluator.querySelectorAll(root, group, found);
+      group.collect(root, found);
       for (final el in found) {
         add(el);
       }
     }
   } on FormatException catch (e) {
-    throw FormatException("invalid selector '$selector': ${e.message}", e.source, e.offset);
+    throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
   } on StackOverflowError {
     rethrow; // a document nested too deep, not a bad selector
   } catch (e) {
-    throw FormatException("invalid selector '$selector': $e");
+    throw ContentException("invalid selector '$selector': $e");
   }
   return out;
 }
@@ -428,7 +546,7 @@ extension ReaderHtml on Reader {
     } on FormatException catch (e) {
       final status = o.status();
       if (status == null || (status >= 200 && status < 300)) rethrow;
-      throw FormatException('${e.message} (HTTP $status)', e.source, e.offset);
+      throw ContentException('${e.message} (HTTP $status)', e.source, e.offset, e);
     }
   }
 }
@@ -447,6 +565,9 @@ extension ElementsFuture on Future<Elements> {
   Future<List<String>> texts() async => (await this).texts();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<List<String>> attrs(String name) async => (await this).attrs(name);
+  Future<Json> json() async => (await this).json();
+  Future<List<Map<String, String>>> table() async => (await this).table();
+  Future<({String action, String method, Map<String, String> fields})?> form() async => (await this).form();
 }
 
 /// Future mirrors for [Element].

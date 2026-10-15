@@ -8,9 +8,14 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import '../core.dart';
+
 /// An expanded AES key (128, 192 or 256 bits).
 final class Aes {
-  Aes(List<int> key) : assert(key.length == 16 || key.length == 24 || key.length == 32), _rounds = key.length ~/ 4 + 6 {
+  Aes(List<int> key) : _rounds = key.length ~/ 4 + 6 {
+    if (key.length != 16 && key.length != 24 && key.length != 32) {
+      throw ArgumentError.value(key.length, 'key', 'AES keys are 16, 24 or 32 bytes');
+    }
     _expand(Uint8List.fromList(key));
   }
 
@@ -138,7 +143,7 @@ final class Aes {
 
   /// CBC decryption of [data] (a multiple of 16 bytes) with [iv].
   Uint8List cbcDecrypt(Uint8List data, List<int> iv) {
-    if (data.length % 16 != 0) throw const FormatException('corrupt archive: encrypted data is not whole AES blocks');
+    if (data.length % 16 != 0) throw const ContentException('corrupt archive: encrypted data is not whole AES blocks');
     final out = Uint8List(data.length);
     final prev = Uint8List.fromList(iv);
     for (var o = 0; o < data.length; o += 16) {

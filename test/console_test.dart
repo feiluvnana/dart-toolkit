@@ -8,6 +8,14 @@ import 'package:test/test.dart';
 import 'support/child.dart';
 
 void main() {
+  test('Console.table aligns by cell width, numbers right, plain when piped', () async {
+    final r = await runDart('''
+import 'package:dart_toolkit/console.dart';
+void main() => Console.table([['日本', 3, null], ['abc', 120, 'x']], header: ['name', 'n', 'note']);
+''');
+    expect(r.stdout, 'name  n    note\n日本    3\nabc   120  x\n');
+  });
+
   group('Console.choose', () {
     test('empty items is an ArgumentError', () {
       expect(Console.choose('Pick', <String>[], label: (s) => s), throwsArgumentError);
@@ -41,6 +49,62 @@ Future<void> main() async {
     });
   });
 
+  group('piped stdin, async', () {
+    test('ask on piped stdin keeps timers running while it waits', () async {
+      final r = await runDart(
+        '''
+import 'dart:async';
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async {
+  var ticks = 0;
+  final t = Timer.periodic(const Duration(milliseconds: 20), (_) => ticks++);
+  final a = await Console.ask('first?');
+  t.cancel();
+  print('a=\$a ticks=\${ticks > 5}');
+}
+''',
+        stdin: const [(Duration(milliseconds: 600), 'one\n')],
+      );
+      expect(r.stdout, contains('a=one ticks=true'));
+      expect(r.exitCode, 0);
+    });
+  });
+
+  group('exit hooks', () {
+    test('a second SIGINT during cleanup exits at once', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX signals');
+      final dir = await Directory.systemTemp.createTemp('sig2');
+      addTearDown(() => dir.delete(recursive: true));
+      final script = File('${dir.path}/main.dart')
+        ..writeAsStringSync('''
+import 'dart:async';
+import 'dart:io';
+import 'package:dart_toolkit/src/exit.dart' as exit;
+Future<void> main() async {
+  exit.onExit(() async {
+    stdout.writeln('cleaning');
+    await Future<void>.delayed(const Duration(seconds: 30));
+  });
+  stdout.writeln('ready');
+  await Future<void>.delayed(const Duration(seconds: 60));
+}
+''');
+      final p = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        script.path,
+      ]);
+      final lines = p.stdout.transform(utf8.decoder).transform(const LineSplitter()).asBroadcastStream();
+      await lines.firstWhere((l) => l == 'ready').timeout(const Duration(seconds: 30));
+      p.kill(ProcessSignal.sigint);
+      await lines.firstWhere((l) => l == 'cleaning').timeout(const Duration(seconds: 10));
+      final sw = Stopwatch()..start();
+      p.kill(ProcessSignal.sigint);
+      // The hook would hold the exit for its 5 s bound.
+      expect(await p.exitCode.timeout(const Duration(seconds: 20)), 130);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+  });
+
   group('Console.spin', () {
     test('returns the work result', () async {
       expect(await Console.spin('Work', Future.value(42)), 42);
@@ -64,9 +128,10 @@ Future<void> main() async {
       await second.close();
     });
 
-    test('two live bars name the fix', () async {
+    test('two live bars may run at once', () async {
       final open = Console.bar(10);
-      expect(() => Console.bar(5), throwsA(isA<StateError>().having((e) => e.message, 'message', contains('close()'))));
+      final other = Console.bar(5)..tick();
+      await other.close();
       await open.close();
     });
 
@@ -140,13 +205,20 @@ Future<void> main() async {
       await bar.close();
     });
 
-    test('a second live line is a StateError', () async {
-      final bar = Console.bar(1);
-      expect(() => Console.bar(2), throwsStateError);
-      expect(() => Console.spin('x', Future<void>.value()), throwsStateError);
-      await bar.close();
-      final ok = Console.bar(1);
-      await ok.close();
+    test('parallel spins and a spin inside a bar print one line each when piped', () async {
+      final r = await runDart('''
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async {
+  final bar = Console.bar(2, label: 'outer');
+  await Future.wait([
+    Console.spin('one', Future<void>.delayed(const Duration(milliseconds: 50))),
+    Console.spin('two', Future<void>.delayed(const Duration(milliseconds: 10))),
+  ]);
+  bar.tick(2);
+}
+''');
+      expect(r.exitCode, 0, reason: r.stderr as String);
+      expect(r.stderr, '✓ two\n✓ one\nouter 2/2\n');
     });
 
     test('as a Pipe it counts bytes and closes itself', () async {
@@ -190,7 +262,7 @@ final class _Boom implements Pipe {
   void abort(Object error) {}
 }
 
-final class _Writer implements Writer {
+final class _Writer with Writer {
   _Writer(this._file);
   final File _file;
   @override
@@ -202,7 +274,7 @@ final class _Writer implements Writer {
 }
 
 /// Fails before ever listening (an unopenable target).
-final class _ThrowBeforeRead implements Writer {
+final class _ThrowBeforeRead with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {
     throw ArgumentError('cannot open target');

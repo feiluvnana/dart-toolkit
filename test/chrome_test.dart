@@ -19,6 +19,7 @@ void main() {
   late HttpServer server;
   late String base;
   final hits = <String>[];
+  final hang = Completer<void>(); // never completes: a long-poll that never answers
 
   setUpAll(() async {
     browser = await Chrome.launch();
@@ -44,7 +45,9 @@ void main() {
         request.response.headers.set('content-disposition', 'attachment; filename="hello.txt"');
         request.response.write('download-me');
       } else if (path == '/cookie') {
-        request.response.headers.set('set-cookie', 'tok=abc; Path=/');
+        request.response.headers.add('set-cookie', 'tok=abc; Path=/');
+        request.response.headers.add('set-cookie', 'b64=YQ==; Path=/');
+        request.response.headers.add('set-cookie', 'rur="NHA\\05412"; Path=/');
         request.response.write('<title>C</title>');
       } else if (path == '/slow-img') {
         await Future<void>.delayed(const Duration(milliseconds: 1500));
@@ -63,6 +66,21 @@ void main() {
           '<script>setTimeout(() => { const i = new Image();'
           ' i.src = "/slow-img?b=$b"; }, 100);</script>',
         );
+      } else if (path == '/spa') {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write(
+          '<script>fetch("/api/graphql/query?q=1").then(() => '
+          'setTimeout(() => { document.cookie = "sid=late; path=/"; }, 300));</script>',
+        );
+      } else if (path == '/api/graphql/query') {
+        request.response.headers.contentType = ContentType.json;
+        request.response.headers.set('x-kind', 'data');
+        request.response.write('{"user":{"pk":42}}');
+      } else if (path == '/hang') {
+        await hang.future;
+      } else if (path == '/longpoll') {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write('<script>fetch("/hang")</script>');
       } else if (path == '/chain') {
         // A slow request, then a follow-up 200 ms after it finished.
         request.response.headers.contentType = ContentType.html;
@@ -244,10 +262,43 @@ void main() {
       await page.close();
     });
 
-    test('cookies() feeds Http', () async {
+    test('cookies() is a jar that feeds Http and survives encode/parse', () async {
       final page = await browser.open('$base/cookie');
-      expect(await page.cookies(), contains('tok=abc'));
+      final jar = await page.cookies();
+      final header = jar.header('$base/')!;
+      expect(header, contains('tok=abc'));
+      // Regression: values with `=` or `"` were quoted into an invalid header.
+      expect(header, contains('b64=YQ=='));
+      expect(header, contains(r'rur="NHA\05412"'));
+      expect(jar['tok'], 'abc');
+      expect(Cookies.parse(jar.encode())['b64'], 'YQ==');
       await page.close();
+    });
+
+    test('cookie() waits until the page sets it; responses() captures XHR/fetch', () async {
+      final page = await browser.open('about:blank');
+      final captured = page.responses('*/graphql/query*').first;
+      await page.go('$base/spa');
+      final c = await captured;
+      expect((c.status(), c.header('X-Kind')), (200, 'data'));
+      expect(c.url(), '$base/api/graphql/query?q=1');
+      expect(await c.text(), '{"user":{"pk":42}}');
+      expect(await page.cookie('sid', timeout: 5.seconds), 'late');
+      await expectLater(page.cookie('never', timeout: 300.milliseconds), throwsA(isA<TimeoutException>()));
+      await page.close();
+    });
+
+    test('closing the tab during cookie() or wait() is BrowserException', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final waiting = expectLater(
+        page.cookie('never', timeout: 10.seconds),
+        throwsA(isA<BrowserException>().having((e) => e.message, 'message', 'browser closed')),
+      );
+      final selecting = expectLater(page.wait('#never', timeout: 10.seconds), throwsA(isA<BrowserException>()));
+      await Future<void>.delayed(300.milliseconds);
+      await page.close();
+      await waiting;
+      await selecting;
     });
   });
 
@@ -266,6 +317,33 @@ void main() {
         throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('#missing'))),
       );
       await page.close();
+    });
+
+    test('timeouts print a human limit once (regression: 0:00:00.300000 twice)', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      final e = await page
+          .click('#nope', timeout: const Duration(milliseconds: 300))
+          .then<Object?>((_) => null, onError: (Object e) => e);
+      expect(e, isA<TimeoutException>());
+      expect(e.toString(), 'TimeoutException: no actionable #nope after 300 ms');
+      expect((e as TimeoutException).duration, const Duration(milliseconds: 300));
+      await page.close();
+    });
+
+    test('every action wraps engine failures as BrowserException (regression: puppeteer types leaked)', () async {
+      final page = await browser.open(dataUrl('<input id="q">'));
+      await page.close();
+      await expectLater(page.press('enter'), throwsA(isA<BrowserException>()));
+      await expectLater(page.press('wheeldown'), throwsA(isA<BrowserException>()));
+      await expectLater(page.scroll(), throwsA(isA<BrowserException>()));
+      await expectLater(page.fill('#q', 'x'), throwsA(isA<BrowserException>()));
+      await expectLater(page.press('nokey'), throwsArgumentError);
+    });
+
+    test('a reader on a failed page future never fails unhandled (regression)', () async {
+      final reader = Future<Page>.error(StateError('no page')).screenshot();
+      await Future<void>.delayed(Duration.zero);
+      await expectLater(reader.bytes(), throwsStateError);
     });
 
     test('fill replaces the value with keystrokes', () async {
@@ -323,6 +401,11 @@ void main() {
       );
       await page.select('#s', 'b');
       expect(await page.run<String>("document.querySelector('#s').value"), 'b');
+      // Regression: a missing option threw TimeoutException at once.
+      await expectLater(
+        page.select('#s', 'zzz'),
+        throwsA(isA<BrowserException>().having((e) => e.selector, 'selector', '#s')),
+      );
       await page.close();
     });
 
@@ -403,6 +486,16 @@ void main() {
       await page.idle();
       sw.stop();
       expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(1000));
+      await page.close();
+    });
+  });
+
+  group('Page idle with a long-poll', () {
+    test('a request open over 5 s stops holding idle (regression: idle never settled)', () async {
+      final page = await browser.open('$base/longpoll');
+      final sw = Stopwatch()..start();
+      await page.idle(timeout: const Duration(seconds: 15));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 8)));
       await page.close();
     });
   });

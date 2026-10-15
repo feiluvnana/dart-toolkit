@@ -5,6 +5,7 @@
 library;
 
 import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/cli.dart';
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
@@ -15,11 +16,16 @@ const site = 'https://key.visualarts.gr.jp/key20th/';
 const soundtrack = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
 const scans = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
 const formats = ['mp3'];
-const browserHeaders = {
-  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'accept-language': 'en-US,en;q=0.9',
-  'upgrade-insecure-requests': '1',
-};
+final http = Http.client(
+  headers: {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'upgrade-insecure-requests': '1',
+  },
+  timeout: 60.seconds,
+  retries: 3,
+  resume: true,
+);
 
 final box = Fs.dir('Key BOX -for two decades- (2019)');
 final keyBoxArt = box.dir('Others').dir('KeyBOX');
@@ -44,7 +50,13 @@ final class Disc {
   File track(int number, String title, String format) => folder.dir(format).file('$number. $title.$format');
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) => Command(
+  'keybox',
+  'Download the Key BOX set into "${box.path()}" and zip it.',
+  handler: (_) => download(),
+).run(args);
+
+Future<void> download() async {
   final keyBox = await page('${site}key_box.html');
   final discs = readDiscs(keyBox);
   final assets = [
@@ -54,19 +66,12 @@ Future<void> main() async {
     ...topics(await page('${site}topics.html')),
     ...await songs(discs),
   ];
-  final missing = <Asset>[];
-  for (final asset in assets) {
-    if (!await asset.$2.exists()) missing.add(asset);
-  }
-  final bar = Console.bar(missing.length, label: 'Downloading');
-  await Pool.map(missing, (a) async => await (get(a.$1) > a.$2), onResult: (_) => bar.tick());
+  final bar = Console.bar(assets.length, label: 'Downloading');
+  await Pool.map(assets, (a) => http.get(a.$1) > a.$2, onDone: bar.tick);
   await Console.spin('Zipping', (Archive.archive(['.'], dir: box.path()) > Fs.file('${box.path()}.zip')));
 }
 
-Future<Response> get(String url) =>
-    Http.get(url, headers: browserHeaders, timeout: const Duration(seconds: 60), retries: 3);
-
-Future<Elements> page(String url) => get(url).html();
+Future<Elements> page(String url) => http.get(url).html();
 
 String nameOf(String url) => Uri.parse(url).pathSegments.last;
 
@@ -74,7 +79,6 @@ Map<int, Disc> readDiscs(Elements page) {
   final discs = <int, Disc>{};
   for (final item in page.$('.key_cd_track_box ul li')) {
     final title = item.$('.track_disc_title').text();
-    if (title.isEmpty) continue;
     final match = discNumber.firstMatch(title);
     if (match == null) continue;
     final disc = int.parse(match[1]!);
@@ -96,9 +100,7 @@ List<Asset> discArtwork(Elements page, Map<int, Disc> discs) {
     if (url == null) continue;
     final text = item.text();
     if (discNumber.firstMatch(text)?[1] case final disc?) {
-      final folder = discs[int.parse(disc)];
-      if (folder == null) continue;
-      out.add((url, folder.folder.file(nameOf(url))));
+      if (discs[int.parse(disc)] case final d?) out.add((url, d.folder.file(nameOf(url))));
     } else if (text.contains('ALL')) {
       out.add((url, keyBoxArt.file(nameOf(url))));
     }
@@ -148,32 +150,23 @@ List<Asset> boxArtwork() {
 
 List<Asset> messages(Elements page) {
   const groups = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
-  final out = <Asset>[];
-  final sections = page.$('.message_white_box').take(groups.length).toList();
-  for (var g = 0; g < sections.length; g++) {
-    var i = 0;
-    for (final a in sections[g].$('a[href*="message_"]')) {
-      final url = a.attr('href');
-      if (url == null) continue;
-      i++;
-      final title = a.attr('title') ?? a.text().replaceAll('[New Message]', '');
-      out.add((url, tributes.dir(groups[g]).file('${studio(url)}${'$i'.padLeft(2, '0')}_${Fs.sanitize(title)}.jpg')));
-    }
+  Asset tribute(String group, int i, Element a) {
+    final url = a.attr('href')!; // the selector requires it
+    final title = a.attr('title') ?? a.text().replaceAll('[New Message]', '');
+    return (url, tributes.dir(group).file('${studio(url)}${'${i + 1}'.padLeft(2, '0')}_${Fs.sanitize(title)}.jpg'));
   }
-  return out;
+
+  return [
+    for (final (g, section) in page.$('.message_white_box').take(groups.length).indexed)
+      for (final (i, a) in section.$('a[href*="message_"]').indexed) tribute(groups[g], i, a),
+  ];
 }
 
 String studio(String url) => url.contains('wfs') ? 'WFS_' : (url.contains('cygames') ? 'Cygames_' : '');
 
-List<Asset> topics(Elements page) {
-  final out = <Asset>[];
-  for (final image in page.$('.topics_box img')) {
-    final src = image.attr('src');
-    if (src == null) continue;
-    out.add((src, events.file(nameOf(src))));
-  }
-  return out;
-}
+List<Asset> topics(Elements page) => [
+  for (final src in page.$('.topics_box img').attrs('src')) (src, events.file(nameOf(src))),
+];
 
 /// The soundtrack's song pages, then each page's file link for every format not on disk yet.
 Future<List<Asset>> songs(Map<int, Disc> discs) async {
@@ -197,19 +190,16 @@ Future<List<Asset>> songs(Map<int, Disc> discs) async {
     if (missing.isNotEmpty) wanted.add((song, missing));
   }
   final bar = Console.bar(wanted.length, label: 'Song pages');
-  final found = await Pool.map(wanted, songFiles, onResult: (_) => bar.tick());
-  return found.expand((files) => files).toList();
+  return [for (final files in await Pool.map(wanted, songFiles, onDone: bar.tick)) ...files];
 }
 
 /// One song page's file links.
 Future<List<Asset>> songFiles((String, Map<String, File>) song) async {
   final doc = await page(song.$1);
-  final out = <Asset>[];
-  for (final entry in song.$2.entries) {
-    final url = doc.$('a[href*=".${entry.key}"]').attr('href');
-    if (url != null) out.add((url, entry.value));
-  }
-  return out;
+  return [
+    for (final MapEntry(key: format, value: to) in song.$2.entries)
+      if (doc.$('a[href*=".$format"]').attr('href') case final url?) (url, to),
+  ];
 }
 
 int numberIn(String path, RegExp pattern, {required String orIn}) =>

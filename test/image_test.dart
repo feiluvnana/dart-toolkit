@@ -63,6 +63,14 @@ void main() {
       expect(() => Image.decode([1, 2, 3]), throwsFormatException);
     });
 
+    test('an unreadable header still decodes under the limit (regression: (0,0) skipped the check)', () async {
+      // PNG magic, then 2 MB of junk: the header gives no size, so the
+      // decode runs (on a worker) and fails as content, never as a bomb.
+      final junk = Uint8List(2 << 20)..setRange(0, 8, tinyPng);
+      expect(() => Image.decode(junk), throwsFormatException);
+      await expectLater(_Mem(junk).image(), throwsFormatException);
+    });
+
     test('M12: a huge declared size is refused before decoding', () async {
       final bomb = _bombPng();
       expect(
@@ -116,8 +124,8 @@ void main() {
 
     test('F14: .ico above 256px is an ArgumentError', () async {
       final big = Image.decode(tinyPng).resize(width: 300, height: 300);
-      // Encoding is lazy: the error surfaces when read.
-      await expectLater(big.encode(ImageFormat.ico).bytes(), throwsArgumentError);
+      // Regression: refused in encode(), not later when the reader is read.
+      expect(() => big.encode(ImageFormat.ico), throwsArgumentError);
       // 256px is fine.
       final ok = Image.decode(tinyPng).resize(width: 256, height: 256);
       expect(await ok.encode(ImageFormat.ico).bytes(), isNotEmpty);
@@ -127,6 +135,12 @@ void main() {
       final big = Image.decode(tinyPng).resize(width: 4, height: 4);
       expect(big.crop(0, 0, 2, 2).width(), 2);
       expect(() => big.crop(3, 3, 2, 2), throwsRangeError);
+    });
+
+    test('webp is refused in encode() (regression: only when read)', () {
+      final image = Image.decode(tinyPng);
+      expect(() => image.encode(ImageFormat.webp), throwsArgumentError);
+      expect(() => Future.value(image).encode(ImageFormat.webp), throwsArgumentError);
     });
 
     test('encode is a Reader, captured when read', () async {

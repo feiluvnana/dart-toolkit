@@ -129,7 +129,9 @@ String _one(String name, String whole) {
 }
 
 /// Split a binding like `'b escape'` into its alternatives.
-List<String> splitBinding(String binding) => binding.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+List<String> splitBinding(String binding) => binding.split(_spaces).where((s) => s.isNotEmpty).toList();
+
+final _spaces = RegExp(r'\s+');
 
 /// True when [keyName] (already canonical, e.g. from the decoder) matches
 /// [binding] (`'b escape'`, `'ctrl+c'`). Alternatives are canonicalized

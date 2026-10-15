@@ -860,7 +860,7 @@ extension RegionWidgets on Region {
   }
 
   static String _oneLine(String text) =>
-      text.replaceAll('\r\n', ' ').replaceAll(RegExp('[\r\n\t]'), ' ').replaceAll(RegExp('[\x00-\x1f\x7f]'), '');
+      text.replaceAll('\r\n', ' ').replaceAll(_lineBreaksRe, ' ').replaceAll(_controlsRe, '');
 
   /// A button. Runs [action] on click or on enter/space while focused.
   Region button(String label, FutureOr<void> Function() action) {
@@ -889,18 +889,13 @@ extension RegionWidgets on Region {
   /// A static progress snapshot laid out like `Console.bar`.
   Region bar(int done, int? total, {String? label}) {
     final lab = label == null ? '' : '$label ';
-    final frac = total == null || total <= 0 ? 0.0 : (done / total).clamp(0.0, 1.0);
     final counts = total != null && total > 0 ? '$done/$total' : '$done';
     var width = 20;
     while (width > 10) {
       if (term.displayWidth('$lab${'_' * width}  $counts') <= _w) break;
       width--;
     }
-    final cells = frac * width;
-    final full = cells.floor();
-    final half = cells - full >= 0.5 && full < width;
-    final (on, mid, off) = _s._caps.ascii ? ('#', '>', '-') : ('━', '╸', '─');
-    final glyphs = '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
+    final glyphs = fmt.barGlyphs(done, total, width, ascii: _s._caps.ascii);
     write('$lab$glyphs  $counts');
     return this;
   }
@@ -909,12 +904,14 @@ extension RegionWidgets on Region {
   /// [since], the elapsed time follows the label (`Thinking… (12s)`).
   Region spin(String label, {DateTime? since}) {
     _s._spinVisible = true;
-    final frames = _s._caps.ascii
-        ? const ['-', '\\', '|', '/']
-        : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    final frames = fmt.spinFrames(ascii: _s._caps.ascii);
     final secs = since == null ? null : DateTime.now().difference(since).inSeconds;
     final time = secs == null ? '' : ' (${secs >= 60 ? '${secs ~/ 60}m ${secs % 60}s' : '${secs}s'})';
     write('${frames[_s._spinTick % frames.length]} $label$time');
     return this;
   }
 }
+
+/// One-line field text: breaks become spaces, other controls go (compiled once).
+final _lineBreaksRe = RegExp('[\r\n\t]');
+final _controlsRe = RegExp('[\x00-\x1f\x7f]');

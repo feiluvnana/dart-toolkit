@@ -4,7 +4,7 @@ part of 'rar.dart';
 // LZ + Huffman decoder with delta-coded tables, the six standard VM
 // filters (run natively: RAR's VM bytecode is recognised by its CRC, never
 // executed) and AES-128 under RAR's SHA-1 key rounds. PPMd blocks and RAR
-// 1.5/2.x members are named in a FormatException.
+// 1.5/2.x members are named in a ContentException.
 
 /// The members of a RAR4 archive in [b].
 List<RarEntry> _readRar4(Uint8List b, String? password) {
@@ -18,15 +18,15 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
     var hp = 0;
     int headerEnd;
     if (encryptedHeaders) {
-      if (password == null) throw const FormatException('archive is encrypted (pass password:)');
-      if (pos + 8 + 16 > b.length) break;
+      if (password == null) throw const ContentException('archive is encrypted (pass password:)');
+      if (pos + 8 + 16 > b.length) _bad('archive ends without its end block (truncated)');
       final salt = Uint8List.sublistView(b, pos, pos + 8);
       final k = _Key4.derive(password, salt);
       final first = k.aes.cbcDecrypt(Uint8List.sublistView(b, pos + 8, pos + 24), k.iv);
       final size = first[5] | first[6] << 8;
-      if (size < 7) throw const FormatException('wrong password or corrupt archive');
+      if (size < 7) throw const ContentException('wrong password or corrupt archive');
       final total = (size + 15) & ~15;
-      if (pos + 8 + total > b.length) throw const FormatException('wrong password or corrupt archive');
+      if (pos + 8 + total > b.length) throw const ContentException('wrong password or corrupt archive');
       h = k.aes.cbcDecrypt(Uint8List.sublistView(b, pos + 8, pos + 8 + total), k.iv);
       headerEnd = pos + 8 + total;
     } else {
@@ -39,15 +39,19 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
     final flags = h[hp + 3] | h[hp + 4] << 8;
     final size = h[hp + 5] | h[hp + 6] << 8;
     if (size < 7 || hp + size > h.length) {
-      if (encryptedHeaders) throw const FormatException('wrong password or corrupt archive');
+      if (encryptedHeaders) throw const ContentException('wrong password or corrupt archive');
       _bad('header past the end');
     }
     if (type != 0x72 && (crc32(h, start: hp + 2, end: hp + size) & 0xFFFF) != crc) {
-      if (encryptedHeaders) throw const FormatException('wrong password or corrupt archive');
+      if (encryptedHeaders) throw const ContentException('wrong password or corrupt archive');
       _bad('header CRC');
     }
     var addSize = 0;
-    if (flags & 0x8000 != 0 || type == 0x74 || type == 0x7A) addSize = _u32le(h, hp + 7);
+    final hasAdd = flags & 0x8000 != 0 || type == 0x74 || type == 0x7A;
+    // A file header's fixed part is 32 bytes (40 with 64-bit sizes).
+    final least = type == 0x74 ? (flags & 0x100 != 0 ? 40 : 32) : (hasAdd ? 11 : 7);
+    if (size < least) _bad('header too short');
+    if (hasAdd) addSize = _u32le(h, hp + 7);
     final dataStart = encryptedHeaders ? headerEnd : pos + size;
     if (type == 0x74) {
       final hi = flags & 0x100 != 0 ? _u32le(h, hp + 32) : 0;
@@ -56,10 +60,20 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
     if (dataStart + addSize > b.length) _bad('data past the end');
     switch (type) {
       case 0x73: // main
-        if (flags & 0x0001 != 0) throw const FormatException('multi-volume RAR archives are not supported');
+        if (flags & 0x0001 != 0) throw const ContentException('multi-volume RAR archives are not supported');
         encryptedHeaders = flags & 0x0080 != 0;
       case 0x74: // file
-        final entry = _file4(h, hp, flags, b, dataStart, addSize, password, flags & 0x10 != 0 ? run : run = _Run4());
+        final entry = _file4(
+          h,
+          hp,
+          size,
+          flags,
+          b,
+          dataStart,
+          addSize,
+          password,
+          flags & 0x10 != 0 ? run : run = _Run4(),
+        );
         out.add(entry);
       case 0x7B: // end
         return out;
@@ -68,12 +82,24 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
     }
     pos = dataStart + addSize;
   }
-  return out;
+  // RAR 2.9 and later always write an end block: without it the archive
+  // was cut short.
+  _bad('archive ends without its end block (truncated)');
 }
 
 int _u32le(Uint8List b, int i) => b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
 
-RarEntry _file4(Uint8List h, int hp, int flags, Uint8List b, int dataStart, int packSize, String? password, _Run4 run) {
+RarEntry _file4(
+  Uint8List h,
+  int hp,
+  int headerSize,
+  int flags,
+  Uint8List b,
+  int dataStart,
+  int packSize,
+  String? password,
+  _Run4 run,
+) {
   var size = _u32le(h, hp + 11);
   final host = h[hp + 15];
   final crc = _u32le(h, hp + 16);
@@ -86,18 +112,19 @@ RarEntry _file4(Uint8List h, int hp, int flags, Uint8List b, int dataStart, int 
     size += _u32le(h, hp + 36) * 0x100000000;
     p += 8;
   }
+  if (p + nameSize + (flags & 0x400 != 0 ? 8 : 0) > hp + headerSize) _bad('file header too short');
   final rawName = Uint8List.sublistView(h, p, p + nameSize);
   p += nameSize;
   final name = _name4(rawName, flags & 0x200 != 0).replaceAll('\\', '/');
   Uint8List? salt;
   if (flags & 0x400 != 0) salt = Uint8List.sublistView(h, p, p + 8);
-  if (flags & 0x03 != 0) throw const FormatException('multi-volume RAR archives are not supported');
+  if (flags & 0x03 != 0) throw const ContentException('multi-volume RAR archives are not supported');
   final isDir = flags & 0xE0 == 0xE0 || (host != 3 && attrs & 0x10 != 0);
   final mode = host == 3 ? attrs & 0xFFFF : 0;
   final isLink = mode & 0xF000 == 0xA000;
   if (isDir) return RarEntry(name, true, mode, () => Uint8List(0));
   final encrypted = flags & 0x04 != 0;
-  if (encrypted && password == null) throw FormatException('archive member is encrypted: $name (pass password:)');
+  if (encrypted && password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
   final packed = Uint8List.sublistView(b, dataStart, dataStart + packSize);
   final index = run.add(() {
     var input = packed;
@@ -113,11 +140,11 @@ RarEntry _file4(Uint8List h, int hp, int flags, Uint8List b, int dataStart, int 
       data = run.data(index);
     } on FormatException {
       // A wrong key turns the data into noise the decoder chokes on.
-      if (encrypted) throw FormatException('wrong password or corrupt archive: $name');
+      if (encrypted) throw ContentException('wrong password or corrupt archive: $name');
       rethrow;
     }
     if (crc32(data) != crc) {
-      throw FormatException(
+      throw ContentException(
         encrypted ? 'wrong password or corrupt archive: $name' : 'corrupt archive: RAR CRC of $name',
       );
     }
@@ -178,11 +205,15 @@ final class _Key4 {
   final Aes aes;
   final Uint8List iv;
 
+  // Bounded, oldest out: an encrypted-headers archive salts every header.
   static final _cache = <String, _Key4>{};
 
   static _Key4 derive(String password, Uint8List salt) {
     final id = '${salt.join(',')}:$password';
-    return _cache[id] ??= () {
+    final hit = _cache[id];
+    if (hit != null) return hit;
+    if (_cache.length >= 16) _cache.remove(_cache.keys.first);
+    return _cache[id] = () {
       final raw = <int>[];
       for (final c in password.codeUnits) {
         raw
@@ -301,10 +332,13 @@ final class _Sha1 {
   }
 }
 
-/// One RAR4 solid run: members decode in order through one window.
+/// One RAR4 solid run: members decode in order through one window, each
+/// kept only until it is taken (as [_Run]).
 final class _Run4 {
   final _inputs = <(Uint8List, int, int, int) Function()>[];
-  final _done = <Uint8List>[];
+  final _ready = <int, Uint8List>{};
+  final _taken = <int>{};
+  var _next = 0;
   _Unpack3? _unpack;
 
   int add((Uint8List, int, int, int) Function() input) {
@@ -313,22 +347,35 @@ final class _Run4 {
   }
 
   Uint8List data(int index) {
-    while (_done.length <= index) {
-      final (packed, method, size, version) = _inputs[_done.length]();
+    final ready = _ready.remove(index);
+    if (ready != null) return _hand(index, ready);
+    if (index < _next) {
+      _unpack = null;
+      _next = 0;
+    }
+    while (true) {
+      final i = _next++;
+      final (packed, method, size, version) = _inputs[i]();
       final u = _unpack ??= _Unpack3();
+      final Uint8List bytes;
       if (method == 0x30) {
-        if (packed.length < size) _bad('stored member is short');
-        final bytes = Uint8List.sublistView(packed, 0, size);
+        if (size < 0 || packed.length < size) _bad('stored member is short');
+        bytes = Uint8List.sublistView(packed, 0, size);
         u.append(bytes);
-        _done.add(bytes);
       } else {
         if (version != 29 && version != 36) {
-          throw FormatException('unsupported RAR4 compression version $version (RAR 1.5/2.x)');
+          throw ContentException('unsupported RAR4 compression version $version (RAR 1.5/2.x)');
         }
-        _done.add(u.decode(packed, size, solid: _done.isNotEmpty));
+        bytes = u.decode(packed, size, solid: i > 0);
       }
+      if (i == index) return _hand(i, bytes);
+      if (!_taken.contains(i)) _ready[i] = bytes;
     }
-    return _done[index];
+  }
+
+  Uint8List _hand(int index, Uint8List bytes) {
+    _taken.add(index);
+    return bytes;
   }
 }
 
@@ -432,8 +479,11 @@ final class _Unpack3 {
   }
 
   Uint8List decode(Uint8List input, int size, {required bool solid}) {
+    if (size < 0) _bad('size $size');
     final begin = _pos;
-    _grow(_pos + size);
+    // A header can claim any size: past the ceiling the window grows only
+    // as the data really decodes.
+    _grow(_pos + (size < declaredCeiling ? size : declaredCeiling));
     if (!solid) {
       _old.fillRange(0, 4, 0);
       _lastLen = 0;
@@ -452,16 +502,16 @@ final class _Unpack3 {
     final filters = <_Filter3>[];
     if (!_tablesRead || !solid) _readTables(r);
     final limit = begin + size;
-    final w = _window; // grown to fit above
     while (_pos < limit) {
       if (r.pos > r.end + 64) _bad('data ends early');
+      if (_pos == _window.length) _grow(_pos + 1);
       if (_ppmBlock) {
         if (!_ppmStep(filters, limit)) break;
         continue;
       }
       final n = _main!.decode(r);
       if (n < 256) {
-        w[_pos++] = n;
+        _window[_pos++] = n;
       } else if (n >= 271) {
         final k = n - 271;
         var length = _lDecode[k] + 3;
@@ -558,6 +608,7 @@ final class _Unpack3 {
     final from = _pos - distance;
     if (from < 0) _bad('distance before the start');
     if (_pos + length > limit) length = limit - _pos;
+    _grow(_pos + length);
     final w = _window;
     if (distance >= length) {
       w.setRange(_pos, _pos + length, w, from);
@@ -799,9 +850,12 @@ final class _Unpack3 {
       (29, 0x0E06077D) => 4, // delta
       (149, 0x1C2C5DC8) => 5, // RGB
       (216, 0xBC85E701) => 6, // audio
-      _ => throw const FormatException('unsupported RAR4 filter (custom VM code)'),
+      _ => throw const ContentException('unsupported RAR4 filter (custom VM code)'),
     };
   }
+
+  /// unrar's bound on delta and audio channels.
+  static const _maxChannels = 1024;
 
   void _runFilter(Uint8List out, _Filter3 f, int at) {
     final n = f.length;
@@ -835,10 +889,10 @@ final class _Unpack3 {
           }
         }
       case 3:
-        throw const FormatException('unsupported RAR4 Itanium filter');
+        throw const ContentException('unsupported RAR4 Itanium filter');
       case 4: // delta
         final channels = r[0];
-        if (channels <= 0) _bad('delta channels');
+        if (channels <= 0 || channels > _maxChannels) _bad('delta channels');
         var s = 0;
         for (var c = 0; c < channels; c++) {
           var prev = 0;
@@ -872,7 +926,7 @@ final class _Unpack3 {
         }
       case 6: // audio
         final channels = r[0];
-        if (channels <= 0) _bad('audio channels');
+        if (channels <= 0 || channels > _maxChannels) _bad('audio channels');
         var s = 0;
         int signed(int b) => b >= 128 ? b - 256 : b;
         for (var c = 0; c < channels; c++) {

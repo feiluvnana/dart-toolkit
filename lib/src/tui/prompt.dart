@@ -129,7 +129,7 @@ extension on _Session<dynamic> {
 
   void _promptText(_Typed p, String text, bool paste) {
     final clean = paste
-        ? text.replaceAll('\r\n', ' ').replaceAll(RegExp('[\r\n\t]'), ' ').replaceAll(RegExp('[\x00-\x1f\x7f]'), '')
+        ? text.replaceAll('\r\n', ' ').replaceAll(_lineBreaksRe, ' ').replaceAll(_controlsRe, '')
         : text;
     final runes = p.field._text.runes.toList();
     final at = p.field._cursor.clamp(0, runes.length);

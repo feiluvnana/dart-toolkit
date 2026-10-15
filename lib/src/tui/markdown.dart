@@ -359,7 +359,7 @@ const _mdKw = {
 
 /// Canonical language key for a fence info string, or null for plain code.
 String? _mdLang(String info) {
-  final key = info.trim().split(RegExp(r'\s+')).firstOrNull?.toLowerCase();
+  final key = info.trim().split(_mdSpaceRe).firstOrNull?.toLowerCase();
   if (key == null || key.isEmpty) return null;
   const aliases = {
     'javascript': 'js',
@@ -513,11 +513,10 @@ List<_MdSeg> _mdInline(String text) {
   final out = <_MdSeg>[];
   // Code spans first (no formatting inside).
   final parts = <Object>[text];
-  final codeRe = RegExp(r'`([^`\n]+)`');
   for (var k = 0; k < parts.length; k++) {
     final part = parts[k];
     if (part is! String) continue;
-    final m = codeRe.firstMatch(part);
+    final m = _mdCodeRe.firstMatch(part);
     if (m == null) continue;
     parts.replaceRange(k, k + 1, [
       part.substring(0, m.start),
@@ -527,11 +526,10 @@ List<_MdSeg> _mdInline(String text) {
   }
   // Links. The text excludes '[' so each '[' scans only to the next one:
   // `[^\]]*` alone made a run of 40,000 '[' quadratic (14 s a render).
-  final linkRe = RegExp(r'\[([^\]\[]*)\]\(([^)\s]+)\)');
   for (var k = 0; k < parts.length; k++) {
     final part = parts[k];
     if (part is! String) continue;
-    final m = linkRe.firstMatch(part);
+    final m = _mdLinkRe.firstMatch(part);
     if (m == null) continue;
     parts.replaceRange(k, k + 1, [
       part.substring(0, m.start),
@@ -694,7 +692,7 @@ List<String> _mdLines(String source) {
 
 /// One markdown call site's last layout (see [_mdLayout]).
 final class _MdMemo {
-  _MdMemo(this.src, this.width, this.ascii, this.layout, this.stableLines, this.stableOut);
+  _MdMemo(this.src, this.width, this.ascii, this.layout, this.stableLines, this.stableOut, this.stableChar);
 
   String src;
   int width;
@@ -707,6 +705,19 @@ final class _MdMemo {
   /// the tail from [stableLines] is re-laid.
   int stableLines;
   int stableOut;
+
+  /// Offset in [src] where raw line [stableLines] starts: an append splits
+  /// and parses only `src.substring(stableChar)`, never the whole source.
+  int stableChar;
+}
+
+/// Offset just past the first [n] raw lines of [lines] (each plus its `\n`).
+int _mdCharsOf(List<String> lines, int n) {
+  var c = 0;
+  for (var k = 0; k < n; k++) {
+    c += lines[k].length + 1;
+  }
+  return c;
 }
 
 /// Cap on remembered call sites; more markdown widgets than this re-lay from
@@ -737,16 +748,31 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
     final m = memos[k];
     if (m.width == width && m.ascii == ascii && source.length >= m.src.length && source.startsWith(m.src)) {
       if (source.length == m.src.length) return m.layout;
-      final raw = _mdLines(source);
-      final tail = _mdRenderRange(raw, m.stableLines, width, ascii);
-      final layout = [...m.layout.sublist(0, m.stableOut.clamp(0, m.layout.length)), ...tail.lines];
-      memos[k] = _MdMemo(source, width, ascii, layout, tail.blockSrc.last, m.stableOut + tail.blockOut.last);
+      // Only the tail from the last block boundary is split and parsed, and
+      // the layout list grows in place: an append costs its tail, not the
+      // whole source (streaming n chunks is linear, not quadratic).
+      final raw = _mdLines(source.substring(m.stableChar));
+      final tail = _mdRenderRange(raw, 0, width, ascii);
+      final layout = m.layout
+        ..length = m.stableOut.clamp(0, m.layout.length)
+        ..addAll(tail.lines);
+      final blocks = tail.blockSrc.last;
+      memos[k] = _MdMemo(
+        source,
+        width,
+        ascii,
+        layout,
+        m.stableLines + blocks,
+        m.stableOut + tail.blockOut.last,
+        m.stableChar + _mdCharsOf(raw, blocks),
+      );
       return layout;
     }
   }
   final raw = _mdLines(source);
   final traced = _mdRenderRange(raw, 0, width, ascii);
-  memos.insert(0, _MdMemo(source, width, ascii, traced.lines, traced.blockSrc.last, traced.blockOut.last));
+  final blocks = traced.blockSrc.last;
+  memos.insert(0, _MdMemo(source, width, ascii, traced.lines, blocks, traced.blockOut.last, _mdCharsOf(raw, blocks)));
   if (memos.length > _mdMemoCap) memos.removeLast();
   return traced.lines;
 }
@@ -793,7 +819,7 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
       continue;
     }
     // Heading.
-    final head = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
+    final head = _mdHeadRe.firstMatch(line);
     if (head != null) {
       final styled = _mdInline(head.group(2) ?? '');
       out.addAll(
@@ -809,16 +835,16 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
       continue;
     }
     // Rule.
-    if (RegExp(r'^\s*(---|\*\*\*|___)\s*$').hasMatch(line)) {
+    if (_mdRuleRe.hasMatch(line)) {
       out.add([_MdSeg((ascii ? '-' : '─') * math.max(1, width), null, null, {}, null)]);
       i++;
       continue;
     }
     // Quote.
-    if (RegExp(r'^\s*>').hasMatch(line)) {
+    if (_mdQuoteRe.hasMatch(line)) {
       final inner = <String>[];
-      while (i < raw.length && RegExp(r'^\s*>').hasMatch(raw[i])) {
-        inner.add(raw[i].replaceFirst(RegExp(r'^\s*>\s?'), ''));
+      while (i < raw.length && _mdQuoteRe.hasMatch(raw[i])) {
+        inner.add(raw[i].replaceFirst(_mdQuoteStripRe, ''));
         i++;
       }
       for (final il in inner) {
@@ -844,15 +870,15 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
       continue;
     }
     // List.
-    final lm = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(line);
+    final lm = _mdListRe.firstMatch(line);
     if (lm != null) {
       final items = <(int, bool, String, String)>[];
       while (i < raw.length) {
-        final m = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$').firstMatch(raw[i]);
+        final m = _mdListRe.firstMatch(raw[i]);
         if (m == null) break;
         final indent = m.group(1)!.replaceAll('\t', '  ').length;
         final marker = m.group(2)!;
-        items.add((indent ~/ 2, RegExp(r'^\d').hasMatch(marker), marker, m.group(3) ?? ''));
+        items.add((indent ~/ 2, _mdDigitRe.hasMatch(marker), marker, m.group(3) ?? ''));
         i++;
       }
       for (final (level, ordered, marker, text) in items) {
@@ -876,10 +902,10 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
     while (i < raw.length &&
         !blank(raw[i]) &&
         !raw[i].trimLeft().startsWith('```') &&
-        RegExp(r'^(#{1,6})\s+').firstMatch(raw[i]) == null &&
-        RegExp(r'^\s*(---|\*\*\*|___)\s*$').firstMatch(raw[i]) == null &&
-        RegExp(r'^\s*>').firstMatch(raw[i]) == null &&
-        RegExp(r'^(\s*)([-*+]|\d+[.)])\s+').firstMatch(raw[i]) == null) {
+        _mdHeadStartRe.firstMatch(raw[i]) == null &&
+        _mdRuleRe.firstMatch(raw[i]) == null &&
+        _mdQuoteRe.firstMatch(raw[i]) == null &&
+        _mdListStartRe.firstMatch(raw[i]) == null) {
       para.add(raw[i].trim());
       i++;
     }
@@ -891,7 +917,7 @@ List<List<_MdSeg>> _mdLayout(String source, int width, bool ascii, _Session<Obje
 bool _mdSep(String line) {
   final t = line.trim();
   if (!t.contains('|') || !t.contains('-')) return false;
-  return RegExp(r'^[\s|:\-]+$').hasMatch(t);
+  return _mdSepRe.hasMatch(t);
 }
 
 List<String> _mdCells(String line) {
@@ -973,3 +999,17 @@ final class _MdSeg {
   final Set<Style> style;
   final String? link;
 }
+
+/// Block and inline patterns, compiled once (not per line or per frame).
+final _mdHeadRe = RegExp(r'^(#{1,6})\s+(.*)$');
+final _mdRuleRe = RegExp(r'^\s*(---|\*\*\*|___)\s*$');
+final _mdQuoteStripRe = RegExp(r'^\s*>\s?');
+final _mdQuoteRe = RegExp(r'^\s*>');
+final _mdListRe = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+(.*)$');
+final _mdDigitRe = RegExp(r'^\d');
+final _mdHeadStartRe = RegExp(r'^(#{1,6})\s+');
+final _mdListStartRe = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+');
+final _mdSepRe = RegExp(r'^[\s|:\-]+$');
+final _mdCodeRe = RegExp(r'`([^`\n]+)`');
+final _mdLinkRe = RegExp(r'\[([^\]\[]*)\]\(([^)\s]+)\)');
+final _mdSpaceRe = RegExp(r'\s+');

@@ -276,12 +276,7 @@ final class _Session<S> implements term.TuiBridge {
       }
     },
     handleUncaughtError: (self, parent, zone, e, st) {
-      if (e is Exception) {
-        _failStatus(e);
-      } else {
-        _fatal ??= e;
-        _fatalStack ??= st;
-      }
+      _handlerError(e, st);
       _dirtyAndWake();
     },
   );
@@ -381,16 +376,26 @@ final class _Session<S> implements term.TuiBridge {
     _wake();
   }
 
-  void _failStatus(Exception e) {
-    var first = _firstLine('$e');
-    // `Exception('msg')` stringifies as `Exception: msg`; the status shows
-    // the message's first line.
-    const prefix = 'Exception: ';
-    if (first.startsWith(prefix)) first = first.substring(prefix.length);
-    _error = '✗ $first';
+  /// Show [e] in the status row: a toolkit error's message, anything else
+  /// without its SDK type prefix (`HttpException: `, `FormatException: `,
+  /// `Exception: `). [st] is kept and printed to stderr after the app quits
+  /// (the alternate screen would hide it now).
+  void _failStatus(Exception e, [StackTrace? st]) {
+    final text = e is ToolkitException ? e.message : '$e'.replaceFirst(_sdkPrefix, '');
+    _error = '✗ ${_firstLine(text)}';
     _sayMsg = null;
+    if (st != null) {
+      _errorLog.add((e, st));
+      if (_errorLog.length > 20) _errorLog.removeAt(0);
+    }
     _dirtyAndWake();
   }
+
+  /// Handler failures shown in the status row, with their stacks, for
+  /// stderr after [_leave] restores the terminal (the last 20).
+  final _errorLog = <(Exception, StackTrace)>[];
+
+  static final _sdkPrefix = RegExp(r'^(?:[A-Z]\w*)?(?:Exception|Error): ');
 
   static String _firstLine(String s) {
     final i = s.indexOf('\n');
@@ -585,6 +590,11 @@ final class _Session<S> implements term.TuiBridge {
 
   final _styleCache = <(Color?, Color?, int), int>{};
   final _styles = <(Color?, Color?, int)>[];
+
+  /// SGR text per packed style id, built once per id for [_sgrCaps]; cleared
+  /// with the style table or when the capabilities change.
+  final _sgrCache = <int, String>{};
+  term.TerminalCaps? _sgrCaps;
 
   /// Last-layout memos, one per markdown call site (see [_mdLayout]):
   /// an `identical` source is an O(1) hit, a streamed append re-lays only
@@ -966,7 +976,7 @@ final class _Session<S> implements term.TuiBridge {
 
   void _handlerError(Object e, StackTrace st) {
     if (e is Exception) {
-      _failStatus(e);
+      _failStatus(e, st);
     } else {
       _fatal ??= e;
       _fatalStack ??= st;
@@ -1027,21 +1037,18 @@ final class _Session<S> implements term.TuiBridge {
     _mBuild.clear();
   }
 
-  void _draw() {
+  /// Build and draw one frame. [reuse] is this frame's [Screen] when the
+  /// refocus pass draws again: the screen function runs once per frame.
+  void _draw([Screen? reuse]) {
     if (_styles.length > 4096) {
       // Packed ids die with the table; every cell is re-packed this frame.
       _styleCache.clear();
       _styles.clear();
+      _sgrCache.clear();
       _repaint = true;
     }
     _resetFrame();
-    if (!_testMode) {
-      var hasTerminal = false;
-      try {
-        hasTerminal = io.stdout.hasTerminal;
-      } catch (_) {}
-      _caps = term.TerminalCaps.of(io.Platform.environment, hasTerminal: hasTerminal);
-    }
+    if (!_testMode) _caps = term.TerminalCaps.forStdout; // cached per run
     // Fresh working grid every draw; _shown keeps last-painted state so the
     // paint still writes only changed cells.
     if (_grid.length != _h || _grid.isNotEmpty && _grid.first.length != _w) {
@@ -1049,7 +1056,7 @@ final class _Session<S> implements term.TuiBridge {
       _shown = null;
       _repaint = true;
     }
-    final screen = _screenFn(_state, app);
+    final screen = reuse ?? _screenFn(_state, app);
     _keysStale = false;
     _drawnKeys = screen._keys;
     _title = screen._title;
@@ -1093,7 +1100,7 @@ final class _Session<S> implements term.TuiBridge {
       if (!_refocused) {
         _refocused = true;
         try {
-          _draw();
+          _draw(screen);
         } finally {
           _refocused = false;
         }
@@ -1155,7 +1162,7 @@ final class _Session<S> implements term.TuiBridge {
 
   /// The running Console spinners and bars for the status row.
   String _consoleStatus() {
-    final frames = _caps.ascii ? const ['-', '\\', '|', '/'] : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    final frames = fmt.spinFrames(ascii: _caps.ascii);
     final parts = <String>[];
     for (final label in _cSpinners.values) {
       parts.add('${frames[_spinTick % frames.length]} $label');
@@ -1166,16 +1173,16 @@ final class _Session<S> implements term.TuiBridge {
       if (bar.bytes) {
         final rate = secs > 0 ? bar.done / secs : 0.0;
         final counts = bar.total != null && bar.total! > 0
-            ? '${_fmtSize(bar.done)}/${_fmtSize(bar.total!)}'
-            : _fmtSize(bar.done);
-        parts.add('$lab${_barGlyphs(bar.done, bar.total)}$counts  ${_fmtRate(rate)}');
+            ? '${fmt.fmtSize(bar.done)}/${fmt.fmtSize(bar.total!)}'
+            : fmt.fmtSize(bar.done);
+        parts.add('$lab${_barGlyphs(bar.done, bar.total)}$counts  ${fmt.fmtRate(rate)}');
       } else {
         final total = bar.total;
         final counts = total != null && total > 0 ? '${bar.done}/$total' : '${bar.done}';
         final rate = secs > 0 ? bar.done / secs : 0.0;
         parts.add(
           '$lab${_barGlyphs(bar.done, total)}$counts  '
-          '${_fmtCount(rate)}/s',
+          '${fmt.fmtCount(rate)}/s',
         );
       }
     }
@@ -1185,13 +1192,7 @@ final class _Session<S> implements term.TuiBridge {
   /// `━━━╸──── ` for a known total (like `Console.bar`), else nothing.
   String _barGlyphs(int done, int? total) {
     if (total == null || total <= 0) return '';
-    const width = 10;
-    final cells = (done / total).clamp(0.0, 1.0) * width;
-    final full = cells.floor();
-    final half = cells - full >= 0.5 && full < width;
-    final (on, mid, off) = _caps.ascii ? ('#', '>', '-') : ('━', '╸', '─');
-    return '${on * full}${half ? mid : ''}'
-        '${off * (width - full - (half ? 1 : 0))} ';
+    return '${fmt.barGlyphs(done, total, 10, ascii: _caps.ascii)} ';
   }
 
   void _writeRaw(int row, int from, int end, String text, int style) {
@@ -1305,6 +1306,7 @@ final class _Session<S> implements term.TuiBridge {
       _restoreTerminal();
     });
     _resizeToken = exit.onResize(() {
+      term.TerminalCaps.invalidate();
       _repaint = true;
       _dirtyAndWake();
     });
@@ -1394,5 +1396,11 @@ final class _Session<S> implements term.TuiBridge {
     try {
       await io.stdout.flush();
     } catch (_) {}
+    for (final (e, st) in _errorLog) {
+      try {
+        io.stderr.writeln('tui: a handler failed: $e\n$st');
+      } catch (_) {}
+    }
+    _errorLog.clear();
   }
 }

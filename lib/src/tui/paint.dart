@@ -16,31 +16,6 @@ const _fallbackCaps = term.TerminalCaps(
 /// Text styles.
 enum Style { bold, dim, italic, underline, strike, reverse }
 
-/// Human-readable byte counts and rates for the status row's bridge bars.
-String _fmtSize(num bytes) {
-  if (bytes < 1024) return '${bytes.round()} B';
-  if (bytes < 1024 * 1024) {
-    return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-}
-
-String _fmtRate(double bytesPerSec) {
-  if (bytesPerSec < 1024) return '${bytesPerSec.toStringAsFixed(0)} B/s';
-  if (bytesPerSec < 1024 * 1024) {
-    return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s';
-  }
-  return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
-}
-
-String _fmtCount(double perSec) {
-  if (perSec < 100) return perSec.toStringAsFixed(1);
-  return perSec.toStringAsFixed(0);
-}
-
 final class _Cell {
   const _Cell(this.ch, this.style, this.width, {this.link});
 
@@ -134,7 +109,15 @@ extension _SessionPaint on _Session<dynamic> {
   }
 
   String _sgrFor(_Cell c) {
-    final (fg, bg, bits) = _unpack(c.style);
+    if (!identical(_sgrCaps, _caps)) {
+      _sgrCache.clear();
+      _sgrCaps = _caps;
+    }
+    return _sgrCache[c.style] ??= _buildSgr(c.style);
+  }
+
+  String _buildSgr(int style) {
+    final (fg, bg, bits) = _unpack(style);
     final b = StringBuffer('\x1b[0');
     if (bits & 1 != 0) b.write(';1');
     if (bits & 2 != 0) b.write(';2');

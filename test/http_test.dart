@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
@@ -21,7 +23,13 @@ const _cjk = {
   'cp949': ('euc-kr', [148, 238, 138, 221]), // 뷁듶 (CP949 extensions)
 };
 
+/// The client most tests share: default settings.
+final http = Http.client();
+
 void main() {
+  serveTests();
+  clientTests();
+  rateTests();
   abortTests();
   edgeTests();
   late HttpServer server;
@@ -38,10 +46,6 @@ void main() {
         request.response
           ..statusCode = HttpStatus.ok
           ..headers.contentType = ContentType.text;
-      } else if (path == '/hello' && method == 'OPTIONS') {
-        request.response
-          ..statusCode = HttpStatus.ok
-          ..headers.set('allow', 'GET, HEAD, OPTIONS');
       } else if (path == '/hello') {
         request.response
           ..statusCode = HttpStatus.ok
@@ -83,7 +87,7 @@ void main() {
           ..write('size:$size;length:${request.headers.value('content-length')}');
       } else if (path == '/boom') {
         hits[method] = (hits[method] ?? 0) + 1;
-        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.statusCode = int.parse(request.uri.queryParameters['code'] ?? '500');
       } else if (path == '/stall') {
         request.response.statusCode = HttpStatus.ok;
         request.response.write('a');
@@ -135,7 +139,7 @@ void main() {
 
   group('verbs', () {
     test('get returns status/header/url', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       expect(res.status(), HttpStatus.ok);
       expect(res.header('content-type'), contains('text/plain'));
       expect(res.url(), '$base/hello');
@@ -143,106 +147,107 @@ void main() {
     });
 
     test('header() is case-insensitive, null if absent', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       expect(res.header('Content-Type'), res.header('content-type'));
       expect(res.header('missing'), isNull);
       await res.close();
     });
 
     test('sends request headers', () async {
-      final res = await Http.get('$base/headers', headers: {'x-test': 'hi'});
+      final res = await http.get('$base/headers', headers: {'x-test': 'hi'});
       expect(await res.text(), 'hi');
     });
 
     test('non-2xx is still a Response', () async {
-      final res = await Http.get('$base/nope');
+      final res = await http.get('$base/nope');
       expect(res.status(), HttpStatus.notFound);
       expect(await res.text(), 'nope');
     });
 
     test('check: true throws with status, method, url and a body snippet', () async {
+      final strict = Http.client(check: true);
       await expectLater(
-        Http.get('$base/nope', check: true),
-        throwsA(isA<HttpException>().having((e) => e.message, 'message', 'HTTP 404 GET $base/nope: nope')),
+        strict.get('$base/nope'),
+        throwsA(
+          isA<HttpStatusException>()
+              .having((e) => e.message, 'message', 'HTTP 404 GET $base/nope: nope')
+              .having((e) => e.status, 'status', 404),
+        ),
       );
       await expectLater(
-        Http.post('$base/nope', check: true),
+        strict.post('$base/nope'),
         throwsA(isA<HttpException>().having((e) => e.message, 'message', startsWith('HTTP 404 POST '))),
       );
-      expect(await Http.get('$base/hello', check: true).text(), isNotEmpty);
+      expect(await strict.get('$base/hello').text(), isNotEmpty);
+      await expectLater(http.get('$base/nope').check(), throwsA(isA<HttpStatusException>()));
     });
 
     test('redirects are followed, url() is final', () async {
-      final res = await Http.get('$base/redirect');
+      final res = await http.get('$base/redirect');
       expect(res.status(), HttpStatus.ok);
       expect(res.url(), '$base/hello');
       expect(await res.text(), contains('hello'));
     });
 
     test('post sends body, returns status/text/header', () async {
-      final res = await Http.post('$base/echo', body: Body.text('a=1'));
+      final res = await http.post('$base/echo', body: Body.text('a=1'));
       expect(res.status(), HttpStatus.created);
       expect(await res.text(), 'got:a=1');
       expect(res.header('x-echo'), 'yes');
     });
 
     test('Body.json accepts a Json inside the value', () async {
-      final r = await Http.post('$base/echo', body: .json({'a': Json.parse('{"b":[1,2]}')}));
+      final r = await http.post('$base/echo', body: .json({'a': Json.parse('{"b":[1,2]}')}));
       expect(await r.text(), 'got:{"a":{"b":[1,2]}}');
     });
 
-    test('retries re-send any verb that asks, POST and PATCH included', () async {
-      await Http.put('$base/boom', body: Body.text('x'), retries: 1);
-      expect(hits['PUT'], 2);
-      await Http.post('$base/boom', body: Body.text('x'), retries: 1);
-      await Http.patch('$base/boom', body: Body.text('x'), retries: 1);
-      expect(hits['POST'], 2);
-      expect(hits['PATCH'], 2);
-      await Http.post('$base/boom', body: Body.text('x'));
-      expect(hits['POST'], 3); // the default: no retries
+    test('a 500 is never retried; a 503 retries every verb, a 502 only idempotent ones', () async {
+      final once = Http.client(retries: 1);
+      await once.put('$base/boom', body: Body.text('x'));
+      expect(hits['PUT'], 1);
+      await once.put('$base/boom?code=503', body: Body.text('x'));
+      await once.post('$base/boom?code=503', body: Body.text('x'));
+      expect((hits['PUT'], hits['POST']), (3, 2));
+      await once.post('$base/boom?code=502', body: Body.text('x'));
+      await once.delete('$base/boom?code=502');
+      expect((hits['POST'], hits['DELETE']), (3, 2));
     });
 
     test('post sends json and form bodies', () async {
-      final j = await Http.post('$base/echo', body: .json({'a': 1}));
+      final j = await http.post('$base/echo', body: .json({'a': 1}));
       expect(await j.text(), 'got:{"a":1}');
-      final f = await Http.post('$base/echo', body: Body.form({'a': '1'}));
+      final f = await http.post('$base/echo', body: Body.form({'a': '1'}));
       expect(await f.text(), 'got:a=1');
     });
 
     test('put sends body', () async {
-      final res = await Http.put('$base/item', body: Body.text('a=1'));
+      final res = await http.put('$base/item', body: Body.text('a=1'));
       expect(await res.text(), 'put:a=1');
     });
 
     test('patch sends body', () async {
-      final res = await Http.patch('$base/item', body: Body.text('b=2'));
+      final res = await http.patch('$base/item', body: Body.text('b=2'));
       expect(await res.text(), 'patch:b=2');
     });
 
     test('delete works', () async {
-      final res = await Http.delete('$base/item');
+      final res = await http.delete('$base/item');
       expect(await res.text(), 'deleted');
     });
 
     test('head returns status, empty text', () async {
-      final res = await Http.head('$base/hello');
+      final res = await http.head('$base/hello');
       expect(res.status(), HttpStatus.ok);
       expect(await res.text(), isEmpty);
     });
 
-    test('options returns allow header', () async {
-      final res = await Http.options('$base/hello');
-      expect(res.header('allow'), contains('GET'));
-      await res.close();
-    });
-
     test('body takes bytes', () async {
-      final res = await Http.post('$base/echo', body: Body.bytes(utf8.encode('a=2')));
+      final res = await http.post('$base/echo', body: Body.bytes(utf8.encode('a=2')));
       expect(await res.text(), 'got:a=2');
     });
 
     test('body streams a Reader', () async {
-      final res = await Http.put(
+      final res = await http.put(
         '$base/upload',
         body: Body.stream(_Mem('0123456789')),
         headers: {'content-length': '10'},
@@ -252,19 +257,20 @@ void main() {
 
     test('H1: an upload the server never reads times out, never hangs', () async {
       await expectLater(
-        Http.put('$base/blackhole', body: Body.stream(_SlowReader()), timeout: const Duration(seconds: 1)),
+        Http.client(timeout: 1.seconds).put('$base/blackhole', body: Body.stream(_SlowReader())),
         throwsA(isA<TimeoutException>()),
       );
     });
 
-    test('retries with a streamed body is an ArgumentError, not silently one try', () async {
-      expect(() => Http.put('$base/upload', body: Body.stream(_Mem('x')), retries: 2), throwsArgumentError);
+    test('a streamed body is sent once, whatever retries says', () async {
+      await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(_Mem('x')));
+      expect(hits['PUT'], 4); // 1 + 2 from the in-memory 503 test above, + this single send
     });
   });
 
   group('Response as Reader', () {
     test('text() decodes with the charset header', () async {
-      final res = await Http.get('$base/latin');
+      final res = await http.get('$base/latin');
       expect(await res.text(), 'caf\u00e9');
     });
 
@@ -279,35 +285,35 @@ void main() {
         'cp949': '뷁듶',
       };
       for (final entry in cases.entries) {
-        final res = await Http.get('$base/cjk?which=${entry.key}');
+        final res = await http.get('$base/cjk?which=${entry.key}');
         expect(await res.text(), entry.value, reason: entry.key);
       }
     });
 
     test('H5: <meta charset> is sniffed without a header', () async {
-      final res = await Http.get('$base/meta');
+      final res = await http.get('$base/meta');
       expect(await res.text(), contains('日本語テスト'));
     });
 
     test('H5: malformed bytes become U+FFFD, never a throw', () async {
-      final res = await Http.get('$base/badbytes');
+      final res = await http.get('$base/badbytes');
       expect(await res.text(), '�A�(');
     });
 
     test('H5: unknown charset falls back to UTF-8', () async {
-      final res = await Http.get('$base/unknown-charset');
+      final res = await http.get('$base/unknown-charset');
       expect(await res.text(), 'plain ascii');
     });
 
     test('text() and bytes() cache: calling again is free', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       final a = await res.text();
       expect(await res.text(), a);
       expect(await res.bytes(), utf8.encode(a));
     });
 
     test('bytes() is an unmodifiable O(1) view, not a copy', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       final b = await res.bytes();
       expect(() => b[0] = 0, throwsUnsupportedError);
       await res.close();
@@ -332,25 +338,13 @@ void main() {
       );
       addTearDown(() => tls.close(force: true));
       final u = 'https://localhost:${tls.port}/';
-      expect(await Http.get(u, insecure: ['localhost']).text(), 'secret');
-      await expectLater(Http.get(u), throwsA(isA<HandshakeException>()));
-      await expectLater(Http.get(u, insecure: ['example.com']), throwsA(isA<HandshakeException>()));
-    });
-
-    test('insecure is per-call and hold() keeps the client', () async {
-      final plain = await Http.get('$base/hello', insecure: ['127.0.0.1']);
-      expect(await plain.text(), contains('hello'));
-      final hold = Http.hold();
-      try {
-        final r = await Http.get('$base/hello');
-        expect(await r.text(), contains('hello'));
-      } finally {
-        await hold.close();
-      }
+      expect(await Http.client(insecure: ['localhost']).get(u).text(), 'secret');
+      await expectLater(http.get(u), throwsA(isA<HandshakeException>()));
+      await expectLater(Http.client(insecure: ['example.com']).get(u), throwsA(isA<HandshakeException>()));
     });
 
     test('piping streams without caching; reading after is StateError', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       final sink = _Sink();
       await (res > sink);
       expect(sink.data, isNotEmpty);
@@ -359,28 +353,28 @@ void main() {
     });
 
     test('close() drops an unread body; reading after is StateError', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       await res.close();
       await res.close(); // idempotent
       expect(() => res.stream(), throwsStateError);
     });
 
     test('close() after a full read is a no-op', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       await res.bytes();
       await res.close();
     });
 
     test('a stalled body times out naming the URL', () async {
-      final res = await Http.get('$base/stall', timeout: const Duration(milliseconds: 300));
+      final res = await Http.client(timeout: 300.milliseconds).get('$base/stall');
       expect(
         res.bytes(),
-        throwsA(isA<TimeoutException>().having((e) => e.message, 'message', contains('$base/stall'))),
+        throwsA(isA<TimeoutException>().having((e) => e.message, 'message', contains('GET $base/stall'))),
       );
     });
 
     test('dropping an unbounded body does not drain it', () async {
-      final res = await Http.get('$base/stall');
+      final res = await http.get('$base/stall');
       final sw = Stopwatch()..start();
       await res.close();
       expect(sw.elapsedMilliseconds, lessThan(2000));
@@ -388,32 +382,32 @@ void main() {
 
     test('a writer that fails before reading frees a slow response', () async {
       final sw = Stopwatch()..start();
-      await expectLater(Http.get('$base/stall') > _ThrowFirstWriter(), throwsStateError);
-      await Http.get('$base/hello').text();
+      await expectLater(http.get('$base/stall') > _ThrowFirstWriter(), throwsStateError);
+      await http.get('$base/hello').text();
       expect(sw.elapsedMilliseconds, lessThan(2000));
     });
 
     test('a failed pipe releases the connection', () async {
-      final res = await Http.get('$base/hello');
+      final res = await http.get('$base/hello');
       await expectLater(res > _BoomWriter(), throwsStateError);
       // The socket must not linger: close() is a no-op, not a hang.
       await res.close().timeout(const Duration(seconds: 5));
     });
 
     test('Future mirrors match', () async {
-      expect(await Http.get('$base/hello').status(), HttpStatus.ok);
-      expect(await Http.get('$base/hello').header('content-type'), contains('text/plain'));
-      expect(await Http.get('$base/hello').url(), '$base/hello');
-      expect(await Http.get('$base/hello').text(), contains('hello'));
-      expect(await Http.get('$base/hello').ok(), isTrue);
+      expect(await http.get('$base/hello').status(), HttpStatus.ok);
+      expect(await http.get('$base/hello').header('content-type'), contains('text/plain'));
+      expect(await http.get('$base/hello').url(), '$base/hello');
+      expect(await http.get('$base/hello').text(), contains('hello'));
+      expect(await http.get('$base/hello').ok(), isTrue);
       // /hello is chunked (no content-length); /sized sets one.
-      expect(await Http.get('$base/hello').size(), isNull);
-      expect(await Http.get('$base/sized').size(), 5);
-      expect(await Http.get('$base/hello').name(), 'hello');
+      expect(await http.get('$base/hello').size(), isNull);
+      expect(await http.get('$base/sized').size(), 5);
+      expect(await http.get('$base/hello').name(), 'hello');
     });
 
     test('H2: mirrors close the response (one-shot)', () async {
-      final f = Http.get('$base/hello');
+      final f = http.get('$base/hello');
       expect(await f.status(), HttpStatus.ok);
       // Nothing else can reach the response now: reading fails, closing
       // is a harmless no-op, and the process is not kept alive.
@@ -422,7 +416,7 @@ void main() {
     });
 
     test('json() on an error page names the status', () async {
-      final bad = await Http.get('$base/nope');
+      final bad = await http.get('$base/nope');
       await expectLater(
         bad.json(),
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('404'))),
@@ -449,7 +443,7 @@ final class _SlowReader with Reader {
   }
 }
 
-final class _Sink implements Writer {
+final class _Sink with Writer {
   final data = <int>[];
   @override
   Future<void> consume(Stream<List<int>> input) async {
@@ -459,7 +453,7 @@ final class _Sink implements Writer {
   }
 }
 
-final class _BoomWriter implements Writer {
+final class _BoomWriter with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {
     var n = 0;
@@ -470,13 +464,13 @@ final class _BoomWriter implements Writer {
   }
 }
 
-final class _ThrowFirstWriter implements Writer {
+final class _ThrowFirstWriter with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async => throw StateError('before reading');
 }
 
 void abortTests() {
-  group('Http.abort', () {
+  group('Client.close', () {
     late HttpServer srv;
     late String url;
     setUp(() async {
@@ -496,10 +490,11 @@ void abortTests() {
     tearDown(() => srv.close(force: true));
 
     test('fails an in-flight body read promptly, without retrying', () async {
-      final res = await Http.get('$url/slow', retries: 3);
+      final c = Http.client(retries: 3);
+      final res = await c.get('$url/slow');
       final read = res.bytes();
       final sw = Stopwatch()..start();
-      Timer(const Duration(milliseconds: 100), Http.abort);
+      Timer(100.milliseconds, c.close);
       await expectLater(read, throwsA(isA<Exception>()));
       expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
     });
@@ -508,10 +503,14 @@ void abortTests() {
       final slow = await HttpServer.bind('127.0.0.1', 0);
       var hits = 0;
       slow.listen((r) => hits++); // never answers
-      final f = Http.get('http://127.0.0.1:${slow.port}/', retries: 3);
-      final expectation = expectLater(f, throwsA(isA<HttpException>()));
+      final c = Http.client(retries: 3);
+      final f = c.get('http://127.0.0.1:${slow.port}/');
+      final expectation = expectLater(
+        f,
+        throwsA(isA<HttpRequestException>().having((e) => e.reason, 'reason', RequestFailure.aborted)),
+      );
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      Http.abort();
+      await c.close();
       await expectation.timeout(const Duration(seconds: 1));
       await Future<void>.delayed(const Duration(milliseconds: 1500));
       expect(hits, 1);
@@ -524,28 +523,35 @@ void abortTests() {
         r.response.statusCode = 503;
         r.response.close();
       });
-      final f = Http.get('http://127.0.0.1:${bad.port}/', retries: 3);
-      final expectation = expectLater(f, throwsA(isA<HttpException>()));
+      final c = Http.client(retries: 3);
+      final f = c.get('http://127.0.0.1:${bad.port}/');
+      final expectation = expectLater(f, throwsA(isA<HttpRequestException>()));
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      Http.abort();
+      await c.close();
       await expectation.timeout(const Duration(milliseconds: 800));
       await bad.close(force: true);
     });
 
-    test('requests after abort work', () async {
-      Http.abort();
-      expect(await Http.get('$url/fast').text(), 'ok');
+    test('close is per client: others keep working, the closed one refuses', () async {
+      final c = Http.client();
+      await c.close();
+      await c.close(); // idempotent
+      await expectLater(c.get('$url/fast'), throwsA(isA<HttpRequestException>()));
+      expect(await http.get('$url/fast').text(), 'ok');
     });
 
     test('a script that aborts a slow download exits by itself', () async {
       final r = await runDart(
         '''
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 Future<void> main(List<String> a) async {
-  final res = await Http.get(a[0]);
+  final c = Http.client();
+  final res = await c.get(a[0]);
   res.bytes().catchError((_) => res.bytes()).ignore();
   await Future<void>.delayed(const Duration(milliseconds: 200));
-  Http.abort();
+  await c.close();
 }
 ''',
         args: ['$url/slow'],
@@ -632,43 +638,40 @@ void edgeTests() {
     tearDownAll(() => server.close(force: true));
 
     test('an upload that keeps moving outlives the timeout', () async {
-      final res = await Http.put(
-        '$url/sink',
-        body: Body.stream(_Drip(8, const Duration(milliseconds: 150))),
-        timeout: const Duration(milliseconds: 500),
-      );
+      final res = await Http.client(timeout: 500.milliseconds)
+          .put('$url/sink', body: Body.stream(_Drip(8, const Duration(milliseconds: 150))));
       expect(await res.text(), '8');
     });
 
     test('a status mirror never waits for a slow small body', () async {
       final sw = Stopwatch()..start();
-      expect(await Http.get('$url/trickle', timeout: const Duration(seconds: 20)).status(), 200);
+      expect(await Http.client(timeout: 20.seconds).get('$url/trickle').status(), 200);
       expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
     });
 
     test('HEAD keeps the connection whatever content-length says', () async {
-      final hold = Http.hold();
-      try {
-        peers.clear();
-        for (var i = 0; i < 4; i++) {
-          expect(await Http.head('$url/big-head').ok(), isTrue);
-        }
-        expect(peers, hasLength(1));
-      } finally {
-        await hold.close();
+      final c = Http.client(idle: 2.seconds);
+      peers.clear();
+      for (var i = 0; i < 4; i++) {
+        expect(await c.head('$url/big-head').ok(), isTrue);
       }
+      expect(peers, hasLength(1));
+      await c.close();
     });
 
     test('a redirect to a non-http or malformed URL is an HttpException', () async {
-      await expectLater(Http.get('$url/to-mailto'), throwsA(isA<HttpException>()));
-      await expectLater(Http.get('$url/to-bad'), throwsA(isA<HttpException>()));
+      final unsendable = isA<HttpRequestException>().having((e) => e.reason, 'reason', RequestFailure.unsendable);
+      await expectLater(http.get('$url/to-mailto'), throwsA(unsendable));
+      await expectLater(http.get('$url/to-bad'), throwsA(unsendable));
     });
 
     test('a writer that never reads still lets the script exit', () async {
       final r = await runDart('''
 import 'dart:io';
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
-final class Ignore implements Writer {
+import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+final class Ignore with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {}
 }
@@ -678,7 +681,7 @@ Future<void> main() async {
     ..contentLength = 1 << 20
     ..add(List.filled(1 << 20, 0))
     ..close());
-  await (Http.get('http://127.0.0.1:\${s.port}/') > Ignore());
+  await (Http.client().get('http://127.0.0.1:\${s.port}/') > Ignore());
   await s.close();
 }
 ''', timeout: const Duration(seconds: 10));
@@ -695,17 +698,19 @@ Future<void> main() async {
         r.response.close();
       });
       addTearDown(() => other.close(force: true));
-      await Http.get(
-        '$url/to-other?to=http://127.0.0.1:${other.port}/',
-        headers: {'authorization': 'Bearer T', 'x-api-key': 'K', 'private-token': 'P', 'accept': 'text/html'},
-      ).then((r) => r.close());
+      await http
+          .get(
+            '$url/to-other?to=http://127.0.0.1:${other.port}/',
+            headers: {'authorization': 'Bearer T', 'x-api-key': 'K', 'private-token': 'P', 'accept': 'text/html'},
+          )
+          .then((r) => r.close());
       expect(seen, {'authorization': null, 'x-api-key': null, 'private-token': null, 'accept': 'text/html'});
     });
 
     test('error messages never show URL credentials or token values', () async {
       final secret = url.replaceFirst('http://', 'http://alice:hunter2@');
       await expectLater(
-        Http.get('$secret/denied?access_token=SECRET&page=2', check: true),
+        Http.client(check: true).get('$secret/denied?access_token=SECRET&page=2'),
         throwsA(
           isA<HttpException>().having(
             (e) => '$e',
@@ -719,7 +724,9 @@ Future<void> main() async {
     test('an unread response, chunked or not, lets the script exit', () async {
       final r = await runDart('''
 import 'dart:io';
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 Future<void> main() async {
   final s = await HttpServer.bind('127.0.0.1', 0);
   s.listen((r) {
@@ -728,7 +735,7 @@ Future<void> main() async {
     r.response.close();
   });
   for (final p in ['/len', '/chunked']) {
-    print((await Http.get('http://127.0.0.1:\${s.port}\$p')).status());
+    print((await Http.client().get('http://127.0.0.1:\${s.port}\$p')).status());
   }
   await s.close(force: true);
 }
@@ -747,11 +754,11 @@ Future<void> main() async {
       );
       addTearDown(() => other.close(force: true));
       final u = 'http://127.0.0.1:${other.port}/';
-      final res = await Http.get(u);
+      final res = await http.get(u);
       await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(await res.bytes(), big);
       final sink = _Sink();
-      await (await Http.get(u) > sink);
+      await (await http.get(u) > sink);
       expect(sink.data, big);
     });
 
@@ -760,7 +767,7 @@ Future<void> main() async {
       final port = dead.port;
       await dead.close();
       await expectLater(
-        Http.get('http://127.0.0.1:$port/thing', retries: 0),
+        Http.client(retries: 0).get('http://127.0.0.1:$port/thing'),
         throwsA(
           isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing')),
         ),
@@ -776,43 +783,65 @@ Future<void> main() async {
       });
       addTearDown(() => echo.close(force: true));
       final u = 'http://127.0.0.1:${echo.port}/s';
-      await Http.get(u, query: {'q': 'a b&c', 'page': '2', 'skip': null}).status();
-      await Http.get('$u?x=1', query: {'y': 'é'}).status();
-      await Http.post(u, query: {'k': 'v'}).status();
-      expect(seen, ['q=a+b%26c&page=2', 'x=1&y=%C3%A9', 'k=v']);
+      await http.get(u, query: {'q': 'a b&c', 'page': 2, 'skip': null, 'on': true}).status();
+      await http.get('$u?x=1', query: {'y': 'é'}).status();
+      await http
+          .post(
+            u,
+            query: {
+              'k': 'v',
+              'id': ['a', 'b'],
+            },
+          )
+          .status();
+      expect(seen, ['q=a+b%26c&page=2&on=true', 'x=1&y=%C3%A9', 'k=v&id=a&id=b']);
     });
 
     test('a sequential loop that awaits between requests keeps one connection', () async {
       peers.clear();
       for (var i = 0; i < 5; i++) {
-        await Http.get('$url/hello').text();
+        await http.get('$url/hello').text();
         await Future<void>.delayed(const Duration(milliseconds: 20)); // a file write
       }
       expect(peers, hasLength(1));
     });
 
-    test('cookies: a login that redirects keeps its session, per host', () async {
-      final res = await Http.post('$url/login', body: .form({'user': 'a'}));
+    test('cookies: a login that redirects keeps its session, per host and per client', () async {
+      final c = Http.client();
+      final res = await c.post('$url/login', body: .form({'user': 'a'}));
       expect((res.status(), await res.text()), (200, 'sid=s3cret'));
-      expect(await Http.get('$url/home').status(), 200);
-      // Another host (localhost vs 127.0.0.1) never sees it.
+      expect(await c.get('$url/home').status(), 200);
+      expect(c.cookies()['sid'], 's3cret');
+      // Another host (localhost vs 127.0.0.1) never sees it, nor another client.
       final other = url.replaceFirst('127.0.0.1', 'localhost');
-      expect(await Http.get('$other/home').status(), 401);
-      // An explicit cookie header replaces the jar for that call.
-      expect(await Http.get('$url/home', headers: {'cookie': 'sid=x'}).text(), 'sid=x');
-      await Http.get('$url/logout').status();
-      expect(await Http.get('$url/home').status(), 401);
+      expect(await c.get('$other/home').status(), 401);
+      expect(await Http.client().get('$url/home').status(), 401);
+      // A copy shares the jar.
+      expect(await c.copy(retries: 0).get('$url/home').status(), 200);
+      // A per-call cookie header wins by name for that call.
+      expect(await c.get('$url/home', headers: {'cookie': 'sid=x'}).text(), 'sid=x');
+      await c.get('$url/logout').status();
+      expect(await c.get('$url/home').status(), 401);
     });
 
-    test('a script whose first call is Http.hold() exits once it closes', () async {
+    test('a session persists through Cookies.encode/parse', () async {
+      final c = Http.client();
+      await c.post('$url/login').status();
+      final saved = Cookies.parse(c.cookies().encode());
+      expect(await Http.client(cookies: saved).get('$url/home').text(), 'sid=s3cret');
+    });
+
+    test('a script with a long-idle client exits once it closes', () async {
       final sw = Stopwatch()..start();
       final r = await runDart(
         '''
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 Future<void> main(List<String> a) async {
-  final hold = Http.hold();
-  print(await Http.get(a[0]).text());
-  await hold.close();
+  final c = Http.client(idle: 1.hours);
+  print(await c.get(a[0]).text());
+  await c.close();
 }
 ''',
         args: ['$url/hello'],
@@ -823,7 +852,7 @@ Future<void> main(List<String> a) async {
     });
 
     test('two reads at once share one body', () async {
-      final res = await Http.get('$url/hello');
+      final res = await http.get('$url/hello');
       expect(await Future.wait([res.text(), res.text()]), ['hello', 'hello']);
     });
   });
@@ -842,4 +871,373 @@ final class _Drip with Reader {
       yield [65];
     }
   }
+}
+
+void rateTests() {
+  group('Rate', () {
+    late HttpServer server;
+    late String base;
+    var hits = <DateTime>[];
+    var refuse = 0;
+    setUp(() async {
+      hits = [];
+      refuse = 0;
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      base = 'http://127.0.0.1:${server.port}';
+      server.listen((req) async {
+        hits.add(DateTime.now());
+        req.response.statusCode = refuse-- > 0 ? 429 : 200;
+        await req.response.close();
+      });
+    });
+    tearDown(() => server.close(force: true));
+
+    test('allows count per window, then waits for the oldest to leave', () async {
+      final waits = <Duration>[];
+      final rate = Rate(2, const Duration(milliseconds: 400), onWait: waits.add);
+      final start = DateTime.now();
+      final c = Http.client(rate: rate);
+      for (var i = 0; i < 3; i++) {
+        await (await c.get(base)).close();
+      }
+      expect(hits, hasLength(3));
+      expect(hits[2].difference(start), greaterThanOrEqualTo(const Duration(milliseconds: 390)));
+      expect(waits, isEmpty, reason: 'onWait only hears waits of a second or more');
+    });
+
+    test('a 429 waits the window out instead of backing off from 1 s', () async {
+      refuse = 1;
+      final rate = Rate(10, const Duration(milliseconds: 300));
+      final res = await Http.client(rate: rate, retries: 1).get(base);
+      expect(res.status(), 200);
+      await res.close();
+      final gap = hits[1].difference(hits[0]);
+      expect(gap, greaterThanOrEqualTo(const Duration(milliseconds: 250)));
+      expect(gap, lessThan(const Duration(milliseconds: 900)));
+    });
+
+    test('close ends a paced wait', () async {
+      final c = Http.client(rate: Rate(1, 5.minutes));
+      await (await c.get(base)).close();
+      final second = expectLater(c.get(base), throwsA(isA<HttpRequestException>()));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await c.close();
+      await second;
+      expect(hits, hasLength(1));
+    });
+  });
+}
+
+void clientTests() {
+  group('client settings', () {
+    late HttpServer server;
+    late String url;
+    final hits = <String, int>{};
+    final seen = <String, String?>{};
+    setUp(() async {
+      hits.clear();
+      seen.clear();
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      url = 'http://127.0.0.1:${server.port}';
+      server.listen((r) async {
+        final path = r.uri.path;
+        hits[path] = (hits[path] ?? 0) + 1;
+        for (final h in ['x-a', 'x-b', 'x-csrf', 'cookie', 'range']) {
+          seen[h] = r.headers.value(h);
+        }
+        final file = List.generate(1000, (i) => i % 256);
+        switch (path) {
+          case '/file':
+            final range = r.headers.value('range');
+            final from = range == null ? 0 : int.parse(range.substring(6, range.length - 1));
+            if (from > 0) {
+              r.response
+                ..statusCode = 206
+                ..headers.set('content-range', 'bytes $from-999/1000');
+            }
+            r.response
+              ..contentLength = 1000 - from
+              ..add(file.sublist(from));
+          case '/norange':
+            r.response
+              ..contentLength = 1000
+              ..add(file);
+          case '/token':
+            r.response.cookies.add(Cookie('csrftoken', 'T0K')..path = '/');
+          case '/cookies':
+            r.response.headers
+              ..add('set-cookie', 'good=1; Path=/')
+              ..add('set-cookie', 'bad=2; Expires=not a date at all; Path=/')
+              ..add('set-cookie', 'tld=3; Domain=com; Path=/')
+              ..add('set-cookie', 'ip=4; Domain=0.0.1; Path=/')
+              ..add('set-cookie', 'deep=5; Path=/a/b')
+              ..add('set-cookie', 'shallow=6; Path=/a');
+          case '/gzip':
+            r.response.headers.set('content-encoding', 'gzip');
+            final z = gzip.encode(utf8.encode('x' * 5000));
+            r.response
+              ..contentLength = z.length
+              ..add(z);
+          case '/vary':
+            r.response.headers.set('vary', 'x-a');
+            r.response.write('v${hits[path]}');
+          case '/busy':
+            r.response.statusCode = r.headers.value('x-a') == 'busy' ? 429 : 200;
+            r.response.write(r.headers.value('x-a'));
+          case '/missing':
+            r.response
+              ..statusCode = 404
+              ..write('line 1\nline 2');
+          default:
+            r.response.write(r.uri.toString());
+        }
+        await r.response.close();
+      });
+    });
+    tearDown(() => server.close(force: true));
+
+    test('base: relative URLs resolve against it; absolute ones pass', () async {
+      final c = Http.client(base: '$url/api/');
+      expect(await c.get('items', query: {'n': 1}).text(), '/api/items?n=1');
+      expect(await c.get('/root').text(), '/root');
+      expect(await c.get('$url/abs').text(), '/abs');
+      expect(() => Http.client().get('relative'), throwsArgumentError);
+    });
+
+    test('headers: client defaults, per-call wins by name; copy merges', () async {
+      final c = Http.client(headers: {'x-a': '1', 'X-B': '2'});
+      await c.get('$url/h', headers: {'x-b': 'call'}).status();
+      expect((seen['x-a'], seen['x-b']), ('1', 'call'));
+      await c.copy(headers: {'x-a': 'copy'}).get('$url/h').status();
+      expect((seen['x-a'], seen['x-b']), ('copy', '2'));
+    });
+
+    test('csrf copies a cookie into a header on every send', () async {
+      final c = Http.client(csrf: (cookie: 'csrftoken', header: 'x-csrf'));
+      await c.get('$url/token').status();
+      await c.post('$url/h').status();
+      expect(seen['x-csrf'], 'T0K');
+      expect(seen['cookie'], 'csrftoken=T0K');
+    });
+
+    test('set-cookie: a bad one skips only itself; Domain needs a dot; longest path first', () async {
+      final c = Http.client();
+      await c.get('$url/cookies').status();
+      final jar = c.cookies();
+      expect([jar['good'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']], ['1', null, null, '5', '6']);
+      expect(jar.header('$url/a/b/c'), 'deep=5; shallow=6; good=1');
+      expect(jar.header('http://example.com/'), isNull);
+      jar.set('k', 'v', url: url);
+      expect(jar.header('$url/'), contains('k=v'));
+    });
+
+    test('a per-call cookie header merges with the jar by name', () async {
+      final c = Http.client(
+        cookies: Cookies().set('a', '1', url: url).set('b', '2', url: url),
+      );
+      await c.get('$url/h', headers: {'cookie': 'b=call; c=3'}).status();
+      expect(seen['cookie'], 'a=1; b=call; c=3');
+    });
+
+    test('resume: a GET piped into a file is atomic, skips a complete file, resumes a .part', () async {
+      final dir = await Directory.systemTemp.createTemp('resume');
+      addTearDown(() => dir.delete(recursive: true));
+      final body = List.generate(1000, (i) => i % 256);
+      final c = Http.client(resume: true);
+      final to = _Path('${dir.path}/sub/f.bin');
+      await (c.get('$url/file') > to);
+      expect(await File(to.path).readAsBytes(), body);
+      expect(File('${to.path}.part').existsSync(), isFalse);
+      await (c.get('$url/file') > to); // same content-length: skipped after the headers
+      expect(hits['/file'], 2);
+
+      await File(to.path).delete();
+      await File('${to.path}.part').writeAsBytes(body.sublist(0, 600));
+      await (c.get('$url/file') > to);
+      expect(seen['range'], 'bytes=600-');
+      expect(await File(to.path).readAsBytes(), body);
+
+      // A server that ignores Range restarts the download.
+      final other = _Path('${dir.path}/g.bin');
+      await File('${other.path}.part').writeAsBytes([9, 9, 9]);
+      await (c.get('$url/norange') > other);
+      expect(await File(other.path).readAsBytes(), body);
+
+      await expectLater(
+        c.get('$url/missing') > _Path('${dir.path}/m'),
+        throwsA(isA<HttpStatusException>().having((e) => e.status, 'status', 404)),
+      );
+      expect(File('${dir.path}/m').existsSync(), isFalse);
+      // A writer without a path just receives the body; awaiting the GET sends it as usual.
+      final sink = _Sink();
+      await (c.get('$url/file') > sink);
+      expect(sink.data, hasLength(1000));
+      expect((await c.get('$url/file')).status(), 200);
+      // Without resume: the old behaviour, every pipe downloads again.
+      final plain = _Path('${dir.path}/p.bin');
+      await (Http.client().get('$url/file') > plain);
+      expect(File('${plain.path}.part').existsSync(), isFalse);
+    });
+
+    test('resume replays stored bytes through pass-through pipes; others download again', () async {
+      final dir = await Directory.systemTemp.createTemp('replay');
+      addTearDown(() => dir.delete(recursive: true));
+      final body = List.generate(1000, (i) => i % 256);
+      final c = Http.client(resume: true);
+      final to = _Path('${dir.path}/f.bin');
+      await File('${to.path}.part').writeAsBytes(body.sublist(0, 400));
+      final sum = (await Hash.sha256().of(Reader.of(body)));
+      final count = _Count();
+      await (c.get('$url/file') | count | Hash.sha256(expect: sum) > to);
+      expect(count.bytes, 1000, reason: 'the pipes saw the whole file');
+      expect(await File(to.path).readAsBytes(), body);
+      // A complete file: the pipes see the stored bytes; nothing is fetched twice.
+      final again = _Count();
+      await (c.get('$url/file') | again | Hash.sha256(expect: sum) > to);
+      expect(again.bytes, 1000);
+      // A pipe that may change bytes never trusts stored ones: it downloads again.
+      final before = hits['/file']!;
+      await (c.get('$url/file') | _Plain() > to);
+      expect(hits['/file'], before + 1);
+      expect(await File(to.path).readAsBytes(), body);
+      // A GET nobody pipes or awaits is still sent.
+      unawaited(c.get('$url/file?lone').then((r) => r.close()));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(hits['/file'], before + 2);
+      // A hash mismatch deletes the .part.
+      await File(to.path).delete();
+      await File('${to.path}.part').writeAsBytes(body.sublist(0, 10));
+      await expectLater(c.get('$url/file') | Hash.sha256(expect: '0' * 64) > to, throwsA(isA<ContentException>()));
+      expect(File('${to.path}.part').existsSync(), isFalse);
+    });
+
+    test('cache: a GET within ttl uses no network; vary headers key it', () async {
+      final dir = await Directory.systemTemp.createTemp('cache');
+      addTearDown(() => dir.delete(recursive: true));
+      final c = Http.client(cache: dir.path);
+      expect(await c.get('$url/vary', headers: {'x-a': '1'}).text(), 'v1');
+      expect(await c.get('$url/vary', headers: {'x-a': '1'}).text(), 'v1');
+      expect(hits['/vary'], 1);
+      expect(await c.get('$url/vary', headers: {'x-a': '2'}).text(), 'v2');
+      expect(await Http.client(cache: dir.path, ttl: Duration.zero).get('$url/vary').text(), 'v3');
+      expect(await c.post('$url/vary').text(), 'v4');
+    });
+
+    test('pool: round-robin over idle members; a 429 benches a member and retries on another', () async {
+      final a = Http.client(headers: {'x-a': 'a'});
+      final b = Http.client(headers: {'x-a': 'b'});
+      final both = Http.pool([a, b]);
+      expect([for (var i = 0; i < 4; i++) await both.get('$url/busy').text()], ['a', 'b', 'a', 'b']);
+      final busy = Http.client(headers: {'x-a': 'busy'});
+      final p = Http.pool([busy, b]);
+      expect([for (var i = 0; i < 3; i++) await p.get('$url/busy').text()], ['b', 'b', 'b']);
+      expect(hits['/busy'], 4 + 4); // one 429 from `busy`, then it stays benched
+      await p.close();
+      await both.close();
+    });
+
+    test('size() is null for a body decoded on the fly', () async {
+      final res = await Http.client().get('$url/gzip');
+      expect(res.size(), isNull);
+      expect((await res.text()).length, 5000);
+    });
+
+    test('lines() works on an error page, like text()', () async {
+      final res = await Http.client().get('$url/missing');
+      expect(await res.lines().toList(), ['line 1', 'line 2']);
+    });
+
+    test('piping an error page throws what check() throws', () async {
+      final res = await Http.client().get('$url/missing');
+      await expectLater(
+        res > _Sink(),
+        throwsA(
+          isA<HttpStatusException>()
+              .having((e) => e.method, 'method', 'GET')
+              .having((e) => e.snippet, 'snippet', 'line 1 line 2'),
+        ),
+      );
+    });
+  });
+}
+
+/// A pass-through pipe that counts bytes, marked as such like a Bar.
+final class _Count with Pipe implements PassThrough {
+  var bytes = 0;
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input.map((c) {
+    bytes += c.length;
+    return c;
+  });
+}
+
+/// A pipe with no pass-through promise.
+final class _Plain with Pipe {
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input;
+}
+
+/// A writer that reports a path, as an fs `File` does.
+final class _Path with Writer {
+  _Path(this.path);
+  final String path;
+  @override
+  Origin origin() => Origin(path: path);
+  @override
+  Future<void> consume(Stream<List<int>> input) async {
+    final sink = File(path).openWrite();
+    await sink.addStream(input);
+    await sink.close();
+  }
+}
+
+void serveTests() {
+  group('Http.serve', () {
+    test('answers text, json, streams, redirects and statuses; a handler error is a 500', () async {
+      final dir = await Directory.systemTemp.createTemp('serve');
+      addTearDown(() => dir.delete(recursive: true));
+      await File('${dir.path}/page.html').writeAsString('<p>hi</p>');
+      final server = await Http.serve(
+        (r) async => switch (r.path()) {
+          '/callback' => Reply.text('code ${r.query('code')}'),
+          '/json' => Reply.json({'method': r.method(), 'agent': r.header('x-a')}),
+          '/echo' => Reply.text('got ${await r.text()}', status: 201),
+          '/page' => Reply.stream(_Mem('<p>hi</p>'), type: 'text/html'),
+          '/go' => const Reply.redirect('/callback?code=7'),
+          '/boom' => throw StateError('handler failed'),
+          _ => const Reply.status(404),
+        },
+      );
+      addTearDown(server.close);
+      final c = Http.client(headers: {'x-a': 'me'});
+      final u = server.url();
+      expect(u, startsWith('http://127.0.0.1:'));
+      expect(await c.get('${u}callback?code=42').text(), 'code 42');
+      expect((await c.get('${u}json').json()).$('agent').text(), 'me');
+      final echo = await c.post('${u}echo', body: .text('body'));
+      expect((echo.status(), await echo.text()), (201, 'got body'));
+      final page = await c.get('${u}page');
+      expect((page.header('content-type'), await page.text()), ('text/html', '<p>hi</p>'));
+      expect(await c.get('${u}go').text(), 'code 7');
+      expect(await c.get('${u}boom').status(), 500);
+      expect(await c.get('${u}nope').status(), 404);
+      await c.close();
+    });
+
+    test('close waits for a request in flight, then refuses new ones', () async {
+      final gate = Completer<void>();
+      final server = await Http.serve((r) async {
+        await gate.future;
+        return const Reply.text('late');
+      });
+      final c = Http.client(retries: 0);
+      final pending = c.get(server.url()).text();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final closing = server.close();
+      gate.complete();
+      expect(await pending, 'late');
+      await closing;
+      await expectLater(c.get(server.url()), throwsA(isA<IOException>()));
+    });
+  });
 }

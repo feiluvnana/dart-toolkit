@@ -10,7 +10,8 @@
 ///
 /// Public surface is exactly: [Shell], [Output].
 /// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe],
-///   `Shell.open()` opens a URL or path with the OS.
+///   `Shell.open()` opens a URL or path with the OS, `Shell.which()` finds an
+///   installed program.
 /// - [Output] supports `code` `ok` `err` (plus [Reader] over stdout).
 /// Everything else is private.
 library;
@@ -23,6 +24,7 @@ import 'dart:typed_data';
 import 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/timeout.dart';
 export 'core.dart';
 
 /// Entry point: run a program, make one a filter, or open with the OS.
@@ -39,14 +41,17 @@ abstract final class Shell {
   /// unsets the variable for the child. [onLine] gets each line of stdout
   /// and stderr as it arrives (a dashboard pane, a log), and the [Output]
   /// still holds both. With [check] a non-zero exit throws
-  /// [io.ProcessException] carrying the exit code and stderr (as `check:`
-  /// does for a non-2xx response).
+  /// [io.ProcessException] carrying the exit code and the last 64 KB of
+  /// stderr (as `check:` does for a non-2xx response). With [timeout] a
+  /// run that takes longer is killed (only the child this call started) and
+  /// throws [TimeoutException] naming the command.
   static Future<Output> run(
     List<String> command, {
     String? dir,
     Map<String, String?>? env,
     bool live = false,
     bool check = false,
+    Duration? timeout,
     void Function(String line)? onLine,
   }) async {
     _checkCommand(command);
@@ -91,10 +96,24 @@ abstract final class Shell {
       }
 
       try {
-        await Future.wait([
+        final work = Future.wait([
           collect(proc.stdout, out, live ? io.stdout : null),
           collect(proc.stderr, err, live ? io.stderr : null),
+          proc.exitCode,
         ]);
+        if (timeout == null) {
+          await work;
+        } else {
+          // A grandchild may keep the pipes open after the kill: stop
+          // waiting for them instead of hanging past the deadline.
+          await work.timeout(
+            timeout,
+            onTimeout: () {
+              proc.kill(io.ProcessSignal.sigkill);
+              throw Timeout('${command.join(' ')} ran over ${timeout.human()}', timeout);
+            },
+          );
+        }
       } catch (_) {
         proc.kill(io.ProcessSignal.sigkill);
         rethrow;
@@ -111,7 +130,7 @@ abstract final class Shell {
       final code = await proc.exitCode;
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
       if (check && code != 0) {
-        throw io.ProcessException(command[0], command.sublist(1), 'exit $code: ${stderr.trim()}', code);
+        throw io.ProcessException(command[0], command.sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
       }
       return Output._(code, out.takeBytes(), stderr);
     } finally {
@@ -238,6 +257,34 @@ abstract final class Shell {
     return e.message.toLowerCase().contains('no such file');
   }
 
+  /// Where [program] resolves on `PATH` (with `PATHEXT` on Windows), or
+  /// null when it is not installed. Starts no process. A name with a path
+  /// separator is checked as that path.
+  static Future<String?> which(String program) async {
+    final windows = io.Platform.isWindows;
+    final exts = windows
+        ? ['', ...(io.Platform.environment['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').where((e) => e.isNotEmpty)]
+        : const [''];
+    Future<String?> probe(String base) async {
+      for (final ext in exts) {
+        final path = '$base$ext';
+        final st = await io.FileStat.stat(path);
+        if (st.type != io.FileSystemEntityType.file) continue;
+        if (windows || st.mode & 0x49 != 0) return path; // any execute bit (0o111)
+      }
+      return null;
+    }
+
+    if (program.contains('/') || (windows && program.contains(r'\'))) return probe(program);
+    final sep = windows ? ';' : ':';
+    for (final dir in (io.Platform.environment['PATH'] ?? '').split(sep)) {
+      if (dir.isEmpty) continue;
+      final hit = await probe('$dir${windows ? r'\' : '/'}$program');
+      if (hit != null) return hit;
+    }
+    return null;
+  }
+
   static void _checkCommand(List<String> command) {
     if (command.isEmpty) {
       throw ArgumentError.value(command, 'command', 'must not be empty');
@@ -331,19 +378,18 @@ final class _Filter implements Pipe {
     // track normal completion and kill in the finally: without this the
     // child outlives a failed run.
     var ok = false;
-    // Cap stderr (256 KB): the spec wants the full text for the exception,
-    // but GBs would OOM; beyond the cap the middle is dropped.
-    final stderrBuf = BytesBuilder(copy: false);
-    var stderrCapped = false;
+    // Only the last 64 KB of stderr is kept for the exception: errors come
+    // last, and GBs would OOM. Compacted whenever it doubles.
+    var stderrBuf = BytesBuilder(copy: false);
     // Drain stderr until the process exits: cancelling when stdout
     // ends would drop late stderr from the exception.
     final stderrDone = () async {
       try {
         await for (final chunk in proc.stderr) {
-          if (stderrBuf.length < 262144) {
-            stderrBuf.add(chunk);
-          } else {
-            stderrCapped = true;
+          stderrBuf.add(chunk);
+          if (stderrBuf.length > 2 * _errCap) {
+            final all = stderrBuf.takeBytes();
+            stderrBuf = BytesBuilder(copy: false)..add(Uint8List.sublistView(all, all.length - _errCap));
           }
         }
       } catch (_) {}
@@ -410,7 +456,7 @@ final class _Filter implements Pipe {
       try {
         await proc.exitCode.timeout(const Duration(seconds: 2));
       } catch (_) {}
-      await Future<void>.error(inputError!, inputStack);
+      Error.throwWithStackTrace(inputError!, inputStack ?? StackTrace.current);
     }
     final code = await proc.exitCode;
     try {
@@ -418,12 +464,7 @@ final class _Filter implements Pipe {
     } catch (_) {}
     if (code != 0) {
       final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
-      throw io.ProcessException(
-        _command[0],
-        _command.sublist(1),
-        'exit $code: $err${stderrCapped ? '…[stderr truncated at 256 KB]' : ''}',
-        code,
-      );
+      throw io.ProcessException(_command[0], _command.sublist(1), 'exit $code: ${_tail(err)}', code);
     }
   }
 
@@ -442,6 +483,19 @@ final class _Filter implements Pipe {
     }
     return false;
   }
+}
+
+/// How much stderr a failure message keeps: the last 64 KB.
+const _errCap = 65536;
+
+/// The last [_errCap] characters of [err], from a line start, led by `…`
+/// when cut: a chatty failing tool must not put megabytes in a message.
+String _tail(String err) {
+  if (err.length <= _errCap) return err;
+  var from = err.length - _errCap;
+  final nl = err.indexOf('\n', from);
+  if (nl != -1 && nl + 1 < err.length) from = nl + 1;
+  return '…${err.substring(from)}';
 }
 
 final class _LineSink implements Sink<String> {

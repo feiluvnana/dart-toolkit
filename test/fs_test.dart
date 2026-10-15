@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:io' as io;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
@@ -184,6 +185,59 @@ void main() {
       expect(await Fs.entry(p('e')), isNull);
     });
 
+    test('File/Dir go through links; Link asks about itself (regression: exists() false while text() read)', () async {
+      await Fs.file(p('a.txt')).write('x');
+      await Fs.file(p('d/b.txt')).write('b');
+      await Fs.link(p('ln.txt')).create(p('a.txt'));
+      await Fs.link(p('ld')).create(p('d'));
+      expect(await Fs.file(p('ln.txt')).exists(), isTrue);
+      expect(await Fs.dir(p('ld')).exists(), isTrue);
+      expect(await Fs.link(p('ln.txt')).exists(), isTrue);
+      expect(await Fs.link(p('a.txt')).exists(), isFalse);
+      expect(await Fs.dir(p('ln.txt')).exists(), isFalse);
+      // copy follows: a real file / folder at the destination.
+      expect(await (await Fs.file(p('ln.txt')).copy(p('c.txt'))).text(), 'x');
+      expect(await Fs.entry(p('c.txt')), isA<File>());
+      await Fs.dir(p('ld')).copy(p('cd'));
+      expect(await Fs.entry(p('cd')), isA<Dir>());
+      expect(await Fs.file(p('cd/b.txt')).text(), 'b');
+      // move moves the link itself.
+      await Fs.file(p('ln.txt')).move(p('m.txt'));
+      expect(await Fs.entry(p('m.txt')), isA<Link>());
+      await Fs.dir(p('ld')).move(p('md'));
+      expect(await Fs.entry(p('md')), isA<Link>());
+      // delete through a File/Dir handle takes the link, never the target.
+      await Fs.file(p('m.txt')).delete();
+      await Fs.dir(p('md')).delete();
+      expect(await Fs.entry(p('m.txt')), isNull);
+      expect(await Fs.entry(p('md')), isNull);
+      expect(await Fs.file(p('a.txt')).text(), 'x');
+      expect(await Fs.file(p('d/b.txt')).text(), 'b');
+    });
+
+    test('delete of the wrong kind throws (regression: silently kept it)', () async {
+      await Fs.file(p('a.txt')).write('x');
+      await Fs.dir(p('d')).create();
+      await expectLater(Fs.dir(p('a.txt')).delete(), throwsA(isA<FileSystemException>()));
+      await expectLater(Fs.file(p('d')).delete(), throwsA(isA<FileSystemException>()));
+      await expectLater(Fs.link(p('a.txt')).delete(), throwsA(isA<FileSystemException>()));
+      expect(await Fs.file(p('a.txt')).exists(), isTrue);
+      expect(await Fs.dir(p('d')).exists(), isTrue);
+    });
+
+    test('a missing source carries the OS error (regression: empty OSError)', () async {
+      final e = await Fs.file(p('missing.txt')).copy(p('x')).then<Object?>((_) => null, onError: (Object e) => e);
+      expect(e, isA<PathNotFoundException>());
+      expect((e as PathNotFoundException).osError?.errorCode, isNot(0));
+      expect(e.osError?.message, isNotEmpty);
+    });
+
+    test('handles compare by normalized path (regression: a/./b != a/b)', () {
+      expect(Fs.file(p('d/./a.txt')), Fs.file(p('d/a.txt')));
+      expect(Fs.dir(p('d/x/..')).hashCode, Fs.dir(p('d')).hashCode);
+      expect(Fs.dir(p('d/x/..')), Fs.dir(p('d')));
+    });
+
     test('an unreadable file fails the copy as a catchable error', () async {
       if (Platform.isWindows) markTestSkipped('needs POSIX modes');
       for (var i = 0; i < 50; i++) {
@@ -207,6 +261,17 @@ void main() {
   });
 
   group('File', () {
+    test('text(or:) and bytes(or:) answer a missing file; json(or:) too', () async {
+      final f = Fs.file(p('missing.txt'));
+      expect(await f.text(or: 'none'), 'none');
+      expect(await f.bytes(or: const [1]), [1]);
+      await expectLater(f.text(), throwsA(isA<PathNotFoundException>()));
+      await Fs.dir(p('d')).create();
+      await expectLater(Fs.file(p('d')).text(or: ''), throwsA(isA<FileSystemException>()));
+      await f.write('here');
+      expect(await f.text(or: 'none'), 'here');
+    });
+
     test('write replaces, append adds, size counts', () async {
       final f = Fs.file(p('a.txt'));
       await f.write('hi');
@@ -304,7 +369,82 @@ void main() {
     });
   });
 
+  group('temp, home, lock, modified', () {
+    test('Fs.temp hands a fresh folder to the body and deletes it after, failures too', () async {
+      String? kept;
+      final n = await Fs.temp((d) async {
+        kept = d.path();
+        await d.file('x/y.txt').write('y');
+        return 3;
+      }, prefix: 'scope');
+      expect(n, 3);
+      expect(Directory(kept!).existsSync(), isFalse);
+      await expectLater(
+        Fs.temp((d) async {
+          kept = d.path();
+          throw StateError('boom');
+        }),
+        throwsStateError,
+      );
+      expect(Directory(kept!).existsSync(), isFalse);
+    });
+
+    test('Fs.home is HOME', () {
+      expect(Fs.home().path(), Platform.environment['HOME']);
+    });
+
+    test('modified() reads the mtime; a missing entry throws', () async {
+      final f = await Fs.file(p('m.txt')).write('x');
+      final when = DateTime(2020, 1, 2, 3, 4, 5);
+      await io.File(f.path()).setLastModified(when);
+      expect(await f.modified(), when);
+      expect(await Fs.dir(tmp.path).modified(), isA<DateTime>());
+      await expectLater(Fs.file(p('none')).modified(), throwsA(isA<PathNotFoundException>()));
+    });
+
+    test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
+      final lock = p('run.lock');
+      // A child script holds the lock for 1.5 s.
+      final dir = await Directory.systemTemp.createTemp('lockchild');
+      addTearDown(() => dir.delete(recursive: true));
+      await io.File('${dir.path}/main.dart').writeAsString('''
+import 'dart:io' as io;
+import 'package:dart_toolkit/fs.dart';
+Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
+  print('held');
+  await Future<void>.delayed(const Duration(milliseconds: 1500));
+});
+''');
+      final holder = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        '${dir.path}/main.dart',
+        lock,
+      ]);
+      await holder.stdout.transform(utf8.decoder).firstWhere((l) => l.contains('held'));
+      await expectLater(
+        Fs.file(lock).lock(() async => 1),
+        throwsA(isA<FileSystemException>().having((e) => e.message, 'message', 'locked by another process')),
+      );
+      expect(await Fs.file(lock).lock(() async => 2, wait: 5.seconds), 2);
+      expect(await holder.exitCode, 0);
+    });
+  });
+
   group('Dir', () {
+    test('list(match:) filters by a glob; ** recurses, {a,b} picks', () async {
+      for (final f in ['a.jpg', 'b.png', 'c.txt', 'x/d.jpg', 'x/y/e.png', 'x/f.gif']) {
+        await Fs.file(p('shots/$f')).write(f);
+      }
+      final shots = Fs.dir(p('shots'));
+      Future<List<String>> names(String glob) async => [
+        for (final e in await shots.list(match: glob)) e.path(from: shots),
+      ];
+      expect(await names('*.{jpg,png}'), ['a.jpg', 'b.png']);
+      expect(await names('**/*.{jpg,png}'), ['a.jpg', 'b.png', 'x/d.jpg', 'x/y/e.png']);
+      expect(await names('x/?.gif'), isEmpty, reason: 'without ** the listing is one level');
+      expect([for (final e in await shots.list(recursive: true, match: 'x/?.gif')) e.name()], ['f.gif']);
+    });
+
     test('file/dir navigate without I/O', () {
       expect(Fs.dir(p('d')).file('a').path(), '${p('d')}/a');
       expect(Fs.dir(p('d')).dir('e').path(), '${p('d')}/e');
@@ -359,6 +499,7 @@ void main() {
         p('w'),
         '''
 import 'dart:io';
+import 'dart:io' as io;
 import 'package:dart_toolkit/src/posix.dart' as posix;
 void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
         '''
@@ -370,6 +511,25 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
   check((await FileStat.stat('-d')).modified.year == 2001, 'mtime -d');
   check(await posix.copyTreeWithCp('s', '-t'), 'cp');
   check(FileSystemEntity.isFileSync('-t/a'), 'cp -t/a');''',
+      );
+    });
+
+    test('chmod and touch failures throw (regression: exit codes ignored)', () async {
+      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      await runInDir(
+        tmp.path,
+        '''
+import 'dart:io';
+import 'dart:io' as io;
+import 'package:dart_toolkit/src/posix.dart' as posix;
+Future<void> expectThrows(Future<void> f, String what) async {
+  try { await f; } on FileSystemException { return; }
+  throw StateError(what);
+}''',
+        '''
+  await expectThrows(posix.chmod('nope', 420), 'chmod');
+  await expectThrows(posix.chmodBatched({420: ['nope']}), 'chmodBatched');
+  await expectThrows(posix.setDirMtime('no/such/dir/x', DateTime(2001)), 'touch');''',
       );
     });
   });

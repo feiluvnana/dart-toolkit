@@ -5,6 +5,7 @@ import 'package:dart_toolkit/core.dart';
 import 'package:test/test.dart';
 
 void main() {
+  timeTests();
   group('Reader', () {
     test('lines() splits on LF, CRLF and CR, across chunks, for futures too', () async {
       final r = _TextChunks(['one\r', '\ntwo\nthr', 'ee\rfour']);
@@ -222,7 +223,7 @@ final class _Boom implements Pipe {
   void abort(Object error) {}
 }
 
-final class _Sink implements Writer {
+final class _Sink with Writer {
   final data = <int>[];
   @override
   Future<void> consume(Stream<List<int>> input) async {
@@ -232,7 +233,7 @@ final class _Sink implements Writer {
   }
 }
 
-final class _OrderWriter implements Writer {
+final class _OrderWriter with Writer {
   _OrderWriter(this.order);
   final List<String> order;
   @override
@@ -242,7 +243,7 @@ final class _OrderWriter implements Writer {
   }
 }
 
-final class _SlowWriter implements Writer {
+final class _SlowWriter with Writer {
   _SlowWriter(this._onStart, this._onEnd);
   final void Function() _onStart;
   final void Function() _onEnd;
@@ -286,7 +287,7 @@ final class _CancelReader with Reader {
   }
 }
 
-final class _BoomWriter implements Writer {
+final class _BoomWriter with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {
     var n = 0;
@@ -305,7 +306,7 @@ final class _CloseReader with Reader implements Closeable {
   Future<void> close() async => closed = true;
 }
 
-final class _ThrowFirst implements Writer {
+final class _ThrowFirst with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async => throw StateError('no');
 }
@@ -315,4 +316,26 @@ final class _TextChunks with Reader {
   final List<String> _parts;
   @override
   Stream<List<int>> stream() => Stream.fromIterable(_parts.map((p) => p.codeUnits));
+}
+
+// Times and Spans (core).
+void timeTests() {
+  test('format and human', () {
+    final t = DateTime(2026, 3, 4, 5, 6, 7, 89);
+    expect(t.format('yyyy-MM-dd_HHmm ss.SSS'), '2026-03-04_0506 07.089');
+    expect(t.format('day dd of MM'), 'day 04 of 03');
+    expect(
+      [
+        850.milliseconds,
+        4.2.seconds,
+        3.seconds,
+        665.seconds,
+        11.minutes,
+        123.minutes,
+        76.hours,
+        -2.seconds,
+      ].map((d) => d.human()),
+      ['850 ms', '4.2 s', '3 s', '11 min 5 s', '11 min', '2 h 3 min', '3 d 4 h', '-2 s'],
+    );
+  });
 }

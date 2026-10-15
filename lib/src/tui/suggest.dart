@@ -56,9 +56,10 @@ extension on _Session<dynamic> {
     FutureOr<List<String>> result;
     try {
       result = fn(word);
-    } catch (_) {
+    } catch (e, st) {
       if (sg.gen == gen) sg.open = false;
       if (identical(_activeSg, sg) && !sg.open) _activeSg = null;
+      _handlerError(e, st); // shown in the status row, not swallowed
       _dirtyAndWake();
       return;
     }
@@ -72,10 +73,11 @@ extension on _Session<dynamic> {
           if (!sg.open && identical(_activeSg, sg)) _activeSg = null;
           _dirtyAndWake();
         },
-        onError: (_) {
+        onError: (Object e, StackTrace st) {
           if (sg.gen == gen) {
             sg.open = false;
             if (identical(_activeSg, sg)) _activeSg = null;
+            _handlerError(e, st); // a stale answer's error is dropped with it
             _dirtyAndWake();
           }
         },

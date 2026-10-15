@@ -3,7 +3,7 @@
 /// ```dart
 /// final id = Hash.md5().add(url).hex();
 /// final h = Hash.sha256().addBytes(header).add(name);
-/// await (Http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
+/// await (http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
 /// final digest = await Hash.sha256().of(Fs.file('disc.iso'));
 /// ```
 ///
@@ -21,12 +21,13 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as c;
 
 import 'core.dart';
+import 'src/resume.dart' show PassThrough;
 export 'core.dart';
 
 /// Entry point: one method per algorithm. With [expect] (hex) the hasher
 /// checks itself at the end of a run: a mismatch fails the pipeline with a
-/// [FormatException] before the writer commits, so
-/// `Http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
+/// [ContentException] before the writer commits, so
+/// `http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
 /// never unpacks a bad download. It is checked when a run ends (`>`, `|`,
 /// `of`); `hex()` alone does not check.
 abstract final class Hash {
@@ -61,7 +62,7 @@ enum _State {
 }
 
 /// A hash in progress: a [Writer] you feed, a [Pipe] that passes through.
-final class Hasher implements Writer, Pipe {
+final class Hasher with Writer implements Pipe, PassThrough {
   Hasher._(this._hash, this._name, String? expect)
     : _expect = expect?.trim().toLowerCase(),
       _capture = _DigestCapture() {
@@ -141,7 +142,7 @@ final class Hasher implements Writer, Pipe {
     final want = _expect;
     if (want == null) return;
     final got = _capture.digest.toString();
-    if (got != want) throw FormatException('$_name mismatch: got $got, expected $want');
+    if (got != want) throw ContentException('$_name mismatch: got $got, expected $want');
   }
 
   @override

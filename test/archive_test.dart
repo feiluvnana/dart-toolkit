@@ -6,7 +6,13 @@ import 'dart:typed_data';
 
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/src/aes.dart';
+import 'package:dart_toolkit/src/crc32.dart';
+import 'package:dart_toolkit/src/lzma.dart';
+import 'package:dart_toolkit/src/ppmd.dart';
 import 'package:dart_toolkit/src/rar.dart' as rar;
+import 'package:dart_toolkit/src/sevenzip.dart' as sevenzip;
+import 'package:dart_toolkit/src/zip.dart' as zip;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -44,6 +50,139 @@ List<int> _pax(Map<String, String> records) {
     out.addAll('$n $body'.codeUnits);
   }
   return out;
+}
+
+List<int> _le32(int v) => [v & 0xFF, v >> 8 & 0xFF, v >> 16 & 0xFF, v >> 24 & 0xFF];
+
+/// RAR5's variable-length number.
+List<int> _vint(int v) {
+  final out = <int>[];
+  do {
+    var b = v & 0x7F;
+    v >>= 7;
+    if (v != 0) b |= 0x80;
+    out.add(b);
+  } while (v != 0);
+  return out;
+}
+
+/// -1 and -10 as ten-byte RAR5 numbers: they wrap past 2^63.
+const _vintMinus1 = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+const _vintMinus10 = [0xF6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+
+/// A RAR5 block: CRC-32, size, then [body] (type, flags, …).
+List<int> _rar5Block(List<int> body) {
+  final sized = [..._vint(body.length), ...body];
+  return [..._le32(crc32(sized)), ...sized];
+}
+
+/// A RAR5 archive of one stored file, its fields overridable to damage it.
+List<int> _rar5(
+  List<int> data, {
+  String name = 'f.txt',
+  List<int> extra = const [],
+  List<int>? dataSize,
+  int? size,
+  int method = 0,
+  bool end = true,
+}) {
+  final fields = [
+    ..._vint(0), // file flags: no mtime, no CRC
+    ..._vint(size ?? data.length),
+    ..._vint(0x81A4),
+    ..._vint(method << 7),
+    ..._vint(1), // unix
+    ..._vint(name.length),
+    ...name.codeUnits,
+  ];
+  return [
+    ...[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00],
+    ..._rar5Block([1, 0, 0]),
+    ..._rar5Block([
+      2,
+      (extra.isEmpty ? 0 : 1) | 2,
+      if (extra.isNotEmpty) ..._vint(extra.length),
+      ...dataSize ?? _vint(data.length),
+      ...fields,
+      ...extra,
+    ]),
+    ...data,
+    if (end) ..._rar5Block([5, 0, 0]),
+  ];
+}
+
+/// A 7z: [packed] streams at offset 32, then the raw [header].
+List<int> _sevenZip(List<int> packed, List<int> header) {
+  final start = [..._le32(packed.length), 0, 0, 0, 0, ..._le32(header.length), 0, 0, 0, 0, ..._le32(crc32(header))];
+  return [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 4, ..._le32(crc32(start)), ...start, ...packed, ...header];
+}
+
+/// Where the zip's first central-directory entry starts.
+int _central(List<int> z) {
+  for (var i = 0; i + 4 <= z.length; i++) {
+    if (z[i] == 0x50 && z[i + 1] == 0x4b && z[i + 2] == 1 && z[i + 3] == 2) return i;
+  }
+  throw StateError('no central directory');
+}
+
+/// A one-member zip as [zip.writeZip] makes it.
+Uint8List _zip(List<int> data, {String? password}) =>
+    zip.writeZip([('f.txt', 0x1A4, data, DateTime(2020))], password: password);
+
+/// Legacy ZipCrypto encryption (PKWARE APPNOTE 6.1), for crafting old zips.
+List<int> _zipCrypto(List<int> plain, String password, int crc) {
+  var k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
+  int step(int c, int b) => crcTable[(c ^ b) & 0xFF] ^ (c >> 8);
+  void update(int b) {
+    k0 = step(k0, b);
+    k1 = ((k1 + (k0 & 0xFF)) * 134775813 + 1) & 0xFFFFFFFF;
+    k2 = step(k2, k1 >> 24);
+  }
+
+  password.codeUnits.forEach(update);
+  int enc(int p) {
+    final t = (k2 & 0xFFFF) | 2;
+    final c = p ^ ((t * (t ^ 1)) >> 8 & 0xFF);
+    update(p);
+    return c;
+  }
+
+  return [for (var i = 0; i < 11; i++) enc(i * 37 & 0xFF), enc(crc >> 24 & 0xFF), for (final b in plain) enc(b)];
+}
+
+/// A one-member stored zip, encrypted with ZipCrypto.
+Uint8List _zipCryptoZip(List<int> plain, String password) {
+  final crc = crc32(plain);
+  final body = _zipCrypto(plain, password, crc);
+  List<int> fields(int sig, {required bool central}) => [
+    ..._le32(sig),
+    if (central) ...[20, 0],
+    20, 0, 1, 0, 0, 0, 0, 0, 0x21, 0, // version, flags (encrypted), stored, time, date
+    ..._le32(crc),
+    ..._le32(body.length),
+    ..._le32(plain.length),
+    5, 0, 0, 0, // name length, extra length
+    if (central) ...[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..._le32(0)], // comment, disk, attrs, offset
+  ];
+  final local = [...fields(0x04034b50, central: false), ...'f.txt'.codeUnits, ...body];
+  final dir = [...fields(0x02014b50, central: true), ...'f.txt'.codeUnits];
+  return Uint8List.fromList([
+    ...local,
+    ...dir,
+    ..._le32(0x06054b50),
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    ..._le32(dir.length),
+    ..._le32(local.length),
+    0,
+    0,
+  ]);
 }
 
 void main() {
@@ -728,6 +867,34 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       expect(await Fs.file(p('out/index.html')).text(), '<h1>hi</h1>');
     });
 
+    test("a tar member of type '7' (contiguous) is a regular file", () async {
+      final tar = [..._tarBlock('c.txt', 3, 0x37), ..._tarBody('abc'.codeUnits), ...List.filled(1024, 0)];
+      await Archive.unarchive(p('out')).consume(Stream.value(tar));
+      expect(await Fs.file(p('out/c.txt')).text(), 'abc');
+    });
+
+    test('existing files are kept: a member at the same path is dropped', () async {
+      await Fs.file(p('src/a.txt')).write('NEW');
+      await Fs.file(p('src/b.txt')).write('NEW');
+      await Fs.file(p('out/a.txt')).write('OLD');
+      if (!Platform.isWindows) await Process.run('chmod', ['600', p('out/a.txt')]);
+      await (Archive.archive(['.'], dir: p('src')) > Archive.unarchive(p('out')));
+      expect(await Fs.file(p('out/a.txt')).text(), 'OLD');
+      expect(await Fs.file(p('out/b.txt')).text(), 'NEW');
+      if (!Platform.isWindows) expect((await io.File(p('out/a.txt')).stat()).mode & 0x1FF, 0x180);
+      expect((await Fs.dir(tmp.path).list()).map((e) => e.name()).where((n) => n.startsWith('.out')), isEmpty);
+    });
+
+    test('zip entries carry the file\'s modified time', () async {
+      await Fs.file(p('src/a.txt')).write('a');
+      await io.File(p('src/a.txt')).setLastModified(DateTime(2001, 2, 3, 4, 5, 6));
+      await (Archive.archive(['.'], dir: p('src')) > Fs.file(p('a.zip')));
+      final z = await Fs.file(p('a.zip')).bytes();
+      final cd = _central(z);
+      expect(z[cd + 12] | z[cd + 13] << 8, 4 << 11 | 5 << 5 | 3);
+      expect(z[cd + 14] | z[cd + 15] << 8, (2001 - 1980) << 9 | 2 << 5 | 3);
+    });
+
     test('M29: non-portable member names are refused on every OS', () async {
       for (final name in ['a:b', 'CON', 'aux.txt', 'dir/NUL.log', 'x.', 'dir./f', 'x ', 'a<b', 'q?', '.. ']) {
         final tar = [..._tarBlock(name, 1, 0x30), ..._tarBody('x'.codeUnits), ...List.filled(1024, 0)];
@@ -808,6 +975,201 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         expect(await tmp.list().toList(), isEmpty);
       });
     }
+  });
+
+  group('hostile input', () {
+    final isContent = isA<ContentException>();
+    Matcher content(String text) => isA<ContentException>().having((e) => e.message, 'message', contains(text));
+    Future<void> unpack(List<int> bytes, {String? password}) =>
+        Reader.of(bytes) > Archive.unarchive(p('out'), password: password);
+
+    test('a 7z encoded header pointing at itself fails instead of looping', () async {
+      // 0x17, pack info (stream at 0, 18 bytes), one Copy coder, unpack size 18.
+      final header = [0x17, 0x06, 0, 1, 0x09, 18, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 18, 0, 0];
+      await expectLater(unpack(_sevenZip(const [], header)), throwsA(content('nest too deep')));
+    }, timeout: const Timeout(Duration(seconds: 10)));
+
+    test('a 7z encoded header is checked against its CRC', () async {
+      final real = [0x01, 0x00]; // a header with nothing in it
+      List<int> encoded(int crc) => [
+        ...[0x17, 0x06, 0, 1, 0x09, 2, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 2],
+        ...[0x0A, 1, ..._le32(crc), 0, 0],
+      ];
+      expect(sevenzip.readSevenZip(Uint8List.fromList(_sevenZip(real, encoded(crc32(real))))), isEmpty);
+      await expectLater(unpack(_sevenZip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
+    });
+
+    test('7z counts and sizes past the header are damage, not a RangeError or an allocation', () async {
+      // A names property of size 0, then 2^40 files.
+      await expectLater(unpack(_sevenZip(const [], [0x01, 0x05, 1, 0x11, 0, 0, 0, 0])), throwsA(isContent));
+      await expectLater(
+        unpack(_sevenZip(const [], [0x01, 0x05, 0xFC, 0, 0, 0, 0, 0, 1, 0, 0])),
+        throwsA(content('files in a')),
+      );
+    });
+
+    test('a 7z folder is freed after its last member and decodes again when asked', () async {
+      final z = sevenzip.writeSevenZip([('a', 0x1A4, 'aaa'.codeUnits), ('b', 0x1A4, 'bbbb'.codeUnits)]);
+      final entries = sevenzip.readSevenZip(z);
+      expect([for (final e in entries) utf8.decode(e.data())], ['aaa', 'bbbb']);
+      expect(utf8.decode(entries.first.data()), 'aaa');
+    });
+
+    test('RAR5 sizes that wrap negative fail instead of looping', () async {
+      final data = 'hi'.codeUnits;
+      expect(rar.readRar(Uint8List.fromList(_rar5(data))).single.data(), data);
+      await expectLater(unpack(_rar5(data, dataSize: _vintMinus1)), throwsA(content('out of range')));
+      // A header size of -1 (and a CRC of the empty range it would cover).
+      final sig = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00];
+      await expectLater(unpack([...sig, 0, 0, 0, 0, ..._vintMinus1, 1, 0, 0]), throwsA(content('out of range')));
+      await expectLater(unpack(_rar5(data, extra: [..._vintMinus10, 2])), throwsA(content('out of range')));
+      await expectLater(unpack(_rar5(data, extra: [40, 2])), throwsA(content('extra record size')));
+      await expectLater(unpack(_rar5(data, extra: [0])), throwsA(content('extra record size')));
+    }, timeout: const Timeout(Duration(seconds: 10)));
+
+    test('a RAR claiming a huge size is damage, not an allocation', () async {
+      await expectLater(unpack(_rar5([1, 2, 3, 4, 5, 6], size: 1 << 40, method: 1)), throwsA(isContent));
+    });
+
+    test('a RAR without its end block is truncated', () async {
+      await expectLater(unpack(_rar5('hi'.codeUnits, end: false)), throwsA(content('truncated')));
+      final rar5 = io.File('test/fixtures/archives/rar5_multiple_files.rar').readAsBytesSync();
+      await expectLater(unpack(rar5.sublist(0, rar5.length - 8)), throwsA(content('truncated')));
+      final rar4 = io.File('test/fixtures/archives/rar4_filter.rar').readAsBytesSync();
+      await expectLater(unpack(rar4.sublist(0, rar4.length - 7)), throwsA(content('truncated')));
+      expect(await Fs.entry(p('out')), isNull);
+    });
+
+    test('a RAR4 header too short for its fields is damage, not a RangeError', () async {
+      List<int> block(int type, int flags, List<int> rest) {
+        final h = [type, flags & 0xFF, flags >> 8, 7 + rest.length, 0, ...rest];
+        final crc = crc32(h) & 0xFFFF;
+        return [crc & 0xFF, crc >> 8, ...h];
+      }
+
+      final rar4 = [
+        0x52,
+        0x61,
+        0x72,
+        0x21,
+        0x1A,
+        0x07,
+        0x00,
+        ...block(0x73, 0, List.filled(6, 0)),
+        ...block(0x74, 0x8000, []),
+      ];
+      await expectLater(unpack(rar4), throwsA(content('header too short')));
+    });
+
+    test('a RAR5 BLAKE2sp hash is checked', () async {
+      final data = ('hello, rar5 blake2sp\n' * 40).codeUnits;
+      const hex = 'b045c7fbb8fb97a0f8f3eaf4c1adbb51eb24d0251915ff802321430b4ba320f0';
+      final hash = [for (var i = 0; i < 64; i += 2) int.parse(hex.substring(i, i + 2), radix: 16)];
+      expect(rar.blake2sp(Uint8List.fromList(data)), hash);
+      final good = _rar5(data, extra: [34, 2, 0, ...hash]);
+      await unpack(good);
+      expect(await Fs.file(p('out/f.txt')).text(), 'hello, rar5 blake2sp\n' * 40);
+      final at = good.length - 8 - data.length; // the data, before the end block
+      await expectLater(unpack(List.of(good)..[at + 5] ^= 1), throwsA(content('checksum of f.txt')));
+    });
+
+    test('RAR members are freed once taken and decode again when asked', () async {
+      final entries = rar.readRar(io.File('test/fixtures/archives/rar5_solid.rar').readAsBytesSync());
+      final files = entries.where((e) => !e.isDir).toList();
+      final forward = [for (final e in files) e.data()];
+      expect([for (final e in files.reversed) e.data()], forward.reversed.toList());
+    });
+
+    test('zip CRCs are checked (stored and deflated)', () async {
+      for (final data in ['ab'.codeUnits, List.filled(1000, 0x78)]) {
+        final z = _zip(data);
+        final cd = _central(z);
+        expect(zip.readZip(z).single.data(), data);
+        z[cd + 16] ^= 1;
+        await expectLater(unpack(z), throwsA(content('CRC of f.txt')));
+      }
+    });
+
+    test('a wrong ZipCrypto password that passes the one-byte check fails on the CRC', () async {
+      final z = _zipCryptoZip('secret text'.codeUnits, 'right');
+      final entry = zip.readZip(z).single;
+      expect(entry.data(password: 'right'), 'secret text'.codeUnits);
+      String? lucky;
+      for (var i = 0; i < 5000 && lucky == null; i++) {
+        try {
+          entry.data(password: 'pw$i');
+          fail('pw$i opened the member');
+        } on ContentException catch (e) {
+          if (e.message.contains('wrong password or corrupt data')) lucky = 'pw$i';
+        }
+      }
+      expect(lucky, isNotNull);
+    });
+
+    test('a deflate member stops at its declared size', () async {
+      final z = _zip(Uint8List(1 << 20));
+      final cd = _central(z);
+      z.setRange(cd + 24, cd + 28, _le32(1000));
+      await expectLater(unpack(z), throwsA(content('past its declared 1000 bytes')));
+    });
+
+    test('a bad WinZip AES extra field is damage', () async {
+      final z = _zip('x'.codeUnits, password: 'pw');
+      final cd = _central(z);
+      z[cd + 46 + 5 + 8] = 7; // strength
+      await expectLater(unpack(z, password: 'pw'), throwsA(content('bad AES extra field')));
+      expect(() => Aes(List.filled(7, 0)), throwsArgumentError);
+    });
+
+    test('a zip64 offset that wraps negative is damage, not a RangeError', () async {
+      final z = _zip('ab'.codeUnits);
+      final cd = _central(z);
+      final zip64 = [1, 0, 8, 0, ...List.filled(8, 0xFF)];
+      final bad = [...z.sublist(0, cd + 46 + 5), ...zip64, ...z.sublist(cd + 46 + 5)];
+      bad.setRange(cd + 30, cd + 32, [zip64.length, 0]);
+      bad.setRange(cd + 42, cd + 46, _le32(0xFFFFFFFF));
+      await expectLater(unpack(bad), throwsA(content('bad sizes')));
+    });
+
+    test('LZMA, LZMA2 and PPMd claiming huge sizes fail on the data, not the allocation', () {
+      expect(
+        () => lzmaDecode(Uint8List.fromList([0, 0, 0, 0, 0, 1, 2]), [0x5D, 0, 0, 1, 0], 1 << 40),
+        throwsA(isContent),
+      );
+      expect(
+        () => lzma2Decode(Uint8List.fromList([0x01, 0x00, 0x00, 0x41, 0x00]), 1 << 40),
+        throwsA(content('ends at 1 of')),
+      );
+      expect(
+        () => ppmdDecode7z(Uint8List.fromList([0, 1, 2, 3]), [6, 0, 0, 0, 0xC0], 10),
+        throwsA(content('properties')),
+      );
+      expect(() => ppmdDecode7z(Uint8List.fromList([0, 1, 2, 3]), [6, 0, 0, 0, 1], 1 << 40), throwsA(isContent));
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test('corrupt gzip data is a ContentException', () async {
+      final gz = gzip.encode(utf8.encode('hello ' * 1000));
+      final bad = List.of(gz)..[12] ^= 0xFF;
+      await expectLater(Archive.gunzip().transform(Stream.value(bad)).drain<void>(), throwsA(isContent));
+    });
+
+    test('crc32 slices 8 bytes at a time and matches the byte-wise one', () {
+      for (final n in [0, 1, 7, 8, 9, 63, 1000]) {
+        final data = Uint8List.fromList(List.generate(n, (i) => i * 131 + 7 & 0xFF));
+        final g = gzip.encode(data);
+        final want = g[g.length - 8] | g[g.length - 7] << 8 | g[g.length - 6] << 16 | g[g.length - 5] << 24;
+        expect(crc32(data), want);
+        expect(crc32(data.toList()), want);
+        expect(
+          crc32(
+            data,
+            start: n ~/ 3,
+            crc: crc32(data, end: n ~/ 3),
+          ),
+          want,
+        );
+      }
+    });
   });
 
   group('gzip', () {

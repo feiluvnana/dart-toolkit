@@ -5,7 +5,7 @@
 /// final cli = Command('fetch', 'Fetch pages.',
 ///     params: [port],
 ///     handler: (context) async => print(context(port)));
-/// exitCode = await cli.run(argv);
+/// await cli.run(argv);                                  // sets exitCode
 /// ```
 ///
 /// Public surface is exactly: [Param], [Flag], [Opt], [Multi],
@@ -18,8 +18,11 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math';
+
+import 'core.dart';
 
 import 'src/sanitize.dart' as term;
 
@@ -93,8 +96,24 @@ final class Flag extends Param<bool> {
 /// [or] or `required` is an [ArgumentError]. Yes/no is always a
 /// [Flag]: `Opt<bool>` is an [ArgumentError].
 final class Opt<T> extends Param<T> {
-  Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse})
-    : this._withReader(name, help, _resolve<T>(name, parse), short: short, or: or, required: required, env: env);
+  Opt(
+    String name,
+    String help, {
+    String? short,
+    T? or,
+    bool required = false,
+    String? env,
+    T Function(String)? parse,
+    List<T>? values,
+  }) : this._withReader(
+         name,
+         help,
+         _resolve<T>(name, parse, values),
+         short: short,
+         or: or,
+         required: required,
+         env: env,
+       );
 
   Opt._withReader(
     String name,
@@ -133,8 +152,8 @@ final class Opt<T> extends Param<T> {
 /// where [or] or [parse] gives it. Yes/no is always a [Flag]:
 /// `Multi<bool>` is an [ArgumentError].
 final class Multi<T> extends Param<List<T>> {
-  Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse})
-    : this._withElement(name, help, _resolve<T>(name, parse), short: short, or: or);
+  Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse, List<T>? values})
+    : this._withElement(name, help, _resolve<T>(name, parse, values), short: short, or: or);
 
   Multi._withElement(String name, String help, _Reader<T> element, {String? short, required List<T> or})
     : _or = or,
@@ -167,8 +186,8 @@ final class Multi<T> extends Param<List<T>> {
 /// is inferred where [or] or [parse] gives it. Yes/no is always a
 /// [Flag]: `Arg<bool>` is an [ArgumentError].
 final class Arg<T> extends Param<T> {
-  Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse})
-    : this._withReader(name, help, _resolve<T>(name, parse), or: or, required: required);
+  Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse, List<T>? values})
+    : this._withReader(name, help, _resolve<T>(name, parse, values), or: or, required: required);
 
   Arg._withReader(String name, String help, _Reader<T> reader, {required T? or, required bool required})
     : super._(
@@ -196,6 +215,7 @@ final class Command {
     List<Command> commands = const [],
     FutureOr<void> Function(Context context)? handler,
     List<String> aliases = const [],
+    this._dotenv,
   }) : _name = name,
        _help = help,
        _params = params,
@@ -266,6 +286,9 @@ final class Command {
   final FutureOr<void> Function(Context context)? _handler;
   final List<String> _aliases;
 
+  /// A `KEY=VALUE` file loaded before parsing (see [run]).
+  final String? _dotenv;
+
   static void _checkSubtree(
     List<Command> commands,
     Set<Param<Object?>> seenParams,
@@ -290,10 +313,24 @@ final class Command {
     }
   }
 
-  /// Run [argv]: parse, run the named handler, print usage/errors, answer
-  /// the exit code. Never calls `exit()`; scripts do
-  /// `exitCode = await run(argv)`.
+  /// Run [argv]: parse, run the named handler, print usage/errors and set
+  /// the process `exitCode` (64 usage, 1 failure; a success leaves it as
+  /// the handler set it). Never calls `exit()`, so pending output and exit
+  /// hooks still run. The code is also returned, for tests and embedding.
+  ///
+  /// With `dotenv:` (`Command(…, dotenv: '.env')`), that file's `KEY=VALUE`
+  /// lines are read first (`#` comments, `export `, quotes allowed; a
+  /// missing file is skipped) and an `Opt(env:)` sees them, never over the
+  /// real environment.
   Future<int> run(List<String> argv) async {
+    final file = _dotenv;
+    _dotenvValues = file == null ? const {} : _readDotenv(file);
+    final code = await _run(argv);
+    if (code != 0) io.exitCode = code;
+    return code;
+  }
+
+  Future<int> _run(List<String> argv) async {
     final deepest = _Deepest();
     late final _Parsed parsed;
     try {
@@ -310,8 +347,18 @@ final class Command {
     final context = Context._(parsed.target, parsed.chain, parsed.params, parsed.extraArgs, {
       for (final c in parsed.chain) ...c._params,
     });
+    final h = parsed.target._handler;
+    if (h == null) {
+      // A group run bare (no subcommand named) is a usage error; a leaf
+      // without a handler just shows its help.
+      if (parsed.target._commands.isEmpty) {
+        print(context.usage());
+        return 0;
+      }
+      io.stderr.writeln(context.usage());
+      return 64;
+    }
     try {
-      final h = parsed.target._handler ?? ((c) => print(c.usage()));
       await Future.sync(() => h(context));
       return 0;
     } on UsageException catch (e) {
@@ -319,7 +366,7 @@ final class Command {
       io.stderr.writeln('Run "${parsed.fullName} --help" for usage.');
       return 64;
     } on Exception catch (e) {
-      io.stderr.writeln(_oneLine('$e'));
+      io.stderr.writeln(_oneLine(_failure(e)));
       return 1;
     }
   }
@@ -363,11 +410,10 @@ final class Context {
 }
 
 /// A usage error a handler throws for a mistake only it can see (exit 64).
-final class UsageException implements Exception {
-  const UsageException(this.message);
-
-  /// The one line printed before the `--help` hint.
-  final String message;
+/// Extends [ToolkitException], so one `on ToolkitException` covers every
+/// failure the toolkit reports.
+final class UsageException extends ToolkitException {
+  const UsageException(super.message);
 
   @override
   String toString() => message;
@@ -445,18 +491,31 @@ String? _closest(String typed, Iterable<String> candidates) {
 /// Resolve the reader + usage hint for `T` once, in the constructor, so
 /// each parsed token costs one closure call: O(1), with no runtime `Type`
 /// chain per token and no chain per usage row.
-_Reader<T> _resolve<T>(String name, T Function(String)? parse) {
+_Reader<T> _resolve<T>(String name, T Function(String)? parse, List<T>? values) {
   if (_same<T, bool>() || _same<T, bool?>()) {
     throw ArgumentError.value(T, 'T', 'Invalid type for "$name": yes/no is always a Flag');
+  }
+  if (values != null) {
+    if (parse != null) throw ArgumentError.value(name, 'values', 'Invalid "$name": give values or parse, not both');
+    final byName = {for (final v in values) _shown(v).toLowerCase(): v};
+    final shown = [for (final v in values) _shown(v)];
+    return _Reader((raw, what) {
+      final key = raw.trim().toLowerCase();
+      if (byName.containsKey(key)) return byName[key] as T;
+      final guess = _closest(key, byName.keys);
+      throw ContentException(
+        'Invalid value "$raw" for $what: expected ${shown.join(', ')}${guess == null ? '' : '. Did you mean "$guess"?'}',
+      );
+    }, '<${shown.join('|')}>');
   }
   if (parse != null) {
     return _Reader((raw, what) {
       try {
         return parse(raw);
       } on FormatException catch (e) {
-        throw FormatException('Invalid value "$raw" for $what: ${e.message}');
+        throw ContentException('Invalid value "$raw" for $what: ${e.message}');
       } on Exception catch (e) {
-        throw FormatException('Invalid value "$raw" for $what: $e');
+        throw ContentException('Invalid value "$raw" for $what: ${_failure(e)}');
       }
     }, '<value>');
   }
@@ -466,7 +525,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = int.tryParse(raw);
       if (v == null) {
-        throw FormatException('Invalid value "$raw" for $what: expected an integer');
+        throw ContentException('Invalid value "$raw" for $what: expected an integer');
       }
       return v as T;
     }, '<int>');
@@ -474,7 +533,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = double.tryParse(raw);
       if (v == null) {
-        throw FormatException('Invalid value "$raw" for $what: expected a number');
+        throw ContentException('Invalid value "$raw" for $what: expected a number');
       }
       return v as T;
     }, '<number>');
@@ -482,7 +541,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = num.tryParse(raw);
       if (v == null) {
-        throw FormatException('Invalid value "$raw" for $what: expected a number');
+        throw ContentException('Invalid value "$raw" for $what: expected a number');
       }
       return v as T;
     }, '<number>');
@@ -490,7 +549,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = _parseDuration(raw);
       if (v == null) {
-        throw FormatException('Invalid value "$raw" for $what: expected a duration such as 90s or 1h30m');
+        throw ContentException('Invalid value "$raw" for $what: expected a duration such as 90s or 1h30m');
       }
       return v as T;
     }, '<duration>');
@@ -498,7 +557,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final v = DateTime.tryParse(raw);
       if (v == null) {
-        throw FormatException('Invalid value "$raw" for $what: expected a date such as 2026-10-08');
+        throw ContentException('Invalid value "$raw" for $what: expected a date such as 2026-10-08');
       }
       return v as T;
     }, '<date>');
@@ -506,7 +565,7 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse) {
     return _Reader((raw, what) {
       final u = Uri.tryParse(raw);
       if (u != null && u.hasScheme) return u as T;
-      throw FormatException('Invalid value "$raw" for $what: expected a URL');
+      throw ContentException('Invalid value "$raw" for $what: expected a URL');
     }, '<url>');
   }
   throw ArgumentError.value(
@@ -560,6 +619,14 @@ Duration? _parseDuration(String raw) {
   return negative ? -parsed : parsed;
 }
 
+/// A failure as one line: a toolkit error's message (not the SDK type's
+/// `toString`, which adds `uri = …` or a source excerpt), a plain
+/// `Exception('…')` without its prefix, anything else as it prints.
+String _failure(Exception e) => switch (e) {
+  ToolkitException(:final message) => message,
+  _ => '$e'.startsWith('Exception: ') ? '$e'.substring(11) : '$e',
+};
+
 /// The first line of [s], controls shown as `�`: messages quote argv.
 String _oneLine(String s) => term.plainLabel(s.split('\n').first.trim());
 
@@ -607,7 +674,7 @@ _Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
       final guess = _closest(t, [
         for (final c in cmd._commands) ...[c._name, ...c._aliases],
       ]);
-      throw FormatException('Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}.');
+      throw ContentException('Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}');
     }
     cmd = sub;
     resolved = [...resolved, cmd];
@@ -642,9 +709,9 @@ _Parsed _mergeParent(
     for (final v in root._params) {
       if (v._isRequired && !merged.containsKey(v)) {
         if (v._isArg) {
-          throw FormatException('Missing argument <${v._name}>.');
+          throw ContentException('Missing argument <${v._name}>');
         }
-        throw FormatException('Missing option --${v._name}.');
+        throw ContentException('Missing option --${v._name}');
       }
     }
   }
@@ -754,7 +821,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
           final guess = _closest(token, [
             for (final c in root._commands) ...[c._name, ...c._aliases],
           ]);
-          throw FormatException('Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}.');
+          throw ContentException('Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}');
         }
       } else if (isHelpName && extraArgs.isEmpty && root._commands.isEmpty && argDefs.isEmpty) {
         // Leaf `help` shows help, not the handler.
@@ -778,14 +845,14 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
       if (param == null) {
         if (key.startsWith('no-') && inline == null) {
           final base = byLong[key.substring(3)];
-          if (base is Flag) {
+          if (base is Flag && base._or) {
             putSingle(base, false);
             i++;
             continue;
           }
         }
         final guess = _closest(key, suggestPool());
-        throw FormatException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
+        throw ContentException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
       }
       if (param is Flag) {
         putSingle(param, inline == null ? true : _parseFlagValue(param._name, inline));
@@ -801,7 +868,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
           help = true;
           i += 2;
         } else {
-          throw FormatException('Opt --$key needs a value.');
+          throw ContentException('Option --$key needs a value');
         }
       } else if (!param._isArg) {
         final what = longWhat(key);
@@ -815,11 +882,11 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
           help = true;
           i += 2;
         } else {
-          throw FormatException('Opt --$key needs a value.');
+          throw ContentException('Option --$key needs a value');
         }
       } else {
         final guess = _closest(key, suggestPool());
-        throw FormatException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
+        throw ContentException('Unknown option --$key${guess == null ? '' : '. Did you mean "--$guess"?'}');
       }
       continue;
     }
@@ -845,7 +912,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
       if (param == null) {
         final swapped = c == c.toLowerCase() ? c.toUpperCase() : c.toLowerCase();
         final guess = byShort.containsKey(swapped) ? swapped : null;
-        throw FormatException(
+        throw ContentException(
           'Unknown option -$c in "-${token.substring(1)}"${guess == null ? '' : '. Did you mean "-$guess"?'}',
         );
       }
@@ -874,7 +941,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
           help = true;
           i++;
         } else {
-          throw FormatException('Opt -$c needs a value.');
+          throw ContentException('Option -$c needs a value');
         }
         break;
       }
@@ -888,11 +955,11 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
           help = true;
           i++;
         } else {
-          throw FormatException('Opt -$c needs a value.');
+          throw ContentException('Option -$c needs a value');
         }
         break;
       }
-      throw FormatException('Unknown option -$c in "-${token.substring(1)}".');
+      throw ContentException('Unknown option -$c in "-${token.substring(1)}"');
     }
     i++;
   }
@@ -909,7 +976,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
         if (at < extraArgs.length) {
           params[param] = param._readOne!(extraArgs[at++], 'argument <${param._name}>');
         } else if (param._isRequired) {
-          throw FormatException('Missing argument <${param._name}>.');
+          throw ContentException('Missing argument <${param._name}>');
         } else {
           // Optional and absent: a default reads back; a nullable type reads
           // null through the missing key.
@@ -918,7 +985,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
         }
       }
       if (at < extraArgs.length) {
-        throw FormatException('Unexpected argument "${extraArgs[at]}".');
+        throw ContentException('Unexpected argument "${extraArgs[at]}"');
       }
       extraArgs.clear();
     }
@@ -928,7 +995,7 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
   if (!help) {
     for (final v in root._params) {
       if (!v._isArg && v._isRequired && !params.containsKey(v)) {
-        throw FormatException('Missing option --${v._name}.');
+        throw ContentException('Missing option --${v._name}');
       }
     }
   }
@@ -941,12 +1008,44 @@ _Parsed _parseCommand(Command root, List<String> argv, List<Command> ancestors, 
   return _Parsed(root, chain, params, List.of(extraArgs), help);
 }
 
+/// What the running command's `dotenv:` file holds.
+var _dotenvValues = const <String, String>{};
+
+/// `KEY=VALUE` lines of [path]; empty when it does not exist.
+Map<String, String> _readDotenv(String path) {
+  final String text;
+  try {
+    text = io.File(path).readAsStringSync();
+  } on io.PathNotFoundException {
+    return const {};
+  }
+  final out = <String, String>{};
+  for (var line in const LineSplitter().convert(text)) {
+    line = line.trim();
+    if (line.isEmpty || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.substring(7).trimLeft();
+    final eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    var value = line.substring(eq + 1).trim();
+    if (value.length >= 2 && (value[0] == '"' || value[0] == "'") && value.endsWith(value[0])) {
+      final quote = value[0];
+      value = value.substring(1, value.length - 1);
+      if (quote == '"') value = value.replaceAll(r'\n', '\n').replaceAll(r'\"', '"');
+    } else {
+      final hash = value.indexOf(' #');
+      if (hash >= 0) value = value.substring(0, hash).trimRight();
+    }
+    out[line.substring(0, eq).trim()] = value;
+  }
+  return out;
+}
+
 /// Options not given fall back to their environment variable.
 void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
   for (final v in root._params) {
     if (v is Opt<Object?> && !params.containsKey(v)) {
       final name = v._env;
-      final raw = name == null ? null : io.Platform.environment[name];
+      final raw = name == null ? null : io.Platform.environment[name] ?? _dotenvValues[name];
       if (raw != null && raw.isNotEmpty) params[v] = v._readOne!(raw, 'environment variable \$$name');
     }
   }
@@ -971,7 +1070,7 @@ bool _parseFlagValue(String name, String raw) {
     case 'no':
       return false;
     default:
-      throw FormatException('Invalid value "$raw" for option "--$name": a flag takes true or false');
+      throw ContentException('Invalid value "$raw" for option "--$name": a flag takes true or false');
   }
 }
 
@@ -1033,8 +1132,33 @@ String _argPlaceholder(Param<Object?> a) {
   return '[${a._name}]';
 }
 
+/// How a value reads on the command line: an enum by its name, a
+/// [Duration] in the syntax the parser accepts (`1m30s`, `250ms`).
+String _shown(Object? v) => switch (v) {
+  Enum() => v.name,
+  Duration() => _shownDuration(v),
+  _ => '$v',
+};
+
+String _shownDuration(Duration d) {
+  if (d == Duration.zero) return '0s';
+  if (d.isNegative) return '-${_shownDuration(-d)}';
+  final b = StringBuffer();
+  void unit(int n, String u) {
+    if (n != 0) b.write('$n$u');
+  }
+
+  unit(d.inDays, 'd');
+  unit(d.inHours % 24, 'h');
+  unit(d.inMinutes % 60, 'm');
+  unit(d.inSeconds % 60, 's');
+  unit(d.inMilliseconds % 1000, 'ms');
+  return b.isEmpty ? '0s' : '$b';
+}
+
 String _describeArg(Param<Object?> a) {
   var d = a._help;
+  if (a._hint.contains('|')) d = '$d ${a._hint}'; // values:
   if (a._isRequired) d = d.isEmpty ? '[required]' : '$d [required]';
   return d.trimLeft();
 }
@@ -1051,7 +1175,7 @@ List<(String, String)> _optionRows(Command cmd) {
         var right = v._help;
         if (v._env != null) right = '${right.isEmpty ? '' : '$right '}[env: ${v._env}]';
         if (v._or != null) {
-          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or}]';
+          right = '${right.isEmpty ? '' : '$right '}[default: ${_shown(v._or)}]';
         }
         if (v._required) {
           right = '${right.isEmpty ? '' : '$right '}[required]';
@@ -1061,7 +1185,7 @@ List<(String, String)> _optionRows(Command cmd) {
         final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
         if (v._or.isNotEmpty) {
-          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or.join(', ')}]';
+          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or.map(_shown).join(', ')}]';
         }
         rows.add((left, right.trimLeft()));
       case Arg<Object?>():

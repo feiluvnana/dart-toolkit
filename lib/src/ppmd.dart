@@ -6,7 +6,9 @@ library;
 
 import 'dart:typed_data';
 
-Never _bad(String why) => throw FormatException('corrupt archive: PPMd $why');
+import '../core.dart';
+
+Never _bad(String why) => throw ContentException('corrupt archive: PPMd $why');
 
 /// The range decoder a model reads through.
 abstract class PpmdCoder {
@@ -844,14 +846,22 @@ Uint8List ppmdDecode7z(Uint8List input, List<int> props, int size) {
   if (props.length < 5) _bad('properties');
   final order = props[0];
   final mem = props[1] | props[2] << 8 | props[3] << 16 | props[4] << 24;
-  if (order < 2 || order > 64 || mem < 2048 || mem > 0xFFFFFFFF - 36) _bad('properties');
+  // 2 GiB is 32-bit 7-Zip's limit: every archive it writes opens.
+  if (order < 2 || order > 64 || mem < 2048 || mem > 1 << 31) _bad('properties');
+  if (size < 0) _bad('size');
   var i = 0;
-  final rc = SevenZipPpmdCoder(() => i < input.length ? input[i++] : 0);
+  // A few zero bytes past the end are the coder's lookahead; more is a
+  // stream that never ends.
+  final rc = SevenZipPpmdCoder(
+    () => i < input.length ? input[i++] : (++i > input.length + 8 ? _bad('data ends early') : 0),
+  );
   final model = Ppmd(mem, order);
-  final out = Uint8List(size);
+  // A header can claim any size: past 1 GiB the output grows as it decodes.
+  var out = Uint8List(size < 1 << 30 ? size : 1 << 30);
   for (var k = 0; k < size; k++) {
     final b = model.decodeChar(rc);
     if (b < 0) _bad('data ends early');
+    if (k == out.length) out = Uint8List(k * 2 < size ? k * 2 : size)..setRange(0, k, out);
     out[k] = b;
   }
   return out;

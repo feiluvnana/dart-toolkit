@@ -1,17 +1,22 @@
-/// Retry policy shared by `http`'s verbs.
+/// Retry policy shared by `http`'s sends and `pool`'s `retries:`.
 ///
-/// One home for doubling backoff, `Retry-After` parsing and the retryable
+/// One home for jittered backoff, `Retry-After` parsing and the retryable
 /// test, so a bad certificate is never retried with 1 s, 2 s … backoff.
 library;
 
 import 'dart:async';
 import 'dart:io' as io;
+import 'dart:math';
 
-/// Doubling backoff from 1 s (`attempt` 0 → 1 s, 1 → 2 s, … capped at 2^10 s),
-/// or the server's `Retry-After` when it is longer (capped at 5 minutes).
+final _random = Random();
+
+/// Doubling backoff from 1 s (`attempt` 0 → 1 s, 1 → 2 s, … capped at 2^10 s)
+/// with ±25% jitter, or the server's `Retry-After` when it is longer (capped
+/// at 5 minutes).
 Duration backoff(int attempt, Duration? server) {
   final shift = attempt > 10 ? 10 : attempt;
-  var wait = Duration(seconds: 1 << shift);
+  final base = 1000 * (1 << shift);
+  var wait = Duration(milliseconds: (base * (0.75 + _random.nextDouble() * 0.5)).round());
   const cap = Duration(minutes: 5);
   if (server != null && server > wait) wait = server > cap ? cap : server;
   return wait;

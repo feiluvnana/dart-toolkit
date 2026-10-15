@@ -8,11 +8,11 @@ Run the other prompts in this folder as one autonomous pipeline. Make every deci
 | 1 | TESTS.md | a trustworthy, fast suite gates every later stage | fixes + flake list |
 | 2 | BUGPERF.md | correctness and liveness before anything is reshaped | fix commits |
 | 3 | SECURITY.md | hardening while the code is still fresh in mind | fix commits |
-| 4 | PLATFORM.md | per-OS fixes; Windows/Linux go to PLAN.md | fixes + PLAN.md steps |
-| 5 | ARCHITECTURE.md | restructure before polishing the surface | ARCHITECTURE.md + pure refactors |
+| 4 | PLATFORM.md | per-OS fixes; Windows/Linux go to docs/PLAN.md | fixes + docs/PLAN.md steps |
+| 5 | ARCHITECTURE.md | restructure before polishing the surface | docs/ARCHITECTURE.md + pure refactors |
 | 6 | ERGONOMIC.md | reshape call sites on the final structure | API commits |
 | 7 | FEATURE.md | add, remove or merge on the polished base | PROPOSAL.md + the "do next" items |
-| 8 | DOGFOOD.md | prove stages 5–7 with real scripts and fix the top friction | DOGFOOD.md + fixes |
+| 8 | DOGFOOD.md | prove stages 5–7 with real scripts and fix the top friction | fixes; friction log in the stage note (no DOGFOOD.md) |
 | 9 | DOCS.md | docs last, so they describe the final code | doc commits |
 | 10 | RELEASE.md | dry-run publish only | readiness report |
 

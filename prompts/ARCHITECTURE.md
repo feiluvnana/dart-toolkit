@@ -11,14 +11,14 @@ Check:
 - **Lifecycle:** one owner for signals, stdin, exit hooks and child processes. Confirm that nothing bypasses lib/src/exit.dart or terminal.dart.
 - **Extensibility:** can users plug in their own Writer, Pipe, Serializer or widget without touching src? Do builder or subclass seams exist where the docs promise them?
 
-Output: ARCHITECTURE.md with the graph (text), findings and a migration order. Refactors are pure (no behaviour change), one commit each, with the full suite passing. Ask before any refactor over about 300 lines.
+Output: docs/ARCHITECTURE.md with the graph (text), findings and a migration order. Refactors are pure (no behaviour change), one commit each, with the full suite passing. Ask before any refactor over about 300 lines.
 
 ## Context (same in every prompt)
-- dart_toolkit, branch master: a Dart scripting toolkit. VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
-- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; PLAN.md holds Windows and Linux handoffs.
+- dart_toolkit, branch master: a Dart scripting toolkit. docs/VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
+- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; docs/PLAN.md holds Windows and Linux handoffs.
 - Priorities: speed (runtime, then startup) > call-site brevity = discoverability > the rest.
 - Every module works alone and composes: `Reader | Pipe > Writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
-- Names: short, one word when it reads one way, the same word for the same idea in every module (see VISION §1).
+- Names: short, one word when it reads one way, the same word for the same idea in every module (see docs/VISION.md §1).
 - Pure Dart plus pub packages; no native code, no codegen, no sync twins. No backward compatibility: rename, merge or delete freely.
 - Tui is alternate-screen only and has no colour by default (`accent:` opts in); scrollback output belongs to Console.
 - Every bug fix gets a regression test. Before each commit: `dart analyze lib test projects tool` is clean and the full `dart test` passes.

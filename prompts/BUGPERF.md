@@ -10,14 +10,14 @@ Look for:
 - **Concurrency:** races between futures, re-entrancy, and pause/cancel semantics on streams.
 
 Method: prove each finding with a scratch script, a loopback server, a pty driver or an RSS/timing measurement. Mark it Verified or Plausible. Fix only Verified findings: one commit each, with a regression test (tests that check a process exits must spawn a child). Give performance fixes an A/B number in the commit message.
-Report: a table of ID, severity, module, one-line problem, fix commit or "skipped: why". Put anything you cannot verify on this Mac into PLAN.md (Windows §1, Linux §2) with exact steps.
+Report: a table of ID, severity, module, one-line problem, fix commit or "skipped: why". Put anything you cannot verify on this Mac into docs/PLAN.md (Windows §1, Linux §2) with exact steps.
 
 ## Context (same in every prompt)
-- dart_toolkit, branch master: a Dart scripting toolkit. VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
-- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; PLAN.md holds Windows and Linux handoffs.
+- dart_toolkit, branch master: a Dart scripting toolkit. docs/VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
+- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; docs/PLAN.md holds Windows and Linux handoffs.
 - Priorities: speed (runtime, then startup) > call-site brevity = discoverability > the rest.
 - Every module works alone and composes: `Reader | Pipe > Writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
-- Names: short, one word when it reads one way, the same word for the same idea in every module (see VISION §1).
+- Names: short, one word when it reads one way, the same word for the same idea in every module (see docs/VISION.md §1).
 - Pure Dart plus pub packages; no native code, no codegen, no sync twins. No backward compatibility: rename, merge or delete freely.
 - Tui is alternate-screen only and has no colour by default (`accent:` opts in); scrollback output belongs to Console.
 - Every bug fix gets a regression test. Before each commit: `dart analyze lib test projects tool` is clean and the full `dart test` passes.

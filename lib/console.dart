@@ -2,16 +2,16 @@
 ///
 /// ```dart
 /// if (!await Console.confirm('Delete ${files.length} files?')) return;
-/// final me = await Console.spin('Signing in', Http.get(api).json());
+/// final me = await Console.spin('Signing in', http.get(api).json());
 /// final bar = Console.bar(urls.length, label: 'Pages');
-/// await Pool.map(urls, fetch, onResult: (_) => bar.tick()); // closes at its total
+/// await Pool.map(urls, fetch, onDone: bar.tick); // closes at its total
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar], [Color].
-/// - `Console.ask/confirm/choose/key/spin/bar/log/notify/copy/clear()` prompt,
-///   read keys, show progress, print above it or reach the desktop;
+/// - `Console.ask/confirm/choose/key/spin/bar/log/table/notify/copy/clear()` prompt,
+///   read keys, show progress, print above it or as columns, or reach the desktop;
 ///   `Console.accent` colours live lines.
-/// - [Bar] supports `tick` `setTotal` (plus [Pipe]/[Closeable]).
+/// - [Bar] supports `tick` `update` `setTotal` (plus [Pipe]/[Closeable]).
 /// Everything else is private.
 library;
 
@@ -23,7 +23,9 @@ import 'core.dart';
 export 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/format.dart' as fmt;
 import 'src/keys.dart' as keys;
+import 'src/resume.dart' show PassThrough;
 import 'src/terminal.dart' as term;
 import 'src/terminal.dart' show Color;
 export 'src/terminal.dart' show Color;
@@ -40,20 +42,80 @@ abstract final class Console {
 
   static String get _accentOn => _styled && accent != null ? '\x1b[38;5;${accent!.code}m' : '';
 
-  static _Live? _live;
+  /// The live lines (spinners, bars) stacked at the bottom, oldest first.
+  /// Only used when animated; otherwise each prints one final line.
+  static final _lives = <_Live>[];
 
-  static void _claim(_Live live) {
-    if (_live != null) {
-      throw StateError(
-        'only one live spinner or bar at a time: close() the one before '
-        '(a bar ticked to its total closes itself)',
-      );
-    }
-    _live = live;
+  /// Rows of the live block on screen; the cursor rests at the start of
+  /// its last row.
+  static var _drawn = 0;
+  static var _lastPaint = 0;
+
+  /// Spinner frames: one timer for every spinner, running only while one
+  /// is live (so it never keeps the script alive).
+  static Timer? _ticker;
+  static var _frame = 0;
+
+  static void _addLive(_Live live) {
+    if (!_animated) return;
+    _lives.add(live);
+    _paint(force: true);
+    _syncTicker();
   }
 
-  static void _release(_Live live) {
-    if (identical(_live, live)) _live = null;
+  /// Remove [live] and print [last] in its place, as a permanent line above
+  /// the remaining live lines.
+  static void _endLive(_Live live, String last) {
+    if (!_lives.remove(live)) {
+      io.stderr.writeln(last);
+      return;
+    }
+    io.stderr.write('${_erase()}$last\n');
+    _drawn = 0;
+    _paint(force: true);
+    _syncTicker();
+  }
+
+  static void _syncTicker() {
+    final spinning = _lives.any((l) => l is _Spinner);
+    if (spinning && _ticker == null) {
+      _ticker = Timer.periodic(const Duration(milliseconds: 80), (_) {
+        _frame++;
+        _paint(force: true);
+      });
+    } else if (!spinning) {
+      _ticker?.cancel();
+      _ticker = null;
+    }
+  }
+
+  /// Move to the top of the live block and clear it.
+  static String _erase() {
+    if (_drawn == 0) return '';
+    return '\r${_drawn > 1 ? '\x1b[${_drawn - 1}A' : ''}\x1b[J';
+  }
+
+  /// Redraw the live block in place (throttled to 80 ms unless [force]).
+  /// Every row fits `cols - 1` (a full last column leaves a pending wrap
+  /// that breaks the move-up); the block keeps to the screen height, newest
+  /// lines first.
+  static void _paint({bool force = false}) {
+    if (_lives.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && now - _lastPaint < 80) return;
+    _lastPaint = now;
+    final cols = _columns();
+    final room = _lines() - 1 < 1 ? 1 : _lines() - 1;
+    final shown = _lives.length > room ? _lives.sublist(_lives.length - room) : _lives;
+    final b = StringBuffer('\r');
+    if (_drawn > 1) b.write('\x1b[${_drawn - 1}A');
+    for (var i = 0; i < shown.length; i++) {
+      if (i > 0) b.write('\n');
+      b.write('${shown[i]._text(cols)}\x1b[K');
+    }
+    if (shown.length < _drawn) b.write('\x1b[J');
+    _drawn = shown.length;
+    io.stderr.write(b);
   }
 
   /// Color codes when the terminal capabilities say styled: a terminal, or
@@ -61,8 +123,8 @@ abstract final class Console {
   /// always wins. See `TerminalCaps` in `src/terminal.dart`.
   static bool get _styled => term.TerminalCaps.current.styled;
 
-  /// Live redraw (spinners, bars, menu repaints): needs a terminal to draw
-  /// on, plus styling. Implies [_styled].
+  /// Live redraw (spinners, bars, menu repaints): needs a terminal that
+  /// takes escapes. Independent of [_styled]: `NO_COLOR` keeps motion.
   static bool get _animated => term.TerminalCaps.current.animated;
 
   /// Glyphs, ASCII where the locale is not UTF-8 (`LANG=C`), as in the Tui.
@@ -353,23 +415,59 @@ abstract final class Console {
     }
   }
 
+  /// Print [rows] to stdout as aligned columns, two spaces apart, sized by
+  /// cell width (wide characters count twice); numbers align right. The
+  /// [header] is bold on a styled terminal and plain when piped or under
+  /// `NO_COLOR`. A null cell prints empty.
+  static void table(List<List<Object?>> rows, {List<String>? header}) {
+    final cells = [
+      for (final row in [?header, ...rows]) [for (final c in row) term.safeText('${c ?? ''}').replaceAll('\n', ' ')],
+    ];
+    if (cells.isEmpty) return;
+    final widths = <int>[];
+    for (final row in cells) {
+      for (final (i, c) in row.indexed) {
+        final w = term.displayWidth(c);
+        if (i == widths.length) {
+          widths.add(w);
+        } else if (w > widths[i]) {
+          widths[i] = w;
+        }
+      }
+    }
+    final bold = header != null && term.TerminalCaps.forStdout.styled;
+    for (final (r, row) in cells.indexed) {
+      final numeric = r == 0 && header != null ? const <Object?>[] : rows[r - (header == null ? 0 : 1)];
+      final line = StringBuffer();
+      for (final (i, c) in row.indexed) {
+        final pad = ' ' * (widths[i] - term.displayWidth(c));
+        final right = i < numeric.length && numeric[i] is num;
+        if (i > 0) line.write('  ');
+        line.write(right ? '$pad$c' : (i == row.length - 1 ? c : '$c$pad'));
+      }
+      final text = '$line'.trimRight();
+      io.stdout.writeln(bold && r == 0 ? '\x1b[1m$text\x1b[22m' : text);
+    }
+  }
+
   /// Print [line] to stderr above a live spinner or bar, which redraws
   /// beneath it. While a state-driven `Tui.run` is active it goes to the
   /// status row.
   static void log(String line) {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.log(line);
-    final live = _animated ? _live : null;
-    if (live != null) io.stderr.write('\r\x1b[K');
-    io.stderr.writeln(term.safeText(line));
-    live?._repaint();
+    if (_lives.isEmpty) return io.stderr.writeln(term.safeText(line));
+    io.stderr.write('${_erase()}${term.safeText(line)}\n');
+    _drawn = 0;
+    _paint(force: true);
   }
 
   /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
   /// or `✗ label` and a rethrow. The live line always fits the width (the
   /// width is re-read on each frame, so no resize subscription is needed).
-  /// While a state-driven `Tui.run` is active, draws in its status row
-  /// instead (several at once).
+  /// Several spinners and bars stack, one row each; without a terminal
+  /// only the final `✓`/`✗` line prints. While a state-driven `Tui.run` is
+  /// active, draws in its status row instead (several at once).
   static Future<T> spin<T>(String label, Future<T> work) {
     label = term.plainLabel(label);
     final bridge = term.TuiBridge.current;
@@ -386,63 +484,37 @@ abstract final class Console {
         },
       );
     }
-    final _Live live = _Spinner(label);
-    try {
-      _claim(live);
-    } catch (_) {
-      work.then<void>((_) {}, onError: (_) {});
-      rethrow;
-    }
-    String fit(String prefix, String text) {
-      final cols = _columns();
-      final line = '$prefix $text';
-      if (term.displayWidth(line) <= cols) return line;
-      final room = cols - term.displayWidth(prefix) - 1;
-      if (room <= 0) return prefix;
-      return '$prefix ${term.truncateWidth(text, room)}';
-    }
-
     if (!_animated) {
       return work.then(
         (v) {
-          live._free();
           io.stderr.writeln('$_okMark $label');
           return v;
         },
         onError: (Object e, StackTrace st) {
-          live._free();
           io.stderr.writeln('$_failMark $label');
           throw e;
         },
       );
     }
-    var i = 0;
-    final frames = _ascii ? const ['-', '\\', '|', '/'] : const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    final timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      io.stderr.write('\r${fit(frames[i % frames.length], label)}\x1b[K');
-      i++;
-    });
-
+    final live = _Spinner(label);
+    _addLive(live);
     return work.then(
-      (v) async {
-        timer.cancel();
-        live._free();
-        io.stderr.writeln('\r${fit(_okMark, label)}\x1b[K');
+      (v) {
+        _endLive(live, _Spinner._fit(_okMark, label, _columns()));
         return v;
       },
-      onError: (Object e, StackTrace st) async {
-        timer.cancel();
-        live._free();
-        io.stderr.writeln('\r${fit(_failMark, label)}\x1b[K');
+      onError: (Object e, StackTrace st) {
+        _endLive(live, _Spinner._fit(_failMark, label, _columns()));
         throw e;
       },
     );
   }
 
   /// A progress bar over [total] items or bytes (`null` or 0 means unknown).
-  /// As a [Pipe] it counts bytes; with [Bar.tick] it counts items. While a
-  /// state-driven `Tui.run` is active, draws in its status row instead
-  /// (several at once).
+  /// As a [Pipe] it counts bytes; with [Bar.tick] it counts items. Stacks
+  /// with other live bars and spinners; without a terminal only the final
+  /// line prints. While a state-driven `Tui.run` is active, draws in its
+  /// status row instead (several at once).
   static Bar bar(int? total, {String? label}) {
     if (label != null) label = term.plainLabel(label);
     final bridge = term.TuiBridge.current;
@@ -450,15 +522,7 @@ abstract final class Console {
       return Bar._bridged(bridge, bridge.barStarted(total, label), total, label: label);
     }
     final bar = Bar._(total, label: label);
-    // Claim before the first draw, so a second bar throws before it can
-    // draw over the live line.
-    _claim(bar);
-    try {
-      bar._render();
-    } catch (_) {
-      _release(bar);
-      rethrow;
-    }
+    _addLive(bar);
     return bar;
   }
 
@@ -481,14 +545,14 @@ abstract final class Console {
   /// One cooked line from the shared broadcast stdin, without blocking the
   /// event loop. Handles `\n` and `\r`; in secret mode backspace edits by
   /// grapheme (not byte, so multibyte passwords survive).
-  static Future<String> _readLine({required bool secret}) {
-    // Piped stdin reads synchronously while nothing has subscribed to it:
-    // a subscription drops lines that arrive between prompts and keeps the
-    // script alive until the writer closes the pipe.
+  static Future<String> _readLine({required bool secret}) async {
+    // Piped stdin is read line by line off the event loop while nothing has
+    // subscribed to it: a subscription drops lines that arrive between
+    // prompts and keeps the script alive until the writer closes the pipe.
     if (!io.stdin.hasTerminal && term.stdinUnclaimed && (_linePushback?.isEmpty ?? true)) {
-      final line = io.stdin.readLineSync(encoding: const Utf8Codec(allowMalformed: true));
-      if (line == null) return Future.error(const io.StdinException('stdin is closed'));
-      return Future.value(line);
+      final line = await term.pipedLine();
+      if (line == null) throw const io.StdinException('stdin is closed');
+      return line;
     }
     final result = Completer<String>();
     final buf = <int>[...?_linePushback];
@@ -602,7 +666,7 @@ abstract final class Console {
   ) async {
     var current = selected;
     return _withKeys((found) async {
-      var painted = 0;
+      var painted = const <int>[];
       io.stderr.writeln(_emph(term.safeText(question)));
       for (;;) {
         painted = _paintChoices(labels, current, painted);
@@ -685,36 +749,53 @@ abstract final class Console {
 
   /// Paint the scrolling window around [selected] plus a dim key-hint row;
   /// each choice cut to fit. The selection draws in [accent] (bold by default).
-  /// Returns the rows painted (for the next repaint's move-up).
-  static int _paintChoices(List<String> choices, int selected, int painted) {
+  /// Returns the cell width of each row painted, for the next repaint's
+  /// move-up.
+  static List<int> _paintChoices(List<String> choices, int selected, List<int> painted) {
     final cols = _columns();
-    final rows = _lines() - 3; // question, hint, and a spare row
+    final lines = _lines();
+    final rows = lines - 3; // question, hint, and a spare row
     final visible = rows.clamp(1, choices.length);
     var start = selected - visible ~/ 2;
     if (start < 0) start = 0;
     if (start + visible > choices.length) start = choices.length - visible;
-    if (painted > 0) io.stderr.write('\x1b[${painted}A');
+    io.stderr.write(_menuUp(painted, cols, lines));
     final width = cols - 2 > 0 ? cols - 2 : 0;
-    var n = 0;
+    final widths = <int>[];
     for (var r = 0; r < visible; r++) {
       final current = start + r == selected;
       final choice = term.truncateWidth(choices[start + r], width);
       final row = '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
+      widths.add(term.displayWidth(row));
       if (_styled && current) {
         io.stderr.writeln(accent == null ? '$_bold$row$_reset\x1b[K' : '$_accentOn$row$_reset\x1b[K');
       } else {
         io.stderr.writeln('$row\x1b[K');
       }
-      n++;
     }
     const hint = 'w/s or ↑↓ move · 1-9 jump · enter select · esc cancel';
     final hintRow = term.truncateWidth(hint, cols > 0 ? cols : hint.length);
+    widths.add(term.displayWidth(hintRow));
     if (_styled) {
       io.stderr.writeln('$_dim$hintRow$_reset\x1b[K');
     } else {
       io.stderr.writeln('$hintRow\x1b[K');
     }
-    return n + 1;
+    return widths;
+  }
+
+  /// Back to the top of the last paint and clear below it. Rows are counted
+  /// at the current width: after a resize the terminal reflows a row wider
+  /// than the screen onto several, and a shorter window shows fewer rows
+  /// (the leftovers are cleared). Capped at the screen height.
+  static String _menuUp(List<int> painted, int cols, int lines) {
+    if (painted.isEmpty) return '';
+    var up = 0;
+    for (final w in painted) {
+      up += cols > 0 && w > cols ? (w + cols - 1) ~/ cols : 1;
+    }
+    if (up > lines - 1) up = lines - 1;
+    return '${up > 0 ? '\x1b[${up}A' : ''}\r\x1b[J';
   }
 
   /// Emphasize [text] (bold) when styling is on.
@@ -843,23 +924,10 @@ final class _KeyReader {
   }
 }
 
+/// One row of the live block.
 abstract final class _Live {
-  void _free();
-
-  /// Redraw the live line (after [Console.log] wrote above it).
-  void _repaint() {}
-}
-
-/// Format a byte count as humans read it: `0 B`, `200 KB`, `12.1 MB`.
-String _fmtSize(num bytes) {
-  if (bytes < 1024) return '${bytes.round()} B';
-  if (bytes < 1024 * 1024) {
-    return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  /// The row as drawn now, fitted to `cols - 1` cells.
+  String _text(int cols);
 }
 
 /// A progress bar: a [Pipe] counting the bytes that pass, [Closeable] at end.
@@ -869,7 +937,7 @@ String _fmtSize(num bytes) {
 /// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
 /// count and a rate with no bar, so `Console.bar(res.size())`
 /// just works.
-final class Bar extends _Live implements Pipe, Closeable {
+final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   Bar._(this._total, {this._label}) : _bridge = null, _bridgeId = null;
 
   Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
@@ -881,8 +949,6 @@ final class Bar extends _Live implements Pipe, Closeable {
   var _done = 0;
   var _closed = false;
   var _piped = false;
-  var _lastDraw = 0;
-  var _cols = 0;
 
   /// Rate clock: started at the first tick, so setup time never dilutes the
   /// displayed speed.
@@ -916,6 +982,13 @@ final class Bar extends _Live implements Pipe, Closeable {
     if (!_piped && total != null && total > 0 && _done >= total) unawaited(close());
   }
 
+  /// Show [done] of [total] (a total that grows as work is found:
+  /// `Scrape(onProgress: bar.update)`). Closes at the total like [tick].
+  Bar update(int done, int? total) {
+    if (total != _total) setTotal(total);
+    return tick(done - _done);
+  }
+
   /// Set the total once it is known (a download's length arrives with its
   /// headers). Returns this bar.
   Bar setTotal(int? total) {
@@ -940,14 +1013,12 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (_closed) return;
       _closed = true;
       bridge.barEnded(id, true);
-      _free();
       return;
     }
     if (_closed) return;
     _closed = true;
-    if (Console._animated) {
-      _render(force: true);
-      io.stderr.writeln();
+    if (Console._lives.contains(this)) {
+      Console._endLive(this, _text(Console._columns()));
     } else {
       final label = _label == null ? '' : '$_label ';
       final total = _total;
@@ -955,25 +1026,18 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (_piped) {
         final rate = secs > 0 ? _done / secs : 0.0;
         if (total != null && total > 0) {
-          io.stderr.writeln('$label${_fmtSize(_done)}/${_fmtSize(total)}  ${_fmtRate(rate)}');
+          io.stderr.writeln('$label${fmt.fmtSize(_done)}/${fmt.fmtSize(total)}  ${fmt.fmtRate(rate)}');
         } else {
-          io.stderr.writeln('$label${_fmtSize(_done)}  ${_fmtRate(rate)}');
+          io.stderr.writeln('$label${fmt.fmtSize(_done)}  ${fmt.fmtRate(rate)}');
         }
       } else if (total != null && total > 0) {
         io.stderr.writeln('$label$_done/$total');
       } else {
         final rate = secs > 0 ? _done / secs : 0.0;
-        io.stderr.writeln('$label$_done  ${_fmtCount(rate)}/s');
+        io.stderr.writeln('$label$_done  ${fmt.fmtCount(rate)}/s');
       }
     }
-    _free();
   }
-
-  @override
-  void _free() => Console._release(this);
-
-  @override
-  void _repaint() => _render(force: true);
 
   /// [Pipe.abort]: the run failed (possibly before this stage was ever
   /// read). Print ✗ and release the live line without starting anything.
@@ -987,17 +1051,11 @@ final class Bar extends _Live implements Pipe, Closeable {
       if (_closed) return;
       _closed = true;
       bridge.barEnded(id, false);
-      Console._release(this);
       return;
     }
     if (_closed) return;
     _closed = true;
-    if (Console._animated) {
-      io.stderr.writeln('${'\r${Console._failMark} ${_label ?? ''}'.trimRight()}\x1b[K');
-    } else {
-      io.stderr.writeln('${Console._failMark} ${_label ?? ''}'.trimRight());
-    }
-    Console._release(this);
+    Console._endLive(this, '${Console._failMark} ${_label ?? ''}'.trimRight());
   }
 
   @override
@@ -1030,24 +1088,19 @@ final class Bar extends _Live implements Pipe, Closeable {
     }
   }
 
-  void _render({bool force = false}) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (!force && now - _lastDraw < 80) return;
-    _lastDraw = now;
-    if (!Console._animated) return;
-    // Re-read the width on every redraw (throttled to 80 ms): resizes fit.
-    _cols = Console._columns();
+  /// Redraw the live block (throttled); the width is re-read on every
+  /// redraw, so resizes fit.
+  void _render() => Console._paint();
+
+  @override
+  String _text(int cols) {
     final label = _label == null ? '' : '$_label ';
-    final line = _line(_cols, label);
-    // The live line draws in [Console.accent]. Wrapping happens here at the
-    // write point so every width fit above keeps measuring the plain line.
-    // Only reached when animated, which implies styling is on; piped output
-    // stays plain.
+    // The live line draws in [Console.accent] (empty unless styled). The
+    // colour wraps the fitted text, so every width fit measures the plain
+    // line.
     final on = Console._accentOn;
-    // cols - 1: a line that fills the last column leaves a pending wrap, and
-    // the next '\r' would return to the wrapped row (stacking lines).
-    final fitted = term.truncateWidth(line, _cols - 1);
-    io.stderr.write('\r$on$fitted${on.isEmpty ? '' : _reset}\x1b[K');
+    final fitted = term.truncateWidth(_line(cols, label), cols - 1);
+    return '$on$fitted${on.isEmpty ? '' : _reset}';
   }
 
   /// One live line for byte and item bars alike: `label bar counts rate`.
@@ -1060,11 +1113,11 @@ final class Bar extends _Live implements Pipe, Closeable {
     final String counts;
     final String rateText;
     if (_piped) {
-      counts = total != null && total > 0 ? '${_fmtSize(_done)}/${_fmtSize(total)}' : _fmtSize(_done);
-      rateText = _fmtRate(rate);
+      counts = total != null && total > 0 ? '${fmt.fmtSize(_done)}/${fmt.fmtSize(total)}' : fmt.fmtSize(_done);
+      rateText = fmt.fmtRate(rate);
     } else {
       counts = total != null && total > 0 ? '$_done/$total' : '$_done';
-      rateText = '${_fmtCount(rate)}/s';
+      rateText = '${fmt.fmtCount(rate)}/s';
     }
     if (total == null || total <= 0) {
       // Unknown total: count and rate, no bar.
@@ -1082,7 +1135,7 @@ final class Bar extends _Live implements Pipe, Closeable {
     var width = cols - term.displayWidth('$label  $counts  $rateText');
     if (width > 20) width = 20;
     if (width < 0) width = 0;
-    final cells = _bar(width);
+    final cells = fmt.barGlyphs(_done, total, width, ascii: Console._ascii);
     var line = '$label$cells  $counts  $rateText';
     if (term.displayWidth(line) > cols) {
       final room = cols - term.displayWidth('$cells  $counts  $rateText') - 1;
@@ -1098,29 +1151,6 @@ final class Bar extends _Live implements Pipe, Closeable {
     }
     return line;
   }
-
-  String _bar(int width) {
-    final total = _total;
-    final frac = total == null || total <= 0 ? 0.0 : (_done / total).clamp(0.0, 1.0);
-    final cells = frac * width;
-    final full = cells.floor();
-    final half = cells - full >= 0.5 && full < width;
-    final (on, mid, off) = Console._ascii ? ('#', '>', '-') : ('━', '╸', '─');
-    return '${on * full}${half ? mid : ''}${off * (width - full - (half ? 1 : 0))}';
-  }
-
-  static String _fmtRate(double bytesPerSec) {
-    if (bytesPerSec < 1024) return '${bytesPerSec.toStringAsFixed(0)} B/s';
-    if (bytesPerSec < 1024 * 1024) {
-      return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s';
-    }
-    return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
-  }
-
-  static String _fmtCount(double perSec) {
-    if (perSec < 100) return perSec.toStringAsFixed(1);
-    return perSec.toStringAsFixed(0);
-  }
 }
 
 final class _Spinner extends _Live {
@@ -1129,5 +1159,17 @@ final class _Spinner extends _Live {
   final String label;
 
   @override
-  void _free() => Console._release(this);
+  String _text(int cols) {
+    final frames = fmt.spinFrames(ascii: Console._ascii);
+    return _fit(frames[Console._frame % frames.length], label, cols);
+  }
+
+  /// `prefix text` cut to `cols - 1` cells.
+  static String _fit(String prefix, String text, int cols) {
+    final line = '$prefix $text';
+    if (term.displayWidth(line) < cols) return line;
+    final room = cols - 1 - term.displayWidth(prefix) - 1;
+    if (room <= 0) return prefix;
+    return '$prefix ${term.truncateWidth(text, room)}';
+  }
 }

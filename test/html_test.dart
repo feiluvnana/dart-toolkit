@@ -80,6 +80,32 @@ void main() {
       );
       expect(doc.$('a')[0].attr('href'), 'https://e.com/s/x');
     });
+
+    test('a bad <base> is ignored (regression: parse threw FormatException)', () {
+      const page = '<html><head><base href="http://[bad"></head><body><a href="x">t</a></body></html>';
+      expect(Html.parse(page, base: 'https://e.com/d/').$('a')[0].attr('href'), 'https://e.com/d/x');
+      expect(Html.parse(page).$('a')[0].attr('href'), 'x');
+    });
+  });
+
+  group('deep documents', () {
+    test('every query works 20,000 deep: parse, \$, not and text never recurse', () {
+      final doc = Html.parse('${'<div>' * 20000}<a>x</a>${'</div>' * 20000}');
+      expect(doc.$('div a').text(), 'x');
+      expect(doc.not('a').$('a'), isEmpty);
+      expect(doc[0].not('a').$('a'), isEmpty);
+      expect(doc.text(), 'x');
+    });
+
+    test('nested roots are walked once (regression: one walk per root)', () {
+      final doc = Html.parse('${'<div>' * 3000}<a>x</a>${'</div>' * 3000}<div><a>y</a></div>');
+      final divs = doc.$('div');
+      final sw = Stopwatch()..start();
+      final links = divs.$('a');
+      expect(links.texts(), ['x', 'y']);
+      expect(sw.elapsedMilliseconds, lessThan(50));
+      expect(divs.$('div').length, 3001);
+    });
   });
 
   group('Reader.html', () {
@@ -351,6 +377,70 @@ void main() {
     test('pre keeps its whitespace', () {
       final doc = Html.parse('<div><pre>x   y\nz</pre></div>');
       expect(doc.$('div')[0].text(), 'x   y\nz');
+    });
+  });
+
+  group('fragments with loose text', () {
+    test('the fragment root holds the text; no synthetic div appears', () {
+      final doc = Html.parse('Tom &amp; <b>Jerry</b> <i>!</i>');
+      expect(doc.length, 1);
+      expect(doc.text(), 'Tom & Jerry !');
+      expect(doc.$('div'), isEmpty);
+      expect(doc.$('*').texts(), ['Jerry', '!']);
+      expect(doc.$('b + i').text(), '!');
+      expect(doc[0].parent(), isNull);
+      expect(doc.$('b')[0].parent(), isNull);
+      expect(doc.not('b').text(), 'Tom & !');
+    });
+  });
+
+  group('embedded data, tables, forms', () {
+    test('json() reads JSON/ld+json/__NEXT_DATA__ scripts, skipping invalid ones', () {
+      final doc = Html.parse('''<html><body>
+<script type="application/json">{"a":{"user":{"pk":1}}}</script>
+<script type="application/ld+json">{"@type":"Thing"}</script>
+<script id="__NEXT_DATA__">{"props":{"user":{"pk":2}}}</script>
+<script type="application/json">{broken</script>
+<script>var x = {"user":{"pk":3}};</script>
+</body></html>''');
+      final data = doc.json();
+      expect(data.length, 3);
+      expect(data.$('**.user.pk').asList<int>(), [1, 2]);
+      expect(doc.$('p').json().length, 0);
+    });
+
+    test('table() maps rows by the first row; colspan repeats', () {
+      final doc = Html.parse('''<div><table>
+<thead><tr><th>Name</th><th colspan="2">Score</th></tr></thead>
+<tbody><tr><td>ann</td><td>1</td><td>2</td></tr><tr><td colspan="3">all</td></tr></tbody>
+</table></div>''');
+      expect(doc.table(), [
+        {'Name': 'ann', 'Score': '2'},
+        {'Name': 'all', 'Score': 'all'},
+      ]);
+      expect(Html.parse('<table><tr><td>k</td></tr><tr><td>v</td></tr></table>').table(), [
+        {'k': 'v'},
+      ]);
+      expect(Html.parse('<p>x</p>').table(), isEmpty);
+    });
+
+    test('form() gives action, method and fields to post, hidden ones included', () {
+      final doc = Html.parse('''<html><body><form action="/login" method="post">
+<input type="hidden" name="csrf" value="T">
+<input name="user" value="">
+<input type="checkbox" name="keep" checked>
+<input type="checkbox" name="spam">
+<select name="lang"><option value="en">EN</option><option value="ja" selected>JA</option></select>
+<textarea name="note">hi</textarea>
+<input type="submit" name="go" value="Go">
+<input name="off" value="x" disabled>
+</form></body></html>''', base: 'https://site.test/page');
+      final f = doc.form()!;
+      expect(f.action, 'https://site.test/login');
+      expect(f.method, 'POST');
+      expect(f.fields, {'csrf': 'T', 'user': '', 'keep': 'on', 'lang': 'ja', 'note': 'hi'});
+      expect(Html.parse('<form></form>', base: 'https://a.test/x').form()!.action, 'https://a.test/x');
+      expect(Html.parse('<p></p>').form(), isNull);
     });
   });
 }

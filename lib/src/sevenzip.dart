@@ -14,6 +14,9 @@ import 'aes.dart';
 import 'crc32.dart';
 import 'lzma.dart';
 import 'ppmd.dart';
+import 'zip.dart' show inflateRaw;
+
+import '../core.dart';
 
 /// The 7z signature: `7z\xBC\xAF\x27\x1C`.
 bool isSevenZip(List<int> b) =>
@@ -37,7 +40,7 @@ final class SevenZipEntry {
   Uint8List data() => _data();
 }
 
-Never _bad(String why) => throw FormatException('corrupt archive: 7z $why');
+Never _bad(String why) => throw ContentException('corrupt archive: 7z $why');
 
 /// The members of the 7z archive in [b]; [password] opens AES folders and
 /// encrypted headers.
@@ -54,15 +57,22 @@ List<SevenZipEntry> readSevenZip(Uint8List b, {String? password}) {
   if (crc32(b, start: start, end: start + nextSize) != nextCrc) _bad('header CRC');
   var header = _Bytes(Uint8List.sublistView(b, start, start + nextSize), 0);
   final pw = password;
-  // An encoded header is a folder whose output is the real header.
-  while (header.peek() == 0x17) {
+  // An encoded header is a folder whose output is the real header; 7-Zip
+  // nests at most one, so a deeper chain (or one pointing at itself) is
+  // damage.
+  for (var depth = 0; header.peek() == 0x17; depth++) {
+    if (depth == 4) _bad('encoded headers nest too deep');
     header.byte();
     final info = _StreamsInfo.read(header);
     if (info.folders.isEmpty) _bad('empty encoded header');
     final decoded = _decodeFolder(b, info, 0, pw);
+    final crc = info.folders[0].crc;
+    if (crc != null && crc32(decoded) != crc) {
+      throw ContentException(pw == null ? 'corrupt archive: 7z header CRC' : 'wrong password or corrupt archive');
+    }
     header = _Bytes(decoded, 0);
     if (pw != null && header.peek() != 0x01 && header.peek() != 0x17) {
-      throw const FormatException('wrong password or corrupt archive');
+      throw const ContentException('wrong password or corrupt archive');
     }
   }
   if (header.byte() != 0x01) _bad('missing header');
@@ -87,8 +97,10 @@ List<SevenZipEntry> readSevenZip(Uint8List b, {String? password}) {
   final info = main ?? _StreamsInfo.empty();
   // Files with data take the substreams in order; empty ones take none.
   final out = <SevenZipEntry>[];
-  var folder = 0, inFolder = 0, sub = 0;
+  var folder = 0, inFolder = 0, sub = 0, offset = 0;
+  // A decoded folder stays until its last member has taken its bytes.
   final cache = <int, Uint8List>{};
+  final left = List.of(info.subCounts);
   for (final f in files) {
     if (!f.hasStream) {
       out.add(SevenZipEntry._(f.name, f.isDir, f.mode, () => Uint8List(0)));
@@ -97,19 +109,20 @@ List<SevenZipEntry> readSevenZip(Uint8List b, {String? password}) {
     while (folder < info.folders.length && inFolder >= info.subCounts[folder]) {
       folder++;
       inFolder = 0;
+      offset = 0;
     }
-    if (folder >= info.folders.length) _bad('more files than streams');
-    final fi = folder, si = sub;
-    final offset = info.subOffset(fi, inFolder);
+    if (folder >= info.folders.length || sub >= info.subSizes.length) _bad('more files than streams');
+    final fi = folder, si = sub, at = offset;
     final size = info.subSizes[si];
     final crc = info.subCrcs[si];
     out.add(
       SevenZipEntry._(f.name, false, f.mode, () {
         final whole = cache[fi] ??= _decodeFolder(b, info, fi, pw);
-        if (offset + size > whole.length) _bad('file past its folder');
-        final data = Uint8List.sublistView(whole, offset, offset + size);
+        if (--left[fi] <= 0) cache.remove(fi);
+        if (size < 0 || at + size > whole.length) _bad('file past its folder');
+        final data = Uint8List.sublistView(whole, at, at + size);
         if (crc != null && crc32(data) != crc) {
-          throw FormatException(
+          throw ContentException(
             pw == null ? 'corrupt archive: 7z CRC of ${f.name}' : 'wrong password or corrupt archive: ${f.name}',
           );
         }
@@ -118,6 +131,7 @@ List<SevenZipEntry> readSevenZip(Uint8List b, {String? password}) {
     );
     inFolder++;
     sub++;
+    offset += size;
   }
   return out;
 }
@@ -132,6 +146,8 @@ final class _File {
 
 List<_File> _readFiles(_Bytes h) {
   final n = h.number();
+  // Every file needs at least its two-byte name terminator.
+  if (n > h.b.length) _bad('$n files in a ${h.b.length}-byte header');
   var emptyStream = List.filled(n, false);
   var emptyFile = <bool>[];
   var names = List.filled(n, '');
@@ -181,7 +197,7 @@ List<_File> _readFiles(_Bytes h) {
     }
     if (a != null && a & 0x10 != 0) isDir = true;
     final mode = a != null && a & 0x8000 != 0 ? a >> 16 & 0xFFFF : 0;
-    if (mode & 0xF000 == 0xA000) throw FormatException('archive member is a link: ${names[i]}');
+    if (mode & 0xF000 == 0xA000) throw ContentException('archive member is a link: ${names[i]}');
     out.add(_File(names[i].replaceAll('\\', '/'), hasStream, isDir, mode));
   }
   return out;
@@ -225,21 +241,25 @@ final class _StreamsInfo {
   final subSizes = <int>[];
   final subCrcs = <int?>[];
 
-  int packStart(int index) => 32 + packPos + packSizes.take(index).fold(0, (a, b) => a + b);
-
-  int firstPack(int folder) => folders.take(folder).fold(0, (a, f) => a + f.packed.length);
-
-  int subOffset(int folder, int index) {
-    var first = 0;
-    for (var f = 0; f < folder; f++) {
-      first += subCounts[f];
+  // Running sums, built on first use: a lookup per folder stays O(1).
+  late final _packStarts = () {
+    final out = List<int>.filled(packSizes.length + 1, 32 + packPos);
+    for (var k = 0; k < packSizes.length; k++) {
+      out[k + 1] = out[k] + packSizes[k];
     }
-    var off = 0;
-    for (var k = 0; k < index; k++) {
-      off += subSizes[first + k];
+    return out;
+  }();
+  late final _firstPacks = () {
+    final out = List<int>.filled(folders.length + 1, 0);
+    for (var k = 0; k < folders.length; k++) {
+      out[k + 1] = out[k] + folders[k].packed.length;
     }
-    return off;
-  }
+    return out;
+  }();
+
+  int packStart(int index) => index < _packStarts.length ? _packStarts[index] : _bad('pack stream $index');
+
+  int firstPack(int folder) => _firstPacks[folder];
 
   static _StreamsInfo read(_Bytes h) {
     final info = _StreamsInfo.empty();
@@ -248,6 +268,7 @@ final class _StreamsInfo {
         case 0x06: // pack info
           info.packPos = h.number();
           final n = h.number();
+          if (n > h.b.length) _bad('$n pack streams');
           for (var t = h.byte(); t != 0; t = h.byte()) {
             if (t == 0x09) {
               for (var k = 0; k < n; k++) {
@@ -349,6 +370,9 @@ void _readSubstreams(_Bytes h, _StreamsInfo info) {
   final hasSizes = id == 0x09;
   for (var k = 0; k < counts.length; k++) {
     if (counts[k] == 0) continue;
+    // Without sizes a folder holds one stream; each further one is a
+    // number in the header, so a count can never outgrow it.
+    if (!hasSizes && counts[k] > 1) _bad('substreams without sizes');
     var sum = 0;
     if (hasSizes) {
       for (var j = 1; j < counts[k]; j++) {
@@ -357,7 +381,9 @@ void _readSubstreams(_Bytes h, _StreamsInfo info) {
         sum += s;
       }
     }
-    sizes.add(info.folders[k].unpackSize - sum);
+    final last = info.folders[k].unpackSize - sum;
+    if (last < 0) _bad('substreams larger than their folder');
+    sizes.add(last);
   }
   if (hasSizes) id = h.byte();
   // CRCs: a folder with one substream and a folder CRC already has its own.
@@ -400,7 +426,7 @@ Uint8List _decodeFolder(Uint8List b, _StreamsInfo info, int index, String? passw
   try {
     return _decodeFolderRaw(b, info, index, password);
   } on FormatException {
-    throw const FormatException('wrong password or corrupt archive');
+    throw const ContentException('wrong password or corrupt archive');
   }
 }
 
@@ -410,6 +436,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   final cache = <int, Uint8List>{};
 
   Uint8List packedStream(int k) {
+    if (firstPack + k >= info.packSizes.length) _bad('missing packed stream');
     final start = info.packStart(firstPack + k);
     final size = info.packSizes[firstPack + k];
     if (start + size > b.length) _bad('packed stream past the end');
@@ -441,7 +468,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
     final (c, firstIn) = owner(out);
     final coder = f.coders[c];
     if (coder.ins != 1 || coder.outs != 1) {
-      throw FormatException('unsupported 7z coder ${_hex(coder.id)} (BCJ2): repack with BCJ or no filter');
+      throw ContentException('unsupported 7z coder ${_hex(coder.id)} (BCJ2): repack with BCJ or no filter');
     }
     return _run(coder, input(firstIn), f.unpackSizes[out], password);
   }();
@@ -449,7 +476,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   final data = output(f.mainOut);
   final crc = f.crc;
   if (crc != null && info.subCounts.length > index && info.subCounts[index] != 1 && crc32(data) != crc) {
-    throw FormatException(password == null ? 'corrupt archive: 7z folder CRC' : 'wrong password or corrupt archive');
+    throw ContentException(password == null ? 'corrupt archive: 7z folder CRC' : 'wrong password or corrupt archive');
   }
   return data;
 }
@@ -458,6 +485,7 @@ Uint8List _run(_Coder c, Uint8List input, int size, String? password) {
   final id = _hex(c.id);
   switch (id) {
     case '00': // copy
+      if (input.length < size) _bad('stored stream is short');
       return input.length == size ? input : Uint8List.sublistView(input, 0, size);
     case '030101':
       return lzmaDecode(input, c.props, size);
@@ -466,12 +494,7 @@ Uint8List _run(_Coder c, Uint8List input, int size, String? password) {
     case '030401':
       return ppmdDecode7z(input, c.props, size);
     case '040108': // deflate
-      try {
-        final out = io.ZLibDecoder(raw: true).convert(input);
-        return out is Uint8List ? out : Uint8List.fromList(out);
-      } on FormatException catch (e) {
-        _bad('deflate (${e.message})');
-      }
+      return inflateRaw(input, size, '7z folder');
     case '03030103': // BCJ x86
       return _bcjX86(Uint8List.fromList(input));
     case '0a': // ARM64
@@ -479,10 +502,10 @@ Uint8List _run(_Coder c, Uint8List input, int size, String? password) {
     case '03': // delta
       return _delta(Uint8List.fromList(input), (c.props.isEmpty ? 0 : c.props[0]) + 1);
     case '06f10701': // AES-256 + SHA-256
-      if (password == null) throw const FormatException('archive is encrypted (pass password:)');
+      if (password == null) throw const ContentException('archive is encrypted (pass password:)');
       return _aes(input, c.props, password, size);
     default:
-      throw FormatException('unsupported 7z coder $id');
+      throw ContentException('unsupported 7z coder $id');
   }
 }
 
@@ -646,7 +669,7 @@ final class _Bytes {
   }
 
   Uint8List bytes(int n) {
-    if (pos + n > b.length) _bad('header ends early');
+    if (n < 0 || pos + n > b.length) _bad('header ends early');
     final out = Uint8List.sublistView(b, pos, pos + n);
     pos += n;
     return out;
@@ -682,6 +705,7 @@ final class _Bytes {
   }
 
   List<bool> bits(int n) {
+    if (n > (b.length - pos) * 8) _bad('header ends early');
     final out = List.filled(n, false);
     var mask = 0, cur = 0;
     for (var i = 0; i < n; i++) {
@@ -695,7 +719,10 @@ final class _Bytes {
     return out;
   }
 
-  List<bool> allOrBits(int n) => byte() != 0 ? List.filled(n, true) : bits(n);
+  List<bool> allOrBits(int n) {
+    if (n > b.length * 8) _bad('$n items in a ${b.length}-byte header');
+    return byte() != 0 ? List.filled(n, true) : bits(n);
+  }
 }
 
 /// A solid 7z of [entries] (name, unix permission bits, bytes; a name

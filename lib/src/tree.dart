@@ -9,23 +9,16 @@ import 'package:path/path.dart' as p;
 
 import 'posix.dart' as posix;
 
-/// Keep the source file's mtime and mode on a copy.
+/// Keep the source file's mtime and mode on a copy. The mtime is
+/// best-effort (some filesystems refuse it); a failed `chmod` throws.
 /// Skips the chmod fork when the mode already matches.
 Future<void> preserveFileMeta(String from, String to) async {
+  final st = await io.FileStat.stat(from);
   try {
-    final st = await io.FileStat.stat(from);
-    try {
-      await io.File(to).setLastModified(st.modified);
-    } catch (_) {}
-    try {
-      final dst = await io.FileStat.stat(to);
-      if ((dst.mode & 0xFFF) != (st.mode & 0xFFF)) {
-        await posix.chmod(to, st.mode & 0xFFF);
-      }
-    } catch (_) {
-      await posix.chmod(to, st.mode & 0xFFF);
-    }
+    await io.File(to).setLastModified(st.modified);
   } catch (_) {}
+  final dst = await io.FileStat.stat(to);
+  if ((dst.mode & 0xFFF) != (st.mode & 0xFFF)) await posix.chmod(to, st.mode & 0xFFF);
 }
 
 /// In-process tree copy: the Windows path (no `cp -pPR`, no POSIX modes)

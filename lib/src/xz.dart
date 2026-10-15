@@ -10,11 +10,13 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'crc32.dart';
 import 'lzma.dart';
 
+import '../core.dart';
+
 /// The xz magic: `\xFD7zXZ\x00`.
 bool isXz(List<int> b) =>
     b.length >= 6 && b[0] == 0xFD && b[1] == 0x37 && b[2] == 0x7A && b[3] == 0x58 && b[4] == 0x5A && b[5] == 0;
 
-Never _bad(String why) => throw FormatException('corrupt archive: xz $why');
+Never _bad(String why) => throw ContentException('corrupt archive: xz $why');
 
 /// The decompressed bytes of the xz data in [b].
 Uint8List xzDecode(Uint8List b) {
@@ -67,7 +69,7 @@ Uint8List xzDecode(Uint8List b) {
         final propsSize = vli();
         p += propsSize;
         if (f < filters - 1 || id != 0x21) {
-          throw FormatException('unsupported xz filter 0x${id.toRadixString(16)} (only LZMA2)');
+          throw ContentException('unsupported xz filter 0x${id.toRadixString(16)} (only LZMA2)');
         }
       }
       i += headerSize;

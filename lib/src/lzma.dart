@@ -5,22 +5,26 @@ library;
 
 import 'dart:typed_data';
 
-Never _bad(String why) => throw FormatException('corrupt archive: LZMA $why');
+import '../core.dart';
+
+Never _bad(String why) => throw ContentException('corrupt archive: LZMA $why');
+
+/// The most a declared size gets up front; past it the buffer grows only
+/// as the stream really decodes (a header can claim anything).
+const declaredCeiling = 1 << 30;
 
 /// Decode an LZMA stream with 7z's 5 property bytes into [size] bytes.
 Uint8List lzmaDecode(Uint8List input, List<int> props, int size) {
   if (props.length < 5) _bad('properties too short');
-  final out = Uint8List(size);
-  final d = _Lzma(out)..setProps(props[0]);
+  final d = _Lzma(size)..setProps(props[0]);
   final rc = _Range(input, 0);
   d.decode(rc, size);
-  return out;
+  return d.bytes();
 }
 
 /// Decode an LZMA2 stream (7z's 1 property byte) into [size] bytes.
 Uint8List lzma2Decode(Uint8List input, int size) {
-  final out = Uint8List(size);
-  final d = _Lzma(out);
+  final d = _Lzma(size);
   var i = 0;
   var needProps = true;
   while (true) {
@@ -33,7 +37,7 @@ Uint8List lzma2Decode(Uint8List input, int size) {
       final n = (input[i] << 8 | input[i + 1]) + 1;
       i += 2;
       if (i + n > input.length || d.pos + n > size) _bad('LZMA2 chunk runs past the end');
-      out.setRange(d.pos, d.pos + n, input, i);
+      d.reserve(d.pos + n).setRange(d.pos, d.pos + n, input, i);
       d.pos += n;
       i += n;
       continue;
@@ -57,7 +61,7 @@ Uint8List lzma2Decode(Uint8List input, int size) {
     i += packed;
   }
   if (d.pos != size) _bad('LZMA2 data ends at ${d.pos} of $size bytes');
-  return out;
+  return d.bytes();
 }
 
 /// The range decoder: 32-bit range and code over [_buf] from [_i].
@@ -74,7 +78,14 @@ final class _Range {
   int _range = 0xFFFFFFFF;
   int _code = 0;
 
-  int _next() => _i < _buf.length ? _buf[_i++] : 0;
+  int _next() => _i < _buf.length ? _buf[_i++] : _pastEnd();
+
+  /// Zeros for the coder's few bytes of lookahead; past those the stream
+  /// is cut short (else a claimed size would decode garbage to its end).
+  int _pastEnd() {
+    if (++_i > _buf.length + 8) _bad('data ends early');
+    return 0;
+  }
 
   int bit(Uint16List probs, int index) {
     final p = probs[index];
@@ -151,10 +162,28 @@ final class _Len {
 }
 
 final class _Lzma {
-  _Lzma(this._out);
+  _Lzma(this._size) : _out = Uint8List(_size.clamp(0, declaredCeiling)) {
+    if (_size < 0) _bad('size $_size');
+  }
 
-  final Uint8List _out;
+  final int _size;
+  Uint8List _out;
   int pos = 0;
+
+  /// The buffer, grown (doubling, never past the declared size) to hold
+  /// [need] bytes.
+  Uint8List reserve(int need) {
+    if (need <= _out.length) return _out;
+    if (need > _size) _bad('data runs past its size');
+    var n = _out.length * 2;
+    while (n < need) {
+      n *= 2;
+    }
+    return _out = Uint8List(n < _size ? n : _size)..setRange(0, pos, _out);
+  }
+
+  /// The decoded bytes.
+  Uint8List bytes() => pos == _out.length ? _out : Uint8List.sublistView(_out, 0, pos);
 
   var _lc = 0, _lp = 0, _pb = 0;
   Uint16List _literal = Uint16List(0);
@@ -202,11 +231,13 @@ final class _Lzma {
 
   /// Decode until [end] bytes of output (or an end marker).
   void decode(_Range rc, int end) {
-    final out = _out;
+    var out = _out;
     final pbMask = (1 << _pb) - 1;
     final lpMask = (1 << _lp) - 1;
     while (pos < end) {
       final posState = pos & pbMask;
+      // The longest step writes 273 bytes.
+      if (pos + 273 > out.length && out.length < _size) out = reserve(pos + 273 < end ? pos + 273 : end);
       if (rc.bit(_isMatch, (_state << 4) + posState) == 0) {
         // A literal, after a match coded against the byte at rep0.
         final prev = pos > 0 ? out[pos - 1] : 0;
@@ -237,6 +268,7 @@ final class _Lzma {
           if (rc.bit(_isRep0Long, (_state << 4) + posState) == 0) {
             // A short rep: one byte at rep0.
             _state = _state < 7 ? 9 : 11;
+            if (pos - _rep0 - 1 < 0) _bad('match before the start');
             out[pos] = out[pos - _rep0 - 1];
             pos++;
             continue;

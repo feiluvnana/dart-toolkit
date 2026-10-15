@@ -8,11 +8,11 @@ Terminal: key decoding (VT input, Esc timing, modifiers, Kitty/CSI-u), mouse, br
 Verify what this Mac can verify: pty drivers, `LANG=C`, `TERM=dumb`, a narrow width, piped stdin, and tmux. For each platform-specific finding, either fix it with a test that is skipped elsewhere, or (Windows or Linux only) write exact steps into PLAN.md §1/§2: files, code, test commands, expected output. Do not ship Windows code you cannot run. Report an OS × module matrix of ok, fixed, handed off or unknown.
 
 ## Context (same in every prompt)
-- dart_toolkit, branch master: a Dart scripting toolkit. VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
-- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; PLAN.md holds Windows and Linux handoffs.
+- dart_toolkit, branch master: a Dart scripting toolkit. docs/VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
+- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; docs/PLAN.md holds Windows and Linux handoffs.
 - Priorities: speed (runtime, then startup) > call-site brevity = discoverability > the rest.
 - Every module works alone and composes: `Reader | Pipe > Writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
-- Names: short, one word when it reads one way, the same word for the same idea in every module (see VISION §1).
+- Names: short, one word when it reads one way, the same word for the same idea in every module (see docs/VISION.md §1).
 - Pure Dart plus pub packages; no native code, no codegen, no sync twins. No backward compatibility: rename, merge or delete freely.
 - Tui is alternate-screen only and has no colour by default (`accent:` opts in); scrollback output belongs to Console.
 - Every bug fix gets a regression test. Before each commit: `dart analyze lib test projects tool` is clean and the full `dart test` passes.

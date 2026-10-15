@@ -9,5 +9,4 @@ coverage/
 /projects/
 /tool/
 /test/
-/PLAN.md
-/DOGFOOD.md
+/docs/*
