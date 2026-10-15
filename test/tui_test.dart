@@ -650,6 +650,19 @@ void main() {
       expect(t.row(3), contains('hello there'));
     });
 
+    test('a popup title lays wide glyphs over two cells', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.popup('日本語', width: 20, height: 4)),
+        width: 30,
+        height: 8,
+      );
+      await t.pump();
+      expect(t.row(2), contains(' 日本語 '));
+      expect(term.displayWidth(t.row(2).trimRight()), term.displayWidth(t.row(3).trimRight())); // the frame lines up
+      t.close();
+    });
+
     test('the status row writes no C1 control (a raw U+009B is a CSI)', () async {
       late App<int> app;
       final t = testSession<int>(

@@ -20,6 +20,16 @@ void main() {
       }
     }, timeout: const Timeout(Duration(seconds: 90)));
 
+    test('on a narrow terminal the bar gives up cells before the rate is cut', () async {
+      final term = await _ptyBar(cols: 40, mode: 'short');
+      final lines = [
+        for (final c in term.split('\r')) c.split('\x1b[K').first.replaceAll(RegExp('\x1b\\[[0-9;?]*[a-zA-Z]'), ''),
+      ];
+      final shown = lines.where((l) => l.contains('12/40'));
+      expect(shown, isNotEmpty);
+      expect(shown.where((l) => l.contains('…')), isEmpty, reason: '$shown');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
     test('a bar on an 8-column terminal never fills the last column', () async {
       final term = await _ptyBar(cols: 8);
       for (final chunk in term.split('\r')) {

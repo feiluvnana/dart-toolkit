@@ -6,6 +6,7 @@
 // "printable" mojibake and the menu never moves.
 import 'dart:convert';
 
+import 'package:dart_toolkit/src/keys.dart' as keys;
 import 'package:dart_toolkit/src/terminal.dart';
 import 'package:test/test.dart';
 
@@ -20,6 +21,17 @@ String keyName(List<int> bytes) {
 }
 
 void main() {
+  test('modifiers: any spelling order binds, super is meta, Linux console F1-F5', () {
+    expect(keys.matchesBinding('shift+ctrl+a', 'ctrl+shift+a'), isTrue);
+    expect(keys.matchesBinding('shift+alt+up', keyName(utf8.encode('\x1b[1;4A'))), isTrue);
+    expect(keyName(utf8.encode('\x1b[1;9A')), 'meta+up');
+    expect(keyName(utf8.encode('\x1b[1;13A')), 'ctrl+meta+up');
+    for (final (i, c) in 'ABCDE'.split('').indexed) {
+      expect(keyName(utf8.encode('\x1b[[$c')), 'f${i + 1}');
+    }
+    expect(decodeKeys(utf8.encode('\x1b[[')).consumed, 0); // split: held
+  });
+
   group('windows extended keys (0xE0 prefix)', () {
     test('arrows', () {
       expect(keyName([0xe0, 0x48]), 'up');

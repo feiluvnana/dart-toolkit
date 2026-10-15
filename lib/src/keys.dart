@@ -93,6 +93,10 @@ String canonicalize(String key) {
       throw ArgumentError.value(key, 'key', 'unknown modifier: ${parts[i]}');
     }
   }
+  // One order whatever the spelling (the decoder's): 'shift+ctrl+a' is
+  // 'ctrl+shift+a', or a binding would never fire.
+  const order = ['ctrl', 'alt', 'shift', 'meta'];
+  mods.sort((a, b) => order.indexOf(a).compareTo(order.indexOf(b)));
   final main = parts.last;
   String base;
   if (main.length == 1) {

@@ -237,6 +237,15 @@ abstract class TuiBridge {
       }
       if (i + 1 >= bytes.length) break; // lone trailing ESC: hold.
       final n1 = bytes[i + 1];
+      if (n1 == 0x5b && i + 2 < bytes.length && bytes[i + 2] == 0x5b) {
+        // The Linux console's F1-F5: ESC [ [ A … E.
+        if (i + 3 >= bytes.length) break; // split: hold.
+        final k = bytes[i + 3];
+        flush();
+        if (k >= 0x41 && k <= 0x45) out.add(TermKey('f${k - 0x40}'));
+        i += 4;
+        continue;
+      }
       if (n1 == 0x5b) {
         // CSI sequence: params in 0x30-0x3F, intermediates 0x20-0x2F.
         var j = i + 2;
@@ -475,6 +484,7 @@ String? csiName(String params, int fin) {
       if (m & 4 != 0) prefix += 'ctrl+';
       if (m & 2 != 0) prefix += 'alt+';
       if (m & 1 != 0) prefix += 'shift+';
+      if (m & 8 != 0) prefix += 'meta+'; // super/cmd: dropping it made cmd+up fire up
     }
   }
   code = code.split(':').first;

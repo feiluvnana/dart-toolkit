@@ -16,6 +16,14 @@ void main() => Console.table([['日本', 3, null], ['abc', 120, 'x']], header: [
     expect(r.stdout, 'name  n    note\n日本    3\nabc   120  x\n');
   });
 
+  test('Console.table: colour takes no cells and a tab is a space', () async {
+    final r = await runDart(r'''
+import 'package:dart_toolkit/console.dart';
+void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long', 'c']]);
+''');
+    expect(r.stdout, '\x1b[32mok\x1b[0m    a\nx y   b\nlong  c\n');
+  });
+
   group('Console.choose', () {
     test('empty items is an ArgumentError', () {
       expect(Console.choose('Pick', <String>[], label: (s) => s), throwsArgumentError);

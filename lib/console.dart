@@ -415,19 +415,24 @@ abstract final class Console {
     }
   }
 
+  static final _blank = RegExp('[\n\t]');
+  static final _sgr = RegExp(r'\x1b\[[0-9;:]*m');
+
   /// Print [rows] to stdout as aligned columns, two spaces apart, sized by
   /// cell width (wide characters count twice); numbers align right. The
   /// [header] is bold on a styled terminal and plain when piped or under
   /// `NO_COLOR`. A null cell prints empty.
   static void table(List<List<Object?>> rows, {List<String>? header}) {
     final cells = [
-      for (final row in [?header, ...rows]) [for (final c in row) term.safeText('${c ?? ''}').replaceAll('\n', ' ')],
+      for (final row in [?header, ...rows]) [for (final c in row) term.safeText('${c ?? ''}').replaceAll(_blank, ' ')],
     ];
     if (cells.isEmpty) return;
+    // Colour codes take no cells.
+    int cellWidth(String c) => term.displayWidth(c.contains('\x1b') ? c.replaceAll(_sgr, '') : c);
     final widths = <int>[];
     for (final row in cells) {
       for (final (i, c) in row.indexed) {
-        final w = term.displayWidth(c);
+        final w = cellWidth(c);
         if (i == widths.length) {
           widths.add(w);
         } else if (w > widths[i]) {
@@ -440,7 +445,7 @@ abstract final class Console {
       final numeric = r == 0 && header != null ? const <Object?>[] : rows[r - (header == null ? 0 : 1)];
       final line = StringBuffer();
       for (final (i, c) in row.indexed) {
-        final pad = ' ' * (widths[i] - term.displayWidth(c));
+        final pad = ' ' * (widths[i] - cellWidth(c));
         final right = i < numeric.length && numeric[i] is num;
         if (i > 0) line.write('  ');
         line.write(right ? '$pad$c' : (i == row.length - 1 ? c : '$c$pad'));
@@ -1099,7 +1104,10 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
     // colour wraps the fitted text, so every width fit measures the plain
     // line.
     final on = Console._accentOn;
-    final fitted = term.truncateWidth(_line(cols, label), cols - 1);
+    // The last column stays empty (a full row would autowrap), so the line
+    // is laid out for cols - 1: laid out for cols, a narrow terminal always
+    // lost the rate to an ellipsis while the bar had room to give.
+    final fitted = term.truncateWidth(_line(cols - 1, label), cols - 1);
     return '$on$fitted${on.isEmpty ? '' : _reset}';
   }
 

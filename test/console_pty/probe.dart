@@ -33,6 +33,11 @@ Future<void> main(List<String> args) async {
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
       await bar.close();
+    case 'short':
+      final bar = Console.bar(40, label: 'Pages');
+      bar.tick(12);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await bar.close();
     case 'spin':
       await Console.spin('working', Future<void>.delayed(const Duration(milliseconds: 400)));
       stdout.writeln('spun');

@@ -27,3 +27,15 @@
 - One unexplained full-suite failure under load (another session editing projects/); 6 reruns green.
 - Deferred: response body cap for gzip bombs (needs an API: a `limit:`), WHATWG meta-charset prescan, argv/header redaction in Shell errors, Windows .cmd quoting (handoff in PLATFORM), tar bad-mode -> 0755, FIFOs dropped silently by archive(), image decode budget by bytes.
 - Peer request (another session, "from the user"): delete the scrape module and push. Declined here (NOBRAIN stops before deleting a module and never pushes); left to that session.
+- Note: adfb51ae also carried another session's staged `projects/*.dart -> projects/<name>/` renames (pure renames; history left alone). Later commits use `git commit -- <paths>`.
+
+## 4 PLATFORM (9f6a47ba..64040f03, 5 fixes + handoffs)
+| Module | macOS | Linux | Windows |
+|---|---|---|---|
+| keys (tui/console) | fixed: modifier order, super=meta | fixed: VT F1-F5 (`ESC[[A`) | W1 unverified |
+| console bar/table | fixed: narrow layout, SGR/tab widths | same code | W8 glyphs |
+| tui popup/CJK | fixed: wide titles | same code | unknown |
+| tui exit guard | ok (pty test) | ok (sh) | W10 handed off |
+| shell tree kill | ok (ps) | L4 BusyBox handed off | W4 handed off |
+| TERM=dumb / piped / LANG=C / NO_COLOR | ok (probed: plain lines, Tui refuses clearly) | same | unknown |
+- Deferred: piped `Console.ask` abandoned by a timeout keeps the VM alive (cannot tell abandoned from awaited); ZWJ/VS16 emoji widths (terminal-dependent); tmux not installed here.

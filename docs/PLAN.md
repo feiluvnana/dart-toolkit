@@ -25,14 +25,15 @@ In `lib/shell.dart`, the three start sites are `Process.run` (~46), the `Process
 - Route all three start sites through one helper that calls both.
 - Tests (Windows only): `Shell.run(['npm', '--version'])` works; `Shell.run(['x.cmd', 'a&b'])` throws `ArgumentError`; a temp `echo.cmd` given a safe argument returns its output.
 
-### W4. M30: kill the whole process tree
-In `lib/shell.dart`, add:
+### W4. Kill the whole process tree on Windows
+`lib/shell.dart` `_killTree(proc, signal)` reads the tree with `ps` on POSIX and signals it deepest first; on Windows it only calls `proc.kill`. Add the Windows branch at its top:
 ```dart
-void _killTree(io.Process p) => io.Platform.isWindows
-    ? io.Process.run('taskkill', ['/F', '/T', '/PID', '${p.pid}']).ignore()
-    : p.kill(io.ProcessSignal.sigkill);
+if (io.Platform.isWindows) {
+  await io.Process.run('taskkill', ['/F', '/T', '/PID', '${proc.pid}']);
+  return;
+}
 ```
-Use it for every `proc.kill(sigkill)`: the `_runLive` catch, and `filter`'s input-error, cancel, `!ok` and stdin-timeout paths. Test: a `.cmd` wrapper starts a long child; cancel the `filter`; check with `tasklist` that the grandchild pid is gone. Only ever kill pids we spawned.
+Every kill site (the run timeout, the exit hook, `filter`'s cancel and error paths) already goes through it. Test (Windows only): port `a timeout kills the grandchildren too` in `test/shell_test.dart` with `cmd /c "start /b ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"` and check with `tasklist /FI "IMAGENAME eq PING.EXE"` that none is left. Only ever kill pids we spawned.
 
 ### W5. M6: hide temp names
 In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <tmp>` right after creating the temp file or folder. The M6 test is skipped on Windows because `Process.kill(sigint)` is unsupported there. Drive it with `GenerateConsoleCtrlEvent` or a manual Ctrl-C instead, and record the result here.
@@ -51,6 +52,9 @@ In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <t
 ### W9. Rename retries for Defender and the indexer
 `_renameOver` in `lib/fs.dart` retries 3 × 50 ms; `File.move`, `Dir.move`, `Link.create` and `_Unpacker._moveInto` (`lib/archive.dart`) do not retry. Add `Future<T> renameRetry<T>(Future<T> Function() op)` to `lib/src/posix.dart`: on Windows retry on `osError.errorCode` 5, 32 or 33 with waits of 20, 40, 80 … ms up to 1 s in total; elsewhere call `op()` once. Route the five sites through it. Test (Windows only): open the target from a second isolate for 300 ms, then `Fs.file(t).write('x')` succeeds after the handle closes.
 
+### W10. Tui restore after `exit()` on Windows
+`lib/src/tui/session.dart` `_startGuard` (a `sh` watchdog that restores the terminal when the process dies inside `Tui.run`) is POSIX only. On Windows check what `exit(3)` from a binding leaves in Windows Terminal and conhost: alternate screen, mouse reporting, VT input mode. If it is broken, add a `cmd` guard: start `cmd /c "findstr "^" >nul & <write the leave codes>"` with stdin from us, the same way as W2's watchdog, and write the leave codes with `powershell -c [Console]::Write(...)`. Record the result here.
+
 ## §2 Linux
 
 ### L1. M11: `Shell.open` with a foreground launcher keeps the script alive
@@ -61,3 +65,6 @@ The launcher's stdio is now released (fixed on POSIX), but `xdg-open` in generic
 
 ### L2. `Chrome.launch()` on linux-arm64 and windows-arm64
 puppeteer's downloader throws `FormatException: Unknown 'linux_arm64' from Platform.version` (Docker on Apple Silicon, Raspberry Pi). In `lib/chrome.dart` `_cachedExecutable`, read the arch from `io.Platform.version` (`linux_arm64`/`windows_arm64`). On `linux_arm64` use the first of `chromium`, `chromium-browser`, `google-chrome-stable` found on PATH, else throw `UnsupportedError('no Chromium download for linux_arm64: apt install chromium, or pass path:')`. On `windows_arm64` throw the same error naming the platform (x64 emulation would need puppeteer's `src/` enum). Check on an arm64 box: `dart test test/chrome_test.dart` launches the system Chromium or fails with that message.
+
+### L4. Process-tree kill with BusyBox `ps`
+`_killTree` in `lib/shell.dart` runs `ps -A -o pid=,ppid=`. BusyBox (Alpine, many Docker images) has no `-A` and may reject `-o pid=,ppid=`, so the tree is empty and only the direct child dies. In an `alpine` container run `dart test test/shell_test.dart -n grandchildren`. If it fails, fall back to reading `/proc/*/stat` (field 4 is the ppid) when `ps` exits non-zero: list `/proc`, keep numeric names, parse `stat` after the last `)`.

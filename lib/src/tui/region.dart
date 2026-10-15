@@ -433,12 +433,27 @@ final class Region {
     grid[row][col] = _Cell(ch, style, 1, link: link);
   }
 
+  /// [text] into [grid] by cell width: a wide glyph takes two cells (its
+  /// second a 0-width filler), marks join the glyph before them.
   void _rawWrite(List<List<_Cell>> grid, int row, int from, int end, String text, int style, String? link) {
+    final cells = grid[row];
+    end = math.min(end, cells.length);
     var col = from;
     for (final r in text.runes) {
-      if (col >= end || col >= grid[row].length) break;
       if (_isControl(r)) continue; // C0, DEL, C1
-      grid[row][col++] = _Cell(String.fromCharCode(r), style, 1, link: link);
+      if (term.isZeroWidth(r)) {
+        if (col > from) {
+          final at = cells[col - 1].width == 0 ? col - 2 : col - 1;
+          final c = cells[at];
+          cells[at] = _Cell('${c.ch}${String.fromCharCode(r)}', c.style, c.width, link: c.link);
+        }
+        continue;
+      }
+      final w = term.cellWidth(r);
+      if (col + w > end) break;
+      cells[col] = _Cell(String.fromCharCode(r), style, w, link: link);
+      if (w == 2) cells[col + 1] = _Cell('', style, 0, link: link);
+      col += w;
     }
   }
 }
