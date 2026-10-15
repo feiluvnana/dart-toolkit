@@ -400,13 +400,19 @@ class Queue {
     }
     final compressed = imageQuality != null || videoQuality != null;
     if (compressed && originalSize > 0) {
-      final saved = originalSize - t.done;
-      final pct = (saved * 100 / originalSize).round();
-      final effectiveness = pct > 0 ? '-$pct%' : (pct < 0 ? '+${-pct}%' : '0%');
-      board.note(
-        '@${t.user.name} ${t.path}  ${size(t.done)} (compressed from ${size(originalSize)}, $effectiveness)',
-        platform: t.user.platform,
-      );
+      if (t.done < originalSize) {
+        final saved = originalSize - t.done;
+        final pct = (saved * 100 / originalSize).round();
+        board.note(
+          '@${t.user.name} ${t.path}  ${size(t.done)} (compressed from ${size(originalSize)}, -$pct%)',
+          platform: t.user.platform,
+        );
+      } else {
+        board.note(
+          '@${t.user.name} ${t.path}  ${size(t.done)} (compressed from ${size(originalSize)}, 0% - already optimal)',
+          platform: t.user.platform,
+        );
+      }
     } else {
       board.note('@${t.user.name} ${t.path}  ${size(t.done)}', platform: t.user.platform);
     }
@@ -425,22 +431,17 @@ class Queue {
 
       if (isImage && imageQuality != null) {
         final img = Image.decode(bytes);
-        final ImageFormat targetFormat;
-        if (ext == 'jpg' || ext == 'jpeg') {
-          targetFormat = ImageFormat.jpg;
-        } else if (ext == 'png') {
-          targetFormat = ImageFormat.png;
-        } else if (sniffedImg == ImageFormat.webp || sniffedImg == null) {
-          targetFormat = ImageFormat.jpg;
-        } else {
-          targetFormat = sniffedImg;
+        final targetFormat = sniffedImg == ImageFormat.webp || sniffedImg == null
+            ? (ext == 'png' ? ImageFormat.png : ImageFormat.jpg)
+            : sniffedImg;
+        final encodedBytes = await img.encode(targetFormat, quality: imageQuality!).bytes();
+        if (encodedBytes.length < bytes.length) {
+          await (Reader.of(encodedBytes) > file);
+          final delta = encodedBytes.length - t.done;
+          t.done = encodedBytes.length;
+          t.part.bytes += delta;
+          board.count(delta);
         }
-        await (img.encode(targetFormat, quality: imageQuality!) > file);
-        final newSize = await file.size();
-        final delta = newSize - t.done;
-        t.done = newSize;
-        t.part.bytes += delta;
-        board.count(delta);
         return;
       }
 
@@ -448,26 +449,19 @@ class Queue {
       final isVideo = sniffedVid != null || const {'mp4', 'webm', 'mkv', 'mov', 'avi'}.contains(ext);
       if (isVideo && videoQuality != null) {
         final video = await Video.decode(bytes);
-        final VideoFormat targetFormat;
-        if (ext == 'mp4') {
-          targetFormat = VideoFormat.mp4;
-        } else if (ext == 'webm') {
-          targetFormat = VideoFormat.webm;
-        } else if (ext == 'mov') {
-          targetFormat = VideoFormat.mov;
-        } else if (ext == 'mkv') {
-          targetFormat = VideoFormat.mkv;
-        } else if (ext == 'avi') {
-          targetFormat = VideoFormat.avi;
+        final targetFormat = sniffedVid ?? (ext == 'webm' ? VideoFormat.webm : VideoFormat.mp4);
+        final tempFile = file.parent().file('.tmp_${file.name()}');
+        await (video.encode(targetFormat, quality: videoQuality!) > tempFile);
+        final newSize = await tempFile.size();
+        if (newSize < bytes.length) {
+          await tempFile.move(file.path());
+          final delta = newSize - t.done;
+          t.done = newSize;
+          t.part.bytes += delta;
+          board.count(delta);
         } else {
-          targetFormat = sniffedVid ?? VideoFormat.mp4;
+          await tempFile.delete();
         }
-        await (video.encode(targetFormat, quality: videoQuality!) > file);
-        final newSize = await file.size();
-        final delta = newSize - t.done;
-        t.done = newSize;
-        t.part.bytes += delta;
-        board.count(delta);
         return;
       }
     } catch (e) {
