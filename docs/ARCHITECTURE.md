@@ -10,7 +10,7 @@ json ─────────────── core, src/names
 hash ─────────────── core, src/resume (+crypto)
 csv ──────────────── core
 yaml ─────────────── json (+yaml)
-scrape, pool ─────── core, src/rate, src/retry
+pool ─────────────── core, src/rate, src/retry
 fs ───────────────── core, src/exit, src/glob, src/names, src/posix, src/tree (+path)
 shell ────────────── core, src/exit, src/timeout
 archive ──────────── core, src/exit, src/posix, src/tree, src/zip, src/sevenzip, src/rar, src/xz (+path)
@@ -32,7 +32,7 @@ No cycles. Cross-module edges are the compositions the API promises: `chrome →
 
 | import | +ms over an empty script | what it costs |
 |---|---|---|
-| core, csv, scrape | 21–26 | — |
+| core, csv | 21–24 | — |
 | json, pool, cli, shell, hash | 57–73 | crypto (hash) |
 | fs, http, html, console | 96–103 | path (fs); charset tables (http); parser and selectors (html) |
 | archive, yaml, tui | 208–239 | in-house codecs; package:yaml; widgets and markdown |
@@ -54,7 +54,7 @@ Archives (zip, 7z, RAR, xz), AES, the HTTP client, the HTML5 parser with its sel
 ## Rules
 
 - **One lifecycle owner.** Only `src/exit.dart` watches signals and calls `exit`. Only `src/terminal.dart` reads stdin and sets its modes (capture, raw, line, restore). Child processes outside `shell` are named here: the tty reader (`terminal`), the Tui exit guard (`tui/session`), the Chromium watchdog (`chrome`) and the `chmod`/`touch` batches (`src/posix`).
-- **One shared model.** `Reader`/`Writer`/`Pipe`/`Closeable`/`Origin` cross modules; no module has a lookalike. Stopping is `src/rate.dart`'s `Halt`: http, pool and scrape end their waits through it.
+- **One shared model.** `Reader`/`Writer`/`Pipe`/`Closeable`/`Origin` cross modules; no module has a lookalike. Stopping is `src/rate.dart`'s `Halt`: http and pool end their waits through it.
 - **Engines stay behind private interfaces.** `Region.picture` draws through `src/pixels.dart`, so the TUI never loads the image engine. `html` never loads `charset`: decoding belongs to the `Reader`.
 - **Big files follow seams.** These are data or state machines: `charset.dart` (tables), `entities.dart`, `html_parser.dart` (tokenizer, tree builder), the archive decoders. The rest are facades: `http.dart` (client, pool, `Response`, send and redirect, cache), `terminal.dart` (decoder, caps, widths), `tui/session.dart` (loop, input, prompts bridge).
 - **SDK-only helpers stay SDK-only.** `src/posix.dart` imports no package, so a module that needs a `chmod` (http's cache) pays nothing for it. Path-shaped helpers (`tmpPath`, `sortByRelative`) live in `src/tree.dart`, next to their only users.
@@ -69,7 +69,7 @@ Archives (zip, 7z, RAR, xz), AES, the HTTP client, the HTML5 parser with its sel
 | A4 | `cli.dart` `_parseCommand` is ~280 lines: options, positionals and sub-commands in one loop | open: split along those three seams (about 300 lines touched) |
 | A5 | `http.dart` is ~1,950 lines, five seams in one file | open: `_Cache` and `Response` to part files once a second change lands there |
 | A6 | `Console.ask` on a pipe reads through `Isolate.run(readLineSync)` per line: an abandoned prompt keeps the VM alive until a line arrives | open: needs a cancellable prompt (a `timeout:` on ask) |
-| A7 | `scrape` has no user in projects/ any more | open: the user's call (proposed by another session) |
+| A7 | `scrape` had no user in projects/ any more (plain loops + `Pool` read shorter) | done: removed |
 
 ## Migration order
 

@@ -39,12 +39,7 @@ abstract final class Yaml {
       throw ContentException('YAML$where nested too deep', text);
     } on y.YamlException catch (e) {
       final line = e.span == null ? '' : ' at line ${e.span!.start.line + 1}';
-      throw ContentException(
-        'invalid YAML$where$line: ${e.message}',
-        text,
-        e.span?.start.offset,
-        e,
-      );
+      throw ContentException('invalid YAML$where$line: ${e.message}', text, e.span?.start.offset, e);
     }
   }
 }

@@ -2,7 +2,7 @@ name: dart_toolkit
 description: >-
   Scripting in Dart without the boilerplate: HTTP, HTML, JSON, files, archives
   (zip, 7z, RAR), hashes, shells, CLIs, prompts, terminal UIs and Chrome.
-version: 0.0.4
+version: 0.0.5
 repository: https://github.com/feiluvnana/dart-toolkit
 topics: [cli, scripting, http, scraping, tui]
 platforms:

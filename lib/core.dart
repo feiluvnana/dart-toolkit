@@ -22,6 +22,11 @@
 /// - [ToolkitException]: the base of every failure the toolkit itself reports.
 /// - [ContentException]: a value the toolkit rejects (bad JSON, archive, image…).
 /// Everything else is private.
+///
+/// {@canonicalFor cookies.Cookies}
+/// {@canonicalFor rate.Rate}
+/// {@canonicalFor time.Spans}
+/// {@canonicalFor time.Times}
 library;
 
 // Origin's named parameters feed private fields, which initializing formals cannot do.
@@ -44,6 +49,8 @@ export 'src/time.dart' show Spans, Times;
 /// `chrome` reads `origin().name()`/`origin().path()` for upload staging.
 /// A plain in-memory reader carries an empty [Origin].
 final class Origin {
+  /// An origin with whatever the source knows; [Origin.new] with no
+  /// arguments is the empty one.
   const Origin({String? url, int? status, String? name, String? path})
     : _url = url,
       _status = status,
@@ -213,10 +220,19 @@ abstract mixin class Writer {
 /// Unit literals: `3.seconds`, `1.5.seconds`, `250.milliseconds`,
 /// `11.minutes`. Fractions round to the microsecond.
 extension Durations on num {
+  /// This many milliseconds.
   Duration get milliseconds => _us(Duration.microsecondsPerMillisecond);
+
+  /// This many seconds.
   Duration get seconds => _us(Duration.microsecondsPerSecond);
+
+  /// This many minutes.
   Duration get minutes => _us(Duration.microsecondsPerMinute);
+
+  /// This many hours.
   Duration get hours => _us(Duration.microsecondsPerHour);
+
+  /// This many days.
   Duration get days => _us(Duration.microsecondsPerDay);
 
   Duration _us(int per) => Duration(microseconds: this is int ? (this as int) * per : (this * per).round());

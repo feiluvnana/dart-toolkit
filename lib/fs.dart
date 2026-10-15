@@ -662,6 +662,7 @@ extension DirFuture on Future<Dir> {
   Future<Dir> dir(String name) async => (await this).dir(name);
   Future<List<Entry>> list({bool recursive = false, String? match}) async =>
       (await this).list(recursive: recursive, match: match);
+  Stream<File> watch() => Stream.fromFuture(this).asyncExpand((d) => d.watch());
   Future<Dir> create() async => (await this).create();
 }
 

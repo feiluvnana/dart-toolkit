@@ -45,7 +45,19 @@ import 'src/zip.dart' as zip;
 /// Formats [Archive.archive] writes. [Archive.unarchive] reads these and
 /// RAR (the magic bytes decide); RAR is read-only, its compressor being
 /// proprietary.
-enum ArchiveFormat { zip, tar, tgz, sevenZip }
+enum ArchiveFormat {
+  /// Deflate; WinZip AES-256 with a password. In memory, up to 4 GiB.
+  zip,
+
+  /// Plain tar, streamed.
+  tar,
+
+  /// Gzipped tar, streamed: the format for big trees.
+  tgz,
+
+  /// 7z (deflate; AES-256 with the names hidden, with a password). In memory.
+  sevenZip,
+}
 
 /// Entry point: archive files and folders, unarchive a stream, gzip on
 /// the way.

@@ -77,3 +77,17 @@ Five scripts on loopback servers: mirror (51 lines), watch+upload (50 -> 47), Tu
 | 5 | `attr('x')!` repeated | 3 | 0 | keep (nullable is honest) |
 | 6 | `chmod +x` through Shell | 1 | 1 | keep |
 | 7 | `Fs.temp` is a scope, not a handle | 1 | 0 | by design |
+
+## 9 DOCS (fd150840..442d7fb9)
+- dart doc: 10 warnings -> 0 ({@canonicalFor} in core, dartdoc_options.yaml for library-level re-export noise, one bad reference).
+- VISION.md: 16 stale facts fixed (counts: module table 9, signatures 4, prose 3); Dir.watch and Image.pixel Future mirrors added (rule 4).
+- Doc comments: one-liners where they carry information (Durations, Origin, Outcome fields, ArchiveFormat values); ~200 lint hits are Future mirrors documented at the extension.
+- CHANGELOG Unreleased: Fixed, Security and Performance lines for this run. README tour compiles; README fs row names watch().
+- Code changes the docs suggest (not done): Rule 2 public fields on Rate, Scrape and Color; Json.toJson undocumented. Left to the session that added them: Fs.scriptDir, Console.bar(keep:) and the leaked Bar.sized, the cookies.txt format, in VISION.
+
+## 10 RELEASE (95f6bcb1; dry run only)
+- `dart pub publish --dry-run`: 452 KB archive, one warning: a dirty tree (another session's uncommitted chrome/console/fs/http/cookies/resume/CHANGELOG edits).
+- pana 140/160 -> 150/160 after formatting posix.dart and yaml.dart; the 10 left are "no example/" (the user removed examples/ in favour of projects/: their call).
+- pubspec: description 148 chars, repository, topics, platforms linux/macos/windows (dart:io, no web), SDK ^3.13.0; constraints pass `pub downgrade`. LICENSE MIT. .pubignore keeps test/, tool/, projects/, prompts/ and docs/ out.
+- Version: pubspec says 0.0.4 with a 0.0.4 CHANGELOG section, but there is no v0.0.4 tag and pub.dev has no package; Unreleased holds breaking changes (cookies.txt format, Pool retries Exceptions only), so propose 0.0.5. The user picks.
+- Manual steps: commit or drop the other session's work, decide on scrape and example/, set the version, tag, `dart pub publish`, verified publisher.

@@ -289,6 +289,7 @@ extension ReaderFutureImage on Future<Reader> {
 extension ImageFuture on Future<Image> {
   Future<int> width() async => (await this).width();
   Future<int> height() async => (await this).height();
+  Future<(int, int, int)> pixel(int x, int y) async => (await this).pixel(x, y);
 
   /// Resize; large images resize on a worker isolate.
   Future<Image> resize({int? width, int? height}) async => _resizeAsync(await this, width: width, height: height);

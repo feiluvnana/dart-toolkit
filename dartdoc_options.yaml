@@ -1,0 +1,5 @@
+dartdoc:
+  # src libraries re-exported in part by several facades; the elements are
+  # pinned with {@canonicalFor} in core and tui.
+  ignore:
+    - ambiguous-reexport

@@ -171,6 +171,7 @@ sealed class Outcome<T, R> {
 final class Done<T, R> extends Outcome<T, R> {
   const Done._(super.item, this.value) : super._();
 
+  /// What the job returned.
   final R value;
 }
 
@@ -178,7 +179,10 @@ final class Done<T, R> extends Outcome<T, R> {
 final class Failed<T, R> extends Outcome<T, R> {
   const Failed._(super.item, this.error, this.stack) : super._();
 
+  /// What the last attempt threw.
   final Object error;
+
+  /// Where it was thrown.
   final StackTrace stack;
 }
 

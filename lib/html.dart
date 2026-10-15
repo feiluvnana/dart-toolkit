@@ -226,8 +226,8 @@ final class Elements extends Iterable<Element> {
 
   /// The first form among these elements, ready to post:
   /// `client.post(f.action, body: .form({...f.fields, 'user': u}))`. The
-  /// [action] resolves against the base (the page itself when absent), the
-  /// method is upper case (`GET` by default), and [fields] holds every named
+  /// `action` resolves against the base (the page itself when absent), the
+  /// `method` is upper case (`GET` by default), and `fields` holds every named
   /// control's current value, hidden ones included (unchecked boxes, buttons
   /// and file inputs left out). Null when there is no form.
   ({String action, String method, Map<String, String> fields})? form() {

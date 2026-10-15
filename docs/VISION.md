@@ -50,7 +50,7 @@ at its call sites than it adds to the surface.
 
 ## 2. Core: Reader, Writer, Pipe, Closeable
 
-`core.dart` is re-exported by every module except `cli` and `tui`, which never use it.
+`core.dart` is re-exported by every module except `cli` and `tui`, which use only `ToolkitException` from it.
 
 ```dart
 abstract mixin class Reader {                     // bytes you can read; implement stream()
@@ -79,7 +79,7 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 | ---------------------------------------- | :----: | :----: | :--: | :-------: |
 | `Response` (http)                              |   ✓    |        |      |    ✓     |
 | `File` (fs)                              |   ✓    |   ✓    |      |           |
-| `Output` (shell), `Download` (chrome)    |   ✓    |        |      |           |
+| `Output` (shell), `Download` `Capture` (chrome), `Request` (http) |   ✓    |        |      |           |
 | `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` | ✓ |  |  |   |
 | `Archive.unarchive(dir)`                    |        |   ✓    |      |           |
 | `Hasher`                                 |        |   ✓    |  ✓   |           |
@@ -113,7 +113,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | -------------------------------------- | -------------------------------------- | --------------------------------------------- |
 | content as text / bytes                | `text()` / `bytes()`                   | every `Reader`, `Element(s)`, `Page`          |
 | bytes → value                          | `html()` `json()` `image()`            | readings on `Reader`                          |
-| text → value / value → text or bytes   | `parse` / `encode`                     | `Html`, `Json`, `Command` / `Json`, `Image`   |
+| text → value / value → text or bytes   | `parse` / `encode`                     | `Html`, `Json`, `Csv`, `Yaml`, `Cookies` / `Json`, `Csv`, `Cookies`, `Image` |
 | query a tree / typed read, null if not | `$` / `value<T>()`, `run<T>()`        | `Elements`, `Element`, `Json` / `Json`, `Page` |
 | an attribute / every match's attribute | `attr` / `attrs`                       | `Element(s)`                                  |
 | a tree without some parts              | `not(selector)`                    | `Element(s)`                                  |
@@ -123,7 +123,6 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | a file name / a size in bytes          | `name()` / `size()`                    | `Entry`, `Download`, `Response` / `File`, `Response` |
 | run a program, an app, a CLI / jobs    | `run` / `map`, `settle`                | `Shell`, `Tui`, `Command` / `Pool`            |
 | download to a file (skip, resume)      | `get(u) \| … > file` with `resume: true` | `Client`                                     |
-| a unit of work: queue more / give back | `add` / `emit`                         | `Visit` (scrape)                              |
 | run a body with a resource, then free  | `temp((dir) …)` / `lock(() …)`         | `Fs` / `File`                                 |
 | a variant with other settings          | `copy(...)`                            | `Client`                                      |
 | a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen` |
@@ -147,27 +146,27 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                     | Engine                |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Closeable` `Origin` · `Cookies` `parse` `encode` `[]` `header` `set` · `Rate` `wait` · `Durations` (`3.seconds`)      | in-house              |
+| `core`    | `Reader` `Writer` `Pipe` `Closeable` `Origin` · `Cookies` `parse` `encode` `[]` `header` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException`      | in-house              |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `attr` `attrs` `json` `table` `form` · `Element` `$` `not` `text` `attr` `parent` | in-house HTML5 parser and selectors |
-| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `stream` | `dart:io`             |
+| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`             |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header`                    | `package:puppeteer`   |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` · `Json` `$` `[]` `value` `or` `text` `max` `min` `asList` `asMap`                                     | `dart:convert`        |
 | `csv`     | `Csv.parse` `records` `encode` · `Reader.csv`                                                                                                     | in-house              |
-| `scrape`  | `Scrape` `run` · `Visit` `item` `add` `emit`                                                                                                     | in-house              |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                       | `package:yaml`        |
 | `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `temp` `home` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create` | `dart:io`, `path` |
-| `shell`   | `Shell.run` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
+| `shell`   | `Shell.run` `which` `filter` `open` · `Output` `code` `ok` `err`                                                                                   | `dart:io`             |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`) · `Hasher` `add` `addBytes` `hex` `of`                                                                                        | `package:crypto`      |
 | `pool`    | `Pool.map` `settle` · `Outcome` `Done` `Failed` · `values` `failures`                                                                         | `dart:isolate`      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
-| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` `clear` `accent` · `Bar` `tick` `setTotal`                                                                                    | in-house              |
-| `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below) · `Color` · `Style` | in-house              |
-| `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `pixel` `resize` `crop` `encode` · `ImageFormat` · `Region.picture`                            | `package:image`       |
+| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` `clear` `accent` · `Bar` `tick` `update` `setTotal`                                                                                    | in-house              |
+| `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style` | in-house              |
+| `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `pixel` `resize` `crop` `encode` · `ImageFormat`                            | `package:image`       |
 
 A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
 for `Elements` and `json` for the `run<T>` coercion rules, and `html`, which imports `json` for
-`Elements.json()` (embedded data). `console` and `tui`
+`Elements.json()` (embedded data), and `yaml`, which imports and re-exports `json` (its `parse`
+returns a `Json`). `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
 ### 4.1 html
@@ -229,7 +228,7 @@ abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, String? cache, Duration ttl = const Duration(hours: 1), List<String> insecure = const [],
-      Duration idle = const Duration(milliseconds: 100), int connections = 6});
+      Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false});
   static Client pool(List<Client> members);      // also a Client
 }
 sealed class Client implements Closeable {
@@ -285,9 +284,9 @@ final class Response with Reader implements Closeable {
   A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
   keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
   synchronous block unless such a pipeline claims it, so awaiting it works as always.
-- **`Http.serve(handler)`** answers loopback requests until `close()`: `Request` (`method`
+- **`Http.serve(handler, port:, host:)`** answers loopback requests until `close()`: `Request` (`method`
   `path` `query(name)` `header`, a `Reader` of the body) → `Reply.text` `.json` `.stream`
-  (content-type from a file's name) `.redirect` `.status`. A handler error is a 500, logged.
+  (content-type from a file's name, or `type:`) `.redirect` `.status`. A handler error is a 500, logged.
   It is meant for a CLI OAuth login, a webhook, or a preview; `switch (r.path())` is the router.
 - `cache: '.cache'` answers a GET within `ttl` from disk (no network, no `Rate` slot), keyed by
   URL and the request headers the answer `Vary`s on: for developing a scraper.
@@ -386,7 +385,7 @@ await page.cookie('sessionid', timeout: 5.minutes);           // a hand login fi
 ```dart
 final class Json extends Iterable<Json> {
   static Json parse(String json);
-  static Json of(Object? value);                  // wrap a value you already hold
+  static Json of(Object? decoded);                  // wrap a value you already hold
   static String encode(Object? value, {bool pretty = false});
   Json $(String path);  Json operator [](int i);
   T? value<T>();  T or<T>(T fallback);           // typed read, null / the fallback when absent or mistyped
@@ -594,7 +593,7 @@ final class Command {
   Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure (also returned)
 }
 final class Context { T call<T>(Param<T> param);  List<String> rest();  String usage(); }
-final class UsageException implements Exception { const UsageException(String message); }
+final class UsageException extends ToolkitException { const UsageException(String message); }
 ```
 
 - **The type comes from the definition.** `Opt<int>('port', …, or: 8080)` reads as `int`, and
@@ -652,7 +651,7 @@ abstract final class Console {
   static void copy(String text);                   // OSC 52; through the app inside Tui.run
   static void clear();
 }
-final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar setTotal(int? total); }
+final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total);  Bar setTotal(int? total); }
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
@@ -866,44 +865,7 @@ extension on Reader { Future<List<List<String>>> csv({String sep = ','}); }
 - RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM. An
   unterminated quote is a `ContentException`. `encode` writes CRLF and quotes only what needs it.
 
-### 4.15 scrape
-
-```dart
-final class Scrape<T, R> {
-  Scrape({int limit = 4, int retries = 0, Rate? rate, Object? Function(T item)? key,
-      void Function(int done, int total)? onProgress});
-  Stream<R> run(Iterable<T> seeds, {required FutureOr<void> Function(Visit<T, R> visit) onItem,
-      FutureOr<void> Function(Visit<T, R> visit, Object error)? onError});
-}
-final class Visit<T, R> { T get item;  bool add(T item);  void emit(R value); }
-```
-
-- Items are the script's own sealed type (or records); `onItem` switches on `visit.item`.
-  `add` queues more work and returns whether it was new; `emit` streams a result. Pagination is
-  "queue the next page", fan-out is "queue every link".
-- `key:` is the deduplicator (default: the item's `==`). An item already queued is dropped, so
-  link cycles end, and `if (fresh.isNotEmpty) v.add(Listing(page + 1))` stops at a page with
-  nothing new.
-- `limit` handlers at once, `rate` paces starts, and `retries` re-runs with the jittered backoff.
-  Then `onError(visit, error)` gets the same `Visit`, so it can queue a replacement or emit a
-  placeholder. Without `onError`, the first failure stops the run and is rethrown from the stream.
-- `onProgress(done, total)` (the total grows): `Console.bar(null).update`. The run starts on
-  listen; pausing stops new items; cancelling ends it. `scrape` imports no http: a handler uses a
-  `Client`, a `Page` or `Shell` as it likes.
-
-```dart
-final albums = await Scrape<Job, Album>(key: jobKey, onProgress: bar.update).run([Listing(1)], onItem: (v) async {
-  switch (v.item) {
-    case Listing(:final page):
-      final fresh = [for (final l in await links(page)) if (v.add(Detail(l))) l];
-      if (fresh.isNotEmpty) v.add(Listing(page + 1));
-    case Detail(:final url):
-      v.emit(readAlbum(await shop.get(url).html(), url));
-  }
-}, onError: (v, e) => Console.log('✗ ${v.item}: $e')).toList();
-```
-
-### 4.16 yaml
+### 4.15 yaml
 
 ```dart
 abstract final class Yaml { static Json parse(String text, {String? from}); }
@@ -955,7 +917,7 @@ surfaces from its `>`/`to`, after cleanup. An error in a chain surfaces at its s
 Native code and codegen; test seams in the public API; sync twins and aliases; fan-out to several
 writers; an option-object for http settings (named parameters plus `copy()`); string commands for
 `Shell.run`; auto-sanitising `Dir.file`; stealth/anti-bot evasion, HTTP/2, brotli, a crawler,
-scheduler or job queue; file watching; browser interception beyond `block` and `responses`, frames
+scheduler or job queue; browser interception beyond `block` and `responses`, frames
 and `hover`; colours outside the TUI; a TUI widget tree (widget state lives in
 `Pick`/`Field`/`Scroll`); terminal images beyond half-blocks (Sixel, kitty), `ctrl+r` history search
 and vim mode in `input`; HMAC; torrents. Each comes back only when a real script needs it.

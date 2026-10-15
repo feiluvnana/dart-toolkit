@@ -970,8 +970,8 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
     if (!_piped && total != null && total > 0 && _done >= total) unawaited(close());
   }
 
-  /// Show [done] of [total] (a total that grows as work is found:
-  /// `Scrape(onProgress: bar.update)`). Closes at the total like [tick].
+  /// Show [done] of [total], for a total that grows as work is found
+  /// (`bar.update(done, queued)`). Closes at the total like [tick].
   Bar update(int done, int? total) {
     if (total != _total) setTotal(total);
     return tick(done - _done);

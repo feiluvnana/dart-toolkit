@@ -1,9 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.0.5
 
 **Added**
-- `scrape`: new module: `Scrape(limit:, retries:, rate:, key:, onProgress:).run(seeds, onItem:, onError:)`, a typed work queue: the handler switches on `visit.item`, `visit.add` queues more (deduplicated by `key:`; returns whether it was new), `visit.emit` streams results; `onError` gets the same `Visit`, so it can queue a replacement.
 - `yaml`: new module: `Yaml.parse`, `reader.yaml(or:)` → the same `Json` reading API (package:yaml).
 - `fs`: `Fs.temp((dir) async {…})` (a scoped temp folder, deleted after, Ctrl-C included), `Fs.home()`, `file.lock(() async {…}, wait:)` (one run at a time across processes), `Entry.modified()`.
 - `shell`: `Shell.run(timeout:)` kills the child and throws a `TimeoutException` naming the command; `Shell.which(program)`.
@@ -27,6 +26,20 @@
 - `cli`: a handler failure prints the toolkit error's message (not `FormatException: …`/`HttpException: …, uri = …`), and a plain `Exception('…')` without its prefix.
 - `json`: an escaped `\*` is a literal key again, not a wildcard.
 - `chrome`: `Page.cookies()` sends `name=value` as the browser does; values with `=` or `"` were quoted into an invalid header.
+- `shell`: a `timeout:`, a cancelled `filter` or a SIGTERM to the script kills the child's whole process tree, and a timed-out run no longer keeps the script alive.
+- `pool`: a worker isolate that dies fails its item instead of hanging `map`/`settle`; `retries:` re-runs Exceptions only; fail-fast ends the other lanes' rate waits.
+- `tui`: `exit()` inside `Tui.run` still restores the terminal; a slow bracketed paste never turns into keystrokes; modifiers bind in any order, super is `meta+`, Linux console F1–F5 decode; popup titles lay CJK over two cells.
+- `http`: resume checks `Content-Range`; `Http.pool` waits out its members' bench; a server `Retry-After` is capped at 5 minutes.
+- `fs`: `file.lock` excludes holders in the same process too.
+- `archive`: zip and 7z refuse data over 4 GiB instead of writing it short; `archive()` refuses FIFOs and devices; a damaged tar mode is no mode.
+- `console`: a narrow terminal keeps the bar's rate; `Console.table` ignores colour codes and tabs in widths.
+
+**Security**
+- `http`: the `csrf:` header goes only where its cookie would; errors and the `serve` log redact URL credentials and tokens; `cache:` keys entries by credentials, skips `Range`, stores no `set-cookie` and creates its folder 0700; the jar refuses `Domain=co.uk`-style registries and `Secure` cookies over http.
+- `archive`: unpacking stages in a 0700 folder with file modes applied before the merge; a target that is a link is resolved first; zip members that share bytes (overlap bombs) and 7z keys asking for more than 2^24 rounds are refused.
+- `yaml`: alias bombs (over 1,000,000 values) and nesting over 1,000 levels are a `ContentException`; `json`: `**`, `==` and `hashCode` survive any depth.
+- `tui`: the status row and popups drop C1 controls; `cli`: a bad value from an environment variable is never echoed.
+- `image`: `resize` refuses targets over 10^8 pixels and never returns a 0-pixel side.
 
 **Changed**
 - `cli`: `Command.run` sets `exitCode` itself (64 usage, 1 failure; success leaves it alone), so scripts write `await cmd.run(args)`.
@@ -44,6 +57,8 @@
 - `image`: webp/ico refusals throw from `encode()`.
 
 **Performance**
+- `html`: deep and long documents parse and query in linear time (20,000 nested divs 4.9 s → 51 ms; `section div div div` on 1,000 nested divs 406 s → 5 ms; 52 real pages × 27 selectors 55.9 s → 0.9 s).
+- `fs`: `Dir.list` 483 → 20 ms on 20,000 entries.
 - `html`: an in-house HTML5 parser and selector engine replace package:html and csslib: startup ~770 → ~235 ms, chrome ~1750 → ~1300 ms; parsing and queries never recurse, so 20,000-deep pages work. A corpus test holds the tree to package:html's on 50 real pages.
 - 7z with 20k files 150 → 25 ms; CRC-32 4× (slicing-by-8); an archive handed over in one chunk 538 → 60 ms and −500 MB; `Region.write` of 80k chars 6.7 s → 65 ms; streamed markdown 4×; `$('div').$('a')` on nested roots 144 → 1 ms; `Json.$('key')` 5×; single-byte charsets 3.6×.
 

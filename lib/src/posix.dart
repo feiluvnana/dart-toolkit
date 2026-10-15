@@ -118,7 +118,6 @@ Future<bool> copyTreeWithCp(String from, String to) async {
   }
 }
 
-
 /// True for a name [tmpPath] made: `.<base>.tmp<pid>.<µs>.<rand>`.
 bool isTmpName(String name) => _tmpName.hasMatch(name);
 

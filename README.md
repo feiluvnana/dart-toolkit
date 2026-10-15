@@ -4,7 +4,7 @@ Scripting in Dart without the boilerplate: HTTP, HTML, files, archives, shells, 
 
 ```yaml
 dependencies:
-  dart_toolkit: ^0.0.4
+  dart_toolkit: ^0.0.5
 ```
 
 ## Tour
@@ -43,7 +43,6 @@ Future<void> main() async {
 |---|---|---|
 | `core` | the shared model | `Reader` (`bytes` `text` `lines`), `Writer`, `Pipe`, `Closeable`, `Origin`, `Cookies`, `Rate`, `3.seconds`, `now.format(…)`, `d.human()` |
 | `http` | requests | `Http.client(base:, headers:, cookies:, rate:, resume:, …)`, `get(u) \| bar > file` that skips and resumes, safe retries, `cache:`, `Http.pool`, `Http.serve` |
-| `scrape` | crawls and batches | `Scrape(limit:, key:).run(seeds, onItem: (v) { switch (v.item) … }, onError:)`: queue pages and links, emit results |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `json()` `table()` `form()`, `text()` that reads like a page |
 | `json` | reading JSON | dotted paths with `*`, `**`, `a\|b`, typed `value<T>()`, `text()`, `max`/`min` |
 | `csv` | CSV | RFC 4180 `parse`, `records`, `encode`, `reader.csv()` |
