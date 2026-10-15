@@ -987,6 +987,20 @@ void clientTests() {
             r.response
               ..contentLength = 1000
               ..add(file);
+          case '/versioned': // version 2 of the file now; If-Range must name it to resume
+            final body = utf8.encode('version two!');
+            final range = r.headers.value('range');
+            r.response.headers.set('etag', '"v2"');
+            final ifRange = r.headers.value('if-range');
+            if (range != null && (ifRange == null || ifRange == '"v2"')) {
+              final from = int.parse(range.substring(6, range.length - 1));
+              r.response
+                ..statusCode = 206
+                ..headers.set('content-range', 'bytes $from-${body.length - 1}/${body.length}')
+                ..add(body.sublist(from));
+            } else {
+              r.response.add(body);
+            }
           case '/wrongrange': // answers any Range with the whole file as a 206
             if (r.headers.value('range') != null) {
               r.response
@@ -1147,6 +1161,20 @@ Future<void> main() async {
       await (c.get('$url/norange') > other);
       expect(await File(other.path).readAsBytes(), body);
       expect(hits['/norange'], 1); // its 200 is the whole body, not fetched again
+
+      // A .part of an older version (its tag says v1) restarts; one of v2 resumes.
+      final v = _Path('${dir.path}/v.bin');
+      await File('${v.path}.part').writeAsString('VERSION'); // version one's bytes
+      await File('${v.path}.part.tag').writeAsString('"v1"');
+      await (c.get('$url/versioned') > v);
+      expect(await File(v.path).readAsString(), 'version two!');
+      expect(seen['range'], 'bytes=7-');
+      expect(File('${v.path}.part.tag').existsSync(), isFalse);
+      await File(v.path).delete();
+      await File('${v.path}.part').writeAsString('version');
+      await File('${v.path}.part.tag').writeAsString('"v2"');
+      await (c.get('$url/versioned') > v);
+      expect(await File(v.path).readAsString(), 'version two!');
 
       // A 206 for another range restarts instead of splicing it on.
       final wrong = _Path('${dir.path}/w.bin');

@@ -8,12 +8,14 @@ import 'package:test/test.dart';
 List<int> get tinyPng =>
     base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
 
-/// [tinyPng] with its IHDR claiming 15000x15000 (checksum fixed).
-Uint8List _bombPng() {
+/// [tinyPng] with its IHDR claiming [side]x[side] at [bits] per sample
+/// (checksum fixed).
+Uint8List _bombPng({int side = 15000, int bits = 8}) {
   final bomb = Uint8List.fromList(tinyPng);
   final data = bomb.buffer.asByteData()
-    ..setUint32(16, 15000)
-    ..setUint32(20, 15000);
+    ..setUint32(16, side)
+    ..setUint32(20, side)
+    ..setUint8(24, bits);
   var crc = 0xFFFFFFFF; // IHDR checksum over type + data
   for (var i = 12; i < 29; i++) {
     crc ^= bomb[i];
@@ -69,6 +71,19 @@ void main() {
       final junk = Uint8List(2 << 20)..setRange(0, 8, tinyPng);
       expect(() => Image.decode(junk), throwsFormatException);
       await expectLater(_Mem(junk).image(), throwsFormatException);
+    });
+
+    test('the decode budget is bytes: a 16-bit image gets half the pixels', () {
+      final big16 = _bombPng(side: 9000, bits: 16); // 81 Mpx x 8 bytes: over 512 MiB
+      expect(
+        () => Image.decode(big16),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))),
+      );
+      final big8 = _bombPng(side: 9000); // 81 Mpx x 4 bytes: under it, so it gets to decode (and fails as junk)
+      expect(
+        () => Image.decode(big8),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', isNot(contains('too large')))),
+      );
     });
 
     test('M12: a huge declared size is refused before decoding', () async {

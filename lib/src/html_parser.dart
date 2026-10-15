@@ -272,9 +272,9 @@ final class _Tokenizer {
   void _rawText({required bool decode}) {
     final n = s.length;
     var j = i;
-    var end = -1;
+    var end = rawEnd == 'script' ? _scriptEnd() : -1;
     final len = rawEnd.length;
-    while (true) {
+    while (rawEnd != 'script') {
       j = s.indexOf('</', j);
       if (j < 0 || j + 2 + len > n) break;
       if (s.substring(j + 2, j + 2 + len).toLowerCase() == rawEnd) {
@@ -296,6 +296,38 @@ final class _Tokenizer {
       i += 2;
       _tag(end: true);
     }
+  }
+
+  /// Where script data ends: the `</script` that closes it, after the
+  /// spec's escaped states (inside `<!-- … -->` a `<script>` opens a
+  /// double-escaped run whose `</script>` does not end the element), or -1.
+  int _scriptEnd() {
+    final n = s.length;
+    var escaped = false, double = false;
+    bool tagAt(int at, String prefix) {
+      final k = at + prefix.length + 6;
+      if (k > n || s.substring(at, k).toLowerCase() != '${prefix}script') return false;
+      return k == n || _isSpace(s.codeUnitAt(k)) || s.codeUnitAt(k) == 0x2F || s.codeUnitAt(k) == 0x3E;
+    }
+
+    for (var j = i; j < n; j++) {
+      final c = s.codeUnitAt(j);
+      if (c == 0x3C) {
+        if (!escaped && s.startsWith('<!--', j)) {
+          escaped = true;
+          j += 3;
+        } else if (tagAt(j, '</')) {
+          if (!double) return j;
+          double = false;
+        } else if (escaped && !double && tagAt(j, '<')) {
+          double = true;
+        }
+      } else if (c == 0x2D && escaped && s.startsWith('-->', j)) {
+        escaped = double = false;
+        j += 2;
+      }
+    }
+    return -1;
   }
 
   /// A character reference at `&` (or a literal `&`).
@@ -656,7 +688,7 @@ final class _Builder {
           _insertHead({});
           continue;
         case _Phase.inHead:
-          if (_inHeadTemplate) return _inBody(name, attrs, selfClosing);
+          if (_inHeadTemplate) return _bodyStart(name, attrs, selfClosing);
           if (name == 'html') return _mergeAttrs(html, attrs);
           if (name == 'head') return;
           if (_headish.contains(name) || name == 'noscript') return _headTag(name, attrs);
@@ -761,6 +793,17 @@ final class _Builder {
       _foster = true;
       _inBody(name, attrs, selfClosing);
       _foster = false;
+      return;
+    }
+    // A template's content takes table parts as they come (the spec's
+    // template insertion modes): a row, a cell, a section or a caption.
+    if (current.localName == 'template' && current.space == Space.html && _templateParts.contains(name)) {
+      _insert(name, attrs);
+      if (name == 'col') {
+        open.removeLast();
+      } else if (name == 'td' || name == 'th' || name == 'caption') {
+        formatting.add(null);
+      }
       return;
     }
     if (_cellClosers.contains(name)) {
@@ -1263,6 +1306,8 @@ final class _Builder {
   static const _buttonScope = {..._scopeHtml, 'button'};
   static const _listScope = {..._scopeHtml, 'ol', 'ul'};
   static const _tableScope = {'html', 'table', 'template'};
+  static const _tableish = ['table', 'tbody', 'thead', 'tfoot', 'tr', 'colgroup'];
+  static const _templateParts = {'caption', 'colgroup', 'col', 'tbody', 'tfoot', 'thead', 'tr', 'td', 'th'};
 
   /// The nearest open element named in [names] before a [boundary]; null
   /// when it is not in scope.
@@ -1310,7 +1355,8 @@ final class _Builder {
   /// it: the nearest `tr`, section (`tbody`…), `colgroup` or `table`; null
   /// when a cell, a caption or the body comes first (body rules).
   String? _tableMode() {
-    if (!open.has('table')) return null; // every tr, tbody, … or colgroup counted here sits in one
+    // Nothing table-like open (a template may hold rows without a table).
+    if (!_tableish.any(open.has)) return null;
     for (var k = open.length - 1; k >= 0; k--) {
       final e = open[k];
       if (e.space != Space.html) continue;

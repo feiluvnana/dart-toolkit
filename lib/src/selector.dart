@@ -343,22 +343,29 @@ final class _Parser {
     if (done) throw error('unterminated attribute selector');
     final value = _c == 0x22 || _c == 0x27 ? string() : ident();
     skipSpace();
-    var fold = false;
+    // HTML compares some attribute values case-blind (`[type=CHECKBOX]`)
+    // unless the selector says `s`; `i` folds any attribute.
+    bool? fold;
     if (!done && (_c | 0x20) == 0x69) {
       fold = true;
       i++;
       skipSpace();
     } else if (!done && (_c | 0x20) == 0x73) {
+      fold = false;
       i++;
       skipSpace();
     }
+    final htmlFold = fold == null && _caseBlind.contains(name);
     if (done || _c != 0x5D) throw error('unterminated attribute selector');
     i++;
-    final want = fold ? value.toLowerCase() : value;
+    final always = fold ?? false;
+    final lower = value.toLowerCase();
     return (e) {
       var v = _attr(e, name);
       if (v == null) return false;
-      if (fold) v = v.toLowerCase();
+      final blind = always || htmlFold && e.space == Space.html;
+      if (blind) v = v.toLowerCase();
+      final want = blind ? lower : value;
       return switch (op) {
         '=' => v == want,
         '~' => _hasWord(v, want),
@@ -369,6 +376,16 @@ final class _Parser {
       };
     };
   }
+
+  /// The attributes whose values HTML matches case-blind in selectors
+  /// (HTML Standard, "case-sensitivity of selectors").
+  static const _caseBlind = {
+    'accept', 'accept-charset', 'align', 'alink', 'axis', 'bgcolor', 'charset', 'checked', 'clear', //
+    'codetype', 'color', 'compact', 'declare', 'defer', 'dir', 'direction', 'disabled', 'enctype', 'face',
+    'frame', 'hreflang', 'http-equiv', 'lang', 'language', 'link', 'media', 'method', 'multiple', 'nohref',
+    'noresize', 'noshade', 'nowrap', 'readonly', 'rel', 'rev', 'rules', 'scope', 'scrolling', 'selected',
+    'shape', 'target', 'text', 'type', 'valign', 'valuetype', 'vlink',
+  };
 
   static String? _attr(Element e, String name) {
     final v = e.attributes[name];

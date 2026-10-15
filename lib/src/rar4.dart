@@ -132,7 +132,7 @@ RarEntry _file4(
       final k = _Key4.derive(password!, salt ?? Uint8List(0));
       input = k.aes.cbcDecrypt(Uint8List.sublistView(packed, 0, packed.length & ~15), k.iv);
     }
-    return (input, method, size, version);
+    return (input, method, size, version, 0x10000 << (flags >> 5 & 7)); // 64 KiB << N dictionary
   });
   return RarEntry(name, false, mode, () {
     Uint8List data;
@@ -335,13 +335,13 @@ final class _Sha1 {
 /// One RAR4 solid run: members decode in order through one window, each
 /// kept only until it is taken (as [_Run]).
 final class _Run4 {
-  final _inputs = <(Uint8List, int, int, int) Function()>[];
+  final _inputs = <(Uint8List, int, int, int, int) Function()>[];
   final _ready = <int, Uint8List>{};
   final _taken = <int>{};
   var _next = 0;
   _Unpack3? _unpack;
 
-  int add((Uint8List, int, int, int) Function() input) {
+  int add((Uint8List, int, int, int, int) Function() input) {
     _inputs.add(input);
     return _inputs.length - 1;
   }
@@ -355,8 +355,8 @@ final class _Run4 {
     }
     while (true) {
       final i = _next++;
-      final (packed, method, size, version) = _inputs[i]();
-      final u = _unpack ??= _Unpack3();
+      final (packed, method, size, version, dict) = _inputs[i]();
+      final u = (_unpack ??= _Unpack3())..keep(dict);
       final Uint8List bytes;
       if (method == 0x30) {
         if (size < 0 || packed.length < size) _bad('stored member is short');
@@ -470,6 +470,17 @@ final class _Unpack3 {
       n *= 2;
     }
     _window = Uint8List(n)..setRange(0, _pos, _window);
+  }
+
+  /// Drop all but the last [dict] bytes of the window between members (see
+  /// the RAR5 decoder): a long solid run holds one dictionary, not every
+  /// byte so far.
+  void keep(int dict) {
+    if (_pos <= dict * 2 || _pos <= 1 << 20) return;
+    final drop = _pos - dict;
+    _window.setRange(0, dict, _window, drop);
+    _pos = dict;
+    if (_window.length > dict * 4) _window = Uint8List.fromList(Uint8List.sublistView(_window, 0, _pos));
   }
 
   void append(Uint8List bytes) {

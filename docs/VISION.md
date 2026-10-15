@@ -158,7 +158,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                         | `dart:io` (in-house zip, tar) |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`) · `Hasher` `add` `addBytes` `hex` `of`                                                                                        | `package:crypto`      |
 | `pool`    | `Pool.map` `settle` · `Outcome` `Done` `Failed` · `values` `failures`                                                                         | `dart:isolate`      |
-| `cli`     | `Flag` `Opt` `Multi` `Arg` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `rest` `usage` · `UsageException`                                  | in-house              |
+| `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                 | in-house              |
 | `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` `clear` `accent` · `Bar` `tick` `update` `setTotal`                                                                                    | in-house              |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style` | in-house              |
 | `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `pixel` `resize` `crop` `encode` · `ImageFormat`                            | `package:image`       |
@@ -588,12 +588,13 @@ final class Flag extends Param<bool> { Flag(String name, String help, {String? s
 final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse, List<T>? values}); } // env: the variable read when the flag is absent
 final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse, List<T>? values}); }
 final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse, List<T>? values}); }
+final class Rest<T> extends Param<List<T>> { Rest(String name, String help, {bool required = false, T Function(String)? parse, List<T>? values}); } // the positionals after the Args, declared last
 final class Command {
   Command(String name, String help, {List<Param<Object?>> params = const [], List<Command> commands = const [],
       FutureOr<void> Function(Context context)? handler, List<String> aliases = const [], String? dotenv});
   Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure (also returned)
 }
-final class Context { T call<T>(Param<T> param);  List<String> rest();  String usage(); }
+final class Context { T call<T>(Param<T> param);  String usage(); }
 final class UsageException extends ToolkitException { const UsageException(String message); }
 ```
 
@@ -602,8 +603,9 @@ final class UsageException extends ToolkitException { const UsageException(Strin
   `ArgumentError`. Built-in `T`s are `String`, `int`, `double`, `num`, `Duration`, `DateTime` and
   `Uri`; anything else needs `parse:`. `values: Section.values` takes one of a fixed set, by
   (enum) name, case-insensitive; usage shows `<photos|reels>` and a typo suggests the closest.
-  Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`.
-  The positionals left after the `Arg`s are `context.rest()`.
+  Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`; with `values:` one occurrence may list several, comma-separated.
+  The positionals after the `Arg`s go to a `Rest<T>` (`<file>...` in usage, `List<T>`); one that
+  nothing takes is an error.
 - `dotenv: '.env'` loads `KEY=VALUE` lines (`#` comments, `export `, quotes) before parsing, so an
   `Opt(env:)` sees them; the real environment always wins, and a missing file is skipped.
 - **Syntax:**

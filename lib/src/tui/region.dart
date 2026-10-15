@@ -382,18 +382,17 @@ final class Region {
         _put(row, col++, '�', 1, style, link);
         continue;
       }
-      if (term.isZeroWidth(rune)) continue;
-      final cluster = StringBuffer()..writeCharCode(rune);
-      while (i < runes.length && term.isZeroWidth(runes[i])) {
-        cluster.writeCharCode(runes[i++]);
-      }
-      final w = term.cellWidth(rune);
+      // One grapheme cluster per cell run: marks, ZWJ sequences, VS16.
+      final (w, next) = term.cluster(runes, at);
+      i = next;
+      if (w == 0) continue;
+      final cluster = String.fromCharCodes(runes, at, next);
       if (col + w > end) {
         _put(row, col++, ' ', 1, style, link);
         i = at;
         break;
       }
-      _put(row, col, cluster.toString(), w, style, link);
+      _put(row, col, cluster, w, style, link);
       col += w;
     }
     _used = i;

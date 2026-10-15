@@ -144,6 +144,9 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   final isSolid = info & 0x40 != 0;
   final method = info >> 7 & 7;
   if (version > 1) throw ContentException('unsupported RAR compression version $version: $name');
+  // 128 KiB << N, plus N/32 of that again in RAR7's extended format.
+  final base = 0x20000 << (info >> 10 & 0x1F);
+  final dict = version == 1 ? base + base ~/ 32 * (info >> 15 & 0x1F) : base;
   final packed = Uint8List.sublistView(b, h.dataStart, h.dataEnd);
   final k = key;
   // Members decode in archive order, so a solid run's window is ready by
@@ -151,7 +154,7 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   final run = isSolid ? solid.current : solid.start();
   final index = run.add(() {
     final plain = k == null ? packed : Aes(k.key).cbcDecrypt(packed, iv);
-    return (plain, method, size, version);
+    return (plain, method, size, version, dict);
   });
   if (isLink) return RarEntry(name, false, mode, () => Uint8List(0), isLink: true);
   final hash = blake2;
@@ -183,13 +186,13 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
 /// A member's bytes are kept only until it takes them; asking again
 /// decodes the run afresh.
 final class _Run {
-  final _inputs = <(Uint8List, int, int, int) Function()>[];
+  final _inputs = <(Uint8List, int, int, int, int) Function()>[];
   final _ready = <int, Uint8List>{}; // decoded, not yet taken
   final _taken = <int>{};
   var _next = 0;
   _Unpack5? _unpack;
 
-  int add((Uint8List, int, int, int) Function() input) {
+  int add((Uint8List, int, int, int, int) Function() input) {
     _inputs.add(input);
     return _inputs.length - 1;
   }
@@ -203,8 +206,8 @@ final class _Run {
     }
     while (true) {
       final i = _next++;
-      final (packed, method, size, version) = _inputs[i]();
-      final u = _unpack ??= _Unpack5(extended: version == 1);
+      final (packed, method, size, version, dict) = _inputs[i]();
+      final u = (_unpack ??= _Unpack5(extended: version == 1))..keep(dict);
       final Uint8List bytes;
       if (method == 0) {
         // Stored members still join the window for the ones after them.
@@ -519,6 +522,17 @@ final class _Unpack5 {
       n *= 2;
     }
     _window = Uint8List(n)..setRange(0, _pos, _window);
+  }
+
+  /// Drop all but the last [dict] bytes of the window between members: no
+  /// back-reference reaches further, so a long solid run holds one
+  /// dictionary (plus the member being decoded), not every byte so far.
+  void keep(int dict) {
+    if (_pos <= dict * 2 || _pos <= 1 << 20) return;
+    final drop = _pos - dict;
+    _window.setRange(0, dict, _window, drop);
+    _pos = dict;
+    if (_window.length > dict * 4) _window = Uint8List.fromList(Uint8List.sublistView(_window, 0, _pos));
   }
 
   /// Stored members of a solid run still join the window.

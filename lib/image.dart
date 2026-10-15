@@ -34,8 +34,16 @@ export 'core.dart';
 /// [Isolate.run] instead of blocking the event loop.
 const _isolatePixels = 1000000;
 
-/// Larger declared sizes are refused before decoding (decompression bomb).
-const _maxPixels = 100000000;
+/// Larger declared sizes are refused before decoding (decompression bomb):
+/// the decoded pixels may take at most this many bytes, so a 16-bit image
+/// gets half the pixels of an 8-bit one.
+const _maxBytes = 512 << 20;
+
+/// Pixels an image of [bytesPerPixel] may have within [_maxBytes].
+int _maxPixelsAt(int bytesPerPixel) => _maxBytes ~/ bytesPerPixel;
+
+/// The output cap for resize (8-bit RGBA).
+final _maxPixels = _maxPixelsAt(4);
 
 /// Image formats: [Image.sniff] names one, [Image.encode] writes all but
 /// [webp] (decoded, never encoded). `.name` is the usual file extension.
@@ -95,8 +103,8 @@ final class Image implements Pixels {
   }
 
   /// [decode] with the header size already read (null when unknown).
-  static Image _decode(Uint8List raw, (int, int)? size) {
-    if (size != null && size.$1 * size.$2 > _maxPixels) {
+  static Image _decode(Uint8List raw, (int, int, int)? size) {
+    if (size != null && _tooLarge(size)) {
       throw ContentException('image too large: ${size.$1}x${size.$2}');
     }
     img.Image? decoded;
@@ -112,7 +120,7 @@ final class Image implements Pixels {
     if (decoded == null) {
       throw const ContentException('unknown image format');
     }
-    if (decoded.width * decoded.height > _maxPixels) {
+    if (decoded.lengthInBytes > _maxBytes) {
       throw ContentException('image too large: ${decoded.width}x${decoded.height}');
     }
     // bakeOrientation always copies the pixels; most images need no turn.
@@ -213,7 +221,12 @@ void _checkEncode(ImageFormat format, int quality, Image? image) {
 }
 
 /// Declared size from the header, null when it cannot be read.
-(int, int)? _declaredSize(Uint8List raw) {
+/// Whether a declared (width, height, bytes per pixel) is over [_maxBytes].
+bool _tooLarge((int, int, int) size) => size.$1 * size.$2 > _maxPixelsAt(size.$3);
+
+/// The header's width, height and decoded bytes per pixel (8 for a 16-bit
+/// PNG, else 4), read without decoding; null when unknown.
+(int, int, int)? _declaredSize(Uint8List raw) {
   try {
     final info = img.findDecoderForData(raw)?.startDecode(raw);
     if (info is img.IcoInfo) {
@@ -225,9 +238,11 @@ void _checkEncode(ImageFormat format, int quality, Image? image) {
       if (e.bytesOffset < 0 || end > raw.length) return null;
       final inner = Uint8List.sublistView(raw, e.bytesOffset, end);
       final png = img.PngDecoder().startDecode(inner);
-      return png != null ? (png.width, png.height) : (e.width == 0 ? 256 : e.width, e.height == 0 ? 256 : e.height);
+      return png != null
+          ? (png.width, png.height, _bytesPerPixel(png))
+          : (e.width == 0 ? 256 : e.width, e.height == 0 ? 256 : e.height, 4);
     }
-    return info == null ? null : (info.width, info.height);
+    return info == null ? null : (info.width, info.height, _bytesPerPixel(info));
   } on Exception {
     return null;
   } on RangeError {
@@ -235,6 +250,8 @@ void _checkEncode(ImageFormat format, int quality, Image? image) {
     return null;
   }
 }
+
+int _bytesPerPixel(img.DecodeInfo info) => info is img.PngInfo && info.bits == 16 ? 8 : 4;
 
 /// Decode on a worker isolate when the header declares a large image, or
 /// declares none on a large input (it may be large). The header is read once.
@@ -244,7 +261,7 @@ Future<Image> _decodeAsync(Uint8List bytes) {
   if (size == null ? bytes.length < 1 << 20 : size.$1 * size.$2 <= _isolatePixels) {
     return Future.value(Image._decode(bytes, size));
   }
-  if (size != null && size.$1 * size.$2 > _maxPixels) {
+  if (size != null && _tooLarge(size)) {
     return Future.error(ContentException('image too large: ${size.$1}x${size.$2}'));
   }
   return Isolate.run(() => Image._decode(bytes, size));

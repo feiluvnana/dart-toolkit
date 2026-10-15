@@ -3,6 +3,8 @@
 ## 0.0.5
 
 **Added**
+- `cli`: a `Multi` with `values:` also takes comma lists (`--category=photo,reel`).
+- `cli`: `Rest<T>('file', …)` takes the positionals after the `Arg`s as a typed `List<T>` (usage `<file>...`); `context.rest()` is gone, and a positional nothing takes is an error.
 - `yaml`: new module: `Yaml.parse`, `reader.yaml(or:)` → the same `Json` reading API (package:yaml).
 - `fs`: `Fs.temp((dir) async {…})` (a scoped temp folder, deleted after, Ctrl-C included), `Fs.home()`, `Fs.scriptDir()` (the running script's folder, for data kept next to it), `file.lock(() async {…}, wait:)` (one run at a time across processes), `Entry.modified()`.
 - `shell`: `Shell.run(timeout:)` kills the child and throws a `TimeoutException` naming the command; `Shell.which(program)`.
@@ -24,6 +26,13 @@
 - `cli`: `values:` on `Opt`/`Multi`/`Arg` for a fixed set (enums by name; usage lists them, typos get a suggestion); enum defaults show by name.
 
 **Fixed**
+- `cli`: dotenv quoted values end at their quote (a `# comment` may follow) and escapes decode once; a Duration option past the largest Duration is a usage error; `-v=no` inside a short group no longer swallows the next token.
+- `fs`: globs take a leading `]` in a class, never match `/` with one, and keep an unmatched `{` literal.
+- `html`: `not()` is linear on long sibling lists; XHTML and `<head>`/`<body>`-first pages parse as documents; script data follows the spec's escaped states; table parts inside `<template>` stay there; attribute selectors compare HTML's case-blind values (`type`, `rel`, `lang`, …) case-blind; windows-1252's five unassigned bytes decode as WHATWG maps them; the `<meta charset>` prescan reads attributes and skips comments.
+- `http`: resume sends `If-Range` (kept in `<file>.part.tag`), so a file that changed restarts instead of being spliced.
+- `tui`: a negative `Bar.tick` is ignored in the status row too. `terminal`: widths follow grapheme clusters (ZWJ sequences, VS16), in Console and Tui alike.
+- `archive`: a solid RAR run keeps one dictionary in memory between members, not every byte so far.
+- `shell`: `check:` and `timeout:` messages mask tokens, secret headers and URL credentials.
 - `console`: a `Console.bar(null)` piped into a `resume: true` download learns the file's length from the response, so it shows `done/total` and a filled bar (skipped and resumed files included).
 - `chrome`: `Chrome.launch(profile:)` no longer restores the last session's tabs, so tabs stop piling up across runs; cookies and logins stay.
 - `cli`: a handler failure prints the toolkit error's message (not `FormatException: …`/`HttpException: …, uri = …`), and a plain `Exception('…')` without its prefix.
@@ -42,7 +51,7 @@
 - `archive`: unpacking stages in a 0700 folder with file modes applied before the merge; a target that is a link is resolved first; zip members that share bytes (overlap bombs) and 7z keys asking for more than 2^24 rounds are refused.
 - `yaml`: alias bombs (over 1,000,000 values) and nesting over 1,000 levels are a `ContentException`; `json`: `**`, `==` and `hashCode` survive any depth.
 - `tui`: the status row and popups drop C1 controls; `cli`: a bad value from an environment variable is never echoed.
-- `image`: `resize` refuses targets over 10^8 pixels and never returns a 0-pixel side.
+- `image`: decode and `resize` are budgeted in decoded bytes (512 MiB: a 16-bit image gets half the pixels of an 8-bit one); `resize` never returns a 0-pixel side.
 
 **Changed**
 - `cli`: `Command.run` sets `exitCode` itself (64 usage, 1 failure; success leaves it alone), so scripts write `await cmd.run(args)`.
@@ -71,6 +80,8 @@
 - VISION, ARCHITECTURE and PLAN moved to `docs/`; DOGFOOD.md removed; both PROPOSAL rounds executed and removed.
 
 **Breaking**
+- `scrape` removed (never released): a loop over `Http` plus `Pool.map` reads as short.
+- `Rate` and `Color` keep their fields private (`count`, `per`, `pause`, `onWait`; `code`, `rgb`): construct them, never read them back.
 - `http`: `Client.save` is gone: `Http.client(resume: true)` and `get(u) | … > file` do it through the pipe.
 - `http`: the static verbs, `Http.hold`, `Http.abort` and `options` are gone: `Http.client(...)` holds settings, `client.close()` cancels its own requests. Per-call parameters are only `query`, `headers`, `body`. Retries default to 2 for every verb but only resend what provably was not processed (POST retries on connect failures, 429 and 503; 500 is never retried); backoff has ±25% jitter. Cookies belong to a client, not the process. `HttpStatusException.status` is non-null; redirect failures are `HttpRequestException`. Piping a non-2xx throws what `check()` throws (with the snippet). `size()` is null for a body decoded on the fly; `lines()` works on any status.
 - `pool`: `Pool.runAll` → `Pool.map(isolates: true)`; `onResult:` → `onDone:` (no argument, so `onDone: bar.tick`).

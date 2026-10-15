@@ -19,8 +19,7 @@ abstract interface class Resumable {
 /// bytes can be replayed through it on a skip or a resume.
 abstract interface class PassThrough {}
 
-/// A pass-through pipe that wants the full length once the download knows
-/// it (a bar created without a total shows `done/total` from then on).
-abstract interface class Sized {
-  void sized(int bytes);
-}
+/// Pass-through pipes that want the full length once the download knows it
+/// (a bar created without a total shows `done/total` from then on): the
+/// pipe registers a callback here instead of growing a public method.
+final sizers = Expando<void Function(int bytes)>();

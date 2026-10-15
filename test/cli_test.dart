@@ -168,6 +168,15 @@ void main() {
       expect(seen, isEmpty);
     });
 
+    test('C4b: Multi with values: takes comma lists too', () async {
+      final kind = Multi('kind', 'K.', values: ['photo', 'reel', 'story']);
+      List<String> seen = const [];
+      final cli = Command('app', 'X.', params: [kind], handler: (ctx) => seen = ctx(kind));
+      expect(await cli.run(['--kind=photo,reel', '--kind', 'story']), 0);
+      expect(seen, ['photo', 'reel', 'story']);
+      expect(await fails(cli, ['--kind=photo,nope']), contains('Invalid value "nope"'));
+    });
+
     test('C5: a short h keeps --help', () async {
       final h = Opt<String>('host', 'H.', short: 'h', or: 'x');
       final cli = Command('app', 'X.', params: [h], handler: (_) {});
@@ -180,41 +189,35 @@ void main() {
     test('grouped shorts, attached params, -- ends options', () async {
       final v = Flag('verbose', 'V.', short: 'v');
       final n = Opt<int>('n', 'N.', short: 'n', or: 0);
+      final rest = Rest<String>('rest', 'R.');
       var vv = false;
       var nn = -1;
       List<String> tail = const [];
       final cli = Command(
         'app',
         'X.',
-        params: [v, n],
+        params: [v, n, rest],
         handler: (ctx) {
           vv = ctx(v);
           nn = ctx(n);
-          tail = ctx.rest();
+          tail = ctx(rest);
         },
       );
       expect(await cli.run(['-vn3']), 0);
       expect((vv, nn), (true, 3));
       expect(await cli.run(['--', '-v']), 0);
       expect(tail, ['-v']);
+      // -v=no consumes only itself (regression: the next token was skipped).
+      expect(await cli.run(['-v=no', '-n', '7']), 0);
+      expect((vv, nn), (false, 7));
     });
 
     test('-5 stays positional when no short answers to it', () async {
       final q = Arg<String?>('q', 'Query.');
       String? seen;
-      List<String> tail = const [];
-      final cli = Command(
-        'app',
-        'X.',
-        params: [q],
-        handler: (ctx) {
-          seen = ctx(q);
-          tail = ctx.rest();
-        },
-      );
+      final cli = Command('app', 'X.', params: [q], handler: (ctx) => seen = ctx(q));
       expect(await cli.run(['-5']), 0);
       expect(seen, '-5');
-      expect(tail, isEmpty);
     });
 
     test('Duration, DateTime and Uri params; negative durations', () async {
@@ -243,6 +246,7 @@ void main() {
       expect(u, Uri.parse('https://example.com/x'));
       expect(d, const Duration(seconds: 90));
       expect(await fails(cli, ['--wait', 'soon']), contains('expected a duration such as 90s'));
+      expect(await fails(cli, ['--wait', '99999999999999999d']), contains('expected a duration')); // wrapped negative
       expect(await fails(cli, ['--uri', 'notaurl']), contains('expected a URL'));
     });
 
@@ -268,12 +272,11 @@ void main() {
   });
 
   group('positionals', () {
-    test('Args bind in order; rest is the tail', () async {
+    test('Args bind in order; a positional nothing takes is an error', () async {
       final src = Arg<String>('src', 'S.', required: true);
       final dst = Arg<String?>('dst', 'D.');
       String? s;
       String? d;
-      List<String> tail = const [];
       final cli = Command(
         'cp',
         'Copy.',
@@ -281,18 +284,46 @@ void main() {
         handler: (ctx) {
           s = ctx(src);
           d = ctx(dst);
-          tail = ctx.rest();
         },
       );
       expect(await cli.run(['a', 'b']), 0);
       expect(s, 'a');
       expect(d, 'b');
-      expect(tail, isEmpty);
       expect(await cli.run(['a']), 0);
       expect(s, 'a');
       expect(d, isNull);
       expect(await fails(cli, []), contains('Missing argument <src>'));
       expect(await fails(cli, ['a', 'b', 'c']), contains('Unexpected argument "c"'));
+    });
+
+    test('Rest takes the positionals after the Args, typed', () async {
+      final op = Arg<String>('op', 'O.', required: true);
+      final ns = Rest<int>('n', 'N.', required: true, parse: int.parse);
+      String? o;
+      List<int> seen = const [];
+      final cli = Command(
+        'sum',
+        'S.',
+        params: [op, ns],
+        handler: (ctx) {
+          o = ctx(op);
+          seen = ctx(ns);
+        },
+      );
+      expect(await cli.run(['add', '1', '2', '3']), 0);
+      expect(o, 'add');
+      expect(seen, [1, 2, 3]);
+      expect(await fails(cli, ['add']), contains('Missing argument <n>'));
+      expect(await fails(cli, ['add', 'x']), contains('Invalid value "x" for argument <n>'));
+      expect(await helps(cli, ['--help']), contains('Usage: sum <op> <n>... [options]'));
+      final opt = Rest<String>('file', 'F.');
+      var files = <String>['unset'];
+      final ls = Command('ls', 'L.', params: [opt], handler: (ctx) => files = ctx(opt));
+      expect(await ls.run([]), 0);
+      expect(files, isEmpty);
+      expect(await helps(ls, ['--help']), contains('Usage: ls [file...] [options]'));
+      expect(await fails(Command('x', 'X.', handler: (_) {}), ['y']), contains('Unexpected argument "y"'));
+      expect(() => Command('c', 'C.', params: [Rest<String>('a', 'A.'), Arg<String?>('b', 'B.')]), throwsArgumentError);
     });
 
     test('a query of help stays positional when Args exist', () async {
@@ -549,6 +580,21 @@ Future<void> main(List<String> a) async {
     });
   });
 
+  test('dotenv: a quoted value ends at its quote, comments after it go, escapes decode once', () async {
+    final dir = await Directory.systemTemp.createTemp('dotenv2');
+    addTearDown(() => dir.delete(recursive: true));
+    await File('${dir.path}/.env')
+        .writeAsString('A="abc123" # prod token\nB="C:\\\\new\\\\dir"\nC="say \\"hi\\"\\tok"\nD=\'it\'\'s\'\n');
+    const script = '''
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  final opts = [for (final k in ['a', 'b', 'c', 'd']) Opt<String?>(k, k, env: k.toUpperCase())];
+  await Command('app', 'X.', params: opts, dotenv: '.env', handler: (c) => print([for (final o in opts) '[\${c(o)}]'].join())).run(a);
+}
+''';
+    expect((await runDart(script, cwd: dir.path)).stdout, '[abc123][C:\\new\\dir][say "hi"\tok][it]\n');
+  });
+
   group('suggestions', () {
     test('L1: short options suggest only the case-swapped letter', () async {
       const script = '''
@@ -679,7 +725,7 @@ Future<void> main(List<String> a) async {
   exitCode = await Command('app', 'X.', handler: (c) {
     if (a.first == 'json') Json.parse('{bad');
     throw Exception('plain failure');
-  }).run(a);
+  }).run(const []);
 }
 ''',
       args: ['plain'],

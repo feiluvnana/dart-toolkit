@@ -21,6 +21,25 @@ void main() {
       expect(() => Html.parse('<'), returnsNormally);
     });
 
+    test('XHTML and pages that open with <head> or <body> are documents', () {
+      expect(Html.parse('<?xml version="1.0"?>\n<html><body><p>x</p></body></html>').$('body'), hasLength(1));
+      expect(Html.parse('<head><title>t</title></head><body><p>x</p>').$('body p'), hasLength(1));
+      expect(Html.parse('<body class=a><p>x</p>').$('body.a'), hasLength(1));
+      expect(Html.parse('<header>h</header>').$('body'), isEmpty); // a fragment
+    });
+
+    test('table parts inside <template> stay in it (template insertion modes)', () {
+      final doc = Html.parse(
+        '<!doctype html><head><template id=row><tr><td>N</td><td>M</td></tr></template></head>'
+        '<body><table><template id=t><tr><td>x</td></tr></template></table>'
+        '<template id=cell><td>c</td></template><template id=cap><caption>k</caption><col></template>',
+      );
+      expect(doc.$('#row > tr > td').texts(), ['N', 'M']);
+      expect(doc.$('#t > tr > td').texts(), ['x']);
+      expect(doc.$('#cell > td').texts(), ['c']);
+      expect(doc.$('#cap > caption, #cap > col').length, 2);
+    });
+
     test('takes a base', () {
       final doc = Html.parse('<a href="/x">t</a>', base: 'https://e.com/d/');
       expect(doc.$('a')[0].attr('href'), 'https://e.com/x');
@@ -32,6 +51,25 @@ void main() {
   });
 
   group('Charset', () {
+    test('the meta prescan reads charset attributes only, never comments or other metas\' text', () {
+      String? sniff(String head) => Charset.metaCharset(head.codeUnits);
+      expect(sniff('<meta name="description" content="we use charset=shift_jis here"><meta charset="utf-8">'), 'utf-8');
+      expect(sniff('<!-- <meta charset=windows-1251> --><meta charset=koi8-r>'), 'koi8-r');
+      expect(
+        sniff('<meta data-charset="big5"><meta http-equiv="Content-Type" content="text/html; charset=EUC-JP">'),
+        'EUC-JP',
+      );
+      expect(sniff('<meta content="text/html; charset=gbk">'), isNull); // no http-equiv
+      expect(sniff("<META CHARSET='iso-8859-2'>"), 'iso-8859-2');
+    });
+
+    test('windows-1252 passes its five unassigned bytes through, as WHATWG does', () {
+      expect(
+        Charset.decode([0x81, 0x8D, 0x8F, 0x90, 0x9D, 0x80], contentType: 'text/html; charset=windows-1252'),
+        '\u0081\u008D\u008F\u0090\u009D€',
+      );
+    });
+
     test('single-byte legacy codecs decode', () {
       expect(
         Charset.decode([0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2], contentType: 'text/html; charset=windows-1251'),
@@ -94,7 +132,7 @@ void main() {
 <div id=root lang="en-GB">
   <ul id=l><li id=a class="x Y">1</li><li id=b>2</li><li id=c class=x>3</li><li id=d>4</li><li id=e class=x>5</li></ul>
   <p id=p1></p><span id=s1>t</span><p id=p2>x</p>
-  <form><fieldset disabled><input id=i1></fieldset><input id=i2 checked><input id=i3 disabled>
+  <form><fieldset disabled><input id=i1></fieldset><input id=i2 checked><input id=i3 disabled><input id=cb type=checkbox name=cb>
   <select><option id=o1 selected>z</option></select></form>
   <a id=k1 href="/x">l</a><a id=k2>n</a><b id="we:ird" lang=fr></b><b id="1st"></b>
   <section id=h><b id=hb></b></section><section id=h2></section>
@@ -113,7 +151,7 @@ void main() {
         ':link': 'k1',
         'input:checked, option:checked': 'i2 o1',
         'input:disabled': 'i1 i3',
-        'input:enabled': 'i2',
+        'input:enabled': 'i2 cb',
         'li:is(#a, #b)': 'a b',
         'li:where(.x):not(#a)': 'c e',
         'section:has(> b)': 'h',
@@ -122,6 +160,9 @@ void main() {
         'li[class~=y i]': 'a',
         'li[class^=x]': 'a c e',
         'li[class|=x]': 'c e',
+        'input[type=CHECKBOX]': 'cb',
+        'input[type=CHECKBOX s]': '',
+        'input[name=CB]': '', // name is case-sensitive
         r'#we\:ird, #\31 st': 'we:ird 1st',
         'li::before, li:hover': '',
       };
@@ -172,6 +213,16 @@ void main() {
       expect(Html.parse('<b><div>${'<br>' * 30000}</b>').$('br'), hasLength(30000));
       expect(Html.parse('<table>${'<i></i>' * 30000}').$('i'), hasLength(30000));
       expect(sw.elapsedMilliseconds, lessThan(1500)); // was ~5 s
+    });
+
+    test('not() on a long sibling list stays linear', () {
+      final doc = Html.parse('<div>${'<br><i>x</i>' * 50000}</div>');
+      final sw = Stopwatch()..start();
+      final kept = doc.not('br');
+      expect(sw.elapsedMilliseconds, lessThan(1000)); // was 8 s
+      expect(kept.$('br'), isEmpty);
+      expect(kept.$('i'), hasLength(50000));
+      expect(doc[0].not('i').$('i'), isEmpty);
     });
 
     test('nested roots are walked once (regression: one walk per root)', () {

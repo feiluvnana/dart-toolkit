@@ -28,8 +28,9 @@ import 'src/selector.dart' as sel;
 /// Entry point: parse HTML source into top-level [Elements].
 abstract final class Html {
   /// Parse [html]. Never throws on bad markup. Input that starts (after
-  /// whitespace) with `<!doctype` or `<html` is a whole document (so
-  /// `$('body')` works); anything else is a fragment.
+  /// whitespace, comments and an `<?xml …?>` declaration) with `<!doctype`,
+  /// `<html`, `<head` or `<body` is a whole document (so `$('body')` works);
+  /// anything else is a fragment.
   /// [base] is the base for relative links: with one, URL attributes
   /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
   /// absolute. The base is parsed once per [Elements] and shared with every
@@ -40,13 +41,13 @@ abstract final class Html {
   static Elements parse(String html, {String? base}) {
     final baseUri = _parseBase(base);
     var s = html.replaceFirst('﻿', '').trimLeft();
-    while (s.startsWith('<!--')) {
-      final end = s.indexOf('-->');
+    while (s.startsWith('<!--') || s.startsWith('<?')) {
+      final end = s.startsWith('<?') ? s.indexOf('>') : s.indexOf('-->');
       if (end < 0) break;
-      s = s.substring(end + 3).trimLeft();
+      s = s.substring(end + (s.startsWith('<?') ? 1 : 3)).trimLeft();
     }
     final head = s.length <= 9 ? s.toLowerCase() : s.substring(0, 9).toLowerCase();
-    if (head.startsWith('<!doctype') || head.startsWith('<html')) {
+    if (_documentStart.hasMatch(head)) {
       final root = _hold(parser.parseDocument(html));
       final found = <dom.Element>[];
       _baseHref.collect(root, found);
@@ -66,7 +67,26 @@ abstract final class Html {
   }
 }
 
+/// Detach every node in [found] with one pass per parent (one `remove()`
+/// each was O(n²): 50,000 siblings took 8 s).
+void _removeAll(List<dom.Element> found) {
+  final dead = Set<dom.Node>.identity()..addAll(found);
+  final parents = Set<dom.Element>.identity();
+  for (final m in found) {
+    final p = m.parent;
+    if (p != null) parents.add(p);
+  }
+  for (final p in parents) {
+    p.nodes.removeWhere(dead.contains);
+    p.edits++;
+  }
+  for (final m in found) {
+    m.parent = null;
+  }
+}
+
 final _baseHref = sel.Selector.parse('base[href]');
+final _documentStart = RegExp(r'^<(!doctype|html|head|body)(?=[\s>/]|$)');
 
 /// The top-level [nodes] under one holder, so they are siblings (for
 /// `:first-child`, `+`, `~`) without a parent element.
@@ -127,9 +147,7 @@ final class Elements extends Iterable<Element> {
         final clone = item._el.clone(true);
         final found = <dom.Element>[];
         group.collect(clone, found);
-        for (final m in found) {
-          m.remove();
-        }
+        _removeAll(found);
         out.add(Element._(clone, _baseUri));
       }
     } on FormatException catch (e) {
@@ -305,9 +323,7 @@ final class Element {
     } catch (e) {
       throw ContentException("invalid selector '$selector': $e");
     }
-    for (final m in found) {
-      m.remove();
-    }
+    _removeAll(found);
     return Element._(clone, _baseUri);
   }
 

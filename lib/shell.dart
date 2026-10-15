@@ -24,6 +24,7 @@ import 'dart:typed_data';
 import 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/names.dart' as names;
 import 'src/timeout.dart';
 export 'core.dart';
 
@@ -125,7 +126,7 @@ abstract final class Shell {
               for (final sub in subs) {
                 await sub.cancel();
               }
-              throw Timeout('${command.join(' ')} ran over ${timeout.human()}', timeout);
+              throw Timeout('${_shown(command).join(' ')} ran over ${timeout.human()}', timeout);
             },
           );
         }
@@ -145,7 +146,7 @@ abstract final class Shell {
       final code = await proc.exitCode;
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
       if (check && code != 0) {
-        throw io.ProcessException(command[0], command.sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
+        throw io.ProcessException(command[0], _shown(command.sublist(1)), 'exit $code: ${_tail(stderr).trim()}', code);
       }
       return Output._(code, out.takeBytes(), stderr);
     } finally {
@@ -511,7 +512,7 @@ final class _Filter implements Pipe {
     } catch (_) {}
     if (code != 0) {
       final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
-      throw io.ProcessException(_command[0], _command.sublist(1), 'exit $code: ${_tail(err)}', code);
+      throw io.ProcessException(_command[0], _shown(_command.sublist(1)), 'exit $code: ${_tail(err)}', code);
     }
   }
 
@@ -553,3 +554,39 @@ final class _LineSink implements Sink<String> {
   @override
   void close() {}
 }
+
+/// [args] fit for an error message: URL credentials and token values,
+/// secret header values (`-H 'Authorization: …'`) and secret options
+/// (`--token=…`, `--password …`) shown as `***`.
+List<String> _shown(List<String> args) => [
+  for (var i = 0; i < args.length; i++)
+    if (i > 0 && (args[i - 1] == '-H' || args[i - 1] == '--header'))
+      _header(args[i])
+    else if (i > 0 && _secretFlag.hasMatch(args[i - 1]) && !args[i - 1].contains('='))
+      '***'
+    else
+      _arg(args[i]),
+];
+
+String _arg(String a) {
+  final flag = _secretFlag.firstMatch(a);
+  if (flag != null && a.contains('=')) return '${a.substring(0, a.indexOf('='))}=***';
+  if (a.startsWith('-H') && a.length > 2) return '-H${_header(a.substring(2))}';
+  return a.contains('://') ? names.redact(a) : a;
+}
+
+String _header(String h) {
+  final colon = h.indexOf(':');
+  if (colon < 0) return h;
+  final name = h.substring(0, colon).trim().toLowerCase();
+  final secret =
+      name == 'authorization' ||
+      name == 'proxy-authorization' ||
+      name == 'cookie' ||
+      name.contains('token') ||
+      name.contains('api-key') ||
+      name.contains('secret');
+  return secret ? '${h.substring(0, colon)}: ***' : h;
+}
+
+final _secretFlag = RegExp(r'^--?(token|password|passwd|secret|api-?key|access-?key|auth)(=|$)', caseSensitive: false);

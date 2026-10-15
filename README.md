@@ -52,7 +52,7 @@ Future<void> main() async {
 | `hash` | md5 … sha512 | in a pipe, `expect:` to verify, `of(reader)` |
 | `shell` | programs | `Shell.run(cmd, check:, timeout:, onLine:)`, `Shell.which`, `Shell.filter` as a `Pipe`, `Shell.open` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), `retries:` `rate:` `isolates:` |
-| `cli` | command lines | typed `Opt`/`Flag`/`Arg`, subcommands, `env:`, `dotenv:`, suggestions |
+| `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, subcommands, `env:`, `dotenv:`, suggestions |
 | `console` | prompts and progress | `ask` `confirm` `choose` `spin` `bar` `log` `table` `notify` `copy` |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, mouse, markdown, diffs, ASCII and no-colour fallbacks |
 | `image` | decode, resize, encode | off the main isolate when large, EXIF orientation |

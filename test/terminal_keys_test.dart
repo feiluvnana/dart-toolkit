@@ -21,6 +21,16 @@ String keyName(List<int> bytes) {
 }
 
 void main() {
+  test('widths follow grapheme clusters: ZWJ families, VS16, marks', () {
+    expect(displayWidth('👨‍👩‍👧'), 2);
+    expect(displayWidth('❤️'), 2);
+    expect(displayWidth('❤'), 1);
+    expect(displayWidth('e\u0301'), 1);
+    expect(displayWidth('a👍🏽b'), 4);
+    expect(truncateWidth('ab👨‍👩‍👧cd', 4), 'ab…'); // the family is dropped whole, no dangling ZWJ
+    expect(truncateWidth('ab👨‍👩‍👧cd', 5), 'ab👨‍👩‍👧…');
+  });
+
   test('modifiers: any spelling order binds, super is meta, Linux console F1-F5', () {
     expect(keys.matchesBinding('shift+ctrl+a', 'ctrl+shift+a'), isTrue);
     expect(keys.matchesBinding('shift+alt+up', keyName(utf8.encode('\x1b[1;4A'))), isTrue);

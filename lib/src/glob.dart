@@ -30,7 +30,7 @@ RegExp glob(String pattern, {bool paths = true}) {
         }
       case '?':
         out.write(paths ? '[^/]' : '.');
-      case '{':
+      case '{' when _closes(pattern, i):
         depth++;
         out.write('(?:');
       case '}' when depth > 0:
@@ -39,14 +39,21 @@ RegExp glob(String pattern, {bool paths = true}) {
       case ',' when depth > 0:
         out.write('|');
       case '[':
-        final end = pattern.indexOf(']', i + 2);
+        // `[!…]` negates; a `]` right after `[` or `[!` is a member.
+        final negate = i + 1 < pattern.length && pattern[i + 1] == '!';
+        final start = negate ? i + 2 : i + 1;
+        final end = pattern.indexOf(']', start + 1);
         if (end < 0) {
           out.write(r'\[');
         } else {
-          var body = pattern.substring(i + 1, end);
-          final negate = body.startsWith('!');
-          if (negate) body = body.substring(1);
-          out.write('[${negate ? '^' : ''}${body.replaceAll(r'\', r'\\').replaceAll('^', r'\^')}]');
+          final body = pattern
+              .substring(start, end)
+              .replaceAll(r'\', r'\\')
+              .replaceAll('^', r'\^')
+              .replaceAll(']', r'\]')
+              .replaceAll('[', r'\[');
+          // A class never matches the folder separator in a path glob.
+          out.write(negate ? '[^${paths ? '/' : ''}$body]' : '${paths ? '(?!/)' : ''}[$body]');
           i = end;
         }
       default:
@@ -55,4 +62,20 @@ RegExp glob(String pattern, {bool paths = true}) {
   }
   out.write(r'$');
   return RegExp(out.toString());
+}
+
+/// Whether the `{` at [at] has a matching `}`; an unmatched one is literal.
+bool _closes(String pattern, int at) {
+  var depth = 0;
+  for (var i = at; i < pattern.length; i++) {
+    final c = pattern[i];
+    if (c == '\\') {
+      i++;
+    } else if (c == '{') {
+      depth++;
+    } else if (c == '}' && --depth == 0) {
+      return true;
+    }
+  }
+  return false;
 }

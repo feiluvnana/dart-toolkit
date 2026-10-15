@@ -728,6 +728,14 @@ void main() {
       }
     });
 
+    test('a ZWJ family and a VS16 heart each take two cells', () async {
+      final t = testSession<int>(0, (s, app) => Screen((r) => r.write('👨‍👩‍👧|❤️|x')), width: 20, height: 2);
+      await t.pump();
+      expect(t.row(0), startsWith('👨‍👩‍👧|❤️|x'));
+      expect(term.displayWidth(t.row(0).trimRight()), 7); // 2 + 1 + 2 + 1 + 1
+      t.close();
+    });
+
     test('a popup title lays wide glyphs over two cells', () async {
       final t = testSession<int>(
         0,
@@ -2460,6 +2468,9 @@ void main() {
       t.bytes(utf8.encode('b'));
       await t.pump();
       expect(t.row(2), matches(RegExp(r'^↓ ch ━━━━━───── 2/4  \S+/s')));
+      bar!.tick(-8); // ignored, as Console.bar documents
+      await t.pump();
+      expect(t.row(2), contains(' 2/4 '));
       await bar!.close();
       t.close();
     });

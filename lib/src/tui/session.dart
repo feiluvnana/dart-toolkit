@@ -481,7 +481,7 @@ final class _Session<S> implements term.TuiBridge {
   @override
   void barTick(Object id, int count) {
     final bar = _cBars[id];
-    if (bar == null) return;
+    if (bar == null || count <= 0) return;
     bar.done += count;
     final total = bar.total;
     if (total != null && total > 0 && bar.done > total) bar.done = total;

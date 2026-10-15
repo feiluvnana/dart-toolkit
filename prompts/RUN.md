@@ -91,3 +91,25 @@ Five scripts on loopback servers: mirror (51 lines), watch+upload (50 -> 47), Tu
 - pubspec: description 148 chars, repository, topics, platforms linux/macos/windows (dart:io, no web), SDK ^3.13.0; constraints pass `pub downgrade`. LICENSE MIT. .pubignore keeps test/, tool/, projects/, prompts/ and docs/ out.
 - Version: pubspec says 0.0.4 with a 0.0.4 CHANGELOG section, but there is no v0.0.4 tag and pub.dev has no package; Unreleased holds breaking changes (cookies.txt format, Pool retries Exceptions only), so propose 0.0.5. The user picks.
 - Manual steps: commit or drop the other session's work, decide on scrape and example/, set the version, tag, `dart pub publish`, verified publisher.
+
+## Follow-up (after review)
+Done since the run: scrape removed, 0.0.5, Http.client(limit:), .tar.xz streaming, multi-member gzip, pbkdf2, markdown, table/diff/repaint speed; the other session's work committed (cookies.txt, Fs.scriptDir, chrome sessions, bar keep/Sized, projects/ layout). No example/ (the user's call).
+Remaining deferred items, in order:
+- [x] cli: dotenv quoting (`"x" # c`, `\\` before `\n`)
+- [x] cli: Duration options overflow to negative
+- [x] fs: glob `[]a]`, `[!]a]`, unbalanced `{`, `[/]`
+- [x] tui: negative `Bar.tick` in the status row
+- [x] html: `not()` is O(n²) on long sibling lists
+- [x] html: XHTML / `<head>`-first pages parse as fragments
+- [x] charset: windows-1252 0x81/0x8D/0x8F/0x90/0x9D
+- [x] html: `[type=CHECKBOX]` (HTML's case-insensitive attribute values)
+- [x] charset: WHATWG meta prescan (comments, `content=` of other metas)
+- [x] shell: argv secrets in timeout/check messages
+- [x] http: `If-Range` on resume
+- [x] image: decode budget by bytes, not pixels
+- [x] Rule 2: public fields on Rate and Color; Bar.sized; Json.toJson doc (already documented: jsonEncode calls it)
+- [ ] console: `Console.ask(timeout:)` (abandoned piped ask keeps the VM alive): not doable as is: the VM waits for an isolate blocked in readLineSync even after kill(); needs stdin read as a stream with pushback, which gives up 'never reads past its line' for children sharing stdin
+- [x] html: script escape states; table tags inside `<template>`
+- [x] cli: split `_parseCommand`; http: part files
+- [x] rar: solid run keeps every byte (dictionary-sized window): the slide only triggers past 1 MiB and twice the dictionary, which no fixture reaches and no rar tool here can make; check once with a real multi-GB solid RAR
+- [x] terminal: ZWJ emoji and VS16 widths

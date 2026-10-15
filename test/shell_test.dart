@@ -293,6 +293,38 @@ Future<void> main() async {
       expect('${ps.stdout}'.trim(), isEmpty, reason: 'sleep $pid outlived the timeout');
     });
 
+    test('check: and timeout: messages never show tokens, secret headers or URL credentials', () async {
+      final args = [
+        '-H',
+        'Authorization: Bearer SECRET1',
+        '-HCookie: sid=SECRET2',
+        '--token=SECRET3',
+        '--password',
+        'SECRET4',
+        'https://u:SECRET5@example.com/a?api_key=SECRET6&page=2',
+        '-H',
+        'Accept: text/html',
+      ];
+      final failed = await Shell.run([
+        'sh',
+        '-c',
+        'exit 3',
+        'sh',
+        ...args,
+      ], check: true).then<Object?>((_) => null, onError: (Object e) => e);
+      final timedOut = await Shell.run([
+        'sh',
+        '-c',
+        'sleep 5',
+        'sh',
+        ...args,
+      ], timeout: 200.milliseconds).then<Object?>((_) => null, onError: (Object e) => e);
+      for (final e in [failed, timedOut]) {
+        expect('$e', isNot(contains('SECRET')), reason: '$e');
+        expect('$e', allOf(contains('Accept: text/html'), contains('page=2'), contains('api_key=***')));
+      }
+    });
+
     test('which finds installed programs on PATH, null otherwise', () async {
       expect(await Shell.which('sh'), endsWith('/sh'));
       expect(await Shell.which('definitely-not-a-program-x9'), isNull);

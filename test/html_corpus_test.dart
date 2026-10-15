@@ -17,12 +17,13 @@ import 'package:html/parser.dart' as ref;
 import 'package:test/test.dart';
 
 /// Selectors both engines support (package:html has a narrow pseudo-class
-/// set, and its `:nth-child`/`:empty` differ from the spec).
+/// set, its `:nth-child`/`:empty` differ from the spec, and it compares the
+/// values HTML matches case-blind, like `rel` and `type`, exactly).
 const selectors = [
   'a', 'p', 'div', 'span', 'li', 'img', 'table', 'tr', 'td', 'th', 'script', 'h1, h2, h3', //
   'tbody tr', 'table > tbody > tr', 'ul > li', 'div p', 'p a', 'nav a', 'form input', 'body > *', //
   'a[href]', 'a[href^="https"]', 'a[href*="wiki"]', 'img[src\$=".png"]', 'meta[property]', //
-  'meta[name="description"]', 'link[rel~="stylesheet"]', '[lang|="en"]', 'li:first-child', //
+  'meta[name="description"]', 'div[class~="container"]', '[lang|="en"]', 'li:first-child', //
   'li:last-child', 'td:only-child', 'span + span', 'h2 ~ p', 'div > span', 'b, i, strong, em', //
   'p:not(.x)', 'a:not([href])', '*', 'svg', 'select option', 'dl > dt', 'pre', 'code',
 ];
@@ -173,6 +174,8 @@ const _blocks = {
 
 /// Tricky markup the parsing algorithm has rules for, each as a document.
 const snippets = {
+  'script escapes': '<!doctype html><script><!-- document.write("<script src=x></script>"); --></script><p>after</p>'
+      '<script><!-- a </script><p>cut</p><script>var x = "<!--"; </script><p>end</p>',
   'misnested formatting': '<!doctype html><p><b>1<p>2</b>3</p><b><i>x</b>y</i>',
   'adoption agency': '<!doctype html><a href=1>a<div>b<a href=2>c</a>d</div>e</a><b>f<p>g</b>h',
   'tables': '<!doctype html><table><tr><td>a<td>b<tr><th>c</table><table>x<tr>y<td>z</table>',

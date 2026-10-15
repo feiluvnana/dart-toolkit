@@ -25,7 +25,7 @@ export 'core.dart';
 import 'src/exit.dart' as exit;
 import 'src/format.dart' as fmt;
 import 'src/keys.dart' as keys;
-import 'src/resume.dart' show PassThrough, Sized;
+import 'src/resume.dart' show PassThrough, sizers;
 import 'src/terminal.dart' as term;
 import 'src/terminal.dart' show Color;
 export 'src/terminal.dart' show Color;
@@ -40,7 +40,7 @@ abstract final class Console {
   /// null (default) stays monochrome; e.g. [Color.orange].
   static Color? accent;
 
-  static String get _accentOn => _styled && accent != null ? '\x1b[38;5;${accent!.code}m' : '';
+  static String get _accentOn => _styled && accent != null ? '\x1b[38;5;${term.colorCode(accent!)}m' : '';
 
   /// The live lines (spinners, bars) stacked at the bottom, oldest first.
   /// Only used when animated; otherwise each prints one final line.
@@ -926,10 +926,14 @@ abstract final class _Live {
 /// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
 /// count and a rate with no bar, so `Console.bar(res.size())`
 /// just works.
-final class Bar extends _Live implements Pipe, Closeable, PassThrough, Sized {
-  Bar._(this._total, {this._label, this._keep = true}) : _bridge = null, _bridgeId = null;
+final class Bar extends _Live implements Pipe, Closeable, PassThrough {
+  Bar._(this._total, {this._label, this._keep = true}) : _bridge = null, _bridgeId = null {
+    sizers[this] = _sized;
+  }
 
-  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label}) : _keep = true;
+  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label}) : _keep = true {
+    sizers[this] = _sized;
+  }
 
   /// Whether the final line stays when the bar finishes.
   final bool _keep;
@@ -956,7 +960,8 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough, Sized {
     if (bridge != null && id != null) {
       if (_closed) return this;
       if (!_clock.isRunning) _clock.start();
-      if (count > 0) _done += count;
+      if (count <= 0) return this; // documented: ignored, in the status row too
+      _done += count;
       bridge.barTick(id, count);
       _closeAtTotal();
       return this;
@@ -983,8 +988,7 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough, Sized {
 
   /// A resumable download piped through this bar reports its length; a total
   /// set by hand wins.
-  @override
-  void sized(int bytes) {
+  void _sized(int bytes) {
     if (_total == null) setTotal(bytes);
   }
 

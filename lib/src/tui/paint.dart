@@ -150,14 +150,14 @@ extension _SessionPaint on _Session<dynamic> {
 
   String _colorSgr(Color? col, bool bg) {
     if (col == null) return '';
-    if (_caps.truecolor && col.rgb != null) {
-      final (r, g, b) = col.rgb!;
+    if (_caps.truecolor && term.colorRgb(col) != null) {
+      final (r, g, b) = term.colorRgb(col)!;
       return bg ? ';48;2;$r;$g;$b' : ';38;2;$r;$g;$b';
     }
     if (_caps.truecolor || _caps.color256) {
-      return bg ? ';48;5;${col.code}' : ';38;5;${col.code}';
+      return bg ? ';48;5;${term.colorCode(col)}' : ';38;5;${term.colorCode(col)}';
     }
-    return ';${_basic(col.code, bg)}';
+    return ';${_basic(term.colorCode(col), bg)}';
   }
 
   static int _basic(int i, bool bg) {

@@ -1589,30 +1589,59 @@ int cellWidth(int rune) {
 
 /// Display width of [text] in cells (zero-width runes attach for free).
 int displayWidth(String text) {
+  final runes = text.runes.toList();
   var w = 0;
-  for (final rune in text.runes) {
-    if (!isZeroWidth(rune)) w += cellWidth(rune);
+  for (var i = 0; i < runes.length;) {
+    final (cells, next) = cluster(runes, i);
+    w += cells;
+    i = next;
   }
   return w;
 }
 
+/// The grapheme cluster at [runes] `[i]`: its cells and where the next one
+/// starts. Marks and modifiers join their base; a ZWJ joins the emoji
+/// after it (`👨‍👩‍👧` is one 2-cell picture); VS16 asks for emoji
+/// presentation, so a 1-cell base (`❤`) takes two.
+(int, int) cluster(List<int> runes, int i) {
+  final base = runes[i];
+  if (isZeroWidth(base) && base != 0x200D) return (0, i + 1);
+  var cells = base == 0x200D ? 0 : cellWidth(base);
+  var j = i + 1;
+  while (j < runes.length) {
+    final r = runes[j];
+    if (r == 0x200D) {
+      j++;
+      if (j < runes.length) j++; // the joined emoji takes no cells of its own
+    } else if (r == 0xFE0F) {
+      if (cells == 1) cells = 2;
+      j++;
+    } else if (isZeroWidth(r)) {
+      j++;
+    } else {
+      break;
+    }
+  }
+  return (cells, j);
+}
+
 /// Cut [text] to at most [width] cells, ending with `…` when cut. Wide
-/// chars that don't fit are dropped whole.
+/// chars and emoji sequences that don't fit are dropped whole.
 String truncateWidth(String text, int width) {
   if (width <= 0) return '';
   if (displayWidth(text) <= width) return text;
   if (width == 1) return '…';
+  final runes = text.runes.toList();
   final buf = StringBuffer();
   var w = 0;
-  for (final rune in text.runes) {
-    if (isZeroWidth(rune)) {
-      buf.writeCharCode(rune);
-      continue;
+  for (var i = 0; i < runes.length;) {
+    final (cells, next) = cluster(runes, i);
+    if (w + cells + 1 > width) break;
+    for (var k = i; k < next; k++) {
+      buf.writeCharCode(runes[k]);
     }
-    final cw = cellWidth(rune);
-    if (w + cw + 1 > width) break;
-    buf.writeCharCode(rune);
-    w += cw;
+    w += cells;
+    i = next;
   }
   buf.write('…');
   return buf.toString();
@@ -1765,17 +1794,23 @@ final class Color {
     return Color._(rgbTo256(r, g, b), (r, g, b));
   }
 
-  const Color._(this.code, this.rgb);
+  const Color._(this._code, this._rgb);
 
-  final int code;
-  final (int, int, int)? rgb;
-
-  @override
-  bool operator ==(Object other) => other is Color && other.code == code && other.rgb == rgb;
+  final int _code;
+  final (int, int, int)? _rgb;
 
   @override
-  int get hashCode => Object.hash(code, rgb);
+  bool operator ==(Object other) => other is Color && other._code == _code && other._rgb == _rgb;
+
+  @override
+  int get hashCode => Object.hash(_code, _rgb);
 }
+
+/// [c]'s xterm-256 index (the painters' read; not exported).
+int colorCode(Color c) => c._code;
+
+/// [c]'s 24-bit value when it was made with [Color.rgb] (not exported).
+(int, int, int)? colorRgb(Color c) => c._rgb;
 
 int rgbTo256(int r, int g, int b) {
   if (r == g && g == b) {

@@ -20,21 +20,20 @@ import 'dart:math';
 /// await Pool.map(paths, convert, rate: Rate(2, 1.seconds));
 /// ```
 final class Rate {
-  Rate(this.count, this.per, {this.pause = Duration.zero, this.onWait}) {
+  Rate(int count, Duration per, {Duration pause = Duration.zero, void Function(Duration wait)? onWait})
+    : _count = count,
+      _per = per,
+      // ignore: prefer_initializing_formals – the public argument names stay.
+      _pause = pause,
+      // ignore: prefer_initializing_formals
+      _onWait = onWait {
     if (count < 1) throw ArgumentError.value(count, 'count', 'must be at least 1');
   }
 
-  /// Starts allowed per window.
-  final int count;
-
-  /// The window.
-  final Duration per;
-
-  /// Upper bound of the random pause before each start.
-  final Duration pause;
-
-  /// Called before a wait of a second or more.
-  final void Function(Duration wait)? onWait;
+  final int _count; // starts allowed per window
+  final Duration _per; // the window
+  final Duration _pause; // upper bound of the random pause before each start
+  final void Function(Duration wait)? _onWait; // hears every wait of a second or more
 
   final _sent = ListQueue<DateTime>();
   final _random = Random();
@@ -44,7 +43,7 @@ final class Rate {
   Future<void> wait() => take(this, null);
 
   void _trim(DateTime now) {
-    while (_sent.isNotEmpty && now.difference(_sent.first) >= per) {
+    while (_sent.isNotEmpty && now.difference(_sent.first) >= _per) {
       _sent.removeFirst();
     }
   }
@@ -102,12 +101,12 @@ Future<void> take(Rate rate, Halt? halt) {
 }
 
 Future<void> _slot(Rate rate, Halt? halt) async {
-  if (rate.pause > Duration.zero) await sleep(rate.pause * rate._random.nextDouble(), halt);
+  if (rate._pause > Duration.zero) await sleep(rate._pause * rate._random.nextDouble(), halt);
   final now = DateTime.now();
   rate._trim(now);
-  if (rate._sent.length >= rate.count) {
-    final wait = rate._sent.first.add(rate.per).difference(now);
-    if (wait >= const Duration(seconds: 1)) rate.onWait?.call(wait);
+  if (rate._sent.length >= rate._count) {
+    final wait = rate._sent.first.add(rate._per).difference(now);
+    if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
     await sleep(wait, halt);
     if (rate._sent.isNotEmpty) rate._sent.removeFirst();
   }
@@ -117,7 +116,7 @@ Future<void> _slot(Rate rate, Halt? halt) async {
 /// Whether [rate] would start now without waiting for the window.
 bool free(Rate rate) {
   rate._trim(DateTime.now());
-  return rate._sent.length < rate.count;
+  return rate._sent.length < rate._count;
 }
 
 /// The wait after a 429: until the oldest start leaves the window, or the
@@ -125,11 +124,11 @@ bool free(Rate rate) {
 /// never capped; the server's value is capped at 5 minutes, as in
 /// `retry.backoff`, so a hostile header cannot park a script for years.
 Duration ban(Rate rate, Duration? server) {
-  var wait = rate._sent.isEmpty ? rate.per : rate._sent.first.add(rate.per).difference(DateTime.now());
+  var wait = rate._sent.isEmpty ? rate._per : rate._sent.first.add(rate._per).difference(DateTime.now());
   const cap = Duration(minutes: 5);
   if (server != null && server > cap) server = cap;
   if (server != null && server > wait) wait = server;
   if (wait < Duration.zero) wait = Duration.zero;
-  if (wait >= const Duration(seconds: 1)) rate.onWait?.call(wait);
+  if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
   return wait;
 }

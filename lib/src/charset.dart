@@ -113,40 +113,39 @@ abstract final class Charset {
   }
 
   /// Sniff `<meta charset=…>` / `<meta http-equiv="content-type" …>` in the
-  /// first 1024 bytes. Returns the raw label, or null when there is none.
+  /// first 1024 bytes, as the WHATWG prescan does: comments are skipped, and
+  /// only a `charset` attribute, or the `content` of an http-equiv
+  /// content-type, counts (not `charset=` inside another meta's text).
+  /// Returns the raw label, or null when there is none.
   static String? metaCharset(List<int> bytes) {
     final n = bytes.length < 1024 ? bytes.length : 1024;
-    final head = String.fromCharCodes(bytes is Uint8List ? Uint8List.sublistView(bytes, 0, n) : bytes.sublist(0, n));
+    final head = String.fromCharCodes(bytes is Uint8List ? Uint8List.sublistView(bytes, 0, n) : bytes.sublist(0, n))
+        .replaceAll(_comment, ' ');
     for (final tag in _metaTag.allMatches(head)) {
-      final text = tag.group(0)!;
-      final charset = _metaCharset.firstMatch(text);
-      if (charset != null) {
-        final label = (charset.group(1) ?? charset.group(2) ?? charset.group(3) ?? '').trim();
-        if (label.isNotEmpty) return label;
+      final attrs = <String, String>{};
+      for (final a in _attr.allMatches(tag.group(1)!)) {
+        attrs.putIfAbsent(a.group(1)!.toLowerCase(), () => a.group(2) ?? a.group(3) ?? a.group(4) ?? '');
       }
-      if (_httpEquiv.hasMatch(text)) {
-        final content = _metaContent.firstMatch(text);
-        if (content != null) {
-          final value = content.group(1) ?? content.group(2) ?? content.group(3) ?? '';
-          final label = headerCharset(value);
-          if (label != null && label.isNotEmpty) return label;
-        }
+      final charset = attrs['charset']?.trim();
+      if (charset != null && charset.isNotEmpty) return charset;
+      if (attrs['http-equiv']?.trim().toLowerCase() == 'content-type') {
+        final label = headerCharset(attrs['content']);
+        if (label != null && label.isNotEmpty) return label;
       }
     }
     return null;
   }
 }
 
+final _comment = RegExp(r'<!--.*?(?:-->|$)', dotAll: true);
+final _metaTag = RegExp(r'<meta\b([^>]{0,500})>?', caseSensitive: false);
+final _attr = RegExp(r"""([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?""");
 final _headerLabel = RegExp(
   r'charset\s*=\s*["'
   ']?([^;"'
   ']+)',
   caseSensitive: false,
 );
-final _metaTag = RegExp(r'<meta\b[^>]{0,500}>?', caseSensitive: false);
-final _metaCharset = RegExp(r'''charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"';/]+))''', caseSensitive: false);
-final _httpEquiv = RegExp(r'''http-equiv\s*=\s*(?:"content-type"|'content-type'|content-type)''', caseSensitive: false);
-final _metaContent = RegExp(r'''content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''', caseSensitive: false);
 
 /// Code units for bytes 0x80–0xFF of a single-byte encoding, or null when
 /// [name] is not one. Built once per encoding.
@@ -157,7 +156,7 @@ Uint16List? _highTable(String name) {
   if (name == 'windows-1252') {
     table = Uint16List(128);
     for (var i = 0; i < 128; i++) {
-      table[i] = i >= 0x20 ? 0x80 + i : _win1252[i] ?? 0xFFFD;
+      table[i] = i >= 0x20 ? 0x80 + i : _win1252[i] ?? 0x80 + i;
     }
   } else {
     final units = _singleByte[name];
