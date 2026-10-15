@@ -65,7 +65,7 @@ abstract mixin class Reader {                     // bytes you can read; impleme
 }
 abstract mixin class Writer { Future<void> consume(Stream<List<int>> input);  Origin origin(); }   // origin: a File's path
 final class Cookies {                             // the jar chrome produces and http consumes
-  Cookies();  static Cookies parse(String text);  String encode();   // JSON lines: name value domain path expiry secure
+  Cookies();  static Cookies parse(String text);  String encode();   // Netscape cookies.txt
   String? operator [](String name);  String? header(String url);  Cookies set(String name, String value, {required String url});
 }
 final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait});  Future<void> wait(); }
@@ -228,7 +228,8 @@ abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, String? cache, Duration ttl = const Duration(hours: 1), List<String> insecure = const [],
-      Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false});
+      Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false,
+      int limit = 256 << 20});                    // limit: bytes a body read into memory may decode to
   static Client pool(List<Client> members);      // also a Client
 }
 sealed class Client implements Closeable {
@@ -644,7 +645,7 @@ abstract final class Console {
   static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
   static Future<String> key({String? prompt});
   static Future<T> spin<T>(String label, Future<T> work);
-  static Bar bar(int? total, {String? label});   // null = unknown
+  static Bar bar(int? total, {String? label, bool keep = true});   // null = unknown; keep: false vanishes when done
   static void log(String line);                    // prints above a live spinner or bar
   static void table(List<List<Object?>> rows, {List<String>? header});   // aligned columns on stdout
   static void notify(String message);              // OSC 9/777 + bell; through the app inside Tui.run (silent while focused)

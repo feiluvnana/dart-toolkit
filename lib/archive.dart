@@ -518,13 +518,21 @@ final class _Unpacker with Writer {
           ],
         );
       } else if (isXz) {
-        // .tar.xz: decoded whole (xz has no member boundaries), then the tar.
+        // .tar.xz: the compressed bytes are held (xz's index sits at the end),
+        // the tar streams out of the decoder a chunk at a time.
         final acc = BytesBuilder(copy: false);
         await for (final chunk in rest()) {
           acc.add(chunk);
         }
         final bytes = acc.takeBytes();
-        await x.tar(_parseTar(Stream.value(_guard('xz', () => xz.xzDecode(bytes))), fromGzip: true));
+        Stream<List<int>> pieces() async* {
+          final it = xz.xzChunks(bytes).iterator;
+          while (_guard('xz', it.moveNext)) {
+            yield it.current;
+          }
+        }
+
+        await x.tar(_parseTar(pieces(), fromGzip: true));
       } else {
         // Tar and gzip-compressed tar stream straight to the temp sibling:
         // links, escapes and truncation fail here, before the merge.
@@ -1052,53 +1060,45 @@ Map<String, String> _parsePax(Uint8List data) {
 }
 
 // ---------------------------------------------------------------------------
-// Gzip. zlib verifies the CRC-32 while inflating; the SDK decoder does not
-// report a truncated stream, so the trailer's ISIZE (the last 4 bytes) is
-// compared with the decompressed length. That check names one member:
-// concatenated (bgzip) gzip fails it unless its last member is the whole.
+// Gzip. zlib checks each member's CRC-32 and size, and goes on to the next
+// member of a concatenated stream (bgzip, pigz -i, `cat a.gz b.gz`). What it
+// never reports is input that stops inside a member: after the real input an
+// empty gzip member is fed in. At a member boundary it decodes to nothing;
+// inside a member it is read as more of that member, which fails or decodes
+// to stray bytes, so a cut stream is caught however many members it had.
 // ---------------------------------------------------------------------------
+
+/// `gzip` of no bytes: the probe fed after the input.
+const _emptyGzip = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 /// Streaming gzip decompression with a truncation check, constant memory.
 Stream<List<int>> _gunzipChecked(Stream<List<int>> input) async* {
-  var totalCompressed = 0;
-  final last8 = Uint8List(8);
-  void tapCompressed(List<int> chunk) {
-    totalCompressed += chunk.length;
-    if (chunk.length >= 8) {
-      last8.setRange(0, 8, chunk, chunk.length - 8);
-    } else {
-      last8.setRange(0, 8 - chunk.length, last8, chunk.length);
-      last8.setRange(8 - chunk.length, 8, chunk);
+  final z = io.RawZLibFilter.inflateFilter(gzip: true);
+  var compressed = 0;
+  Iterable<List<int>> drain({bool end = false}) sync* {
+    for (List<int>? out; (out = z.processed(end: end)) != null;) {
+      yield out!;
     }
   }
 
-  final decoded = input
-      .map((chunk) {
-        tapCompressed(chunk);
-        return chunk;
-      })
-      .transform(io.gzip.decoder);
-  var size = 0;
   try {
-    await for (final out in decoded) {
-      size = (size + out.length) & 0xFFFFFFFF;
-      yield out;
+    await for (final chunk in input) {
+      if (chunk.isEmpty) continue;
+      compressed += chunk.length;
+      z.process(chunk, 0, chunk.length);
+      yield* Stream.fromIterable(drain().toList());
+    }
+    if (compressed == 0) throw const ContentException('bad gzip data: empty (not a gzip stream)');
+    if (compressed < 18) throw const ContentException('bad gzip data: truncated (no trailer)');
+    z.process(_emptyGzip, 0, _emptyGzip.length);
+    if (drain(end: true).any((out) => out.isNotEmpty)) {
+      throw const ContentException('bad gzip data: truncated (the stream stops inside a member)');
     }
   } on ContentException {
     rethrow;
   } on FormatException catch (e) {
     // zlib's own "Filter error": the data, not the source, is bad.
-    throw ContentException('bad gzip data: ${e.message}', null, null, e);
-  }
-  if (totalCompressed == 0) {
-    throw const ContentException('bad gzip data: empty (not a gzip stream)');
-  }
-  if (totalCompressed < 18) {
-    throw const ContentException('bad gzip data: truncated (no trailer)');
-  }
-  final wantSize = ByteData.sublistView(last8).getUint32(4, Endian.little);
-  if (size != wantSize) {
-    throw const ContentException('bad gzip data: size mismatch (truncated, corrupt or multi-member)');
+    throw ContentException('bad gzip data: ${e.message} (truncated or corrupt)', null, null, e);
   }
 }
 

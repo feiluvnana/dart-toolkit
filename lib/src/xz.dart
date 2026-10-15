@@ -3,6 +3,7 @@
 /// index and footer, concatenated streams and stream padding.
 library;
 
+import 'dart:convert' show ByteConversionSink;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -21,6 +22,15 @@ Never _bad(String why) => throw ContentException('corrupt archive: xz $why');
 /// The decompressed bytes of the xz data in [b].
 Uint8List xzDecode(Uint8List b) {
   final out = BytesBuilder(copy: false);
+  xzChunks(b).forEach(out.add);
+  return out.takeBytes();
+}
+
+/// The decompressed bytes of the xz data in [b], a piece at a time: memory
+/// stays at one LZMA2 dictionary, however large the output. A block's check
+/// is verified at its end, after its bytes went out (an unpack discards
+/// its staging on the error).
+Iterable<Uint8List> xzChunks(Uint8List b) sync* {
   var i = 0;
   while (i < b.length) {
     // Stream padding: zero bytes in fours between streams.
@@ -64,26 +74,34 @@ Uint8List xzDecode(Uint8List b) {
       if (flags & 0x40 != 0) vli(); // compressed size
       if (flags & 0x80 != 0) vli(); // uncompressed size
       final filters = (flags & 3) + 1;
+      var dict = 1 << 32;
       for (var f = 0; f < filters; f++) {
         final id = vli();
         final propsSize = vli();
-        p += propsSize;
         if (f < filters - 1 || id != 0x21) {
           throw ContentException('unsupported xz filter 0x${id.toRadixString(16)} (only LZMA2)');
         }
+        if (propsSize == 1 && p < i + headerSize) {
+          final d = b[p] & 0x3F; // LZMA2's dictionary size byte
+          dict = d >= 40 ? 0xFFFFFFFF : (2 | (d & 1)) << (d ~/ 2 + 11);
+        }
+        p += propsSize;
       }
       i += headerSize;
       final (size, end) = lzma2Extent(b, i);
-      final data = lzma2Decode(Uint8List.sublistView(b, i, end), size);
+      final sum = _Check(check);
+      for (final piece in lzma2Chunks(Uint8List.sublistView(b, i, end), size, window: dict)) {
+        sum.add(piece);
+        yield piece;
+      }
       i = end;
       while ((i - blockStart) % 4 != 0) {
         if (i >= b.length || b[i] != 0) _bad('block padding');
         i++;
       }
       if (i + checkSize > b.length) _bad('block check past the end');
-      _verify(check, data, Uint8List.sublistView(b, i, i + checkSize));
+      sum.verify(Uint8List.sublistView(b, i, i + checkSize));
       i += checkSize;
-      out.add(data);
     }
     // The index: records, padding, CRC32; then the 12-byte footer.
     final indexStart = i;
@@ -112,31 +130,63 @@ Uint8List xzDecode(Uint8List b) {
     i = p + 4 + 12; // the footer
     if (i > b.length || b[i - 2] != 0x59 || b[i - 1] != 0x5A) _bad('stream footer');
   }
-  return out.takeBytes();
 }
 
-void _verify(int check, Uint8List data, Uint8List stored) {
-  switch (check) {
-    case 1:
-      if (crc32(data) != _u32(stored, 0)) _bad('CRC32 of a block');
-    case 4:
-      final c = _crc64(data);
-      for (var k = 0; k < 8; k++) {
-        if ((c >> (8 * k)) & 0xFF != stored[k]) _bad('CRC64 of a block');
-      }
-    case 10:
-      final d = crypto.sha256.convert(data).bytes;
-      for (var k = 0; k < 32; k++) {
-        if (d[k] != stored[k]) _bad('SHA-256 of a block');
-      }
+/// A block's check, computed as its bytes go by.
+final class _Check {
+  _Check(this._kind) {
+    if (_kind == 10) _sha = crypto.sha256.startChunkedConversion(_digest);
   }
+
+  final int _kind;
+  var _crc = 0;
+  final _digest = _DigestSink();
+  ByteConversionSink? _sha;
+
+  void add(Uint8List data) {
+    switch (_kind) {
+      case 1:
+        _crc = crc32(data, crc: _crc);
+      case 4:
+        _crc = _crc64(data, _crc);
+      case 10:
+        _sha!.add(data);
+    }
+  }
+
+  void verify(Uint8List stored) {
+    switch (_kind) {
+      case 1:
+        if (_crc != _u32(stored, 0)) _bad('CRC32 of a block');
+      case 4:
+        for (var k = 0; k < 8; k++) {
+          if ((_crc >> (8 * k)) & 0xFF != stored[k]) _bad('CRC64 of a block');
+        }
+      case 10:
+        _sha!.close();
+        final d = _digest.value!.bytes;
+        for (var k = 0; k < 32; k++) {
+          if (d[k] != stored[k]) _bad('SHA-256 of a block');
+        }
+    }
+  }
+}
+
+final class _DigestSink implements Sink<crypto.Digest> {
+  crypto.Digest? value;
+
+  @override
+  void add(crypto.Digest data) => value = data;
+
+  @override
+  void close() {}
 }
 
 int _u32(Uint8List b, int i) => b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
 
 /// CRC-64/XZ (ECMA-182, reflected), the xz default check.
-int _crc64(Uint8List data) {
-  var c = -1; // all ones
+int _crc64(Uint8List data, [int crc = 0]) {
+  var c = ~crc; // all ones to start
   for (final v in data) {
     c = _crc64Table[(c ^ v) & 0xFF] ^ (c >>> 8);
   }

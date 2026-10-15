@@ -105,7 +105,7 @@ final class ZipEntry {
     final keyLen = 8 + 8 * strength; // 16, 24, 32
     final saltLen = keyLen ~/ 2;
     if (raw.length < saltLen + 12) _corrupt('encrypted member too short: $name');
-    final keys = pbkdf2(crypto.sha1, password, Uint8List.sublistView(raw, 0, saltLen), 1000, 2 * keyLen + 2);
+    final keys = pbkdf2(password, Uint8List.sublistView(raw, 0, saltLen), 1000, 2 * keyLen + 2);
     if (keys[2 * keyLen] != raw[saltLen] || keys[2 * keyLen + 1] != raw[saltLen + 1]) {
       throw ContentException('wrong password for $name');
     }
@@ -277,7 +277,7 @@ Uint8List writeZip(List<(String, int, List<int>, DateTime)> entries, {String? pa
     var flags = 0x800; // UTF-8 names
     if (pw != null && !isDir) {
       final salt = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
-      final keys = pbkdf2(crypto.sha1, pw, salt, 1000, 66);
+      final keys = pbkdf2(pw, salt, 1000, 66);
       final plain = body is Uint8List ? body : Uint8List.fromList(body);
       final encrypted = Aes(Uint8List.sublistView(keys, 0, 32)).ctrLittleEndian(plain);
       final mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, 32, 64)).convert(encrypted).bytes;

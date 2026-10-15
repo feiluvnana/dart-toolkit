@@ -89,6 +89,11 @@ abstract final class Fs {
     return Dir._(home);
   }
 
+  /// The folder of the running script (`Platform.script`), so a script keeps
+  /// its data next to itself whatever the working directory:
+  /// `Fs.scriptDir().file('.session')`.
+  static Dir scriptDir() => Dir._(p.dirname(io.Platform.script.toFilePath()));
+
   /// [name] (a scraped title, a header value) as one file name that is safe
   /// on every OS: `/`, `\\`, `:*?"<>|` and controls become `_`, trailing dots
   /// and spaces go, `CON`-style device names and a leading `.` or `-` get a

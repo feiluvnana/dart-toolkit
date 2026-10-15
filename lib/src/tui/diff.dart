@@ -6,10 +6,10 @@ extension RegionDiff on Region {
   /// `-`/`+` rows on red/green backgrounds, changed words of paired lines
   /// brighter.
   Region diff(String before, String after) {
-    final hit = _diffMemo;
-    final rows = hit != null && hit.$1 == before && hit.$2 == after
-        ? hit.$3
-        : (_diffMemo = (before, after, _diffHunks(before.split('\n'), after.split('\n')))).$3;
+    final key = (before, after);
+    final rows = _diffMemo.remove(key) ?? _diffHunks(before.split('\n'), after.split('\n'));
+    _diffMemo[key] = rows; // most recent last
+    if (_diffMemo.length > 8) _diffMemo.remove(_diffMemo.keys.first);
     for (final line in rows) {
       if (_cursor >= _h) {
         _cursor++;
@@ -25,7 +25,9 @@ extension RegionDiff on Region {
   }
 }
 
-(String, String, List<List<_DiffSeg>>)? _diffMemo;
+/// The last few diffs drawn: several `diff()` panes on one screen each
+/// keep theirs (one shared slot recomputed both every frame).
+final _diffMemo = <(String, String), List<List<_DiffSeg>>>{};
 
 final class _DiffSeg {
   _DiffSeg(this.text, this.fg, this.bg, this.style);

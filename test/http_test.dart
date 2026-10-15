@@ -834,6 +834,28 @@ Future<void> main() async {
       expect(await Http.client(cookies: saved).get('$url/home').text(), 'sid=s3cret');
     });
 
+    test('Cookies.parse reads a browser cookies.txt export', () {
+      final jar = Cookies.parse(
+        [
+          '# Netscape HTTP Cookie File',
+          '# This is a generated file! Do not edit.',
+          '',
+          '.example.com\tTRUE\t/\tTRUE\t4102444800\tsid\ts3cret',
+          '#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\ttok\tabc',
+          'www.example.com\tFALSE\t/app\tFALSE\t4102444800\thost\tonly',
+          '.example.com\tTRUE\t/\tFALSE\t1\told\texpired',
+          'not a cookie line',
+        ].join('\r\n'),
+      );
+      expect(jar.header('https://www.example.com/app/x'), 'host=only; sid=s3cret; tok=abc');
+      expect(jar.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
+      expect(jar.header('http://www.example.com/'), isNull); // sid and tok are secure
+      expect(jar['old'], isNull);
+      final again = Cookies.parse(jar.encode());
+      expect(again.header('https://www.example.com/app/x'), jar.header('https://www.example.com/app/x'));
+      expect(again.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
+    });
+
     test('a script with a long-idle client exits once it closes', () async {
       final sw = Stopwatch()..start();
       final r = await runDart(
@@ -1061,6 +1083,46 @@ void clientTests() {
       expect(seen['cookie'], 'a=1; b=call; c=3');
     });
 
+    test('resume: a bar without a total learns the length, resumed or skipped', () async {
+      final r = await runDart(r'''
+import 'dart:io' as io;
+import 'package:dart_toolkit/console.dart';
+import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/http.dart';
+Future<void> main() async {
+  final server = await io.HttpServer.bind('127.0.0.1', 0);
+  server.listen((q) {
+    final range = q.headers.value('range');
+    if (range == 'bytes=400-') {
+      q.response.statusCode = 206;
+      q.response.headers.set('content-range', 'bytes 400-999/1000');
+      q.response.contentLength = 600;
+      q.response.add(List.filled(600, 1));
+    } else {
+      q.response.contentLength = 1000;
+      q.response.add(List.filled(1000, 1));
+    }
+    q.response.close();
+  });
+  final cdn = Http.client(resume: true);
+  final url = 'http://127.0.0.1:${server.port}/f';
+  await Fs.temp((dir) async {
+    final to = dir.file('f.bin');
+    await (cdn.get(url) | Console.bar(null, label: 'fresh') > to);
+    await (cdn.get(url) | Console.bar(null, label: 'skipped') > to);
+    await to.delete();
+    await dir.file('f.bin.part').write('x' * 400);
+    await (cdn.get(url) | Console.bar(null, label: 'resumed') > to);
+  });
+  await server.close(force: true);
+}
+''');
+      final err = r.stderr as String;
+      for (final label in ['fresh', 'skipped', 'resumed']) {
+        expect(err, contains('$label 1000 B/1000 B'));
+      }
+    });
+
     test('resume: a GET piped into a file is atomic, skips a complete file, resumes a .part', () async {
       final dir = await Directory.systemTemp.createTemp('resume');
       addTearDown(() => dir.delete(recursive: true));
@@ -1188,6 +1250,20 @@ void clientTests() {
       expect(hits['/banned'], 3);
       expect(sw.elapsed, greaterThan(const Duration(milliseconds: 900))); // was ~10 ms: straight into the ban
       await p.close();
+    });
+
+    test('limit: caps a body read into memory, decoded size included; piping is unlimited', () async {
+      final small = Http.client(limit: 1000);
+      await expectLater(
+        small.get('$url/gzip').text(),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('over 1000 bytes'))),
+      );
+      final sink = _Sink();
+      await (small.get('$url/gzip') > sink);
+      expect(sink.data, hasLength(5000));
+      expect((await Http.client().get('$url/gzip').text()).length, 5000);
+      expect(() => Http.client(limit: -1), throwsArgumentError);
+      await small.close();
     });
 
     test('size() is null for a body decoded on the fly', () async {

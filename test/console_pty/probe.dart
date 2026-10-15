@@ -9,6 +9,7 @@
 //           exit(3), crash, or cancel and report whether it is alive.
 //   leak:   ticks a bar and returns without closing it; must still exit.
 //   over:   ticks past the total and by a negative count; close prints the count.
+//   keep:   a kept bar, a `keep: false` one, and a `keep: false` one that fails.
 //   evil:   choose over a label with ESC and a newline (piped).
 //   ask:    reads one line (piped stdin); writes the answer.
 //   ask2:   reads two lines; writes both.
@@ -33,6 +34,14 @@ Future<void> main(List<String> args) async {
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
       await bar.close();
+    case 'keep':
+      Console.bar(2, label: 'kept').tick(2);
+      Console.bar(2, label: 'gone', keep: false).tick(2);
+      try {
+        await (Reader.of([1, 2, 3]) | Console.bar(null, label: 'broken', keep: false) > _Failing());
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      stdout.writeln('done');
     case 'short':
       final bar = Console.bar(40, label: 'Pages');
       bar.tick(12);
@@ -126,5 +135,15 @@ Future<void> main(List<String> args) async {
     case 'secret':
       final answer = await Console.ask('Password?', secret: true);
       await log.writeAsString('secret=$answer\n');
+  }
+}
+
+/// A writer that fails after the first chunk, so a piped bar aborts.
+final class _Failing with Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async {
+    await for (final _ in input) {
+      throw const FileSystemException('disk full');
+    }
   }
 }

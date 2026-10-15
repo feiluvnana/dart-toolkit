@@ -17,48 +17,54 @@ import 'dart:io' as io;
 final class Cookies {
   Cookies();
 
-  /// What [encode] wrote; a line that does not parse is skipped.
+  /// A Netscape `cookies.txt`: what [encode] writes, and what browser
+  /// cookie-export extensions, curl and yt-dlp use. Comments and lines that
+  /// do not parse are skipped (`#HttpOnly_` lines are cookies).
   static Cookies parse(String text) {
     final jar = Cookies();
-    for (final line in const LineSplitter().convert(text)) {
-      if (line.trim().isEmpty) continue;
-      try {
-        final m = jsonDecode(line) as Map<String, Object?>;
-        final domain = m['domain'] as String;
-        final expiry = m['expiry'] as int?;
-        jar._put(
-          _Cookie(
-            m['name'] as String,
-            m['value'] as String,
-            domain: domain.startsWith('.') ? domain.substring(1) : domain,
-            hostOnly: !domain.startsWith('.'),
-            path: m['path'] as String? ?? '/',
-            secure: m['secure'] as bool? ?? false,
-            expires: expiry == null ? null : DateTime.fromMillisecondsSinceEpoch(expiry),
-          ),
-        );
-      } catch (_) {}
+    for (var line in const LineSplitter().convert(text)) {
+      line = line.trim();
+      if (line.startsWith('#HttpOnly_')) line = line.substring('#HttpOnly_'.length);
+      if (line.isEmpty || line.startsWith('#')) continue;
+      final f = line.split('\t');
+      if (f.length != 7 || f[0].isEmpty || f[5].isEmpty) continue;
+      final seconds = num.tryParse(f[4]);
+      if (seconds == null) continue;
+      final domain = f[0].toLowerCase();
+      jar._put(
+        _Cookie(
+          f[5],
+          f[6],
+          domain: domain.startsWith('.') ? domain.substring(1) : domain,
+          hostOnly: !domain.startsWith('.') && f[1].toUpperCase() != 'TRUE',
+          path: f[2].isEmpty ? '/' : f[2],
+          secure: f[3].toUpperCase() == 'TRUE',
+          expires: seconds <= 0 ? null : DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round()),
+        ),
+      );
     }
     return jar;
   }
 
   final _cookies = <String, _Cookie>{};
 
-  /// JSON lines: `name`, `value`, `domain` (a leading dot for a domain
-  /// cookie, none for host-only), `path`, `expiry` (epoch ms or null),
-  /// `secure`. Expired cookies are left out.
+  /// A Netscape `cookies.txt` (expiry 0 for a session cookie). Expired
+  /// cookies are left out.
   String encode() {
     _sweep();
+    String flag(bool b) => b ? 'TRUE' : 'FALSE';
     return [
+      '# Netscape HTTP Cookie File',
       for (final c in _cookies.values)
-        jsonEncode({
-          'name': c.name,
-          'value': c.value,
-          'domain': c.hostOnly ? c.domain : '.${c.domain}',
-          'path': c.path,
-          'expiry': c.expires?.millisecondsSinceEpoch,
-          'secure': c.secure,
-        }),
+        [
+          c.hostOnly ? c.domain : '.${c.domain}',
+          flag(!c.hostOnly),
+          c.path,
+          flag(c.secure),
+          '${(c.expires?.millisecondsSinceEpoch ?? 0) ~/ 1000}',
+          c.name,
+          c.value,
+        ].join('\t'),
     ].join('\n');
   }
 

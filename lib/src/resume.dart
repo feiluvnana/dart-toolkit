@@ -18,3 +18,9 @@ abstract interface class Resumable {
 /// A pipe whose output is its input (a progress bar, a hasher), so stored
 /// bytes can be replayed through it on a skip or a resume.
 abstract interface class PassThrough {}
+
+/// A pass-through pipe that wants the full length once the download knows
+/// it (a bar created without a total shows `done/total` from then on).
+abstract interface class Sized {
+  void sized(int bytes);
+}

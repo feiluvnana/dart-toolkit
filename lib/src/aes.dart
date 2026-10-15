@@ -194,22 +194,100 @@ final class Aes {
   }
 }
 
-/// PBKDF2 (RFC 8018) with HMAC over [hash]: [length] bytes.
-Uint8List pbkdf2(crypto.Hash hash, List<int> password, List<int> salt, int iterations, int length) {
-  final hmac = crypto.Hmac(hash, password);
+/// PBKDF2 with HMAC-SHA1 (WinZip AES): [length] key bytes from [password]
+/// and [salt]. The HMAC pad states are hashed once, so each of the
+/// [iterations] costs two SHA-1 compressions on fixed buffers (2.7x the
+/// generic `Hmac`).
+Uint8List pbkdf2(List<int> password, List<int> salt, int iterations, int length) {
+  var key = password;
+  if (key.length > 64) key = crypto.sha1.convert(key).bytes;
+  final pad = Uint8List(64);
+  Uint32List padState(int fill) {
+    pad.fillRange(0, 64, fill);
+    for (var i = 0; i < key.length; i++) {
+      pad[i] ^= key[i];
+    }
+    final st = Uint32List.fromList(_sha1Init);
+    _sha1Block(st, Uint32List.fromList([for (var w = 0; w < 16; w++) _word(pad, 4 * w)]));
+    return st;
+  }
+
+  final inner = padState(0x36), outer = padState(0x5c);
+  final hmac = crypto.Hmac(crypto.sha1, password);
+  // One block holding a 20-byte message after a 64-byte pad: the message,
+  // 0x80, zeros, and the length 84 * 8 bits.
+  final msg = Uint32List(16)
+    ..[5] = 0x80000000
+    ..[15] = 84 * 8;
+  final st = Uint32List(5);
   final out = BytesBuilder(copy: false);
   for (var block = 1; out.length < length; block++) {
-    var u = hmac.convert([...salt, block >> 24 & 0xFF, block >> 16 & 0xFF, block >> 8 & 0xFF, block & 0xFF]).bytes;
-    final t = Uint8List.fromList(u);
+    final u = hmac.convert([...salt, block >> 24 & 0xFF, block >> 16 & 0xFF, block >> 8 & 0xFF, block & 0xFF]).bytes;
+    final first = Uint8List.fromList(u);
+    final t = Uint32List(5);
+    for (var w = 0; w < 5; w++) {
+      t[w] = msg[w] = _word(first, 4 * w);
+    }
     for (var i = 1; i < iterations; i++) {
-      u = hmac.convert(u).bytes;
-      for (var j = 0; j < t.length; j++) {
-        t[j] ^= u[j];
+      st.setAll(0, inner);
+      _sha1Block(st, msg);
+      msg.setRange(0, 5, st);
+      st.setAll(0, outer);
+      _sha1Block(st, msg);
+      for (var w = 0; w < 5; w++) {
+        t[w] ^= msg[w] = st[w];
       }
     }
-    out.add(t);
+    final bytes = Uint8List(20);
+    for (var w = 0; w < 5; w++) {
+      _put(bytes, 4 * w, t[w]);
+    }
+    out.add(bytes);
   }
   return Uint8List.sublistView(out.takeBytes(), 0, length);
+}
+
+const _sha1Init = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+final _w = Uint32List(80);
+
+/// One SHA-1 compression of the 16 big-endian words [block] into [h].
+void _sha1Block(Uint32List h, Uint32List block) {
+  final w = _w;
+  for (var i = 0; i < 16; i++) {
+    w[i] = block[i];
+  }
+  for (var i = 16; i < 80; i++) {
+    final x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+    w[i] = (x << 1 | x >> 31) & 0xFFFFFFFF;
+  }
+  var a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+  for (var i = 0; i < 80; i++) {
+    final int f, k;
+    if (i < 20) {
+      f = (b & c) | (~b & d);
+      k = 0x5A827999;
+    } else if (i < 40) {
+      f = b ^ c ^ d;
+      k = 0x6ED9EBA1;
+    } else if (i < 60) {
+      f = (b & c) | (b & d) | (c & d);
+      k = 0x8F1BBCDC;
+    } else {
+      f = b ^ c ^ d;
+      k = 0xCA62C1D6;
+    }
+    final t = ((a << 5 | a >> 27) + (f & 0xFFFFFFFF) + e + k + w[i]) & 0xFFFFFFFF;
+    e = d;
+    d = c;
+    c = (b << 30 | b >> 2) & 0xFFFFFFFF;
+    b = a;
+    a = t;
+  }
+  h[0] = (h[0] + a) & 0xFFFFFFFF;
+  h[1] = (h[1] + b) & 0xFFFFFFFF;
+  h[2] = (h[2] + c) & 0xFFFFFFFF;
+  h[3] = (h[3] + d) & 0xFFFFFFFF;
+  h[4] = (h[4] + e) & 0xFFFFFFFF;
 }
 
 int _word(Uint8List b, int o) => b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3];

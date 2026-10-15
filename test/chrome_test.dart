@@ -146,6 +146,19 @@ void main() {
       expect(profiles(), isFalse);
     }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
 
+    test('a reused profile keeps its cookies but not its tabs', () async {
+      final profile = await Directory.systemTemp.createTemp('chrome_profile');
+      addTearDown(() => profile.delete(recursive: true));
+      final first = await Chrome.launch(profile: profile.path);
+      await first.open('$base/cookie');
+      await first.close();
+      final again = await Chrome.launch(profile: profile.path);
+      addTearDown(again.close);
+      await Future<void>.delayed(const Duration(seconds: 1)); // restored tabs open late
+      expect(await Future.wait([for (final p in await again.pages()) p.url()]), isNot(contains('$base/cookie')));
+      expect((await (await again.open('$base/')).cookies())['tok'], 'abc');
+    });
+
     test('closing a connected browser closes its own tabs, not the host\'s', () async {
       final exe = (await pp.downloadChrome(cachePath: '${cache.userCacheDir()}/dart_toolkit/chrome')).executablePath;
       final host = await pp.puppeteer.launch(executablePath: exe);

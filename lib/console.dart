@@ -25,7 +25,7 @@ export 'core.dart';
 import 'src/exit.dart' as exit;
 import 'src/format.dart' as fmt;
 import 'src/keys.dart' as keys;
-import 'src/resume.dart' show PassThrough;
+import 'src/resume.dart' show PassThrough, Sized;
 import 'src/terminal.dart' as term;
 import 'src/terminal.dart' show Color;
 export 'src/terminal.dart' show Color;
@@ -64,13 +64,13 @@ abstract final class Console {
   }
 
   /// Remove [live] and print [last] in its place, as a permanent line above
-  /// the remaining live lines.
-  static void _endLive(_Live live, String last) {
+  /// the remaining live lines; a null [last] leaves nothing behind.
+  static void _endLive(_Live live, String? last) {
     if (!_lives.remove(live)) {
-      io.stderr.writeln(last);
+      if (last != null) io.stderr.writeln(last);
       return;
     }
-    io.stderr.write('${_erase()}$last\n');
+    io.stderr.write(last == null ? _erase() : '${_erase()}$last\n');
     _drawn = 0;
     _paint(force: true);
     _syncTicker();
@@ -502,14 +502,15 @@ abstract final class Console {
   /// As a [Pipe] it counts bytes; with [Bar.tick] it counts items. Stacks
   /// with other live bars and spinners; without a terminal only the final
   /// line prints. While a state-driven `Tui.run` is active, draws in its
-  /// status row instead (several at once).
-  static Bar bar(int? total, {String? label}) {
+  /// status row instead (several at once). With `keep: false` the line
+  /// vanishes when the bar finishes (a failed one still prints ✗).
+  static Bar bar(int? total, {String? label, bool keep = true}) {
     if (label != null) label = term.plainLabel(label);
     final bridge = term.TuiBridge.current;
     if (bridge != null) {
       return Bar._bridged(bridge, bridge.barStarted(total, label), total, label: label);
     }
-    final bar = Bar._(total, label: label);
+    final bar = Bar._(total, label: label, keep: keep);
     _addLive(bar);
     return bar;
   }
@@ -925,10 +926,13 @@ abstract final class _Live {
 /// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
 /// count and a rate with no bar, so `Console.bar(res.size())`
 /// just works.
-final class Bar extends _Live implements Pipe, Closeable, PassThrough {
-  Bar._(this._total, {this._label}) : _bridge = null, _bridgeId = null;
+final class Bar extends _Live implements Pipe, Closeable, PassThrough, Sized {
+  Bar._(this._total, {this._label, this._keep = true}) : _bridge = null, _bridgeId = null;
 
-  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label});
+  Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label}) : _keep = true;
+
+  /// Whether the final line stays when the bar finishes.
+  final bool _keep;
 
   int? _total;
   final String? _label;
@@ -977,6 +981,13 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
     return tick(done - _done);
   }
 
+  /// A resumable download piped through this bar reports its length; a total
+  /// set by hand wins.
+  @override
+  void sized(int bytes) {
+    if (_total == null) setTotal(bytes);
+  }
+
   /// Set the total once it is known (a download's length arrives with its
   /// headers). Returns this bar.
   Bar setTotal(int? total) {
@@ -1006,8 +1017,8 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
     if (_closed) return;
     _closed = true;
     if (Console._lives.contains(this)) {
-      Console._endLive(this, _text(Console._columns()));
-    } else {
+      Console._endLive(this, _keep ? _text(Console._columns()) : null);
+    } else if (_keep) {
       final label = _label == null ? '' : '$_label ';
       final total = _total;
       final secs = _clock.elapsed.inMilliseconds / 1000;

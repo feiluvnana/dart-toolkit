@@ -15,7 +15,7 @@ Output: docs/ARCHITECTURE.md with the graph (text), findings and a migration ord
 
 ## Context (same in every prompt)
 - dart_toolkit, branch master: a Dart scripting toolkit. docs/VISION.md is the intended API; lib/*.dart is the public surface (lib/src is private).
-- README.md has the tour; projects/rawfree.dart is a real Tui app built on the library; docs/PLAN.md holds Windows and Linux handoffs.
+- README.md has the tour; projects/rawfree/rawfree.dart is a real Tui app built on the library; docs/PLAN.md holds Windows and Linux handoffs.
 - Priorities: speed (runtime, then startup) > call-site brevity = discoverability > the rest.
 - Every module works alone and composes: `Reader | Pipe > Writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
 - Names: short, one word when it reads one way, the same word for the same idea in every module (see docs/VISION.md §1).

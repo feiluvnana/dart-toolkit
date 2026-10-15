@@ -599,6 +599,13 @@ List<_MdSeg> _mdEmph(String text, Set<Style> base) {
                 _isWordChar(text.codeUnitAt(close + mark.length))))) {
       close = text.indexOf(mark, close + mark.length);
     }
+    // `***x***`: the outer `**` closes at the end of the run, so the inner
+    // `*` gets its own close (it rendered `x*`).
+    if (close > 0 && mark.length == 2) {
+      while (close + 2 < text.length && text.codeUnitAt(close + 2) == mark.codeUnitAt(0)) {
+        close++;
+      }
+    }
     textOut(plain.toString());
     plain.clear();
     if (close < 0) {
@@ -643,8 +650,27 @@ List<List<_MdSeg>> _mdWrap(List<_MdSeg> segs, int width, int indent) {
         );
         used++;
       }
-      line.add(_MdSeg(word, seg.fg, seg.bg, seg.style, seg.link));
-      used += w;
+      if (used + w <= width) {
+        line.add(_MdSeg(word, seg.fg, seg.bg, seg.style, seg.link));
+        used += w;
+      } else {
+        // Wider than a whole line (a URL, a hash): broken by cells, never
+        // clipped.
+        var part = StringBuffer();
+        for (final rune in word.runes) {
+          final rw = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
+          if (used + rw > width && used > start) {
+            if (part.isNotEmpty) line.add(_MdSeg('$part', seg.fg, seg.bg, seg.style, seg.link));
+            lines.add(line);
+            line = [];
+            used = start = indent;
+            part = StringBuffer();
+          }
+          part.writeCharCode(rune);
+          used += rw;
+        }
+        if (part.isNotEmpty) line.add(_MdSeg('$part', seg.fg, seg.bg, seg.style, seg.link));
+      }
       space = false;
       prev = seg;
     }
@@ -1011,5 +1037,5 @@ final _mdHeadStartRe = RegExp(r'^(#{1,6})\s+');
 final _mdListStartRe = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+');
 final _mdSepRe = RegExp(r'^[\s|:\-]+$');
 final _mdCodeRe = RegExp(r'`([^`\n]+)`');
-final _mdLinkRe = RegExp(r'\[([^\]\[]*)\]\(([^)\s]+)\)');
+final _mdLinkRe = RegExp(r'\[([^\]\[]*)\]\(((?:[^()\s]|\([^()\s]*\))+)\)'); // one level of (…) in the URL
 final _mdSpaceRe = RegExp(r'\s+');

@@ -1,7 +1,7 @@
-// Downloads the Key BOX -for two decades- set (artwork, scans, messages and the mp3
-// soundtrack) into the folder below, then zips it. Files already there are skipped.
+// Downloads the Key BOX -for two decades- set (artwork, scans, messages and the
+// mp3 soundtrack), then zips it. Files already downloaded are skipped.
 //
-//   dart run projects/keybox.dart
+//   dart run projects/keybox/keybox.dart
 library;
 
 import 'package:dart_toolkit/archive.dart';
@@ -27,7 +27,7 @@ final http = Http.client(
   resume: true,
 );
 
-final box = Fs.dir('Key BOX -for two decades- (2019)');
+final box = Fs.scriptDir().dir('Key BOX -for two decades- (2019)');
 final keyBoxArt = box.dir('Others').dir('KeyBOX');
 final anniversary = box.dir('Others').dir('Key 20th Anniversary');
 final events = box.dir('Others').dir('Events & Topics');
@@ -39,7 +39,6 @@ final discInLink = RegExp(r'/(\d+)-');
 final trackInLink = RegExp(r'-(\d+)\.');
 final number = RegExp(r'(\d+)');
 
-/// One file to fetch, and where it goes.
 typedef Asset = (String url, File to);
 
 final class Disc {
@@ -57,18 +56,28 @@ Future<void> main(List<String> args) => Command(
 ).run(args);
 
 Future<void> download() async {
-  final keyBox = await page('${site}key_box.html');
+  final (keyBox, messagePage, topicsPage) = await Console.spin(
+    'reading the Key 20th site',
+    (page('${site}key_box.html'), page('${site}message.html'), page('${site}topics.html')).wait,
+  );
   final discs = readDiscs(keyBox);
   final assets = [
     ...discArtwork(keyBox, discs),
     ...boxArtwork(),
-    ...messages(await page('${site}message.html')),
-    ...topics(await page('${site}topics.html')),
+    ...messages(messagePage),
+    ...topics(topicsPage),
     ...await songs(discs),
   ];
-  final bar = Console.bar(assets.length, label: 'Downloading');
-  await Pool.map(assets, (a) => http.get(a.$1) > a.$2, onDone: bar.tick);
-  await Console.spin('Zipping', (Archive.archive(['.'], dir: box.path()) > Fs.file('${box.path()}.zip')));
+
+  final bar = Console.bar(assets.length, label: 'files done');
+  await Pool.map(assets, (a) async {
+    final (url, to) = a;
+    if (await to.exists()) return;
+    await (http.get(url) | Console.bar(null, label: '  ${to.name()}', keep: false) > to);
+  }, onDone: bar.tick);
+  final zip = Fs.file('${box.path()}.zip');
+  await Console.spin('zipping into ${zip.path()}', Archive.archive(['.'], dir: box.path()) > zip);
+  Console.log('done: ${discs.length} discs and ${assets.length} files in "${box.path()}", zipped to "${zip.path()}"');
 }
 
 Future<Elements> page(String url) => http.get(url).html();
@@ -151,7 +160,7 @@ List<Asset> boxArtwork() {
 List<Asset> messages(Elements page) {
   const groups = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
   Asset tribute(String group, int i, Element a) {
-    final url = a.attr('href')!; // the selector requires it
+    final url = a.attr('href')!;
     final title = a.attr('title') ?? a.text().replaceAll('[New Message]', '');
     return (url, tributes.dir(group).file('${studio(url)}${'${i + 1}'.padLeft(2, '0')}_${Fs.sanitize(title)}.jpg'));
   }
@@ -168,9 +177,9 @@ List<Asset> topics(Elements page) => [
   for (final src in page.$('.topics_box img').attrs('src')) (src, events.file(nameOf(src))),
 ];
 
-/// The soundtrack's song pages, then each page's file link for every format not on disk yet.
+// khinsider has one page per song; the actual file link is on that page.
 Future<List<Asset>> songs(Map<int, Disc> discs) async {
-  final doc = await page(soundtrack);
+  final doc = await Console.spin('reading the soundtrack list', page(soundtrack));
   final wanted = <(String, Map<String, File>)>[];
   for (final row in doc.$('#songlist tr')) {
     final cells = row.$('td').toList();
@@ -189,11 +198,10 @@ Future<List<Asset>> songs(Map<int, Disc> discs) async {
     }
     if (missing.isNotEmpty) wanted.add((song, missing));
   }
-  final bar = Console.bar(wanted.length, label: 'Song pages');
+  final bar = Console.bar(wanted.length, label: 'finding song files');
   return [for (final files in await Pool.map(wanted, songFiles, onDone: bar.tick)) ...files];
 }
 
-/// One song page's file links.
 Future<List<Asset>> songFiles((String, Map<String, File>) song) async {
   final doc = await page(song.$1);
   return [

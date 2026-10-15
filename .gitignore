@@ -5,6 +5,5 @@ build/
 coverage/
 
 # Script
-.chrome/
-.session
-downloads/
+projects/*/*
+!projects/*/*.dart

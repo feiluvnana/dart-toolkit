@@ -23,46 +23,68 @@ Uint8List lzmaDecode(Uint8List input, List<int> props, int size) {
 }
 
 /// Decode an LZMA2 stream (7z's 1 property byte) into [size] bytes.
-Uint8List lzma2Decode(Uint8List input, int size) {
-  final d = _Lzma(size);
+Uint8List lzma2Decode(Uint8List input, int size) => lzma2Chunks(input, size).single;
+
+/// [lzma2Decode] in pieces: with a [window] (the dictionary size), each
+/// chunk's new bytes as it decodes, keeping only the last [window] bytes
+/// for back-references, so memory stays at the dictionary however large
+/// the stream. Without one, the whole output once.
+Iterable<Uint8List> lzma2Chunks(Uint8List input, int size, {int? window}) sync* {
+  final d = _Lzma(size, window == null ? null : window + _slack);
   var i = 0;
   var needProps = true;
+  var shifted = 0; // bytes already handed out and dropped from the front
   while (true) {
     if (i >= input.length) _bad('LZMA2 stream ends without its end marker');
     final control = input[i++];
     if (control == 0) break;
+    final from = d.pos;
     if (control == 1 || control == 2) {
       // An uncompressed chunk (1 also resets the dictionary).
       if (i + 2 > input.length) _bad('truncated LZMA2 chunk');
       final n = (input[i] << 8 | input[i + 1]) + 1;
       i += 2;
-      if (i + n > input.length || d.pos + n > size) _bad('LZMA2 chunk runs past the end');
+      if (i + n > input.length || shifted + d.pos + n > size) _bad('LZMA2 chunk runs past the end');
       d.reserve(d.pos + n).setRange(d.pos, d.pos + n, input, i);
       d.pos += n;
       i += n;
-      continue;
+    } else {
+      if (control < 0x80) _bad('bad LZMA2 control byte $control');
+      if (i + 4 > input.length) _bad('truncated LZMA2 chunk');
+      final unpacked = ((control & 0x1F) << 16 | input[i] << 8 | input[i + 1]) + 1;
+      final packed = (input[i + 2] << 8 | input[i + 3]) + 1;
+      i += 4;
+      final mode = control >> 5 & 3;
+      if (mode >= 2) {
+        d.setProps(input[i++]);
+        needProps = false;
+      } else if (needProps) {
+        _bad('LZMA2 chunk before its properties');
+      }
+      if (mode >= 1) d.resetState();
+      if (i + packed > input.length || shifted + d.pos + unpacked > size) _bad('LZMA2 chunk runs past the end');
+      final rc = _Range(input, i);
+      d.decode(rc, d.pos + unpacked);
+      i += packed;
     }
-    if (control < 0x80) _bad('bad LZMA2 control byte $control');
-    if (i + 4 > input.length) _bad('truncated LZMA2 chunk');
-    final unpacked = ((control & 0x1F) << 16 | input[i] << 8 | input[i + 1]) + 1;
-    final packed = (input[i + 2] << 8 | input[i + 3]) + 1;
-    i += 4;
-    final mode = control >> 5 & 3;
-    if (mode >= 2) {
-      d.setProps(input[i++]);
-      needProps = false;
-    } else if (needProps) {
-      _bad('LZMA2 chunk before its properties');
+    if (window == null) continue;
+    yield Uint8List.fromList(Uint8List.sublistView(d._out, from, d.pos));
+    // Slide: keep the last [window] bytes, moved by a multiple of 16 so the
+    // position bits (pb, lp <= 4) the coder reads off `pos` stay the same.
+    if (d.pos > window + (_slack >> 1)) {
+      final delta = (d.pos - window) & ~15;
+      d._out.setRange(0, d.pos - delta, d._out, delta);
+      d.pos -= delta;
+      shifted += delta;
     }
-    if (mode >= 1) d.resetState();
-    if (i + packed > input.length || d.pos + unpacked > size) _bad('LZMA2 chunk runs past the end');
-    final rc = _Range(input, i);
-    d.decode(rc, d.pos + unpacked);
-    i += packed;
   }
-  if (d.pos != size) _bad('LZMA2 data ends at ${d.pos} of $size bytes');
-  return d.bytes();
+  if (shifted + d.pos != size) _bad('LZMA2 data ends at ${shifted + d.pos} of $size bytes');
+  if (window == null) yield d.bytes();
 }
+
+/// Room past the window: one LZMA2 chunk (2 MiB unpacked at most) plus the
+/// longest match, with space to spare before a slide.
+const _slack = 8 << 20;
 
 /// The range decoder: 32-bit range and code over [_buf] from [_i].
 final class _Range {
@@ -162,7 +184,7 @@ final class _Len {
 }
 
 final class _Lzma {
-  _Lzma(this._size) : _out = Uint8List(_size.clamp(0, declaredCeiling)) {
+  _Lzma(this._size, [int? capacity]) : _out = Uint8List((capacity ?? _size).clamp(0, _size.clamp(0, declaredCeiling))) {
     if (_size < 0) _bad('size $_size');
   }
 

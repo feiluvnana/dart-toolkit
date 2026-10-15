@@ -390,6 +390,22 @@ void main() {
       expect(Directory(kept!).existsSync(), isFalse);
     });
 
+    test('Fs.scriptDir is the script\'s folder, not the working directory', () async {
+      final cwd = await Directory.systemTemp.createTemp('elsewhere');
+      addTearDown(() => cwd.delete(recursive: true));
+      final r = await runDart('''
+import 'package:dart_toolkit/fs.dart';
+Future<void> main() async {
+  print(Fs.scriptDir().path());
+  print(await Fs.scriptDir().file('main.dart').exists());
+}
+''', cwd: cwd.path);
+      expect(r.stderr, isEmpty);
+      final [dir, found, ...] = (r.stdout as String).split('\n');
+      expect(found, 'true');
+      expect(Directory(dir).resolveSymbolicLinksSync(), isNot(cwd.resolveSymbolicLinksSync()));
+    });
+
     test('Fs.home is HOME', () {
       expect(Fs.home().path(), Platform.environment['HOME']);
     });

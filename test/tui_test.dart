@@ -650,6 +650,84 @@ void main() {
       expect(t.row(3), contains('hello there'));
     });
 
+    test('markdown breaks a too-long word, keeps parens in link URLs, and nests ***bold italic***', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen(
+          (r) => r.markdown(
+            'see https://example.com/a/very/long/path/to/a/file\n\n[link (x)](https://e.com/a_(b)) after\n\n***both***',
+          ),
+        ),
+        width: 20,
+        height: 12,
+      );
+      await t.pump();
+      final rows = [for (var y = 0; y < 12; y++) t.row(y).trimRight()];
+      expect(rows.join(), contains('https://example.com/a/very/long/path/to/a/file'.substring(0, 16)));
+      expect(rows.join(), contains('to/a/file'), reason: '$rows');
+      expect(rows.join('|'), contains('link (x) after'));
+      expect(rows.join('|'), isNot(contains(')) after')));
+      expect(rows.join('|'), contains('both'));
+      expect(rows.join('|'), isNot(contains('both*')));
+      t.close();
+    });
+
+    test('two diffs on one screen are each computed once (regression: Myers every frame)', () async {
+      String text(int seed) =>
+          [for (var i = 0; i < 3000; i++) i % 7 == seed ? 'changed $i $seed' : 'line $i'].join('\n');
+      final a = text(0), b = text(1), c = text(2), d = text(3);
+      var tick = 0;
+      final t = testSession<int>(
+        0,
+        (s, app) {
+          tick++;
+          return Screen((r) {
+            final [left, right] = r.cols([1, 1]);
+            left.diff(a, b);
+            right.diff(c, d);
+          });
+        },
+        width: 80,
+        height: 20,
+      );
+      await t.pump();
+      final sw = Stopwatch()..start();
+      for (var i = 0; i < 20; i++) {
+        t.bytes([0x78]); // any key: a new frame
+        await t.pump();
+      }
+      expect(tick, greaterThan(10));
+      expect(sw.elapsedMilliseconds, lessThan(120)); // was ~14 ms a frame, 280 ms here
+      t.close();
+    });
+
+    test('a table frame costs the screen, not the rows (regression: 35 ms at 100k rows)', () async {
+      final pick = Pick<int>(List.generate(1000000, (i) => i))..select(500000);
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.table(pick, (i) => ['$i', 'row $i'], header: ['n', 'name'])),
+        width: 40,
+        height: 20,
+      );
+      await t.pump();
+      final sw = Stopwatch()..start();
+      pick.select(500001);
+      await t.pump();
+      expect(sw.elapsedMilliseconds, lessThan(150)); // was ~350 ms at a million rows
+      expect([for (var y = 0; y < 20; y++) t.row(y)].join('|'), contains('row 500001'));
+      t.close();
+    });
+
+    test('a full repaint moves the cursor once a row through frames and CJK, not per cell', () async {
+      for (final fill in ['─', '日']) {
+        final t = testSession<int>(0, (s, app) => Screen((r) => r.write(fill * 2000)), width: 40, height: 10);
+        await t.pump();
+        final moves = RegExp(r'\x1b\[\d+;\d+H').allMatches(t.output).length;
+        expect(moves, lessThanOrEqualTo(12), reason: fill); // was one per cell
+        t.close();
+      }
+    });
+
     test('a popup title lays wide glyphs over two cells', () async {
       final t = testSession<int>(
         0,

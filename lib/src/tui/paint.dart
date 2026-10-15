@@ -27,7 +27,22 @@ final class _Cell {
   final int width;
   final String? link;
 
-  bool get isAscii => ch.length == 1 && ch.codeUnitAt(0) < 0x7f;
+  /// The terminal cursor ends where this cell says: ASCII, box drawing and
+  /// block elements (the frames and bars), and wide CJK, kana, Hangul and
+  /// fullwidth forms. Emoji, marks and ambiguous-width text re-sync with a
+  /// cursor move after them.
+  bool get flows {
+    if (ch.length != 1) return false;
+    final c = ch.codeUnitAt(0);
+    if (c < 0x7f) return true;
+    if (c >= 0x2500 && c <= 0x259F) return width == 1;
+    return width == 2 &&
+        ((c >= 0x1100 && c <= 0x115F) ||
+            (c >= 0x2E80 && c <= 0xA4CF) ||
+            (c >= 0xAC00 && c <= 0xD7A3) ||
+            (c >= 0xF900 && c <= 0xFAFF) ||
+            (c >= 0xFF00 && c <= 0xFF60));
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -75,7 +90,7 @@ extension _SessionPaint on _Session<dynamic> {
             was[x + 1] = row[x + 1];
           }
         }
-        cx = c.isAscii ? x + 1 : -1;
+        cx = c.flows ? x + c.width : -1;
       }
     }
     if (link != null) buf.write('\x1b]8;;\x1b\\');

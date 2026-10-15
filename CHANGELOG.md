@@ -4,11 +4,12 @@
 
 **Added**
 - `yaml`: new module: `Yaml.parse`, `reader.yaml(or:)` → the same `Json` reading API (package:yaml).
-- `fs`: `Fs.temp((dir) async {…})` (a scoped temp folder, deleted after, Ctrl-C included), `Fs.home()`, `file.lock(() async {…}, wait:)` (one run at a time across processes), `Entry.modified()`.
+- `fs`: `Fs.temp((dir) async {…})` (a scoped temp folder, deleted after, Ctrl-C included), `Fs.home()`, `Fs.scriptDir()` (the running script's folder, for data kept next to it), `file.lock(() async {…}, wait:)` (one run at a time across processes), `Entry.modified()`.
 - `shell`: `Shell.run(timeout:)` kills the child and throws a `TimeoutException` naming the command; `Shell.which(program)`.
 - `core`: `DateTime.format('yyyy-MM-dd_HHmm')`, `Duration.human()` (`11 min 5 s`); every toolkit timeout message uses it.
 - `console`: `Bar.update(done, total)` (`onProgress: bar.update`).
-- `core`: `Cookies` (a jar with domain/path/expiry: `parse` `encode` `[]` `header` `set`), shared by chrome and http; `Rate` moved here from http (pool paces with it too); `Durations` on `num` (`3.seconds`, `1.5.minutes`); `Writer` is a mixin with `origin()` (a `File` reports its path).
+- `console`: `Console.bar(..., keep: false)`: the line vanishes when the bar finishes (a failed one still prints ✗), for per-file bars that should not fill the scrollback.
+- `core`: `Cookies` (a jar with domain/path/expiry: `parse`/`encode` read and write a Netscape `cookies.txt`, the format browser exports and curl use; `[]` `header` `set`), shared by chrome and http; `Rate` moved here from http (pool paces with it too); `Durations` on `num` (`3.seconds`, `1.5.minutes`); `Writer` is a mixin with `origin()` (a `File` reports its path).
 - `http`: `Http.client(base:, headers:, timeout:, retries:, rate:, check:, cookies:, csrf:, proxy:, cache:, ttl:, insecure:, idle:, connections:)` holds the settings a script states once; `client.copy(...)` is a variant sharing jar, `Rate` and sockets; `Http.pool([...])` spreads requests over clients (fewest in flight, 429 benches a member). `Http.client(resume: true)`: a GET piped into a file (`cdn.get(u) | bar > Fs.file(f)`) skips a complete file, resumes a `.part` with `Range` and renames atomically; stored bytes replay through pass-through pipes (bars count everything, hashes verify). `Http.serve(handler)` with `Request`/`Reply`/`Server` for OAuth loopbacks, webhooks and previews. `Response.check()`. `query:`/`Body.form` take `num`/`bool`/null/`Iterable` values. `cache:` answers GETs from disk within `ttl`. `proxy:` (null reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`). `HttpRequestException` with `RequestFailure.aborted`/`redirects`/`unsendable`.
 - `pool`: `Pool.settle` (one `Outcome` — `Done`/`Failed`, item included — per item, never throws), `retries:`, `rate:`, `isolates:` (long-lived workers), `onDone:`.
 - `chrome`: `page.cookie(name, timeout:)` waits for a cookie; `page.responses(glob)` streams XHR/fetch responses as `Capture` readers.
@@ -23,6 +24,8 @@
 - `cli`: `values:` on `Opt`/`Multi`/`Arg` for a fixed set (enums by name; usage lists them, typos get a suggestion); enum defaults show by name.
 
 **Fixed**
+- `console`: a `Console.bar(null)` piped into a `resume: true` download learns the file's length from the response, so it shows `done/total` and a filled bar (skipped and resumed files included).
+- `chrome`: `Chrome.launch(profile:)` no longer restores the last session's tabs, so tabs stop piling up across runs; cookies and logins stay.
 - `cli`: a handler failure prints the toolkit error's message (not `FormatException: …`/`HttpException: …, uri = …`), and a plain `Exception('…')` without its prefix.
 - `json`: an escaped `\*` is a literal key again, not a wildcard.
 - `chrome`: `Page.cookies()` sends `name=value` as the browser does; values with `=` or `"` were quoted into an invalid header.
@@ -31,11 +34,11 @@
 - `tui`: `exit()` inside `Tui.run` still restores the terminal; a slow bracketed paste never turns into keystrokes; modifiers bind in any order, super is `meta+`, Linux console F1–F5 decode; popup titles lay CJK over two cells.
 - `http`: resume checks `Content-Range`; `Http.pool` waits out its members' bench; a server `Retry-After` is capped at 5 minutes.
 - `fs`: `file.lock` excludes holders in the same process too.
-- `archive`: zip and 7z refuse data over 4 GiB instead of writing it short; `archive()` refuses FIFOs and devices; a damaged tar mode is no mode.
+- `archive`: concatenated gzip (bgzip, `pigz -i`, `cat a.gz b.gz`) unpacks, and a stream cut anywhere inside a member still fails; `.tar.xz` streams out of the decoder (one dictionary of memory, not the whole output). Zip and 7z refuse data over 4 GiB instead of writing it short; `archive()` refuses FIFOs and devices; a damaged tar mode is no mode.
 - `console`: a narrow terminal keeps the bar's rate; `Console.table` ignores colour codes and tabs in widths.
 
 **Security**
-- `http`: the `csrf:` header goes only where its cookie would; errors and the `serve` log redact URL credentials and tokens; `cache:` keys entries by credentials, skips `Range`, stores no `set-cookie` and creates its folder 0700; the jar refuses `Domain=co.uk`-style registries and `Secure` cookies over http.
+- `http`: `Http.client(limit:)` (256 MiB by default) caps a body read into memory, so a gzip bomb fails instead of filling the heap; piping to a file has no limit. The `csrf:` header goes only where its cookie would; errors and the `serve` log redact URL credentials and tokens; `cache:` keys entries by credentials, skips `Range`, stores no `set-cookie` and creates its folder 0700; the jar refuses `Domain=co.uk`-style registries and `Secure` cookies over http.
 - `archive`: unpacking stages in a 0700 folder with file modes applied before the merge; a target that is a link is resolved first; zip members that share bytes (overlap bombs) and 7z keys asking for more than 2^24 rounds are refused.
 - `yaml`: alias bombs (over 1,000,000 values) and nesting over 1,000 levels are a `ContentException`; `json`: `**`, `==` and `hashCode` survive any depth.
 - `tui`: the status row and popups drop C1 controls; `cli`: a bad value from an environment variable is never echoed.
@@ -59,6 +62,8 @@
 **Performance**
 - `html`: deep and long documents parse and query in linear time (20,000 nested divs 4.9 s → 51 ms; `section div div div` on 1,000 nested divs 406 s → 5 ms; 52 real pages × 27 selectors 55.9 s → 0.9 s).
 - `fs`: `Dir.list` 483 → 20 ms on 20,000 entries.
+- `tui`: a `table` frame costs the screen, not the rows (100k rows 35 → 0.95 ms); two `diff` panes keep their own memo (13.6 → 1.0 ms a frame); full repaints flow through box drawing and CJK (a 200x60 `─` frame 110 KB → 12 KB). Markdown breaks over-long words, keeps `(…)` in link URLs and nests `***x***`.
+- `archive`: WinZip AES key derivation 5.5 → 2.0 ms per member (in-house HMAC-SHA1 with the pad states hashed once).
 - `html`: an in-house HTML5 parser and selector engine replace package:html and csslib: startup ~770 → ~235 ms, chrome ~1750 → ~1300 ms; parsing and queries never recurse, so 20,000-deep pages work. A corpus test holds the tree to package:html's on 50 real pages.
 - 7z with 20k files 150 → 25 ms; CRC-32 4× (slicing-by-8); an archive handed over in one chunk 538 → 60 ms and −500 MB; `Region.write` of 80k chars 6.7 s → 65 ms; streamed markdown 4×; `$('div').$('a')` on nested roots 144 → 1 ms; `Json.$('key')` 5×; single-byte charsets 3.6×.
 

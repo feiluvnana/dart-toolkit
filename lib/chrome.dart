@@ -50,7 +50,8 @@ const Duration _defaultTimeout = Duration(seconds: 30);
 abstract final class Chrome {
   /// Launch Chromium. Downloads it into the user cache on first use, unless
   /// [path] names a Chrome or Chromium binary. [profile] keeps
-  /// cookies and logins between runs; without it, every launch starts fresh
+  /// cookies and logins between runs, not tabs (the last session is never
+  /// restored, so tabs never pile up); without it, every launch starts fresh
   /// in a temp profile deleted on [Browser.close]. [proxy] routes every request
   /// (`http://host:port`, `socks5://host:port`). Throws when the browser
   /// can't start.
@@ -59,6 +60,11 @@ abstract final class Chrome {
     exe ??= await _cachedExecutable();
     final args = <String>[if (proxy != null) '--proxy-server=$proxy'];
     final temp = profile == null ? await io.Directory.systemTemp.createTemp('puppeteer_dev_profile-') : null;
+    if (profile != null) {
+      try {
+        await io.Directory(p.join(profile, 'Default', 'Sessions')).delete(recursive: true);
+      } on io.PathNotFoundException catch (_) {}
+    }
     final pp.Browser browser;
     try {
       browser = await pp.puppeteer.launch(

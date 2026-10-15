@@ -245,9 +245,16 @@ extension RegionWidgets on Region {
   Region table<T>(Pick<T> pick, List<String> Function(T item) cells, {List<String>? header, String empty = ''}) {
     final y = _gy + _cursor;
     final h = _listRows(pick, header == null ? 0 : 1, empty);
-    // Columns as wide as their widest cell, the widest shrunk to fit.
-    final widths = <int>[];
-    for (final row in [?header, for (final t in pick.items()) cells(t)]) {
+    // Columns as wide as their widest cell, the widest shrunk to fit. Only
+    // rows within a screen of the selection are measured (whatever this
+    // frame can show), on top of what this pick measured before: O(screen)
+    // per frame however many items, and columns never jump back.
+    final items = pick.items();
+    final memo = _tableWidths[pick];
+    // A pick that lost items (cleared, refilled) is measured afresh.
+    final widths = memo != null && memo.$1 <= items.length ? List.of(memo.$2) : <int>[];
+    final from = math.max(0, pick.index() - h), to = math.min(items.length, pick.index() + h + 1);
+    for (final row in [?header, for (var i = from; i < to; i++) cells(items[i])]) {
       for (var k = 0; k < row.length; k++) {
         final w = term.displayWidth(row[k]);
         if (k == widths.length) {
@@ -257,6 +264,7 @@ extension RegionWidgets on Region {
         }
       }
     }
+    _tableWidths[pick] = (items.length, List.of(widths));
     while (widths.fold(0, (a, w) => a + w + 2) - 2 > _w) {
       final k = widths.indexOf(widths.reduce(math.max));
       if (widths[k] <= 4) break;
@@ -269,6 +277,8 @@ extension RegionWidgets on Region {
     _drawList(pick, (t) => line(cells(t)), empty, y, h, header: header == null ? null : [line(header)]);
     return this;
   }
+
+  static final _tableWidths = Expando<(int, List<int>)>();
 
   static String _padCells(String s, int cells) => s + ' ' * math.max(0, cells - term.displayWidth(s));
 

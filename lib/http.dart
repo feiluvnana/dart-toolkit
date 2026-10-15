@@ -210,6 +210,10 @@ abstract final class Http {
   ///   for the next run, any other failure deletes it. The GET is sent at
   ///   the end of the current synchronous block unless such a pipeline
   ///   claims it first, so awaiting it, or not using it, sends it as usual.
+  /// - [limit]: the most bytes a body read into memory (`bytes`, `text`,
+  ///   `json`, `html`) may decode to; past it the read fails with a
+  ///   [ContentException], so a gzip bomb cannot fill the heap. Piping a
+  ///   body into a file has no limit.
   static Client client({
     String? base,
     Map<String, String> headers = const {},
@@ -226,7 +230,9 @@ abstract final class Http {
     Duration idle = const Duration(milliseconds: 100),
     int connections = 6,
     bool resume = false,
+    int limit = 256 << 20,
   }) {
+    if (limit < 0) throw ArgumentError.value(limit, 'limit', 'must not be negative');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
     if (connections < 1) throw ArgumentError.value(connections, 'connections', 'must be at least 1');
     final settings = _Settings(
@@ -241,6 +247,7 @@ abstract final class Http {
       cache: cache,
       ttl: ttl,
       resume: resume,
+      limit: limit,
     );
     return _Client(
       settings,
@@ -312,6 +319,7 @@ sealed class Client implements Closeable {
     Duration? idle,
     int? connections,
     bool? resume,
+    int? limit,
   });
 
   /// The cookie jar: persist it with `cookies().encode()`.
@@ -350,6 +358,7 @@ final class _Settings {
     required this.cache,
     required this.ttl,
     required this.resume,
+    required this.limit,
   });
 
   final Uri? base;
@@ -363,6 +372,7 @@ final class _Settings {
   final String? cache;
   final Duration ttl;
   final bool resume;
+  final int limit;
 }
 
 /// One `HttpClient` with its socket settings, counted by the requests and
@@ -497,6 +507,7 @@ final class _Client extends Client {
     Duration? idle,
     int? connections,
     bool? resume,
+    int? limit,
   }) {
     final s = _s;
     final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections)
@@ -521,6 +532,7 @@ final class _Client extends Client {
         cache: cache ?? s.cache,
         ttl: ttl ?? s.ttl,
         resume: resume ?? s.resume,
+        limit: limit ?? s.limit,
       ),
       conn,
     );
@@ -580,12 +592,19 @@ final class _Client extends Client {
       check: false,
     );
 
+    void sized(int bytes) {
+      for (final p in pipes) {
+        if (p case final Sized s) s.sized(bytes);
+      }
+    }
+
     final file = File(path), part = File('$path.part');
     if (await file.exists()) {
       final res = await fetch(0);
       final size = res.size();
       if (res.ok() && (size == null || size == await file.length())) {
         await res.close();
+        sized(await file.length());
         if (pipes.isNotEmpty) await through(file.openRead()).drain<void>(); // bars finish, hashes verify
         return;
       }
@@ -610,6 +629,7 @@ final class _Client extends Client {
       res = await fetch(0);
     }
     await res.check();
+    if (res.size() case final size?) sized(have + size);
     await part.parent.create(recursive: true);
     final sink = part.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
     try {
@@ -956,6 +976,7 @@ final class _Pool extends Client {
     Duration? idle,
     int? connections,
     bool? resume,
+    int? limit,
   }) => _Pool([
     for (final m in _members)
       m.copy(
@@ -974,6 +995,7 @@ final class _Pool extends Client {
         idle: idle,
         connections: connections,
         resume: resume,
+        limit: limit,
       ) as _Client,
   ]);
 
@@ -1560,8 +1582,16 @@ final class Response with Reader implements Closeable {
   Future<Uint8List> _readAll() async {
     try {
       final out = BytesBuilder(copy: false);
+      final limit = _client._s.limit;
       await for (final chunk in _preReady != null ? _fromPrefetch() : _bodyStream()) {
         out.add(chunk);
+        if (out.length > limit) {
+          await _abandon();
+          throw ContentException(
+            'response body over $limit bytes: pipe it to a file, or raise Http.client(limit:) '
+            '(${names.redact(url())})',
+          );
+        }
       }
       return _cached = out.takeBytes();
     } finally {

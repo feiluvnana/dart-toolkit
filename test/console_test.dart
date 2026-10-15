@@ -160,6 +160,19 @@ Future<void> main() async {
       expect(res.stderr, contains('5/3'));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    test('keep: false leaves no final line; a failure still prints', () async {
+      final root = Directory.current;
+      final res = await Process.run(Platform.resolvedExecutable, [
+        '${root.path}/test/console_pty/probe.dart',
+        '${Directory.systemTemp.path}/probe_nosuch.log',
+        'keep',
+      ], workingDirectory: root.path);
+      expect(res.stdout, contains('done'));
+      expect(res.stderr, contains('kept 2/2'));
+      expect(res.stderr, isNot(contains('gone')));
+      expect(res.stderr, contains('broken'));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('L2: control characters in labels are neutralised', () async {
       final root = Directory.current;
       final proc = await Process.start(Platform.resolvedExecutable, [
