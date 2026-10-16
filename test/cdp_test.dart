@@ -5,9 +5,11 @@ import 'dart:io';
 
 import 'package:dart_toolkit/chrome.dart' show Chrome;
 import 'package:dart_toolkit/src/cdp.dart';
+import 'package:dart_toolkit/src/chrome_find.dart' show testingPlatform;
 import 'package:test/test.dart';
 
 import 'support/capture.dart';
+import 'support/child.dart';
 import 'support/io.dart';
 
 /// A fake browser endpoint: [answer] maps each command to its reply
@@ -175,21 +177,28 @@ void main() {
         ..close(),
     );
     await expectLater(Chrome.connect(junk), throwsA(isA<BrowserException>()));
-    if (Platform.isWindows) return;
-    final dir = await Directory.systemTemp.createTemp('fake_chrome');
-    addTearDown(() => dir.delete(recursive: true));
-    final fake = File('${dir.path}/chrome')..writeAsStringSync('#!/bin/sh\necho "bad flag --x" >&2\nexit 3\n');
+    final platform = testingPlatform();
+    if (Platform.isWindows || platform == null) return;
+    // A Chrome that cannot start says why: a fake Chrome for Testing in a fresh user cache.
+    final home = await Directory.systemTemp.createTemp('fake_home');
+    addTearDown(() => home.delete(recursive: true));
+    final version = RegExp(r"_version = '([^']+)'").firstMatch(File('lib/src/chrome_find.dart').readAsStringSync())![1];
+    final cache = Platform.isMacOS ? '${home.path}/Library/Caches' : '${home.path}/.cache';
+    final shell = 'chrome-headless-shell-$platform';
+    final fake = File('$cache/dart_toolkit/chrome/$version/$shell/$shell/chrome-headless-shell')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('#!/bin/sh\necho "bad flag --x" >&2\nexit 3\n');
     await Process.run('chmod', ['+x', fake.path]);
-    await expectLater(
-      Chrome.launch(path: fake.path),
-      throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('bad flag --x'))),
-    );
-  });
-
-  test('S12: a proxy password never reaches Chrome\'s argv', () async {
-    await expectLater(
-      Chrome.launch(proxy: 'http://user:SECRET@127.0.0.1:8080'),
-      throwsA(isA<ArgumentError>().having((e) => '$e', 'text', allOf(contains('no proxy password'), isNot(contains('SECRET'))))),
-    );
+    final r = await runDart('''
+import 'package:dart_toolkit/chrome.dart';
+Future<void> main() async {
+  try {
+    await Chrome.launch();
+  } on BrowserException catch (e) {
+    print(e.message);
+  }
+}
+''', env: {'HOME': home.path, 'XDG_CACHE_HOME': ''});
+    expect(r.stdout, contains('bad flag --x'), reason: '${r.stderr}');
   });
 }

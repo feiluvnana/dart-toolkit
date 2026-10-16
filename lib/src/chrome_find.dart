@@ -114,7 +114,7 @@ Future<String> _testingChrome({required bool headless}) async {
       _testingPath(headless: headless) ??
       (throw BrowserException(
         'no Chrome found and no Chrome for Testing build for ${Abi.current()}: '
-        'install Chrome or Chromium, or pass path:',
+        'install Chrome or Chromium',
       ));
   if (io.File(exe).existsSync()) return exe;
   await io.Directory(p.dirname(dir)).create(recursive: true);
@@ -127,7 +127,7 @@ Future<String> _testingChrome({required bool headless}) async {
     } on UnsupportedError catch (e) {
       throw BrowserException(
         'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '
-        '(`dart run`) or with Chrome installed: pass path: or install Chrome (${e.message})',
+        '(`dart run`): install Chrome or Chromium (${e.message})',
         cause: e,
       );
     }

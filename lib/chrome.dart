@@ -63,21 +63,16 @@ const Duration _defaultTimeout = Duration(seconds: 30);
 
 /// Entry point: launch or attach a browser.
 abstract final class Chrome {
-  /// Launch Chrome: [path], else Chrome for Testing already in the user
-  /// cache, else an installed Chrome or Chromium, else Chrome for Testing
+  /// Launch Chrome: Chrome for Testing already in the user cache, else an
+  /// installed Chrome or Chromium (on Linux, the first on PATH), else Chrome for Testing
   /// downloaded into the user cache once per machine. A headless run without
   /// a profile uses `chrome-headless-shell`, which starts ~4x faster.
   /// [profile] keeps cookies (session cookies too) and logins between runs,
   /// not tabs, so tabs never pile up; without it, every launch starts fresh
-  /// in a temp profile deleted on [Browser.close]. [proxy] routes every request
-  /// (`http://host:port`, `socks5://host:port`). Throws when the browser
+  /// in a temp profile deleted on [Browser.close]. Throws when the browser
   /// can't start.
-  static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy}) async {
-    if (proxy != null && (Uri.tryParse(proxy)?.userInfo.isNotEmpty ?? false)) {
-      // It would sit in the process list, and Chrome ignores it anyway.
-      throw ArgumentError.value(names.redact(proxy), 'proxy', 'Chrome takes no proxy password: use an open local proxy');
-    }
-    final exe = path ?? await chromeExecutable(headless: headless && profile == null);
+  static Future<Browser> launch({bool headless = true, String? profile}) async {
+    final exe = await chromeExecutable(headless: headless && profile == null);
     final temp = profile == null ? await io.Directory.systemTemp.createTemp('dart_toolkit_chrome-') : null;
     if (profile != null) {
       try {
@@ -90,7 +85,6 @@ abstract final class Chrome {
     final args = [
       ..._flags,
       if (headless) ...['--headless', '--hide-scrollbars', '--mute-audio'],
-      if (proxy != null) '--proxy-server=$proxy',
       // Keeps session cookies (logins); the session's tabs were deleted above.
       if (profile != null) '--restore-last-session',
       if (pipes == null) '--remote-debugging-port=0' else '--remote-debugging-pipe',

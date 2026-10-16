@@ -382,7 +382,7 @@ await (req.response..write('Signed in; close this tab.')).close();
 
 ```dart
 abstract final class Chrome {
-  static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy});
+  static Future<Browser> launch({bool headless = true, String? profile});
   static Future<Browser> connect(String url);
 }
 enum Resource { image, font, media, stylesheet }   // what open(block:) stops loading
@@ -410,8 +410,8 @@ final class Capture with Reader { int status();  String url();  String? header(S
 ```
 
 - `chrome` speaks the DevTools protocol itself over a `dart:io` WebSocket (no engine package).
-  `launch` takes `path`, else Chrome for Testing already in the user cache, else an installed
-  Chrome/Chromium, else downloads Chrome for Testing once per machine; a headless run without a
+  `launch` takes Chrome for Testing already in the user cache, else an installed Chrome/Chromium
+  (on Linux the first on PATH), else downloads Chrome for Testing once per machine; a headless run without a
   profile uses `chrome-headless-shell` (starts ~4x faster). `profile` keeps logins (session cookies
   too) between runs, never tabs; without it, a temp profile is deleted on `close`. `connect`
   attaches (`http://host:9222` or `ws://…`), and its `close` closes the tabs it opened, restores
