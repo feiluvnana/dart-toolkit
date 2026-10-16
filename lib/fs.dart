@@ -77,8 +77,8 @@ abstract final class Fs {
   /// Run [body] with a fresh folder under the system temp dir, then delete
   /// it (Ctrl-C included) and return what [body] returned. A scope, not a
   /// handle: nothing to forget, and nothing keeps the script alive.
-  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'}) async {
-    final made = await io.Directory.systemTemp.createTemp('$prefix-');
+  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body) async {
+    final made = await io.Directory.systemTemp.createTemp('tmp-');
     final token = exit.onExit(() async {
       try {
         await made.delete(recursive: true);

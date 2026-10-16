@@ -502,7 +502,7 @@ abstract final class Fs {
   static Future<Entry?> entry(String path);   // what is on disk, links not followed
   static File file(String path);  static Dir dir(String path);   // no I/O; a Link comes from entry()
   static String sanitize(String name);   // an untrusted title as one portable file name; never leaves its folder
-  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'});   // deleted after body
+  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body);   // deleted after body
   static Dir homeDir();  static Dir scriptDir();   // HOME/USERPROFILE; the running script's folder
 }
 sealed class Entry {

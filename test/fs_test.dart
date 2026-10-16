@@ -444,7 +444,7 @@ void main() {
         kept = d.path();
         await d.file('x/y.txt').write('y');
         return 3;
-      }, prefix: 'scope');
+      });
       expect(n, 3);
       expect(Directory(kept!).existsSync(), isFalse);
       await expectLater(
