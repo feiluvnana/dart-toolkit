@@ -6,6 +6,7 @@ import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/cache.dart' as cache;
+import 'package:dart_toolkit/src/chrome_fetch.dart' as chrome;
 import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/src/tool_fetch.dart' as fetch;
 import 'package:test/test.dart';
@@ -76,6 +77,16 @@ void main() {
       );
       expect(await cache.fetchInIsolate('tool_fetch.dart', ['$url/raw', sha(served['/raw']!), 'raw', dir.path, 't']), isNull);
     });
+  });
+
+  test('S13: a Chrome zip unpacks only when it matches its pinned sha256', () async {
+    final bad = '${tmp.path}/cft/bad';
+    await expectLater(chrome.fetch('$url/tool.zip', '0' * 64, bad), throwsA(anything));
+    expect(Directory(bad).existsSync(), isFalse);
+    expect(Directory('${tmp.path}/cft').listSync().where((e) => e.path.contains('.tmp-')), isEmpty);
+    final good = '${tmp.path}/cft/good';
+    await chrome.fetch('$url/tool.zip', sha(served['/tool.zip']!), good);
+    expect(await io.File('$good/bin/tool').readAsString(), contains('echo hi'));
   });
 
   test('P1: no HOME is an error, never a shared temp folder', () async {

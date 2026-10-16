@@ -23,13 +23,31 @@ Future<String> chromeExecutable({required bool headless}) async {
   return installedChrome() ?? await testingChrome(headless: headless);
 }
 
+/// The pinned Chrome for Testing. Google publishes no hashes and signs the
+/// builds ad hoc only, so each zip's sha256 is recorded here: nothing runs
+/// (or loses its quarantine) before its hash checks. Bump all of them
+/// together (`curl -sL <url> | shasum -a 256`).
+const _version = '155.0.8059.84';
+const _sha256 = {
+  'chrome mac-arm64': '13b9e98ce56f5ce18e100a009f455c9285f399e7c9dc8a76fdf2f3a9755bb5f2',
+  'chrome-headless-shell mac-arm64': '7f111980bcb41e908d0fa3e969a625e7777ff683c1fc43fd7759d05ec3ffe52b',
+  'chrome mac-x64': 'd805a173118daa5f6f5cf464500789e1e00022a9a6aed8abfec821ab828fa862',
+  'chrome-headless-shell mac-x64': '3c5bf34eb8daa874e8b50edf900eab618b74c1b9596e596340278eeba4ff1ae1',
+  'chrome linux64': 'cf0f049892dea22e6a6db26d47ed0d7776b7158edcbec4634086633df8bafcbc',
+  'chrome-headless-shell linux64': 'a5d71b91aa996fef00517cd212b2dfb816b43055edefbe727e6fd562d4ae1f9c',
+  'chrome win64': '507f2a031441d10c62b5e3d4e863f09ac1198a571c1419976cbd8387f639afde',
+  'chrome-headless-shell win64': '5ca590a4968864e219ea25ccd134597ef8898a733a4698c07fc3e8b2c480fef4',
+  'chrome win32': '80cd73d2523691d6b7bcb9fc399f97a8499b64def13f37eec502777b83a9f805',
+  'chrome-headless-shell win32': '5d37ece0cc400bbe328f30b4a7b5aa3b26157290cf0b1df3850575317b75d14e',
+};
+
 /// Where Chrome for Testing lives in the cache for this machine, or null
 /// when it has no build for this platform.
 ({String kind, String platform, String dir, String exe})? _testingPath({required bool headless}) {
   final platform = testingPlatform();
   if (platform == null) return null;
   final kind = headless ? 'chrome-headless-shell' : 'chrome';
-  final dir = p.join(userCacheDir(), 'dart_toolkit', 'chrome', '$kind-$platform');
+  final dir = p.join(userCacheDir(), 'dart_toolkit', 'chrome', _version, '$kind-$platform');
   final exe = p.join(dir, '$kind-$platform', switch ((kind, platform)) {
     ('chrome', 'mac-arm64' || 'mac-x64') => 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
     (_, 'win64' || 'win32') => '$kind.exe',
@@ -108,7 +126,8 @@ Future<String> _testingChrome({required bool headless}) async {
     io.stderr.writeln('dart_toolkit: downloading $kind for $platform (once per machine)');
     final String? failed;
     try {
-      failed = await fetchInIsolate('chrome_fetch.dart', [kind, platform, dir]);
+      final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
+      failed = await fetchInIsolate('chrome_fetch.dart', [url, _sha256['$kind $platform']!, dir]);
     } on UnsupportedError catch (e) {
       throw BrowserException(
         'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '
