@@ -238,6 +238,40 @@ void main() {
       expect(kept.$('i'), hasLength(50000));
     });
 
+    test('S4: the tree is at most 512 deep, like Chromium: deeper elements land beside the 512th', () {
+      final doc = Html.parse('<body>${'<div>' * 2000}<a>x</a>');
+      var depth = 0;
+      for (Element? e = doc.$('a').first; e != null; e = e.parent()) {
+        depth++;
+      }
+      expect(depth, lessThanOrEqualTo(513));
+      expect(doc.$('div'), hasLength(2000));
+      expect(doc.$('a').text(), 'x');
+    });
+
+    test('S4: misnested formatting (<a><b>x</a>) parses in linear time', () {
+      final sw = Stopwatch()..start();
+      expect(Html.parse('<body>${'<a><b>x</a>' * 160000}').$('a'), hasLength(160000));
+      expect(sw.elapsedMilliseconds, lessThan(2000)); // was 6.2 s
+    });
+
+    test('S4: :has() searches only where its combinators can reach', () {
+      final list = Html.parse('<ul>${'<li>x</li>' * 20000}<li class=z>z</li></ul>');
+      final deep = Html.parse('<body>${'<div>' * 30000}<a>x</a>');
+      final sw = Stopwatch()..start();
+      expect(list.$('li:has(+ .z)'), hasLength(1));
+      expect(list.$('ul:has(> li.z)'), hasLength(1));
+      expect(deep.$('div:has(> a)'), hasLength(1));
+      expect(deep.$('div:has(a)'), hasLength(509)); // the a's ancestors: the tree is capped at 512
+      expect(sw.elapsedMilliseconds, lessThan(3000)); // :has(+ .z) was 2.3 s at 8,000
+      final small = Html.parse('<ul><li>a<li>b<li class=z><i>z</i><li>c</ul><p><b><i>x</i></b></p>');
+      expect([for (final e in small.$('li:has(~ .z)')) e.text()], ['a', 'b']);
+      expect([for (final e in small.$('li:has(+ .z > i)')) e.text()], ['b']);
+      expect([for (final e in small.$('li:has(+ li + li)')) e.text()], ['a', 'b']);
+      expect(small.$('p:has(> b > i)'), hasLength(1));
+      expect(small.$('p:has(> i)'), isEmpty);
+    });
+
     test('S6: 120,000 unclosed formatting tags parse in linear time', () {
       final sw = Stopwatch()..start();
       expect(Html.parse('${'<b><i><u>' * 40000}x').text(), 'x');

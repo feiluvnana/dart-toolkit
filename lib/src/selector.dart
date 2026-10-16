@@ -589,30 +589,47 @@ final class _Parser {
 }
 
 /// Whether some element related to [scope] by [c]'s leading combinator
-/// matches [c] (`:has()`).
+/// matches [c] (`:has()`). Only elements its combinators can reach are
+/// tried: `> a` looks at children, `+ .z` at the next sibling, and a
+/// subtree is walked only as deep as the child steps go.
 bool _has(_Complex c, Element scope) {
   bool anchor(Element x) => identical(x, scope);
-  switch (c.lead!) {
-    case _Comb.descendant || _Comb.child:
-      final stack = [...scope.children];
-      while (stack.isNotEmpty) {
-        final e = stack.removeLast();
-        if (c.matches(e, anchor)) return true;
-        stack.addAll(e.children);
-      }
-      return false;
-    case _Comb.adjacent || _Comb.sibling:
-      final (sib, at) = position(scope);
-      for (var k = at + 1; k < sib.length; k++) {
-        final stack = [sib[k]];
-        while (stack.isNotEmpty) {
-          final e = stack.removeLast();
-          if (c.matches(e, anchor)) return true;
-          stack.addAll(e.children);
-        }
-      }
-      return false;
+  // How many levels below scope's level a match sits (null: any), and how
+  // many siblings along at scope's own level (null: any later one).
+  int? depth = c.lead == _Comb.child ? 1 : (c.lead == _Comb.descendant ? null : 0);
+  int? along = c.lead == _Comb.adjacent ? 1 : null;
+  for (final comb in c.combs) {
+    switch (comb) {
+      case _Comb.descendant:
+        depth = null;
+      case _Comb.child:
+        if (depth != null) depth++;
+      case _Comb.adjacent when depth == 0:
+        if (along != null) along++;
+      case _Comb.sibling when depth == 0:
+        along = null;
+      case _Comb.adjacent || _Comb.sibling:
+        break;
+    }
   }
+  final List<(Element, int)> stack;
+  if (c.lead == _Comb.descendant || c.lead == _Comb.child) {
+    stack = [for (final e in scope.children) (e, 1)];
+  } else {
+    final (sib, at) = position(scope);
+    final end = along == null || at + 1 + along > sib.length ? sib.length : at + 1 + along;
+    stack = [for (var k = at + 1; k < end; k++) (sib[k], 0)];
+  }
+  while (stack.isNotEmpty) {
+    final (e, level) = stack.removeLast();
+    if (c.matches(e, anchor)) return true;
+    if (depth == null || level < depth) {
+      for (final child in e.children) {
+        stack.add((child, level + 1));
+      }
+    }
+  }
+  return false;
 }
 
 const _formControls = {'button', 'input', 'select', 'textarea', 'optgroup', 'option', 'fieldset'};

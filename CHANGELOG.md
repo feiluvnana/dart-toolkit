@@ -37,6 +37,7 @@
 - `video`/`image`: `Video.open(source, audio:)` takes only http(s) URLs (`file://`, `tcp://`, `ftp://`, `concat:` read local files or opened sockets); a local file is `Fs.file(path).video()`, and local paths reach ffmpeg as `file:<absolute path>`, never parsed as another protocol.
 - `archive`: `unarchive` of a zip past 32 MiB spools it to a file in its temp folder and reads it a member at a time instead of holding the whole zip in memory (a 768 MiB body peaked at 2.7 GB).
 - `archive`: `Archive.unarchive(dir, max:)` caps the bytes an extraction writes, hardlink copies included; past it the unpack fails with a `ContentException` and nothing lands (a 10 MB `.tar.gz` of zeros writes 10 GB without it).
+- `html`: hostile markup no longer costs quadratic time: the tree is at most 512 deep (deeper elements land beside the 512th, as in Chromium), misnested formatting (`<a><b>x</a>` × 160,000) parses in 0.2 s instead of 6.2 s, and `:has()` tries only the elements its combinators reach (`li:has(+ .z)` looks at one sibling; `div:has(a)` on 100,000 nested divs 165 s → 1.2 s).
 
 **Performance**
 

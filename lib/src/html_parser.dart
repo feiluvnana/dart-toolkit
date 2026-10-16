@@ -1286,7 +1286,10 @@ final class _Builder {
   /// Append [node] at the current insertion point (fostered before the
   /// table when a table holds content it may not).
   void _place(Node node, [Element? target]) {
-    final parent = target ?? current;
+    var parent = target ?? current;
+    // Past 512 open elements a new one goes beside the current one, as in
+    // Chromium: the tree stays shallow enough for every walk over it.
+    if (target == null && node is Element && open.length >= _maxDepth) parent = parent.parent ?? parent;
     if ((_foster || target != null) && _tableContext.contains(parent.localName) && parent.space == Space.html) {
       final table = open.lastWhere((e) => e.localName == 'table', orElse: () => open.first);
       final holder = table.parent;
@@ -1314,6 +1317,7 @@ final class _Builder {
 
   // ---- scope ----
 
+  static const _maxDepth = 512;
   static const _buttonScope = {..._scopeHtml, 'button'};
   static const _listScope = {..._scopeHtml, 'ol', 'ul'};
   static const _tableScope = {'html', 'table', 'template'};
@@ -1504,7 +1508,7 @@ final class _Builder {
     for (var outer = 0; outer < 8; outer++) {
       final fe = _formattingAfterMarker(subject);
       if (fe == null) return _anyOtherEnd(subject);
-      final feAt = open.indexOf(fe);
+      final feAt = open.lastIndexOf(fe); // near the top: misnesting grows the stack
       if (feAt < 0) {
         formatting.remove(fe);
         return;
@@ -1525,7 +1529,7 @@ final class _Builder {
       final common = open[feAt - 1];
       var bookmark = formatting.indexOf(fe);
       var node = furthest, last = furthest;
-      var nodeAt = open.indexOf(furthest);
+      var nodeAt = open.lastIndexOf(furthest);
       for (var inner = 1; ; inner++) {
         nodeAt--;
         node = open[nodeAt];
@@ -1569,8 +1573,8 @@ final class _Builder {
       if (feIndex < bookmark) bookmark--;
       formatting.removeAt(feIndex);
       formatting.insert(bookmark.clamp(0, formatting.length), copy);
-      open.remove(fe);
-      open.insert(open.indexOf(furthest) + 1, copy);
+      open.removeAt(open.lastIndexOf(fe));
+      open.insert(open.lastIndexOf(furthest) + 1, copy);
     }
   }
 }
