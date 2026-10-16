@@ -6,12 +6,12 @@ Structure, not features: module edges, startup cost, dependencies and the seams 
 
 ```
 core ─────────────── src/resume, src/progress
-utils ────────────── core, src/cookies, src/csv, src/format, src/hash, src/rate, src/time: a separate import, re-exported by no module
+utils ────────────── core, src/cookies, src/csv, src/format, src/hash, src/rate, src/shell_utils, src/time: a separate import, re-exported by no module
 json ─────────────── core, src/names
 yaml ─────────────── json, src/names, src/yaml_parser
 pool ─────────────── core, src/format, src/progress, src/rate, src/retry
 fs ───────────────── core, src/exit, src/format, src/glob, src/names, src/posix, src/progress, src/tree (+path)
-shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/time, src/timeout, src/which
+shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/time, src/timeout
 archive ──────────── src/tar (part file) → core, shell, src/exit, src/format, src/posix, src/progress, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
 http ─────────────── core, src/charset, src/cookies, src/origin, src/posix, src/rate, src/resume, src/retry, src/time, src/timeout
 html ─────────────── json, src/dom, src/html_parser, src/selector
@@ -22,7 +22,8 @@ tui ──────────────── src/tui (part files) → co
 video ────────────── image, src/format, src/media, src/media_proxy, src/progress (+path)
 chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/format, src/glob, src/keys, src/names, src/origin, src/progress, src/time (+path)
 
-src/media ── shell, src/cache, src/format, src/posix, src/quiet, src/tool      src/tool ── shell, src/cache, src/names, src/posix (+path)
+src/media ── shell, src/cache, src/format, src/posix, src/quiet, src/tool      src/tool ── shell, src/cache, src/names, src/posix, src/which (+path)
+src/shell_utils ── src/which: `ShellUtils.which` and `open`, SDK only
 src/chrome_find ── src/cache, src/cdp, src/which      src/cache ── src/download_line (+path): the user cache and fetchInIsolate
 src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
 src/progress ── src/format: Probe, Task, Meter and the private run that feeds them

@@ -127,7 +127,7 @@ Future<void> main() async {
       expect(r.stderr, 'live-err\n');
     });
 
-    test('Shell.open never passes a target as a launcher option', () async {
+    test('ShellUtils.open never passes a target as a launcher option', () async {
       if (Platform.isWindows) return markTestSkipped('POSIX launchers only');
       final bin = await Directory.systemTemp.createTemp('fake_open');
       addTearDown(() => bin.delete(recursive: true));
@@ -137,8 +137,8 @@ Future<void> main() async {
       }
       final r = await runDart(
         '''
-import 'package:dart_toolkit/shell.dart';
-Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
+import 'package:dart_toolkit/utils.dart';
+Future<void> main() => ShellUtils.open('-a/System/Applications/Calculator.app');
 ''',
         env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
       );
@@ -146,7 +146,7 @@ Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
       expect(await Fs.file('${bin.path}/argv').text(), './-a/System/Applications/Calculator.app|');
     });
 
-    test('Shell.open returns and exits while the opened app keeps running', () async {
+    test('ShellUtils.open returns and exits while the opened app keeps running', () async {
       if (Platform.isWindows) return markTestSkipped('POSIX launchers only');
       final bin = await Directory.systemTemp.createTemp('fake_open');
       addTearDown(() => bin.delete(recursive: true));
@@ -157,8 +157,8 @@ Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
       final sw = Stopwatch()..start();
       final r = await runDart(
         '''
-import 'package:dart_toolkit/shell.dart';
-Future<void> main() => Shell.open('https://example.com');
+import 'package:dart_toolkit/utils.dart';
+Future<void> main() => ShellUtils.open('https://example.com');
 ''',
         env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
         timeout: const Duration(seconds: 15),
@@ -356,10 +356,10 @@ Future<void> main() async {
     });
 
     test('which finds installed programs on PATH, null otherwise', () async {
-      expect(await Shell.which('sh'), endsWith('/sh'));
-      expect(await Shell.which('definitely-not-a-program-x9'), isNull);
-      expect(await Shell.which('/bin/sh'), '/bin/sh');
-      expect(await Shell.which('/etc/hosts'), isNull, reason: 'not executable');
+      expect(await ShellUtils.which('sh'), endsWith('/sh'));
+      expect(await ShellUtils.which('definitely-not-a-program-x9'), isNull);
+      expect(await ShellUtils.which('/bin/sh'), '/bin/sh');
+      expect(await ShellUtils.which('/etc/hosts'), isNull, reason: 'not executable');
     });
   });
 

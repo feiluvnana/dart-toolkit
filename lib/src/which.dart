@@ -1,4 +1,4 @@
-/// The `PATH` walk shared by `Shell.which` and `chrome`'s browser lookup
+/// The `PATH` walk shared by `ShellUtils.which`, `tool()` and `chrome`'s browser lookup
 /// (chrome cannot import shell).
 library;
 

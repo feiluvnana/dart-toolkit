@@ -17,6 +17,7 @@ import '../shell.dart';
 import 'cache.dart' as cache;
 import 'names.dart' as names;
 import 'posix.dart' as posix;
+import 'which.dart' as paths;
 
 /// A tool [tool] can find.
 enum Tool { ffmpeg, ffprobe, sevenzip }
@@ -143,7 +144,7 @@ Future<String> _locate(Tool t, Set<String> needs) async {
   final pinned = p.join(_home(t), _exe(t));
   if (await io.File(pinned).exists()) return pinned;
   for (final name in _onPath(t)) {
-    final onPath = await Shell.which(name);
+    final onPath = await paths.which([name]);
     if (onPath != null && (needs.isEmpty || (await _encoders(onPath)).containsAll(needs))) return onPath;
   }
   await _download(t, pinned);

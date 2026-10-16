@@ -70,6 +70,7 @@
 - `hash`: moved to `package:dart_toolkit/utils.dart` as `HashUtils` (`HashUtils.sha256(expect: sum)` in a pipe, `key:` for HMAC) and `Hasher`; `package:dart_toolkit/hash.dart` is gone.
 - `csv`: moved to `package:dart_toolkit/utils.dart` as `CsvUtils.parse`/`encode`; `reader.csv(or:)` and `reader.rows()` are utils' `ReaderCsv` extension. `package:dart_toolkit/csv.dart` is gone.
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
+- `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
 
 **Removed**
 

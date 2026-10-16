@@ -14,12 +14,14 @@
 /// await Fs.file('out.csv').write(CsvUtils.encode([['name', 'n'], ['a', 1]]));
 /// final site = Http.client(headers: HttpUtils.page);                           // looks like a browser tab
 /// final api = Http.client(headers: {...HttpUtils.api, 'x-app': '1'});          // later names win
+/// if (await ShellUtils.which('ffmpeg') == null) print('install ffmpeg');
+/// await ShellUtils.open('https://example.com');                                // the default browser
 /// ```
 ///
 /// Public surface is exactly: [DurationUtils], [SizeUtils], [TimeUtils],
 /// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies],
 /// [HashUtils], [Hasher], [CsvUtils], [ReaderCsv], [ReaderFutureCsv],
-/// [HttpUtils].
+/// [HttpUtils], [ShellUtils].
 /// - [DurationUtils]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [SizeUtils]: `bytes.size()` (`12.1 MB`).
 /// - [TimeUtils]: `now.format('yyyy-MM-dd')`; [SpanUtils]: `wait.human()` (`11 min 5 s`).
@@ -35,6 +37,8 @@
 ///   parses any [Reader], `reader.rows()` streams its rows.
 /// - [HttpUtils]: `page` / `api`, the headers a desktop browser sends, for
 ///   `Http.client(headers:)`.
+/// - [ShellUtils]: `which` finds an installed program on `PATH`, `open`
+///   hands a URL or path to the OS (`open`, `xdg-open`, `rundll32`).
 /// Everything else is private.
 ///
 /// {@canonicalFor cookies.Cookies}
@@ -45,6 +49,7 @@
 /// {@canonicalFor hash.HashUtils}
 /// {@canonicalFor hash.Hasher}
 /// {@canonicalFor rate.Rate}
+/// {@canonicalFor shell_utils.ShellUtils}
 /// {@canonicalFor time.DurationUtils}
 /// {@canonicalFor time.SpanUtils}
 /// {@canonicalFor time.TimeUtils}
@@ -60,6 +65,7 @@ export 'src/csv.dart' show CsvUtils, ReaderCsv, ReaderFutureCsv;
 export 'src/format.dart' show SizeUtils;
 export 'src/hash.dart' show HashUtils, Hasher;
 export 'src/rate.dart' show Rate;
+export 'src/shell_utils.dart' show ShellUtils;
 export 'src/time.dart' show DurationUtils, SpanUtils, TimeUtils;
 
 /// `reader.cookies()`: a Netscape `cookies.txt` session from any [Reader].

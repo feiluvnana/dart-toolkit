@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/shell.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/video.dart' show Video;
 import 'package:test/test.dart';
@@ -151,7 +152,7 @@ void main() {
     });
 
     test('HEIC tile grids decode whole', () async {
-      final sips = await Shell.which('sips');
+      final sips = await ShellUtils.which('sips');
       if (sips == null) return markTestSkipped('needs macOS sips to make a HEIC');
       final jpg = '${tmp.path}/grid.jpg';
       await io.File(jpg).writeAsBytes(await draw('testsrc2=s=1200x900', 'jpg'));
