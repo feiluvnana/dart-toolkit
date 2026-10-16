@@ -417,16 +417,23 @@ sealed class Client implements Closeable {
   /// redirect hop, not cache hits. A pool counts its members.
   int sent();
 
+  /// GET [url] (relative to `base:`), [query] appended; completes when the
+  /// headers arrive. With `resume: true`, `get(u) > file` skips and resumes.
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});
 
+  /// HEAD [url]: the status and headers, no body.
   Future<Response> head(String url, {Map<String, Object?>? query, Map<String, String>? headers});
 
+  /// DELETE [url].
   Future<Response> delete(String url, {Map<String, Object?>? query, Map<String, String>? headers});
 
+  /// POST [body] to [url].
   Future<Response> post(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers});
 
+  /// PUT [body] at [url].
   Future<Response> put(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers});
 
+  /// PATCH [url] with [body].
   Future<Response> patch(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers});
 
   /// Cancel this client's in-flight requests, body reads and waits (they

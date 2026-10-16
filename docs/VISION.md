@@ -720,7 +720,8 @@ final class Speed implements Pipe { Speed();  Speed add(int count);  double rate
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
   prompt restores the terminal and exits with 130.
 - **A closed stdin is not an error.** `ask` gives its `or` (`''` by default) and `choose` its `or` (null without one), and so
-  does an `ask` whose `timeout:` passes (its reader is stopped, so the script can still exit);
+  does an `ask` whose `timeout:` passes (its reader is stopped, so the script can still exit; an
+  outer `.timeout()` would leave it waiting);
   `confirm` gives its `or` (false by default); the same goes for Escape in a Tui popup. An empty
   line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.
 - `confirm` takes y/yes/n/no, and Enter gives `or`. On a terminal, `choose` uses the arrow keys,

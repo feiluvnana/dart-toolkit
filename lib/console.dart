@@ -1,4 +1,5 @@
-/// Prompts and progress. Everything writes to stderr.
+/// Prompts and progress, on stderr (`Console.table` prints to stdout: it is
+/// the output).
 ///
 /// ```dart
 /// if (!await Console.confirm('Delete ${files.length} files?')) return;
@@ -172,7 +173,8 @@ abstract final class Console {
   /// after the question). With [secret], echo is turned off (passwords) and
   /// [or] is not shown. With [timeout], no answer in that time also gives
   /// [or]: the reader is stopped, so an unanswered prompt never keeps the
-  /// script alive.
+  /// script alive. Use [timeout], never an outer `.timeout()`: that one
+  /// leaves the reader waiting, holding the script until stdin closes.
   /// Asynchronous: timers, downloads and bars keep running while one waits.
   /// Ctrl-C restores the terminal and exits with 130. While a state-driven
   /// [Tui.run] is active, shows as a popup (Escape closes it like EOF).
@@ -255,9 +257,6 @@ abstract final class Console {
   /// popup (the popup speaks labels and the answer is mapped back, so
   /// duplicate labels resolve to their first item; [keys] is the console
   /// menu's own and does not apply there).
-  ///
-  /// To clear first, call [clear] explicitly: there is one way to
-  /// clear, not a `clear:` parameter on every prompt.
   static Future<T?> choose<T>(
     String question,
     List<T> items, {
@@ -450,8 +449,8 @@ abstract final class Console {
     _paint(force: true);
   }
 
-  /// Animate `⠋ label` until [work] completes, then `✓ label` and its result,
-  /// or `✗ label` and a rethrow. The live line always fits the width (the
+  /// Animate `⠋ label` until [work] completes, then `✓ label` and return its
+  /// value, or `✗ label` and a rethrow. The live line always fits the width (the
   /// width is re-read on each frame, so no resize subscription is needed).
   /// Several spinners and bars stack, one row each; without a terminal
   /// only the final `✓`/`✗` line prints. While a state-driven `Tui.run` is

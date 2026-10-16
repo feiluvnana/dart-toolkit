@@ -11,11 +11,11 @@
 ///
 /// Public surface is exactly: [Chrome], [Browser], [Page], [Download], [Capture], [Resource], [BrowserException].
 /// - `Chrome.launch/connect()` open a browser.
-/// - [Browser] supports `open` `pages`.
+/// - [Browser] supports `open` `pages` `close`.
 /// - [Page] supports `go` `back` `reload` `url` `html` `text` `run`
 ///   `cookies` `cookie` `responses` `click` `fill` `press` `select` `upload`
 ///   `scroll` `wait` `idle`
-///   `screenshot` `pdf` `download`.
+///   `screenshot` `pdf` `download` `close`.
 /// - [Download] supports `name` (plus [Reader]).
 /// - [Capture] is an XHR/fetch response the page received: `status` `url`
 ///   `header` (plus [Reader]).

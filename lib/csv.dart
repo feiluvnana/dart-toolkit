@@ -66,6 +66,7 @@ abstract final class Csv {
 /// `reader.csv()`: the rows of any [Reader] (`Fs.file`, an http response);
 /// `reader.rows()` streams them as they arrive, in constant memory.
 extension ReaderCsv on Reader {
+  /// Every row, split on [sep] (quotes and CRLF handled).
   Future<List<List<String>>> csv({String sep = ','}) async => Csv.parse(await text(), sep: sep);
 
   /// The CSV rows one at a time as the bytes arrive: a multi-gigabyte

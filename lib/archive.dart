@@ -1,18 +1,21 @@
-/// Archives and gzip, in pure Dart.
+/// Archives and gzip: zip, tar, gzip and xz in Dart, 7-Zip (downloaded once
+/// on first use when PATH has none) for 7z writes and big or exotic reads.
 ///
 /// | format | archive | unarchive |
 /// |---|---|---|
 /// | zip | ✓ (streamed, zip64; AES-256 with `password:`) | ✓ (AES, legacy ZipCrypto) |
 /// | tar, tgz | ✓ (streamed) | ✓ (streamed; `.tar.xz` too) |
-/// | 7z | ✓ (Deflate; AES-256 hides names) | ✓ (LZMA, LZMA2, PPMd, Deflate, BCJ, AES) |
+/// | 7z | ✓ (7-Zip: LZMA2; AES-256 hides names) | ✓ (LZMA, LZMA2, PPMd, Deflate, BCJ, AES) |
 /// | RAR4, RAR5 | — (the compressor is proprietary) | ✓ (solid, filters, PPMd, AES) |
+/// | `.tar.bz2` `.tar.zst` `.tar.Z` `.tar.lzma`, cab, ar, xar | — | ✓ (through 7-Zip) |
 ///
-/// Unarchiving zip, 7z and RAR holds the archive in memory (their directory
-/// or solid stream needs it whole) and decodes on its own isolate; tar,
-/// tgz and `.tar.xz` stream one member at a time (xz decodes on its own
-/// isolate too). Ctrl-C and screen redraws stay live either way. File
-/// modes and mtimes are kept; links are kept when they point inside the
-/// folder.
+/// Unarchiving zip, and 7z/RAR up to 32 MiB, holds the archive in memory
+/// (their directory or solid stream needs it whole) and decodes on its own
+/// isolate under a fixed budget; a bigger 7z/RAR goes to 7-Zip, which
+/// streams to disk. Tar, tgz and `.tar.xz` stream one member at a time
+/// (xz decodes on its own isolate too). Ctrl-C and screen redraws stay
+/// live either way. File modes and mtimes are kept; links are kept when
+/// they point inside the folder.
 ///
 /// ```dart
 /// await (Archive.archive(['site', 'README.md']) > Fs.file('site.zip'));  // like zip -r
@@ -64,8 +67,8 @@ enum ArchiveFormat {
   /// Gzipped tar, streamed.
   tgz,
 
-  /// 7z (deflate; AES-256 with the names hidden, with a password). Built in
-  /// memory, up to 4 GiB.
+  /// 7z, written by 7-Zip into a temp file (LZMA2 on every core; AES-256
+  /// with the names hidden, with a password).
   sevenzip,
 }
 
@@ -101,12 +104,12 @@ abstract final class Archive {
   /// A [Writer] extracting what it is given into [dir], creating it and
   /// merging into what is there (a file already there is kept, never
   /// replaced). The format comes from the magic bytes; one this module
-  /// cannot read (bzip2, zstd, lz4, …) is named in the [ContentException].
+  /// cannot read (lz4, lzip, …) is named in the [ContentException].
   /// Symlinks and hardlinks are kept when they resolve inside [dir] (a
   /// hardlink lands as a copy); one that points outside fails by name.
   /// [password] opens encrypted archives (zip AES or legacy ZipCrypto, 7z
   /// AES, RAR4/RAR5); an encrypted member without it, or with the wrong one,
-  /// is a [ContentException] before anything lands in [dir].
+  /// is a [PasswordException] before anything lands in [dir].
   static Writer unarchive(String dir, {String? password}) => _Unpacker(dir, password);
 
   /// Streaming gzip compression.

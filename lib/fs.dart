@@ -14,8 +14,9 @@
 /// [LockedException].
 /// - `Fs.entry/file/dir/link()` inspect or build handles (`entry` is the
 ///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
-///   an untrusted string a safe file name.
-/// - [Entry] supports `path` `name` `parent` `exists` `delete` `copy` `move`.
+///   an untrusted string a safe file name; `Fs.tempDir()` runs a body with a
+///   fresh folder; `Fs.homeDir()` and `Fs.scriptDir()` name the usual places.
+/// - [Entry] supports `path` `name` `parent` `exists` `modified` `delete` `copy` `move`.
 /// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `size` `watch` `create`.
 /// - [Link] supports `target` `resolve` `create`.

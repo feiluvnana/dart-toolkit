@@ -3,7 +3,7 @@
 ///
 /// ```dart
 /// await Pool.map(urls, fetchPage, onDone: bar.tick);                     // 4 lanes, fail fast
-/// final done = await Pool.settle(files, (f) => cdn.save(f.url, f.to));   // never throws
+/// final done = await Pool.settle(files, (f) => cdn.get(f.url) > f.to);   // never throws
 /// for (final Failed(:item, :error) in done.failures()) Console.log('✗ $item: $error');
 /// final thumbs = await Pool.map(paths, makeThumb, isolates: true);       // CPU work
 /// final lanes = Pool(limit: 8);                                          // one limit shared by many callers

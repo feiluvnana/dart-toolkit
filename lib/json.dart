@@ -529,6 +529,7 @@ Object? _scalar<E>(Object? e) {
 /// [or] is returned when the source does not exist (a missing file:
 /// `PathNotFoundException`); every other failure still throws.
 extension ReaderJson on Reader {
+  /// The body decoded as JSON; [or] when the source does not exist.
   Future<Json> json({Json? or}) async {
     final List<int> bytes;
     try {
@@ -562,8 +563,8 @@ extension ReaderJson on Reader {
   }
 }
 
-/// UTF-8 straight into JSON: faster than `text()` + `jsonDecode` (A/B,
-/// 2026-10-16), malformed bytes replaced like `text()`.
+/// UTF-8 straight into JSON: faster than `text()` + `jsonDecode` (no
+/// intermediate string), malformed bytes replaced like `text()`.
 final _utf8Json = const Utf8Decoder(allowMalformed: true).fuse(const JsonDecoder());
 
 /// ` from <url|path> (HTTP <status>)` for an error message (URL

@@ -69,6 +69,7 @@ int _size(Object? v, Map<Object, int> seen) {
 
 /// `reader.yaml()`: [or] is returned when the source does not exist.
 extension ReaderYaml on Reader {
+  /// The body parsed as YAML into a [Json]; [or] when the source does not exist.
   Future<Json> yaml({Json? or}) async {
     final String text;
     try {

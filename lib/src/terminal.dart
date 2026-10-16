@@ -1928,6 +1928,8 @@ final class TerminalCaps {
 /// Downgraded to the terminal's level at paint time (truecolor → 256 → 16;
 /// `NO_COLOR` drops colours and keeps styles).
 final class Color {
+  /// The eight basic terminal colours and gray (the palette's 0–8): they
+  /// follow the user's terminal theme.
   static const black = Color._(0, null);
   static const red = Color._(1, null);
   static const green = Color._(2, null);
@@ -1950,6 +1952,8 @@ final class Color {
     return Color._(index, null);
   }
 
+  /// True colour where the terminal has it, else the nearest of the 256;
+  /// each channel 0–255, else [ArgumentError].
   factory Color.rgb(int r, int g, int b) {
     for (final (n, v) in [('r', r), ('g', g), ('b', b)]) {
       if (v < 0 || v > 255) {

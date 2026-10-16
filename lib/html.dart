@@ -9,7 +9,8 @@
 ///
 /// Public surface is exactly: [Html], [Elements], [Element] (and
 /// everything `json` exports, since `json()` returns a [Json]).
-/// - `Html.parse()` parses HTML and returns [Elements].
+/// - `Html.parse()` parses HTML and returns [Elements]; `Reader.html()`
+///   parses a body (`http.get(u).html()`), its URL the base.
 /// - [Elements] supports `$` `[]` `not` `text` `texts` `html` `attr` `attrs`
 ///   `json` (embedded data) `table` (rows as maps) `form` (fields to post)
 ///   (plus [Iterable] helpers).
@@ -21,7 +22,7 @@ library;
 import 'json.dart';
 export 'core.dart';
 // The json names by `show`: a bare `export 'json.dart'` re-exports core
-// through json and costs +60 ms at startup (A/B, 2026-10-16).
+// through json, which costs startup.
 export 'json.dart' show Json, JsonFuture, ReaderJson, ReaderFutureJson;
 
 import 'src/dom.dart' as dom;
@@ -702,6 +703,7 @@ String? _baseFor(Origin o) {
 /// (or the file's URI) from the typed [Origin]; other readers parse without
 /// a base.
 extension ReaderHtml on Reader {
+  /// The body parsed as HTML, its URL (or file) the base for links.
   Future<Elements> html() async => Html.parse(await text(), base: _baseFor(origin()));
 }
 
