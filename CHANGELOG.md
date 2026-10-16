@@ -71,6 +71,7 @@
 - `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
 - `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
 - `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
+- `csv`: `Csv.records(text)`; `final [keys, ...rows] = Csv.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
 
 ## 0.1.0
 

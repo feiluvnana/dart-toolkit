@@ -3,13 +3,12 @@
 ///
 /// ```dart
 /// final rows = await Fs.file('sales.csv').csv();
-/// final people = Csv.records(await Fs.file('people.csv').text());   // header row → keys
+/// final [keys, ...people] = Csv.parse(await Fs.file('people.csv').text());   // header row first
 /// await Fs.file('out.csv').write(Csv.encode([['name', 'n'], ['a', 1]]));
 /// ```
 ///
 /// Public surface is exactly: [Csv], [ReaderCsv].
-/// - `Csv.parse()` reads rows, `Csv.records()` maps them by the header row,
-///   `Csv.encode()` writes rows.
+/// - `Csv.parse()` reads rows, `Csv.encode()` writes rows.
 /// - `reader.csv()` parses any [Reader]; `reader.rows()` streams its rows.
 /// Everything else is private.
 library;
@@ -31,17 +30,6 @@ abstract final class Csv {
     final rows = <List<String>>[];
     (_Rows(sep, rows.add)..feed(text)).end();
     return rows;
-  }
-
-  /// The rows of [text] after the first, as maps keyed by the first row. A
-  /// short row leaves its missing keys out; extra cells are dropped.
-  static List<Map<String, String>> records(String text, {String sep = ','}) {
-    final rows = parse(text, sep: sep);
-    if (rows.isEmpty) return [];
-    final keys = rows.first;
-    return [
-      for (final row in rows.skip(1)) {for (var k = 0; k < row.length && k < keys.length; k++) keys[k]: row[k]},
-    ];
   }
 
   /// [rows] as CSV text with CRLF line ends. A null cell is empty; a field

@@ -183,7 +183,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
-| `csv`     | `Csv.parse` `records` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
+| `csv`     | `Csv.parse` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `which` `filter` `open` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
@@ -1068,7 +1068,6 @@ At most half the cores' worth of encodes run at once.
 ```dart
 abstract final class Csv {
   static List<List<String>> parse(String text, {String sep = ','});
-  static List<Map<String, String>> records(String text, {String sep = ','});   // header row → keys
   static String encode(List<List<Object?>> rows, {String sep = ','});
 }
 extension on Reader { Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or});  Stream<List<String>> rows({String sep = ','}); }
@@ -1076,7 +1075,8 @@ extension on Reader { Future<List<List<String>>> csv({String sep = ',', List<Lis
 
 - RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM; a blank
   line is no row. An unterminated quote is a `ContentException`. `encode` writes CRLF and quotes
-  only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory.
+  only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory. Rows
+  keyed by the header are `final [keys, ...rows] = Csv.parse(t)` and a map per row.
 
 ### 4.16 yaml
 

@@ -30,11 +30,7 @@ void main() {
     expect(() => Csv.parse('a', sep: '"'), throwsArgumentError);
   });
 
-  test('records key rows by the header; encode round-trips', () {
-    expect(Csv.records('name,n\nann,1\nbob\n'), [
-      {'name': 'ann', 'n': '1'},
-      {'name': 'bob'},
-    ]);
+  test('encode round-trips', () {
     final rows = [
       ['a,b', 'q"', null, ' pad', 3],
       ['line\nbreak', '', 'x', 'y', 1.5],
@@ -65,9 +61,6 @@ void streaming() {
     expect(Csv.parse('a,b\n\n1,2\r\n\r\n'), [
       ['a', 'b'],
       ['1', '2'],
-    ]);
-    expect(Csv.records('k\n\nv\n'), [
-      {'k': 'v'},
     ]);
     expect(Csv.parse('a\n""\n'), [
       ['a'],

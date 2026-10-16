@@ -55,7 +55,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` that skips and resumes, safe retries, `Body.multipart`, `sent()`, `Http.pool`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run), `browser: .page`/`.api` headers, `login:` paths that throw `SessionException` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `markup()`, `text()` that reads like a page; re-exports `json` |
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`, `reader.ndjson()` |
-| `csv` | CSV | RFC 4180 `parse`, `records`, `encode`, `reader.csv(or:)`, streamed `reader.rows()` |
+| `csv` | CSV | RFC 4180 `parse`, `encode`, `reader.csv(or:)`, streamed `reader.rows()` |
 | `yaml` | reading YAML | in-house YAML 1.2 reader, `file.yaml().$('version').text()`: the `json` reading API |
 | `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `watch()`, `dir.size()`, watchable `copy`/`move`/`list`, `Fs.tempDir`, `file.lock(timeout:)`, `modified()`/`touch(t)`, `Fs.sanitize(name)` |
 | `archive` | zip, tar, tgz, 7z, RAR, bz2/zst, cab/ar/xar | `archive(paths, password:)` (zip and tar stream, 7z via 7-Zip LZMA2; a probe sees the input packed), `unarchive(dir)` for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 in Dart, big or exotic ones via 7-Zip; modes, mtimes and inside links kept |
