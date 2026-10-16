@@ -183,9 +183,9 @@ final class Job {
       part.added++;
       return true;
     } catch (e) {
-      part
-        ..failed += 1
-        ..stored -= got.done();
+      part.stored -= got.done();
+      if (e is InterruptedException) rethrow; // stopped (q, Ctrl-C), not failed
+      part.failed += 1;
       board.fail('✗ @${u.name} $path: $e', () async {
         part
           ..failed -= 1
@@ -210,6 +210,8 @@ final class Job {
           : await (Image.compress(path, quality: quality) & bar);
       if (c case Compressed(:final before, :final after)) part.stored += after - before;
       return c is Compressed ? c.text() : '$size (${c.text()})';
+    } on InterruptedException {
+      rethrow;
     } on ToolkitException catch (e) {
       return '$size (not compressed: ${e.message})';
     }
@@ -220,6 +222,8 @@ final class Job {
     u.id = null; // on the board: looking up
     try {
       await platform.explore(this);
+    } on InterruptedException {
+      rethrow;
     } catch (e) {
       u.error = '${platform.explain(e)}';
       board.fail('✗ @${u.name}: ${u.error}', () async {
@@ -232,8 +236,11 @@ final class Job {
       }, platform: code);
       return 0;
     } finally {
-      await Future.wait(batches);
-      await _index?.save();
+      try {
+        await Future.wait(batches);
+      } finally {
+        await _index?.save(); // an interrupted run keeps what it saw
+      }
     }
     if (u.changes.isNotEmpty) Console.notify('medialoader: @${u.name} changed: ${u.changes.join('; ')}');
     return [for (final b in await Future.wait(batches)) ...b].values().where((isNew) => isNew).length;
