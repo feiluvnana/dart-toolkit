@@ -117,7 +117,7 @@ final class Image {
   /// The displayed size ffprobe reports, and whether it is a tile grid: a
   /// grid's own size, else the first video stream's.
   static Future<(int, int, bool)> _probeSize(String path) async {
-    final info = await media.ffprobe(path);
+    final info = await media.ffprobe(media.file(path));
     for (final g in (info['stream_groups'] as List?) ?? const []) {
       final c = (g as Map)['components'];
       if (c is List && c.isNotEmpty && c.first is Map && (c.first as Map)['width'] is int) {
@@ -234,7 +234,7 @@ final class Image {
   /// which ffmpeg only allows in a complex graph, so every call uses one.
   List<String> _graph(List<String> steps) => [
     '-i',
-    _src,
+    media.file(_src),
     '-filter_complex',
     '${_grid ? '[0:g:0]' : '[0:v:0]'}${steps.isEmpty ? 'null' : steps.join(',')}[o]',
     '-map',

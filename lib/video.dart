@@ -102,24 +102,28 @@ final class Video {
     return null;
   }
 
-  /// Probe [source], a URL ffmpeg reads itself (`.m3u8`/`.mpd` manifests
-  /// included, which have no bytes to read); a file is a reading:
-  /// `Fs.file(path).video()`, a path here an [ArgumentError]. [audio] adds
-  /// a separate audio source (DASH serves them apart), and [headers]
+  /// Probe [source], an http(s) URL ffmpeg reads itself (`.m3u8`/`.mpd`
+  /// manifests included, which have no bytes to read); a file is a reading:
+  /// `Fs.file(path).video()`, and a path or any other scheme here is an
+  /// [ArgumentError]. [audio] (an http(s) URL too) adds a separate audio
+  /// source (DASH serves them apart), and [headers]
   /// (cookies, referer, a token) go with ffmpeg's requests to the source's
   /// own origins only, through a loopback proxy: never in the process
   /// list, never to a CDN or redirect on another host.
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) {
-    if (!_url.hasMatch(source)) {
-      throw ArgumentError.value(source, 'source', 'a URL; read a file with Fs.file(path).video()');
+    for (final url in [source, ?audio]) {
+      if (!_url.hasMatch(url)) {
+        throw ArgumentError.value(url, url == source ? 'source' : 'audio', 'an http(s) URL; read a file with Fs.file(path).video()');
+      }
     }
     return _open(source, audio: audio, headers: headers);
   }
 
-  static final _url = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]+://');
+  static final _url = RegExp(r'^https?://', caseSensitive: false);
 
+  /// [source] (an http(s) URL, else a local path) as ffmpeg reads it.
   static Future<Video> _open(String source, {String? audio, Map<String, String>? headers, media.Temp? temp}) async {
-    final inputs = [source, ?audio];
+    final inputs = [for (final i in [source, ?audio]) _url.hasMatch(i) ? i : media.file(i)];
     final infos = await proxy.throughProxy(
       inputs,
       headers,

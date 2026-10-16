@@ -152,7 +152,10 @@ void main() {
       ..statusCode = 503
       ..close());
     await expectLater(Video.open('$base/x.mp4'), throwsA(isA<io.IOException>()));
-    await expectLater(Video.open('$base/x.mp4'.replaceFirst('http', 'file')), throwsA(isA<ContentException>()));
+    final (_, junk) = await serve((r) => r.response
+      ..write('not a video')
+      ..close());
+    await expectLater(Video.open('$junk/x.mp4'), throwsA(isA<ContentException>()));
   });
 
   test('with headers:, an upstream failure surfaces as itself, naming the source (B20)', () async {
@@ -193,15 +196,33 @@ void main() {
       expect((v.width(), v.height()), (360, 640));
     });
 
-    test('open takes URLs; a path is a reading instead', () async {
+    /// A loopback server for the files in tmp, by name.
+    Future<String> files() async {
+      final (_, base) = await serve((r) async {
+        await r.response.addStream(io.File('${tmp.path}${r.uri.path}').openRead());
+        await r.response.close();
+      });
+      return base;
+    }
+
+    test('open takes http(s) URLs; a path is a reading instead', () async {
       expect(() => Video.open(clip), throwsArgumentError);
-      final v = await Video.open(Uri.file(clip).toString());
+      final v = await Video.open('${await files()}/${clip.split('/').last}');
       expect((v.width(), v.format()), (640, VideoFormat.mp4));
     });
 
+    test('S7: open refuses every other scheme ffmpeg would read (local files, raw sockets)', () {
+      for (final url in [Uri.file(clip).toString(), 'tcp://127.0.0.1:9/', 'ftp://127.0.0.1/x.mp4', 'concat:$clip|$clip']) {
+        expect(() => Video.open(url), throwsArgumentError, reason: url);
+        expect(() => Video.open('http://127.0.0.1:9/x.mp4', audio: url), throwsArgumentError, reason: url);
+      }
+    });
+
     test('open joins a separate audio source (DASH)', () async {
-      final video = Uri.file(await make('v.mp4', ['-i', clip, '-an', '-c', 'copy'])).toString();
-      final audio = await make('a.m4a', ['-i', clip, '-vn', '-c', 'copy']);
+      final base = await files();
+      await make('v.mp4', ['-i', clip, '-an', '-c', 'copy', '-movflags', '+faststart']); // no Range here
+      await make('a.m4a', ['-i', clip, '-vn', '-c', 'copy']);
+      final (video, audio) = ('$base/v.mp4', '$base/a.m4a');
       expect((await Video.open(video)).audioCodec(), isNull);
       final joined = await Video.open(video, audio: audio);
       expect(joined.audioCodec(), 'aac');

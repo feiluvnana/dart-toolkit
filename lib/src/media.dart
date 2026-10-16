@@ -81,6 +81,10 @@ final _network = RegExp(
   r'Operation timed out|Server returned (5XX|429)|Broken pipe',
 );
 
+/// The local file [path] as an ffmpeg input: a `file:` path ffmpeg never
+/// reads as another protocol (`concat:`, `subfile:`, `tcp:`).
+String file(String path) => 'file:${p.absolute(path)}';
+
 /// ffprobe's JSON for [input] (a path or URL). Unreadable input is a
 /// [ContentException].
 Future<Map<String, Object?>> ffprobe(String input) async {
