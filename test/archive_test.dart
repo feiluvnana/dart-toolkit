@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' show Hmac, sha1;
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/aes.dart';
 import 'package:dart_toolkit/src/crc32.dart';
 import 'package:dart_toolkit/src/lzma.dart';
@@ -436,6 +437,61 @@ void main() {
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))),
       );
       expect(await Fs.entry(p('mixed/a.txt')), isNull);
+    });
+
+    test('RAR names in RAR4 compact UTF-16 and RAR5 UTF-8; RAR5 links and a hard link', () async {
+      final fx = 'test/fixtures/archives';
+      await (Fs.file('$fx/rar4_unicode.rar') > Archive.unarchive(p('u4')));
+      expect(await Fs.file(p('u4/abcdefghijklmnopqrsテスト.txt')).text(), 'aaaaaaaaaaaaaaa\n');
+      expect(await Fs.file(p('u4/表だよ/新しいフォルダ/新規テキスト ドキュメント.txt')).size(), 0);
+      expect(await io.Link(p('u4/表だよ/ファイル')).target(), '漢字長いファイル名long-filename-in-漢字.txt');
+      await (Fs.file('$fx/rar5_unicode.rar') > Archive.unarchive(p('u5')));
+      expect(await Fs.file(p('u5/👋🌎.txt')).text(), 'Hello, world!');
+      expect(await Fs.file(p('u5/Ⓗⓐⓡⓓ Ⓛⓘⓝⓚ.txt')).text(), 'Hello, world!');
+      expect(await io.Link(p('u5/𝒮𝓎𝓂𝒷𝑜𝓁𝒾𝒸 𝐿𝒾𝓃𝓀.txt')).target(), '👋🌎.txt');
+      await (Fs.file('$fx/rar5_symlink.rar') > Archive.unarchive(p('sym')));
+      expect(await io.Link(p('sym/symlink.txt')).target(), 'file.txt');
+      expect(await io.Link(p('sym/dirlink')).target(), 'dir');
+      await (Fs.file('$fx/rar5_hardlink.rar') > Archive.unarchive(p('hard')));
+      expect(await Fs.file(p('hard/hardlink.txt')).text(), '1234\n');
+    });
+
+    test('RAR5 BLAKE2sp hashes and the MAC-tweaked CRCs of a solid encrypted archive are checked', () async {
+      final fx = 'test/fixtures/archives';
+      await (Fs.file('$fx/rar5_blake2.rar') > Archive.unarchive(p('b2')));
+      final h = Hash.sha256();
+      await (Fs.file(p('b2/cebula.txt')) > h);
+      expect(h.hex(), '1e98540238b2b13d1a22f4f4fa8e2eb6c66e24d46115ffdfafd3f3f981b212e7');
+      await (Fs.file('$fx/rar5_solid_encrypted.rar') > Archive.unarchive(p('se'), password: 'password'));
+      expect(
+        [
+          for (final n in ['a', 'b', 'c', 'd']) await Fs.file(p('se/$n.txt')).size(),
+        ],
+        [18, 18, 18, 18],
+      );
+      await expectLater(
+        Fs.file('$fx/rar5_solid_encrypted.rar') > Archive.unarchive(p('se_bad'), password: 'nope'),
+        throwsA(isA<PasswordException>()),
+      );
+    });
+
+    test('7z: the ARM64 branch filter and a PPMd model that rescales and restarts decode exactly', () async {
+      final fx = 'test/fixtures/archives';
+      await (Fs.file('$fx/7z_arm64.7z') > Archive.unarchive(p('arm64')));
+      final code = ByteData(2048 * 4);
+      for (var i = 0; i < 2048; i++) {
+        code.setUint32(i * 4, switch (i % 4) {
+          0 => 0x94000000 | (i * 7919 & 0x3FFFFFF),
+          1 => 0x90000000 | (i * 13 & 3) << 29 | (i * 31 & 0x7FFF) << 5 | (i & 31),
+          2 => 0x90000000 | (i * 5 & 3) << 29 | (i * 977 & 0x7FFFF) << 5 | (i & 31),
+          _ => 0xD503201F,
+        }, Endian.little);
+      }
+      expect(await Fs.file(p('arm64/code.bin')).bytes(), code.buffer.asUint8List());
+      await (Fs.file('$fx/7z_ppmd_restart.7z') > Archive.unarchive(p('ppmd')));
+      final h = Hash.sha256();
+      await (Fs.file(p('ppmd/mix4000.txt')) > h);
+      expect(h.hex(), 'c582bb308da8b1cd68cc5854313b5aa49d5d8db8341cf40e062e1de11d7f619d'); // fixtures/README.md
     });
 
     test('RAR4: the E8 filter, AES-128 with encrypted names and solid, a link kept', () async {
