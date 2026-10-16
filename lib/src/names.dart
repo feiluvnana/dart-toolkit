@@ -55,33 +55,65 @@ final _reserved = RegExp(
   caseSensitive: false,
 );
 
-/// [url] fit for an error message or log: no `user:password@`, and the
-/// values of credential query parameters shown as `***`. Only exact secret
-/// names count (`token`, `access_token`, `key`, `api_key`, `code`, `auth`,
-/// `password`, `secret`, `sig`, `signature`, `session`, … and AWS/GCS
-/// signing parameters), so `shortcode`, `keyword` and `author` stay
-/// readable. Not a URL to request.
+/// [url] fit for an error message or log: no `user:password@`, the values
+/// of credential parameters in the query and the fragment
+/// (`#access_token=`) shown as `***`, and so are path tokens: a Telegram
+/// `bot<id>:<token>` segment and what follows a `webhooks` segment or
+/// Slack's `hooks.slack.com/services`. Only exact secret names count
+/// (`token`, `access_token`, `key`, `api_key`, `code`, `auth`, `password`,
+/// `secret`, `sig`, `signature`, `session`, … and AWS/GCS signing
+/// parameters), so `shortcode`, `keyword` and `author` stay readable. Not
+/// a URL to request.
 String redact(Object url) {
   final uri = url is Uri ? url : Uri.tryParse('$url');
   if (uri == null) return '$url';
   var out = uri.userInfo.isEmpty ? uri : uri.replace(userInfo: '');
-  if (uri.hasQuery) {
-    var hit = false;
-    final masked = uri.query
-        .split('&')
-        .map((pair) {
-          final eq = pair.indexOf('=');
-          if (eq < 0 || !_secretParams.contains(pair.substring(0, eq).toLowerCase().replaceAll('-', '_'))) {
-            return pair;
-          }
-          hit = true;
-          return '${pair.substring(0, eq)}=***';
-        })
-        .join('&');
-    if (hit) out = out.replace(query: masked);
+  final segments = <String>[];
+  var cut = false;
+  for (final s in uri.pathSegments) {
+    if (_botToken.hasMatch(s)) {
+      segments.add('bot***');
+      cut = true;
+      continue;
+    }
+    segments.add(s);
+    if (s == 'webhooks' || s == 'services' && uri.host == 'hooks.slack.com') {
+      if (segments.length < uri.pathSegments.length) segments.add('***');
+      cut = true;
+      break;
+    }
   }
-  return out.toString();
+  if (cut) out = out.replace(pathSegments: segments);
+  if (uri.hasQuery) {
+    final masked = _maskPairs(uri.query);
+    if (masked != null) out = out.replace(query: masked);
+  }
+  // Uri.replace keeps the fragment; masking it means building the string.
+  final text = out.toString();
+  if (!uri.hasFragment) return text;
+  final masked = _maskPairs(uri.fragment);
+  return masked == null ? text : '${text.substring(0, text.lastIndexOf('#'))}#$masked';
 }
+
+/// `a=1&token=x` with the secret values as `***`; null when none is.
+String? _maskPairs(String pairs) {
+  var hit = false;
+  final masked = pairs
+      .split('&')
+      .map((pair) {
+        final eq = pair.indexOf('=');
+        if (eq < 0 || !_secretParams.contains(pair.substring(0, eq).toLowerCase().replaceAll('-', '_'))) {
+          return pair;
+        }
+        hit = true;
+        return '${pair.substring(0, eq)}=***';
+      })
+      .join('&');
+  return hit ? masked : null;
+}
+
+/// A Telegram bot API token segment: `bot123456:AAE…`.
+final _botToken = RegExp(r'^bot\d+:[\w-]+$');
 
 /// Query parameter names whose values are credentials (lowercase, `-` as
 /// `_`).

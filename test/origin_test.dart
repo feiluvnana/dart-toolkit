@@ -77,6 +77,20 @@ void redactTests() {
       );
       expect(redact('https://x.com/?page=2'), 'https://x.com/?page=2');
     });
+
+    test('S9: masks secrets in the fragment and in token-bearing paths', () {
+      expect(
+        redact('https://app.example/cb#access_token=T&token_type=bearer&state=s'),
+        'https://app.example/cb#access_token=***&token_type=bearer&state=s',
+      );
+      expect(
+        redact('https://api.telegram.org/bot123456:AAE-secretBotToken/sendMessage?chat_id=1'),
+        'https://api.telegram.org/bot***/sendMessage?chat_id=1',
+      );
+      expect(redact('https://hooks.slack.com/services/T000/B000/XXXXsecret'), 'https://hooks.slack.com/services/***');
+      expect(redact('https://discord.com/api/webhooks/123/tokenSECRET'), 'https://discord.com/api/webhooks/***');
+      expect(redact('https://x.com/robots/bot/page#top'), 'https://x.com/robots/bot/page#top');
+    });
   });
 
   group('filename* astral', () {
