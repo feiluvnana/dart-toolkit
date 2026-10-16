@@ -236,10 +236,11 @@ import 'dart:async';
 import 'dart:io';
 import 'package:dart_toolkit/src/exit.dart' as exit;
 Future<void> main() async {
+  // Resident (not busy): the first SIGINT finds the toolkit idle and runs it.
   exit.onExit(() async {
     stdout.writeln('cleaning');
     await Future<void>.delayed(const Duration(seconds: 30));
-  });
+  }, busy: false);
   stdout.writeln('ready');
   await Future<void>.delayed(const Duration(seconds: 60));
 }

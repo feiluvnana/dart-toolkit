@@ -203,7 +203,7 @@ Future<String> tempOut(String ext) async =>
     p.join((await _spool()).path, '${DateTime.now().microsecondsSinceEpoch}-${_n++}.out.$ext');
 
 /// [body], with the temp file [path] deleted if a signal ends the script
-/// meanwhile (Ctrl-C skips `finally`).
+/// meanwhile (a second Ctrl-C, SIGTERM or SIGHUP skips `finally`).
 Future<T> deletedOnExit<T>(String path, Future<T> Function() body) async {
   final token = exit.onExit(() => io.File(path).delete().then((_) {}, onError: (_) {}));
   try {

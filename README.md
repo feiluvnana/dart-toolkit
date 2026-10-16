@@ -47,6 +47,8 @@ Future<void> main() async {
 
 A probe shows the whole run it is in: a flow's source bytes against the source's length (learned, never passed), an encode in media time, a pool's jobs, a plain future as a spinner.
 
+Ctrl-C fails whatever the toolkit is waiting on with `InterruptedException` (programs and browsers stopped, temp files removed), so a script's `finally` runs and can save its state with `file.write`; then it exits 130. A second Ctrl-C exits at once.
+
 ## Modules
 
 | Import | For | Highlights |

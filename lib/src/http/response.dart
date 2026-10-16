@@ -318,17 +318,29 @@ final class Response with Reader implements Closeable {
     out = StreamController<List<int>>(
       sync: true,
       onListen: () {
+        // Ctrl-C fails the read in flight (`>`, text, lines, events).
+        if (!signals.interrupted) _stop ??= signals.onInterrupt(() => _kill(const InterruptedException()));
         sub = _resp
             .timeout(
               limit,
               onTimeout: (sink) =>
                   sink.addError(Timeout('body stalled for ${limit.human()}: $_method ${names.redact(_url)}', limit)),
             )
-            .listen(out.add, onError: out.addError, onDone: out.close);
+            .listen(
+              out.add,
+              onError: out.addError,
+              onDone: () {
+                _unstop();
+                out.close();
+              },
+            );
       },
       onPause: () => sub?.pause(),
       onResume: () => sub?.resume(),
-      onCancel: () => sub?.cancel(),
+      onCancel: () {
+        _unstop();
+        return sub?.cancel();
+      },
     );
     _killer = (error) {
       sub?.cancel();
@@ -341,6 +353,15 @@ final class Response with Reader implements Closeable {
   }
 
   void Function(Object error)? _killer;
+
+  /// The Ctrl-C stop of the body read in flight.
+  Object? _stop;
+
+  void _unstop() {
+    final token = _stop;
+    _stop = null;
+    if (token != null) signals.offInterrupt(token);
+  }
 
   /// Fail the body read in flight with [error] and drop the connection.
   void _kill(Object error) {
@@ -362,6 +383,7 @@ final class Response with Reader implements Closeable {
   }
 
   void _finish() {
+    _unstop();
     _done = true;
     if (_released) return;
     _released = true;

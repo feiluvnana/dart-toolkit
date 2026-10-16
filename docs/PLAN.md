@@ -79,6 +79,11 @@ On POSIX the terminal reader is a `cat` child that dies with our pipe; on Window
 ### W18. Idle Tui misses resizes on Windows (P7)
 `lib/src/tui/session.dart` redraws on resize through `exit.onResize` (`SIGWINCH`), which Windows does not have, so an idle Tui keeps its old layout until a key arrives. On Windows, while `Tui.run` is active, poll `io.stdout.terminalColumns`/`terminalLines` every 250 ms in the session (a `Timer.periodic` started in `_enter`, cancelled in `_leave`; only when idle, since a busy frame reads the size anyway) and fire the same path as `exit.onResize`. Check: resize the Windows Terminal window while an idle Tui shows a box; it redraws within a quarter second.
 
+### W19. Ctrl-C runs `finally` on Windows (M9)
+`lib/src/exit.dart` turns the first Ctrl-C into an interruption: pending waits fail with `InterruptedException`, the script's `finally` runs, and the process exits 130 once the toolkit is idle. It rests on `ProcessSignal.sigint.watch()` (Windows has it, for Ctrl-C and Ctrl-Break) and `Isolate.setErrorsFatal(false)`. The race fix (a child that died of the terminal's Ctrl-C ends `Shell.run` before our watcher hears it) is POSIX-only: `_diedOfCtrlC` in `lib/shell.dart` checks for exit `-2`, and a Windows child ended by Ctrl-C exits `0xC000013A` (`-1073741510`, `STATUS_CONTROL_C_EXIT`). Check in Windows Terminal and conhost:
+1. `dart test test/interrupt_test.dart` (the file is `@TestOn('!windows')`: drop that, and replace `sleep 30` with `powershell -c Start-Sleep 30` and `touch` with `type nul >`). `Process.kill(ProcessSignal.sigint)` cannot signal a child on Windows: drive these by hand instead. Run a script with `try { await Shell.run(['powershell', '-c', 'Start-Sleep 30']); } finally { await Fs.file('state').write('saved'); }`, press Ctrl-C: expected `state` = `saved` and `$LASTEXITCODE` = 130. Press Ctrl-C twice with a `finally` that holds `Fs.tempDir((d) => Future.delayed(30.seconds))`: it exits at once and the temp folder is gone.
+2. If `Shell.run` instead returns an `Output` with code `-1073741510` before the script hears its Ctrl-C (the child died first), add that code to `_diedOfCtrlC` on Windows (with `exit.onTerminal`) and record it here.
+
 ## §2 Linux
 
 ### L1. M11: `ShellUtils.open` with a foreground launcher keeps the script alive

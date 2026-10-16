@@ -299,7 +299,8 @@ final class _Packed with Reader {
       base = await io.Directory(base).resolveSymbolicLinks();
     }
     final work = await io.Directory.systemTemp.createTemp('dart_toolkit_7z_');
-    // Ctrl-C skips `finally`: the exit hook removes the work folder.
+    // A signal that ends the process skips `finally`: the exit hook
+    // removes the work folder.
     final token = exit.onExit(() => work.delete(recursive: true).then((_) {}, onError: (_) {}));
     try {
       final list = p.join(work.path, 'list.txt');
@@ -1072,7 +1073,8 @@ final class _Unpacker with Writer {
   /// Watched, an archive 7-Zip extracts after reading it reports that
   /// extraction too.
   Future<void> _consume(Stream<List<int>> input, Run? run) async {
-    final it = StreamIterator(input);
+    // Ctrl-C fails an unpack in flight, so its temp folder goes.
+    final it = StreamIterator(exit.guard(input));
     try {
       final (format, rest) = await _sniffed(it);
       // Normalise the target; the temp folder is a SIBLING of the target,
@@ -1080,13 +1082,20 @@ final class _Unpacker with Writer {
       // '.') still gets a sibling outside itself.
       final d = p.normalize(_dir);
       final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))), _max, _match)..run = run;
-      // An interrupt skips `finally`: the exit hook stops the decoder, then
-      // removes the temp folder.
+      // A signal that ends the process skips `finally`: the exit hook stops
+      // the decoder, then removes the temp folder.
       final token = exit.onExit(() async {
         await x.stop();
         try {
           await x.tmp.delete(recursive: true);
         } catch (_) {}
+      });
+      // Ctrl-C stops the decoder (its input may be read already) and fails
+      // the unpack before anything lands.
+      var stopped = false;
+      final stop = exit.onInterrupt(() {
+        stopped = true;
+        unawaited(x.stop());
       });
       try {
         await x.start();
@@ -1102,8 +1111,13 @@ final class _Unpacker with Writer {
             // truncation fail here, before the merge.
             await x.tar(await _tarEvents(format, rest));
         }
+        if (stopped) throw const InterruptedException();
         await x.merge(d);
+      } on Object {
+        if (stopped) throw const InterruptedException();
+        rethrow;
       } finally {
+        exit.offInterrupt(stop);
         await x.stop();
         await x.dispose();
         exit.offExit(token);

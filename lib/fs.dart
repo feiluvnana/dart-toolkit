@@ -376,6 +376,9 @@ final class File extends Entry with Reader, Writer {
   static final _writes = <String, Future<void>>{};
 
   Future<void> _atomicWrite(Stream<List<int>> input) async {
+    // Ctrl-C fails a write in flight (the temp goes, `finally` runs); one
+    // begun after it (saving state) runs.
+    input = exit.guard(input);
     // Writes go through symlinks to their real target: resolve first so
     // a handle pointing at a link updates the target instead of replacing
     // the link with a regular file. Broken links fall back to the handle
@@ -422,7 +425,8 @@ final class File extends Entry with Reader, Writer {
         };
       }
     }
-    // An interrupt skips `finally`: the exit hook removes the temp file.
+    // A signal that ends the process skips `finally`: the exit hook
+    // removes the temp file.
     final token = exit.onExit(() async {
       try {
         await tmpFile.delete();

@@ -637,9 +637,11 @@ final class Output with Reader { int code();  bool ok();  String err();  Output 
 
 - `timeout:` kills a run that takes longer, with everything it started, and throws a
   `TimeoutException` naming the command. `cancel:` kills the same tree when its future completes
-  and returns the captured `Output` (code `-9`). Ctrl-C, `SIGTERM` and `SIGHUP` end the child
-  tree of every `run` and `filter` in flight, and so does cancelling a filter's reader (Windows
-  has no `ps`: only the child itself).
+  and returns the captured `Output` (code `-9`). Ctrl-C fails every `run`, `read` and `filter`
+  in flight with `InterruptedException` (§5), and it, `SIGTERM` and `SIGHUP` end their child
+  trees, as does cancelling a filter's reader (Windows has no `ps`: only the child itself). A
+  child that died of `SIGINT` while we share its terminal took the terminal's Ctrl-C: that run
+  is an interruption too, even when our own signal arrives after it ended.
 - `command[0]` is the program, looked up on `PATH`, and there is no shell, so arguments are safe.
   Use `['sh', '-c', …]` for shell syntax.
 - `run(cmd, terminal: true)` gives the child our terminal (`git commit` opens `$EDITOR`, `ssh`
@@ -721,7 +723,7 @@ final class Pool {
   static Task<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
       {int? limit, int retries = 0, bool isolates = false});   // fail fast
   static Task<List<Outcome<T, R>>> settle<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, int retries = 0, bool isolates = false});   // never throws
+      {int? limit, int retries = 0, bool isolates = false});   // never throws (but Ctrl-C)
 }
 sealed class Outcome<T, R> { T get item; }
 final class Done<T, R> extends Outcome<T, R> { R get value; }
@@ -740,8 +742,9 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
   `await rate.wait()` (or the client's `rate:`).
   A shell's exit, a 5xx, a browser or network failure is retried; a bug (`Error`), bad data
   (`ContentException`), TLS, an HTTP 4xx (but 408/429), a logged-out session or a refused proxy
-  login fails at once. An exception says whose fault: data → `ContentException`, the network or
-  the disk → an `IOException`.
+  login fails at once, and so does Ctrl-C (`InterruptedException`: no new item starts, worker
+  isolates end, and `settle` throws it too). An exception says whose fault: data →
+  `ContentException`, the network or the disk → an `IOException`.
   Together they replace hand-written retry loops around shells, browsers and flaky I/O.
 - Both are `Task`s counting the jobs done, success or failure: `Pool.map(urls, fetch) &
   Console.bar('pages')`. Probes nest: a bar per file inside the job, one over the pool outside.
@@ -836,7 +839,7 @@ final class Bar with Probe implements Closeable { Bar update(int done, int? tota
 
 - Everything goes to stderr, so stdout stays clean for data.
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
-  prompt restores the terminal and exits with 130.
+  prompt restores the terminal and fails it with `InterruptedException` (§5).
 - **A closed stdin is not an error.** `ask` gives its `or` (`''` by default) and `choose` its `or` (null without one), and so
   does an `ask` whose `timeout:` passes (its reader is stopped, so the script can still exit; an
   outer `.timeout()` would leave it waiting);
@@ -1149,11 +1152,33 @@ keeps catching it. None is an `Error`: an `Error` is a bug.
 | `BrowserException`          | a tab action the page itself fails (click, PDF, download); a `ToolkitException`                                                                                                                                                                                                                       |
 | `SetupException`            | this machine lacks what a call needs: ffmpeg, 7-Zip or Chrome not on PATH and not downloadable here (a compiled exe, an ABI with no pinned build), no `HOME` for the cache; `pool` never retries it |
 | `UsageException` (cli)      | a handler rejects its input, giving exit 64                                                                                                                                                                                                                                                           |
+| `InterruptedException`      | Ctrl-C arrived while the toolkit waited: a program, a request or a body being read, a Chrome call, a pool lane, a prompt, a `>` run or an unpack in flight; `pool` never retries it, `Command.run` gives 130 |
 | `ToolkitException`          | the base of the ones above                                                                                                                                                                                                                                                                             |
 | SDK types (kept on purpose) | engine failures pass through (`SocketException`, `TlsException`, `ProcessException`, `FileSystemException`, `StdinException`/`StdoutException`); Dart-idiom guards stay (`ArgumentError`/`RangeError` for bad arguments, `StateError` for protocol misuse, `TimeoutException` for waits that run out) |
 
 Engine exceptions are rethrown as one of these, naming the subject. An error inside a pipeline
 surfaces from its `>`, after cleanup. An error in a chain surfaces at its single `await`.
+
+**Ctrl-C runs `finally`.** The first Ctrl-C fails every pending toolkit wait with
+`InterruptedException` (its program tree killed, its request aborted, its temp file removed), so
+the script's `finally` blocks and `catch`es run. Waits on the outside world started after it (a
+program, a request, a Chrome call, a pool lane, a prompt) fail at once, so a loop that catches
+everything drains instead of going on; file work still runs, so `finally { await state > file; }`
+saves. The process exits 130 once no toolkit work has been in flight for 50 ms (the
+`InterruptedException` escaping `main` is not printed), after the exit hooks close browsers and
+restore the terminal; plain `dart:io` or timer work in a `finally` gets only those 50 ms. A
+second Ctrl-C stops waiting:
+the hooks run and the process exits 130; a third exits at once. With nothing of the toolkit
+pending, Ctrl-C ends the process as Dart does. Inside `Tui.run` Ctrl-C is a key (it quits the app
+unless bound). `SIGTERM` and `SIGHUP` run the hooks and exit (143, 129) without a `finally`.
+
+```dart
+try {
+  await Pool.map(pages, fetch);
+} finally {
+  await Fs.file('state.json').write(Json.encode(seen));   // runs on Ctrl-C too
+}
+```
 
 ## 6. Performance and testing
 

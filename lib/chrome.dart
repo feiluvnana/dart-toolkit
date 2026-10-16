@@ -274,7 +274,8 @@ abstract final class Chrome {
 /// An open browser. Owns its pages; one browser serves many pages.
 /// A launched browser nobody closes never keeps a finished script alive: a
 /// watchdog ends Chromium and its temp profile with the script (POSIX). A
-/// SIGTERM/SIGHUP (or a cooked-terminal Ctrl-C) during a call closes it.
+/// Ctrl-C fails a pending call with [InterruptedException]; the browser
+/// closes when the script exits. SIGTERM/SIGHUP during a call closes it.
 final class Browser implements Closeable {
   Browser._(this._cdp, {int? pid, this._dog, this._temp}) : _pid = pid {
     if (pid == null) return;
@@ -306,7 +307,7 @@ final class Browser implements Closeable {
         try {
           await close();
         } catch (_) {}
-      });
+      }, busy: false);
     } else if (!on && _exitToken != null) {
       exit.offExit(_exitToken!);
       _exitToken = null;
@@ -412,6 +413,7 @@ final class Browser implements Closeable {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _cdp.ending = true;
     for (final page in await Future.wait([
       for (final f in _pages.values) f.then<Page?>((p) => p, onError: (_) => null),
     ])) {
@@ -1204,7 +1206,7 @@ function(value) {
     _browser._pages.remove(_target);
     await _unstage();
     try {
-      await _browser._cdp.browser.send('Target.closeTarget', {'targetId': _target});
+      await _browser._cdp.browser.finish('Target.closeTarget', {'targetId': _target});
       await _s.gone.timeout(const Duration(seconds: 2));
     } catch (_) {
       // Already closed with the browser.

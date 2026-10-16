@@ -53,7 +53,9 @@ abstract final class Shell {
   /// Run [command] directly (no shell), with stdin closed, to its exit: a
   /// [Task] of its [Output] (watch it with `& Console.bar('build')`). A
   /// program that can't start throws [io.ProcessException]. A non-zero
-  /// exit is an [Output], never a throw: `.check()` makes it one.
+  /// exit is an [Output], never a throw: `.check()` makes it one. Ctrl-C
+  /// kills the tree and throws [InterruptedException], as does a child
+  /// that died of the Ctrl-C of a terminal we share.
   ///
   /// [env] overlays the parent environment; a null value unsets the
   /// variable for the child. With [timeout] a run that takes longer is
@@ -93,6 +95,7 @@ abstract final class Shell {
     Future<void>? cancelled,
     bool terminal,
   ) async {
+    if (exit.interrupted) throw const InterruptedException();
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -115,6 +118,10 @@ abstract final class Shell {
     // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child and
     // its descendants too, instead of leaving them orphaned under init.
     final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
+    // Ctrl-C fails the run (the tree is killed below), so `finally` runs.
+    final ctrlC = Completer<void>();
+    final stopToken = exit.onInterrupt(ctrlC.complete);
+    if (exit.interrupted) ctrlC.complete(); // during the start
     var exited = false;
     unawaited(proc.exitCode.then((_) => exited = true));
     try {
@@ -154,7 +161,8 @@ abstract final class Shell {
           }
         }
 
-        final ended = Future.any<void>([work, if (cancelled != null) stop(cancelled)]);
+        final halted = ctrlC.future.then<void>((_) => throw const InterruptedException())..ignore();
+        final ended = Future.any<void>([work, halted, if (cancelled != null) stop(cancelled)]);
         if (timeout == null) {
           await ended;
         } else {
@@ -171,12 +179,17 @@ abstract final class Shell {
         }
       } catch (_) {
         await _killTree(proc, io.ProcessSignal.sigkill);
+        for (final sub in subs) {
+          unawaited(sub.cancel());
+        }
         rethrow;
       }
       final code = await proc.exitCode;
+      if (_diedOfCtrlC(code)) throw const InterruptedException();
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
       return Output._(command, code, out.takeBytes(), stderr);
     } finally {
+      exit.offInterrupt(stopToken);
       exit.offExit(token);
     }
   }
@@ -305,6 +318,15 @@ final class _Program with Reader {
       _Filter(_command, dir: _dir, env: _env, showErr: !(quiet[this] ?? false)).transform(const Stream.empty());
 }
 
+/// A child that died of `SIGINT` while we share its terminal took the
+/// terminal's Ctrl-C, which may reach our watcher only after the run ended:
+/// interrupt the script now, as the signal would.
+bool _diedOfCtrlC(int code) {
+  if (code != -2 || io.Platform.isWindows || !exit.onTerminal) return false;
+  exit.interrupt();
+  return true;
+}
+
 /// Which started processes have exited (and been reaped), for [_killTree].
 final _reaped = Expando<bool>();
 
@@ -362,8 +384,11 @@ final class _Filter implements Pipe {
     // via its finally, which already kills the child.
   }
 
+  /// Guarded: Ctrl-C fails the read, and the cancel kills the child.
   @override
-  Stream<List<int>> transform(Stream<List<int>> input) async* {
+  Stream<List<int>> transform(Stream<List<int>> input) => exit.guard(_transform(input), outside: true);
+
+  Stream<List<int>> _transform(Stream<List<int>> input) async* {
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -476,6 +501,7 @@ final class _Filter implements Pipe {
       await stderrDone;
     } catch (_) {}
     if (code != 0) {
+      if (_diedOfCtrlC(code)) throw const InterruptedException();
       final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
       throw ExitException(_command[0], _shown(_command).sublist(1), 'exit $code: ${_tail(err)}', code);
     }

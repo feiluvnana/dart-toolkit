@@ -8,7 +8,7 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math';
 
-import '../core.dart' show SetupException;
+import '../core.dart' show InterruptedException, SetupException;
 
 final _random = Random();
 
@@ -84,7 +84,8 @@ bool isRetryable(Object e) {
 
 /// True for failures another attempt of a `pool` job cannot fix: an
 /// [Error] (a bug, an [ArgumentError]), bad data ([FormatException], so
-/// `ContentException`), a missing tool ([SetupException]), TLS, and failures marked [permanent] (an HTTP 4xx
+/// `ContentException`), a missing tool ([SetupException]), Ctrl-C
+/// ([InterruptedException]), TLS, and failures marked [permanent] (an HTTP 4xx
 /// after the client's own retries, a logged-out session, a refused proxy
 /// login). Any other exception is retried: a shell's exit, a 5xx, a
 /// browser or network failure.
@@ -92,6 +93,7 @@ bool isPermanent(Object e) =>
     e is Error ||
     e is FormatException ||
     e is SetupException ||
+    e is InterruptedException ||
     _final[e] == true ||
     e is io.HandshakeException ||
     e is io.TlsException ||

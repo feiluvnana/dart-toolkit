@@ -48,6 +48,7 @@ import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
 import 'src/cookies.dart' show Cookies;
 import 'src/decoders.dart';
+import 'src/exit.dart' as signals;
 import 'src/missing.dart' show missing;
 import 'src/origin.dart' as names;
 import 'src/rate.dart' as rate;
@@ -677,8 +678,12 @@ final class _Client extends Client {
     bool retry429 = true,
   }) {
     final uri = _resolve(url, query);
+    if (signals.interrupted) return Future.error(const InterruptedException());
     final done = Completer<void>();
-    final future = _run(method, uri, body, headers, check: check, retry429: retry429);
+    final future = signals.interruptible(
+      _run(method, uri, body, headers, check: check, retry429: retry429),
+      stop: _interrupt,
+    );
     _sends.add(done.future);
     _inFlight++;
     return future.whenComplete(() {
@@ -691,6 +696,23 @@ final class _Client extends Client {
   HttpRequestException _aborted(String method, Uri uri) =>
       HttpRequestException(method, names.redact(uri), RequestFailure.aborted);
 
+  /// Ctrl-C: end the backoffs and the requests in flight (their sends fail
+  /// with [InterruptedException]); a body being read fails on its own.
+  void _interrupt() {
+    _halt.fire();
+    for (final req in [..._requests]) {
+      try {
+        req.abort(const InterruptedException());
+      } catch (_) {}
+    }
+  }
+
+  /// Stop before sending again: closed, or interrupted.
+  void _stopped(String method, Uri uri) {
+    if (_closed) throw _aborted(method, uri);
+    if (signals.interrupted) throw const InterruptedException();
+  }
+
   Future<Response> _run(
     String method,
     Uri uri,
@@ -699,7 +721,7 @@ final class _Client extends Client {
     required bool check,
     required bool retry429,
   }) async {
-    if (_closed) throw _aborted(method, uri);
+    _stopped(method, uri);
     final sent = _merge(_headersFor(uri), headers ?? const {});
     final resendable = body?._resendable ?? true;
     final idempotent = method == 'GET' || method == 'HEAD' || method == 'PUT' || method == 'DELETE';
@@ -714,11 +736,11 @@ final class _Client extends Client {
             ? rate.ban(pace, server, host: uri.host)
             : retry.backoff(attempt - 1, server);
         await rate.sleep(wait, _halt);
-        if (_closed) throw _aborted(method, uri);
+        _stopped(method, uri);
       }
       if (pace != null) {
         await rate.take(pace, _halt, host: uri.host);
-        if (_closed) throw _aborted(method, uri);
+        _stopped(method, uri);
       }
       retryAfter = null;
       banned = false;
@@ -736,7 +758,7 @@ final class _Client extends Client {
         res._prefetch();
         return await _checked(res, check);
       } on _Failed catch (f) {
-        if (_closed) throw _aborted(method, uri);
+        _stopped(method, uri);
         final safe = !f.sent || idempotent;
         if (!resendable || !safe || attempt >= _s.retries || !retry.isRetryable(f.cause)) {
           Error.throwWithStackTrace(_naming(f.cause, method, uri), f.stack);
@@ -1032,7 +1054,7 @@ final class _Pool extends Client {
       // sending into its ban at once.
       final bench = m._benched?.difference(DateTime.now());
       if (bench != null && bench > Duration.zero) {
-        await rate.sleep(bench, m._halt);
+        await signals.interruptible(rate.sleep(bench, m._halt));
         if (m._closed) throw m._aborted(method, m._resolve(url, query));
       }
       final res = await m._send(method, url, body: body, query: query, headers: headers, check: false, retry429: false);

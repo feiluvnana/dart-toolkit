@@ -16,6 +16,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import '../core.dart';
+import 'exit.dart' as exit;
 
 /// What a tab action throws when the page itself fails it: a click that
 /// misses, a PDF that never renders, a download the site cancels, a
@@ -126,13 +127,18 @@ final class Cdp {
   var _holds = 0;
 
   /// Count [work] as pending until it completes: the script stays alive
-  /// for it. Returns [work].
-  Future<T> hold<T>(Future<T> work) {
+  /// for it. Returns [work], which Ctrl-C fails with
+  /// [InterruptedException] unless the browser is [ending].
+  Future<T> hold<T>(Future<T> work, {bool always = false}) {
     if (_holds++ == 0) _busy(true);
-    return work.whenComplete(() {
+    final held = work.whenComplete(() {
       if (--_holds == 0) _busy(false);
     });
+    return always || ending ? held : exit.interruptible(held);
   }
+
+  /// Set while the browser closes: its own calls are never interrupted.
+  var ending = false;
 
   void _busy(bool busy) {
     _ref?.call(busy);
@@ -247,10 +253,17 @@ final class CdpSession {
   /// Send [method]; completes with its result, or throws [BrowserException]
   /// (a [TimeoutException] after [timeout], when given: the late reply is
   /// dropped).
-  Future<Msg> send(String method, [Msg params = const {}, Duration? timeout]) {
+  Future<Msg> send(String method, [Msg params = const {}, Duration? timeout]) =>
+      _send(method, params, timeout, always: _cdp.ending);
+
+  /// [send] for cleanup (closing a tab): Ctrl-C never fails it.
+  Future<Msg> finish(String method, [Msg params = const {}]) => _send(method, params, null, always: true);
+
+  Future<Msg> _send(String method, Msg params, Duration? timeout, {required bool always}) {
     if (_gone.isCompleted || _cdp._closing) {
       return Future.error(BrowserException('$method: target closed', cause: _cdp._cause));
     }
+    if (exit.interrupted && !always) return Future.error(const InterruptedException());
     final done = Completer<Msg>();
     final n = ++_cdp._next;
     _cdp._pending[n] = (done, method, this);
@@ -266,7 +279,7 @@ final class CdpSession {
       });
       done.future.whenComplete(timer.cancel).ignore();
     }
-    return _cdp.hold(done.future);
+    return _cdp.hold(done.future, always: always);
   }
 
   /// Call [handler] for every [method] event; the returned function stops it.
@@ -282,6 +295,7 @@ final class CdpSession {
   Future<Msg> once(String method, {bool Function(Msg params)? where, Duration? timeout}) {
     final done = Completer<Msg>();
     if (_gone.isCompleted) return Future.error(BrowserException('browser closed', cause: _cdp._cause));
+    if (exit.interrupted && !_cdp.ending) return Future.error(const InterruptedException());
     late final void Function() off;
     Timer? timer;
     late final void Function() ended;

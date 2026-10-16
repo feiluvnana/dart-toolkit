@@ -1406,7 +1406,7 @@ final class _Session<S> implements term.TuiBridge {
   void _watchSignals() {
     _exitToken = exit.onExit(() {
       _restoreTerminal();
-    });
+    }, busy: false);
     _resizeToken = exit.onResize(() {
       term.TerminalCaps.invalidate();
       _repaint = true;

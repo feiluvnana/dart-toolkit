@@ -346,9 +346,9 @@ final class Command {
   }
 
   /// Run [argv]: parse, run the named handler, print usage/errors and set
-  /// the process `exitCode` (64 usage, 1 failure; a success leaves it as
-  /// the handler set it). Never calls `exit()`, so pending output and exit
-  /// hooks still run. The code is also returned, for tests and embedding.
+  /// the process `exitCode` (64 usage, 1 failure, 130 Ctrl-C; a success
+  /// leaves it as the handler set it). Never calls `exit()`, so pending
+  /// output and exit hooks still run. The code is also returned, for tests and embedding.
   ///
   /// With `version:` (`Command('fetch', …, version: '1.2.3')`), `--version`
   /// prints `fetch 1.2.3` to stdout and exits 0, here and in every
@@ -392,6 +392,8 @@ final class Command {
     try {
       await Future.sync(() => h(context));
       return 0;
+    } on InterruptedException {
+      return 130; // Ctrl-C: the handler's `finally` ran; nothing to print
     } on UsageException catch (e) {
       io.stderr.writeln(_oneLine(e.message));
       io.stderr.writeln('Run "${parsed.fullName} --help" for usage.');

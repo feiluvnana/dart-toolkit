@@ -63,15 +63,21 @@ abstract final class Console {
     if (--_parked == 0) _paint(force: true);
   }
 
-  /// Run [body] with the live block parked (see [_park]).
+  /// Run [body] with the live block parked (see [_park]). Ctrl-C fails it
+  /// with [InterruptedException] and stops the read; once interrupted, a
+  /// prompt fails at once.
   static Future<T> _parkedFor<T>(Future<T> Function() body) async {
+    if (exit.interrupted) throw const InterruptedException();
     _park();
     try {
-      return await body();
+      return await exit.interruptible(body(), stop: () => _stopRead?.call());
     } finally {
       _unpark();
     }
   }
+
+  /// Ends the line or key read in flight (see [_parkedFor]).
+  static void Function()? _stopRead;
 
   /// Spinner frames: one timer for every spinner, running only while one
   /// is live (so it never keeps the script alive).
@@ -195,7 +201,7 @@ abstract final class Console {
   /// script alive. Use [timeout], never an outer `.timeout()`: that one
   /// leaves the reader waiting, holding the script until stdin closes.
   /// Asynchronous: timers, downloads and bars keep running while one waits.
-  /// Ctrl-C restores the terminal and exits with 130. While a state-driven
+  /// Ctrl-C restores the terminal and throws [InterruptedException]. While a state-driven
   /// [Tui.run] is active, shows as a popup (Escape closes it like EOF).
   ///
   /// The cooked, echoed modes this prompt needs are established up front
@@ -227,7 +233,7 @@ abstract final class Console {
       term.setLineModes(echo: !secret);
       // Terminal restore on signals (first), via the single owner in
       // src/exit.dart; browsers registered earlier run after us.
-      final token = exit.onExit(() => term.restoreModes(modes));
+      final token = exit.onExit(() => term.restoreModes(modes), busy: false);
       try {
         return await _readLine(secret: secret, timeout: timeout);
       } finally {
@@ -441,7 +447,7 @@ abstract final class Console {
   /// `'f12'`, `'ctrl+c'` …). A bracketed paste is not a keypress and is
   /// skipped. A closed stdin and no key within [timeout] give [or], or
   /// without one throw ([io.StdinException], [TimeoutException]). Ctrl-C
-  /// restores the terminal and exits with 130.
+  /// restores the terminal and throws [InterruptedException].
   ///
   /// ```dart
   /// stderr.writeln('Downloaded. Press q to quit, any other key for more.');
@@ -701,7 +707,17 @@ abstract final class Console {
         unawaited(sub.cancel().then((_) {}, onError: (_) {}));
       });
     }
-    return result.future;
+    void stop() {
+      timer?.cancel();
+      if (result.isCompleted) return;
+      result.completeError(const io.StdinException('interrupted'));
+      unawaited(sub.cancel().then((_) {}, onError: (_) {}));
+    }
+
+    _stopRead = stop;
+    return result.future.whenComplete(() {
+      if (identical(_stopRead, stop)) _stopRead = null;
+    });
   }
 
   /// Remove one grapheme (base char plus combining marks/ZWJ) from [buf].
@@ -845,8 +861,10 @@ abstract final class Console {
   static Future<T> _withKeys<T>(Future<T> Function(_KeyReader keys) body, {Duration? timeout}) async {
     final modes = term.captureModes();
     term.setRawModes();
-    final token = exit.onExit(() => term.restoreModes(modes));
+    final token = exit.onExit(() => term.restoreModes(modes), busy: false);
     final found = _KeyReader();
+    final stop = found._close;
+    _stopRead = stop;
     StreamSubscription<List<int>>? sub;
     var timedOut = false;
     final timer = timeout == null
@@ -867,6 +885,7 @@ abstract final class Console {
       if (timedOut) throw TimeoutException('no key', timeout);
       rethrow;
     } finally {
+      if (identical(_stopRead, stop)) _stopRead = null;
       timer?.cancel();
       try {
         await sub?.cancel();

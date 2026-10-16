@@ -281,6 +281,11 @@ final working = Expando<Stream<List<int>> Function(Run run)>();
 /// here how to consume while reporting it.
 final writing = Expando<Future<void> Function(Stream<List<int>> input, Run run)>();
 
+/// Set by `src/exit.dart` once it watches signals: how a `>` run fails on
+/// Ctrl-C. Null until then (no watcher: Ctrl-C ends the process anyway), so
+/// a script that never waits on the toolkit pays nothing for it.
+Stream<List<int>> Function(Stream<List<int>> bytes)? runGuard;
+
 /// A [Future] that counts its progress: what long work returns
 /// (`Pool.map`, `Dir.copy`, `Video.compress`). Watch it with `&`:
 ///

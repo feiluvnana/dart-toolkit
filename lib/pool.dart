@@ -13,7 +13,7 @@
 /// Public surface is exactly: [Pool], [Outcome], [Done], [Failed], [Outcomes].
 /// - `Pool.map()` fails fast: the first error is rethrown with its type and
 ///   stack once the jobs in flight finish.
-/// - `Pool.settle()` never throws: one [Outcome] per item, in input order.
+/// - `Pool.settle()` never throws (but Ctrl-C): one [Outcome] per item, in input order.
 /// - Both take `limit` `retries` `isolates`, and return a [Task]
 ///   that counts the items done: watch it with `&`.
 /// - `Pool(limit:)` holds lanes that any number of calls share:
@@ -29,6 +29,7 @@ import 'dart:io' as io;
 import 'dart:isolate';
 
 import 'core.dart';
+import 'src/exit.dart' as exit;
 import 'src/format.dart' show Unit;
 import 'src/progress.dart' show Run, task;
 import 'src/rate.dart' as rate;
@@ -44,6 +45,8 @@ import 'src/retry.dart' as retry;
 ///   (`ContentException`), TLS, an HTTP 4xx (but 408 and 429), a logged-out
 ///   session and a refused proxy login fail at once. A job paces itself
 ///   with `await rate.wait()` (or a client's `rate:`).
+/// - Ctrl-C fails a run (`settle` too) with [InterruptedException] at once:
+///   no new item starts and the worker isolates end.
 /// - `isolates: true` runs the jobs on `limit` long-lived worker isolates
 ///   that pull items: the job and every item must be sendable (a top-level
 ///   function or a closure over plain data). A value that cannot cross is an
@@ -68,7 +71,8 @@ final class Pool {
   /// what it returns (or rethrow what it throws). The lane is freed either way.
   /// A [Task]: a probe on it (`lanes.run(job) & bar`) shows it waiting, then
   /// running.
-  Task<R> run<R>(FutureOr<R> Function() job) => task((_) => _lane(job));
+  Task<R> run<R>(FutureOr<R> Function() job) =>
+      task((_) => exit.interrupted ? Future.error(const InterruptedException()) : exit.interruptible(_lane(job)));
 
   Future<R> _lane<R>(FutureOr<R> Function() job) async {
     if (_free > 0) {
@@ -77,6 +81,11 @@ final class Pool {
       final turn = Completer<void>();
       _waiting.add(turn);
       await turn.future;
+    }
+    if (exit.interrupted) {
+      // Its caller already failed: hand the lane on without running.
+      _waiting.isEmpty ? _free++ : _waiting.removeFirst().complete();
+      throw const InterruptedException();
     }
     try {
       return await job();
@@ -106,7 +115,8 @@ final class Pool {
     ];
   });
 
-  /// Run [job] over every item and never throw: one [Outcome] per item, in
+  /// Run [job] over every item and never throw (but [InterruptedException]
+  /// on Ctrl-C): one [Outcome] per item, in
   /// input order, each carrying its item, because "which one failed" is the
   /// first question.
   static Task<List<Outcome<T, R>>> settle<T, R>(
@@ -126,6 +136,7 @@ final class Pool {
     Run run, {
     required bool failFast,
   }) async {
+    if (exit.interrupted) throw const InterruptedException();
     final list = items.toList();
     var finished = 0;
     run.report(0, list.length, Unit.items);
@@ -137,19 +148,20 @@ final class Pool {
     final workers = <_Worker>[];
     var next = 0;
     var failed = false;
-    // Fail-fast ends the other lanes' backoffs at once.
+    // Ctrl-C starts no new item; fail-fast and Ctrl-C end the backoffs.
+    var stopped = false;
     final halt = rate.Halt();
 
     Future<void> lane() async {
       _Worker? worker;
-      while (!(failFast && failed)) {
+      while (!(failFast && failed) && !stopped) {
         final i = next++;
         if (i >= list.length) return;
         final item = list[i];
         Outcome<T, R> result;
         try {
           for (var attempt = 0; ; attempt++) {
-            if (failFast && failed) return; // the map throws the first failure
+            if (failFast && failed || stopped) return; // the map throws the first failure
             try {
               final R value;
               if (isolates) {
@@ -167,8 +179,8 @@ final class Pool {
               if (worker?.dead ?? false) worker = null; // the next attempt or item gets a fresh one
               // A bug, bad data or a status: running it again cannot help.
               if (attempt >= retries || (failFast && failed) || retry.isPermanent(e)) rethrow;
-              await rate.sleep(retry.backoff(attempt, null), failFast ? halt : null);
-              if (failFast && failed) rethrow;
+              await rate.sleep(retry.backoff(attempt, null), halt);
+              if (failFast && failed || stopped) rethrow;
             }
           }
         } on _Unsendable catch (e, st) {
@@ -185,12 +197,25 @@ final class Pool {
       }
     }
 
-    try {
-      await Future.wait([for (var k = 0; k < width; k++) lane()]);
-    } finally {
+    void stopWorkers() {
       for (final w in workers.toSet()) {
         w.stop();
       }
+    }
+
+    try {
+      // Ctrl-C fails the run at once: no new item starts, the workers die,
+      // and a lane still in a job drops its outcome.
+      await exit.interruptible(
+        Future.wait([for (var k = 0; k < width; k++) lane()]),
+        stop: () {
+          stopped = true;
+          halt.fire();
+          stopWorkers();
+        },
+      );
+    } finally {
+      stopWorkers();
     }
     if (failFast) {
       final first = out.whereType<Failed<T, R>>().firstOrNull;

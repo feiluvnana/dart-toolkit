@@ -10,7 +10,8 @@
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Probe], [Meter],
 /// [Task], [Watch], [Closeable], [Origin], [ToolkitException],
-/// [ContentException], [PasswordException], [SetupException]. Helpers (unit literals, sizes,
+/// [ContentException], [PasswordException], [SetupException],
+/// [InterruptedException]. Helpers (unit literals, sizes,
 /// times, `Rate`, `Cookies`, hashes, CSV) are `package:dart_toolkit/utils.dart`.
 /// - [Reader]: `stream` `bytes` `text` `lines` `|` `&` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
@@ -24,6 +25,7 @@
 /// - [ToolkitException]: the base of every failure the toolkit itself reports.
 /// - [ContentException]: a value the toolkit rejects (bad JSON, archive, image…).
 /// - [SetupException]: this machine lacks what a call needs (a tool, `HOME`).
+/// - [InterruptedException]: Ctrl-C arrived while the toolkit waited.
 /// Everything else is private.
 library;
 
@@ -172,7 +174,9 @@ Future<void> _run(Reader self, Writer? writer) async {
     // A folder stores the bytes under the reader's name, known once its
     // future (a response) is in.
     if (writer is Folder) writer = into(writer, await _settled(self));
-    s = _open(self, run);
+    // A run in flight at Ctrl-C fails, so the writer drops its temp and
+    // the script's `finally` runs; one begun afterwards (saving state) runs.
+    s = _Guarded(_open(self, run));
     if (writer == null) {
       await for (final _ in s) {
         // discard
@@ -194,6 +198,23 @@ Future<void> _run(Reader self, Writer? writer) async {
     unawaited(_closeRoot(self));
     Error.throwWithStackTrace(e, st);
   }
+}
+
+/// A `>` run's bytes, guarded against Ctrl-C from the moment the writer
+/// listens (after it armed its own exit hook) by [runGuard], if set.
+final class _Guarded extends Stream<List<int>> {
+  _Guarded(this._bytes);
+
+  final Stream<List<int>> _bytes;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> chunk)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) =>
+      (runGuard?.call(_bytes) ?? _bytes).listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
 }
 
 /// [reader]'s origin once every future in its chain is in.
@@ -528,4 +549,16 @@ final class SetupException extends ToolkitException {
 
   @override
   String toString() => 'SetupException: $message';
+}
+
+/// Ctrl-C arrived while the toolkit waited (a program, a request, a browser
+/// call, a pool lane, a prompt, a pipeline): every such wait fails with
+/// this, so the script's `finally` blocks run before it exits with 130.
+/// Waits started after it fail at once; file work still runs, so a
+/// `finally` can save state. `pool` never retries it.
+final class InterruptedException extends ToolkitException {
+  const InterruptedException() : super('interrupted (Ctrl-C)');
+
+  @override
+  String toString() => 'InterruptedException: $message';
 }
