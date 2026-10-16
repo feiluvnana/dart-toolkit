@@ -3,26 +3,40 @@ part of '../../http.dart';
 
 /// One GET's place under a cache folder: `<key>.body` plus `<key>.json`
 /// (URL, status, headers, the request headers the answer varies on, time).
-/// Everything is fixed when the request is made: the key (URL, the
-/// `authorization` and `cookie` headers given) and the jar's cookies, which
-/// must match the stored ones except those the answer set itself, so a
-/// session cookie the server rotates on every answer still hits.
+/// Everything is fixed when the request is made: the key (URL and every
+/// secret header given: `authorization`, `cookie`, `x-api-key` …), checked
+/// again on read with the URL and a second hash, and the jar's cookies,
+/// which must match the stored ones except those the answer set itself, so
+/// a session cookie the server rotates on every answer still hits.
 final class _Cache {
   _Cache(this._dir, Uri uri, Map<String, String> sent, _Client client)
     : _sent = {for (final e in sent.entries) e.key.toLowerCase(): e.value},
+      _request = 'GET $uri',
       _jar = jar.headerFor(client._s.cookies, uri) ?? '' {
-    final who = '${_sent['authorization'] ?? ''}\n${_sent['cookie'] ?? ''}';
-    var h = 0xcbf29ce484222325;
-    for (final c in utf8.encode('GET $uri\n$who')) {
+    final who = [
+      for (final k in _sent.keys.toList()..sort())
+        if (names.isSecretHeader(k)) '$k: ${_sent[k]}',
+    ].join('\n');
+    final bytes = utf8.encode('$_request\n$who');
+    _key = '$_dir/${_fnv(bytes, 0xcbf29ce484222325)}';
+    _who = _fnv(bytes, 0x84222325cbf29ce4);
+  }
+
+  /// FNV-1a over [bytes] from [basis], as 16 hex digits.
+  static String _fnv(List<int> bytes, int basis) {
+    var h = basis;
+    for (final c in bytes) {
       h = ((h ^ c) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
     }
-    _key = '$_dir/${h.toUnsigned(64).toRadixString(16).padLeft(16, '0')}';
+    return h.toUnsigned(64).toRadixString(16).padLeft(16, '0');
   }
 
   final String _dir;
   final Map<String, String> _sent;
+  final String _request;
   final String _jar;
   late final String _key;
+  late final String _who;
 
   /// A `Cookie` header without the cookies named in [names].
   static String _strip(String header, List<String> names) => [
@@ -34,6 +48,8 @@ final class _Cache {
   Future<_Entry?> read() async {
     try {
       final meta = jsonDecode(await File('$_key.json').readAsString()) as Map<String, Object?>;
+      // Another request that hashed to this name is a miss, never its body.
+      if (meta['request'] != _request || meta['who'] != _who) return null;
       final vary = (meta['vary'] as Map).cast<String, Object?>();
       if (vary.entries.any((e) => _sent[e.key] != e.value)) return null;
       final set = (meta['set'] as List).cast<String>();
@@ -112,6 +128,8 @@ final class _Cache {
     final tmp = File('$_key.${DateTime.now().microsecondsSinceEpoch}.json.tmp');
     await tmp.writeAsString(
       jsonEncode({
+        'request': _request,
+        'who': _who,
         'url': e.url,
         'status': e.status,
         'headers': e.headers,

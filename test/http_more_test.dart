@@ -130,6 +130,28 @@ void main() {
       expect(hits['/rotate'], 2);
     });
 
+    test('S5: an answer cached for one API key is never served to another', () async {
+      final dir = await temp();
+      final before = hits['/rotate'] ?? 0;
+      await Http.client(cache: dir.path, headers: {'x-api-key': 'ALICE'}).get('$url/rotate').text();
+      await Http.client(cache: dir.path, headers: {'x-api-key': 'BOB'}).get('$url/rotate').text();
+      await Http.client(cache: dir.path, headers: {'x-api-key': 'ALICE'}).get('$url/rotate').text();
+      expect(hits['/rotate'], before + 2); // Bob asked the server; Alice's second is a hit
+    });
+
+    test('S5: a stored entry for another request under the same name is a miss', () async {
+      final dir = await temp();
+      final c = Http.client(cache: dir.path);
+      final before = hits['/rotate'] ?? 0;
+      await c.get('$url/rotate').text();
+      // Forge a name clash: the stored entry claims to be for another URL.
+      final meta = Directory(dir.path).listSync().whereType<File>().firstWhere((f) => f.path.endsWith('.json'));
+      final json = (jsonDecode(meta.readAsStringSync()) as Map)..['request'] = 'GET $url/other';
+      meta.writeAsStringSync(jsonEncode(json));
+      await c.get('$url/rotate').text();
+      expect(hits['/rotate'], before + 2);
+    });
+
     test('bug 2: a cached gzip answer reports its decoded size', () async {
       final dir = await temp();
       final c = Http.client(cache: dir.path);
