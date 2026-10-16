@@ -78,6 +78,7 @@
 - `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
 - `console`: `Bar.tick` and `Console.bar(total:)`; a bar counted by hand is `bar.update(++n, total)`, which closes it at the total as `tick` did.
 - `core`: `Cookies(agent:)`, `Cookies.agent()` and `Cookies.header(url)`; http reads the jar itself. A session's user-agent is the `user-agent:` line of its cookies.txt (`Cookies.parse('# user-agent: X\n…')`, kept by `encode()`), which the client still sends unless a `user-agent` header is given.
+- `fs`: `Fs.link(path)` and `Link.create(target)`; a new link is `dart:io`'s `Link(path).create(target)`, and a `Link` handle comes from `Fs.entry(path)` or `Dir.list()` (`target()` and `resolve()` stay).
 
 ## 0.1.0
 

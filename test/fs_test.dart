@@ -11,6 +11,9 @@ import 'support/child.dart';
 import 'support/io.dart';
 import 'support/poll.dart';
 
+/// The [Link] at [path] (which must be one): the handle `Fs.entry` gives.
+Future<Link> link(String path) async => (await Fs.entry(path))! as Link;
+
 void main() {
   late Directory tmp;
 
@@ -40,7 +43,7 @@ void main() {
     test('entry tells file, folder, link and nothing apart', () async {
       await Fs.file(p('a.txt')).write('x');
       await Fs.dir(p('sub')).create();
-      await Fs.link(p('lnk')).create(p('a.txt'));
+      await io.Link(p('lnk')).create(p('a.txt'));
       expect(await Fs.entry(p('a.txt')), isA<File>());
       expect(await Fs.entry(p('sub')), isA<Dir>());
       expect(await Fs.entry(p('lnk')), isA<Link>());
@@ -49,7 +52,7 @@ void main() {
 
     test('a trailing slash never follows a link', () async {
       await Fs.dir(p('sub')).create();
-      await Fs.link(p('ln')).create(p('sub'));
+      await io.Link(p('ln')).create(p('sub'));
       expect(await Fs.entry('${p('ln')}/'), isA<Link>());
     });
 
@@ -132,7 +135,7 @@ void main() {
     test('dir copy is recursive, links as links', () async {
       await Fs.file(p('src/a.txt')).write('a');
       await Fs.file(p('src/nested/b.txt')).write('b');
-      await Fs.link(p('src/lnk')).create(p('src/a.txt'));
+      await io.Link(p('src/lnk')).create(p('src/a.txt'));
       final c = await Fs.dir(p('src')).copy(p('dst'));
       expect(c, isA<Dir>());
       expect(await Fs.file(p('dst/a.txt')).text(), 'a');
@@ -193,16 +196,16 @@ void main() {
     test('dir copy into an existing tree merges, replacing files and links', () async {
       await Fs.file(p('src/a.txt')).write('new');
       await Fs.file(p('src/nested/b.txt')).write('b');
-      await Fs.link(p('src/lnk')).create('a.txt');
+      await io.Link(p('src/lnk')).create('a.txt');
       await Fs.file(p('dst/a.txt')).write('old');
       await Fs.file(p('dst/keep.txt')).write('k');
       await Fs.file(p('outside.txt')).write('o');
-      await Fs.link(p('dst/lnk')).create(p('outside.txt'));
+      await io.Link(p('dst/lnk')).create(p('outside.txt'));
       await Fs.dir(p('src')).copy(p('dst'));
       expect(await Fs.file(p('dst/a.txt')).text(), 'new');
       expect(await Fs.file(p('dst/nested/b.txt')).text(), 'b');
       expect(await Fs.file(p('dst/keep.txt')).text(), 'k');
-      expect(await Fs.link(p('dst/lnk')).target(), 'a.txt');
+      expect(await link(p('dst/lnk')).target(), 'a.txt');
       expect(await Fs.file(p('outside.txt')).text(), 'o');
     });
 
@@ -221,7 +224,7 @@ void main() {
     test('a merging dir copy replaces a dest link to a folder, never follows it', () async {
       await Fs.file(p('src/sub/f.txt')).write('f');
       await Fs.dir(p('elsewhere')).create();
-      await Fs.link(p('dst/sub')).create(p('elsewhere'));
+      await io.Link(p('dst/sub')).create(p('elsewhere'), recursive: true);
       await Fs.dir(p('src')).copy(p('dst'));
       expect(await Fs.entry(p('dst/sub')), isA<Dir>());
       expect(await Fs.file(p('dst/sub/f.txt')).text(), 'f');
@@ -246,12 +249,11 @@ void main() {
     test('File/Dir go through links; Link asks about itself (regression: exists() false while text() read)', () async {
       await Fs.file(p('a.txt')).write('x');
       await Fs.file(p('d/b.txt')).write('b');
-      await Fs.link(p('ln.txt')).create(p('a.txt'));
-      await Fs.link(p('ld')).create(p('d'));
+      await io.Link(p('ln.txt')).create(p('a.txt'));
+      await io.Link(p('ld')).create(p('d'));
       expect(await Fs.file(p('ln.txt')).exists(), isTrue);
       expect(await Fs.dir(p('ld')).exists(), isTrue);
-      expect(await Fs.link(p('ln.txt')).exists(), isTrue);
-      expect(await Fs.link(p('a.txt')).exists(), isFalse);
+      expect(await link(p('ln.txt')).exists(), isTrue);
       expect(await Fs.dir(p('ln.txt')).exists(), isFalse);
       // copy follows: a real file / folder at the destination.
       expect(await (await Fs.file(p('ln.txt')).copy(p('c.txt'))).text(), 'x');
@@ -278,7 +280,6 @@ void main() {
       await Fs.dir(p('d')).create();
       await expectLater(Fs.dir(p('a.txt')).delete(), throwsA(isA<FileSystemException>()));
       await expectLater(Fs.file(p('d')).delete(), throwsA(isA<FileSystemException>()));
-      await expectLater(Fs.link(p('a.txt')).delete(), throwsA(isA<FileSystemException>()));
       expect(await Fs.file(p('a.txt')).exists(), isTrue);
       expect(await Fs.dir(p('d')).exists(), isTrue);
     });
@@ -365,7 +366,7 @@ void main() {
       final name = 'a' * 250;
       await Fs.file(p(name)).write('x');
       expect(await Fs.file(p(name)).text(), 'x');
-      await Fs.link(p('l' * 250)).create(p(name));
+      await io.Link(p('l' * 250)).create(p(name));
       await (Reader.of(utf8.encode('hello')) > Fs.file(p('b' * 230)));
       expect(await Fs.file(p('b' * 230)).text(), 'hello');
     });
@@ -430,7 +431,7 @@ void main() {
       await Process.run('chmod', ['755', p('run.sh')]);
       await f.write('#!/bin/sh\necho new\n');
       expect((await FileStat.stat(p('run.sh'))).mode & 0x1ff, 0x1ff & 493);
-      await Fs.link(p('link.sh')).create(p('run.sh'));
+      await io.Link(p('link.sh')).create(p('run.sh'));
       await Fs.file(p('link.sh')).write('via link');
       expect(await FileSystemEntity.isLink(p('link.sh')), isTrue);
       expect(await Fs.file(p('run.sh')).text(), 'via link');
@@ -608,7 +609,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
 
     test('recursive list never goes through links', () async {
       await Fs.file(p('r/a.txt')).write('a');
-      await Fs.link(p('r/loop')).create(p('r'));
+      await io.Link(p('r/loop')).create(p('r'));
       final entries = await Fs.dir(p('r')).list(recursive: true);
       expect(entries.whereType<Link>().map((e) => e.name()), ['loop']);
       expect(entries.whereType<File>().map((e) => e.name()), ['a.txt']);
@@ -688,79 +689,67 @@ Future<void> expectThrows(Future<void> f, String what) async {
   });
 
   group('Link', () {
-    test('target/resolve/create', () async {
+    test('target/resolve', () async {
       await Fs.file(p('real.txt')).write('r');
-      await Fs.link(p('lnk')).create(p('real.txt'));
-      expect(await Fs.link(p('lnk')).target(), p('real.txt'));
-      expect(await Fs.link(p('lnk')).resolve(), isA<File>());
-      expect(await Fs.link(p('broken')).resolve(), isNull);
+      await io.Link(p('lnk')).create(p('real.txt'));
+      await io.Link(p('broken')).create(p('nowhere'));
+      expect(await link(p('lnk')).target(), p('real.txt'));
+      expect(await link(p('lnk')).resolve(), isA<File>());
+      expect(await link(p('broken')).resolve(), isNull);
     });
 
     test('resolve is null only for a broken link; permission denied throws (B27)', () async {
       await io.Link(p('loop')).create(p('loop'));
-      expect(await Fs.link(p('loop')).resolve(), isNull, reason: 'a loop is broken');
+      expect(await link(p('loop')).resolve(), isNull, reason: 'a loop is broken');
       await io.File(p('locked/x.txt')).create(recursive: true);
       await io.Link(p('behind')).create(p('locked/x.txt'));
       await io.Process.run('chmod', ['000', p('locked')]);
       addTearDown(() => io.Process.run('chmod', ['755', p('locked')]));
-      await expectLater(Fs.link(p('behind')).resolve(), throwsA(isA<io.FileSystemException>()));
+      await expectLater(link(p('behind')).resolve(), throwsA(isA<io.FileSystemException>()));
     }, skip: io.Platform.isWindows ? 'POSIX modes' : null);
 
-    test('create replaces an existing link', () async {
-      await Fs.file(p('a.txt')).write('a');
-      await Fs.file(p('b.txt')).write('b');
-      await Fs.link(p('lnk')).create(p('a.txt'));
-      await Fs.link(p('lnk')).create(p('b.txt'));
-      expect(await Fs.link(p('lnk')).target(), p('b.txt'));
-    });
-
-    test('F10: resolve returns a handle at the target; create over a file', () async {
+    test('F10: resolve returns a handle at the target', () async {
       await Fs.file(p('real.txt')).write('r');
-      await Fs.link(p('lnk')).create(p('real.txt'));
-      final resolved = await Fs.link(p('lnk')).resolve();
+      await io.Link(p('lnk')).create(p('real.txt'));
+      final resolved = await link(p('lnk')).resolve();
       expect(resolved, isA<File>());
       // resolveSymbolicLinks may normalize the temp prefix (/var vs
       // /private/var on macOS): compare the tail.
       expect(resolved!.path(), endsWith('real.txt'));
       expect(await resolved.exists(), isTrue);
-      // Atomic replace over a regular file (not "Cannot delete link").
-      await Fs.file(p('plain.txt')).write('x');
-      await Fs.link(p('plain.txt')).create(p('real.txt'));
-      expect(await Fs.link(p('plain.txt')).target(), p('real.txt'));
-      expect(await Fs.file(p('real.txt')).text(), 'r');
     });
 
     test('M10: a link to an ancestor can be moved and copied', () async {
       await Fs.dir(p('proj/sub')).create();
-      await Fs.link(p('proj/up')).create(p('proj'));
-      final moved = await Fs.link(p('proj/up')).move(p('proj/sub/up'));
+      await io.Link(p('proj/up')).create(p('proj'));
+      final moved = await link(p('proj/up')).move(p('proj/sub/up'));
       expect(moved.path(), p('proj/sub/up'));
-      expect(await Fs.link(p('proj/up')).exists(), isFalse);
-      await Fs.link(p('proj/sub/up')).copy(p('proj/sub/up2'));
-      expect(await Fs.link(p('proj/sub/up2')).target(), p('proj'));
+      expect(await Fs.entry(p('proj/up')), isNull);
+      await link(p('proj/sub/up')).copy(p('proj/sub/up2'));
+      expect(await link(p('proj/sub/up2')).target(), p('proj'));
     });
 
     test('L11: copy replaces an existing file or link at the destination', () async {
       await Fs.file(p('real.txt')).write('r');
-      await Fs.link(p('l1')).create(p('real.txt'));
+      await io.Link(p('l1')).create(p('real.txt'));
       await Fs.file(p('plain.txt')).write('x');
-      await Fs.link(p('l1')).copy(p('plain.txt'));
-      expect(await Fs.link(p('plain.txt')).target(), p('real.txt'));
-      await Fs.link(p('l1')).copy(p('plain.txt'));
+      await link(p('l1')).copy(p('plain.txt'));
+      expect(await link(p('plain.txt')).target(), p('real.txt'));
+      await link(p('l1')).copy(p('plain.txt'));
       expect(await Fs.file(p('real.txt')).text(), 'r');
     });
 
     test('delete never takes the target', () async {
       await Fs.file(p('real.txt')).write('r');
-      await Fs.link(p('lnk')).create(p('real.txt'));
-      await Fs.link(p('lnk')).delete();
+      await io.Link(p('lnk')).create(p('real.txt'));
+      await link(p('lnk')).delete();
       expect(await Fs.file(p('real.txt')).exists(), isTrue);
     });
 
     test('Future mirrors match', () async {
       await Fs.file(p('t.txt')).write('t');
-      final l = Future.value(Fs.link(p('ml')));
-      await l.create(p('t.txt'));
+      await io.Link(p('ml')).create(p('t.txt'));
+      final l = link(p('ml'));
       expect(await l.exists(), isTrue);
       expect(await l.target(), p('t.txt'));
       expect(await l.resolve(), isA<File>());
@@ -780,7 +769,7 @@ Future<void> expectThrows(Future<void> f, String what) async {
       // An Image/Video.compress encode in flight (regression: medialoader counted it).
       await d.file('posts/.b.mp4.compress').write('xxxxxxxx');
       await Fs.file(p('outside.bin')).write('x' * 100);
-      await Fs.link('${d.path()}/ln').create(p('outside.bin'));
+      await io.Link('${d.path()}/ln').create(p('outside.bin'));
       expect(await d.size(), (files: 3, bytes: 9));
       expect(await d.size(match: '**/*.{jpg,mp4}'), (files: 2, bytes: 8));
       expect(await d.size(match: '*.jpg'), (files: 1, bytes: 5));

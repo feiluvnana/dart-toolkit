@@ -185,7 +185,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `csv`     | `Csv.parse` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
-| `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create`                                                                                                                | `dart:io`, `path`                   |
+| `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `which` `filter` `open` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
@@ -502,7 +502,7 @@ extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }  
 ```dart
 abstract final class Fs {
   static Future<Entry?> entry(String path);   // what is on disk, links not followed
-  static File file(String path);  static Dir dir(String path);  static Link link(String path);  // no I/O
+  static File file(String path);  static Dir dir(String path);   // no I/O; a Link comes from entry()
   static String sanitize(String name);   // an untrusted title as one portable file name; never leaves its folder
   static Future<T> tempDir<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'});   // deleted after body
   static Dir homeDir();  static Dir scriptDir();   // HOME/USERPROFILE; the running script's folder
@@ -525,7 +525,7 @@ final class Dir extends Entry {
   Future<({int files, int bytes})> size({String? match});   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
-  Future<String> target();  Future<Entry?> resolve();  Future<Link> create(String target);
+  Future<String> target();  Future<Entry?> resolve();   // a new link is dart:io's Link(path).create(target)
 }
 ```
 
@@ -547,7 +547,6 @@ final class Link extends Entry {
   `delete()` is a no-op when nothing is there, removes a link (never its target), and throws
   `FileSystemException` on the wrong kind (`Dir.delete()` on a file).
 - `resolve()` returns a handle at the final target, or `null` when the link is broken.
-  `Link.create` replaces a link atomically.
 - `list()` is typed and sorted by relative path (depth-first when `recursive`), and `recursive` never follows links.
   `match: '**/*.{jpg,png}'` keeps the paths (relative to the folder) that match a glob: `*` and
   `?` stay in one folder, `**` crosses folders and implies `recursive`, `{a,b}` and `[abc]` pick.

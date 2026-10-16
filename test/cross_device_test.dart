@@ -77,7 +77,7 @@ void main() {
   test('Link.move: the link is made again on the other device', () async {
     if (!await mounted()) return markTestSkipped('no RAM disk here');
     await io.Link('$tmp/ln').create('/some/where');
-    await Fs.link('$tmp/ln').move('$ram/ln');
+    await (await Fs.entry('$tmp/ln'))!.move('$ram/ln');
     expect(await io.Link('$ram/ln').target(), '/some/where');
     expect(io.Link('$tmp/ln').existsSync(), isFalse);
   });

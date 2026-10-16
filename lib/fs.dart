@@ -12,8 +12,8 @@
 ///
 /// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link],
 /// [LockedException].
-/// - `Fs.entry/file/dir/link()` inspect or build handles (`entry` is the
-///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
+/// - `Fs.entry/file/dir()` inspect or build handles (`entry` is the one
+///   call that does I/O, and the way to a [Link]; the other two do none); `Fs.sanitize()` makes
 ///   an untrusted string a safe file name; `Fs.tempDir()` runs a body with a
 ///   fresh folder; `Fs.homeDir()` and `Fs.scriptDir()` name the usual places.
 /// - [Entry] supports `path` `name` `parent` `exists` `modified` `delete` `copy` `move`
@@ -21,7 +21,7 @@
 ///   `copy`/`move` move an entry with its modes and times; `>` moves content.
 /// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `size` `watch` `create`.
-/// - [Link] supports `target` `resolve` `create`.
+/// - [Link] supports `target` `resolve`.
 /// Everything else is private.
 library;
 
@@ -55,7 +55,7 @@ final class LockedException extends io.FileSystemException implements ToolkitExc
 /// Entry point: inspect the disk or build handles (handles do no I/O).
 abstract final class Fs {
   /// What is on disk now: a [File], [Dir], [Link], or null. Never follows
-  /// links. The one `Fs.` call that does I/O; `file`/`dir`/`link` don't.
+  /// links. The one `Fs.` call that does I/O; `file`/`dir` don't.
   static Future<Entry?> entry(String path) async {
     // Strip first: `ln/` makes the OS follow the link to its folder.
     path = _strip(path);
@@ -73,9 +73,6 @@ abstract final class Fs {
 
   /// A folder handle. No I/O; the target need not exist.
   static Dir dir(String path) => Dir._(path);
-
-  /// A link handle. No I/O; the target need not exist.
-  static Link link(String path) => Link._(path);
 
   /// Run [body] with a fresh folder under the system temp dir, then delete
   /// it (Ctrl-C included) and return what [body] returned. A scope, not a
@@ -672,10 +669,9 @@ final class Link extends Entry {
     };
   }
 
-  /// Make the link, replacing an existing link or file atomically.
-  /// A temp link is created next to the target and renamed over it.
-  /// Returns this.
-  Future<Link> create(String target) async {
+  // Make the link, replacing an existing link or file atomically: a temp
+  // link is created next to the target and renamed over it.
+  Future<Link> _create(String target) async {
     await _ensureParent(_path);
     final tmp = tree.tmpPath(_path);
     final tmpLink = io.Link(tmp);
@@ -724,7 +720,7 @@ final class Link extends Entry {
   @override
   Task<Link> copy(String to) => task((_) async {
     await _checkSource(_path, to, io.FileSystemEntityType.link);
-    return Link._(to).create(await target());
+    return Link._(to)._create(await target());
   });
 
   @override
@@ -806,7 +802,6 @@ extension LinkFuture on Future<Link> {
   Task<Link> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<String> target() async => (await this).target();
   Future<Entry?> resolve() async => (await this).resolve();
-  Future<Link> create(String target) async => (await this).create(target);
 }
 
 /// The errors besides not-found that mean a link chain is broken: ENOTDIR

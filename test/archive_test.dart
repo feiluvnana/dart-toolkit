@@ -1190,7 +1190,7 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
 
     test('F13: pack refuses symlinks like unpack does', () async {
       await seed();
-      await Fs.link(p('site/link')).create('${p('site')}/a/b.txt');
+      await io.Link(p('site/link')).create('${p('site')}/a/b.txt');
       await expectLater(
         Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.zip).bytes(),
         throwsFormatException,
