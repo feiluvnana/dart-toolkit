@@ -7,7 +7,6 @@ library;
 
 import 'dart:convert';
 
-import 'charset.dart' as charset;
 import 'names.dart';
 
 export 'names.dart' show redact;
@@ -49,10 +48,12 @@ String? dispositionName(String? header) {
     final first = value.indexOf("'");
     final second = first < 0 ? -1 : value.indexOf("'", first + 1);
     if (first > 0 && second > first) {
-      final encoding = charset.Charset.canonical(value.substring(0, first));
-      final raw = value.substring(second + 1);
-      final decoder = charset.IncrementalDecoder(encoding);
-      decoded = decoder.add(percentDecode(raw)) + decoder.finish();
+      // RFC 8187 names only UTF-8 and ISO-8859-1.
+      final bytes = percentDecode(value.substring(second + 1));
+      decoded = switch (value.substring(0, first).trim().toLowerCase()) {
+        'iso-8859-1' || 'latin1' || 'iso8859-1' => latin1.decode(bytes),
+        _ => utf8.decode(bytes, allowMalformed: true),
+      };
     } else {
       decoded = percentDecodeString(value);
     }
