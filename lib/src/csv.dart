@@ -1,28 +1,16 @@
-/// CSV per RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded
+/// CSV per RFC 4180 (exported by `utils` as [CsvUtils], [ReaderCsv] and
+/// [ReaderFutureCsv]): quoted fields, `""` escapes, CRLF or LF, embedded
 /// newlines, a leading BOM. Pure Dart.
-///
-/// ```dart
-/// final rows = await Fs.file('sales.csv').csv();
-/// final [keys, ...people] = Csv.parse(await Fs.file('people.csv').text());   // header row first
-/// await Fs.file('out.csv').write(Csv.encode([['name', 'n'], ['a', 1]]));
-/// ```
-///
-/// Public surface is exactly: [Csv], [ReaderCsv].
-/// - `Csv.parse()` reads rows, `Csv.encode()` writes rows.
-/// - `reader.csv()` parses any [Reader]; `reader.rows()` streams its rows.
-/// Everything else is private.
 library;
 
 import 'dart:convert';
 import 'dart:io' show PathNotFoundException;
 
-import 'core.dart';
-import 'src/decoders.dart';
-
-export 'core.dart';
+import '../core.dart';
+import 'decoders.dart';
 
 /// Entry point: parse and encode.
-abstract final class Csv {
+abstract final class CsvUtils {
   /// The rows of [text]. A field is quoted when it holds [sep], a quote or
   /// a newline; a blank line is no row. Throws [ContentException] on an
   /// unterminated quote.
@@ -69,11 +57,11 @@ extension ReaderCsv on Reader {
       if (or != null) return or;
       rethrow;
     }
-    return Csv.parse(body, sep: sep);
+    return CsvUtils.parse(body, sep: sep);
   }
 
   /// The CSV rows one at a time as the bytes arrive: a multi-gigabyte
-  /// export reads in constant memory. Same rules as [Csv.parse]; decoded
+  /// export reads in constant memory. Same rules as [CsvUtils.parse]; decoded
   /// like [text] (a response's charset).
   Stream<List<String>> rows({String sep = ','}) async* {
     final ready = <List<String>>[];

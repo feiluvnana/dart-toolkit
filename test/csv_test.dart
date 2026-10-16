@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io' show Directory, PathNotFoundException;
 
-import 'package:dart_toolkit/csv.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/io.dart';
@@ -11,23 +11,23 @@ import 'support/io.dart';
 void main() {
   streaming();
   test('parse: quotes, "" escapes, CRLF and LF, embedded newlines, BOM', () {
-    expect(Csv.parse('﻿a,b\r\n"x, y","say ""hi"""\n"two\nlines",\n'), [
+    expect(CsvUtils.parse('﻿a,b\r\n"x, y","say ""hi"""\n"two\nlines",\n'), [
       ['a', 'b'],
       ['x, y', 'say "hi"'],
       ['two\nlines', ''],
     ]);
-    expect(Csv.parse(''), isEmpty);
-    expect(Csv.parse('a;b', sep: ';'), [
+    expect(CsvUtils.parse(''), isEmpty);
+    expect(CsvUtils.parse('a;b', sep: ';'), [
       ['a', 'b'],
     ]);
-    expect(Csv.parse('""'), [
+    expect(CsvUtils.parse('""'), [
       [''],
     ]);
   });
 
   test('an unterminated quote is a ContentException; a bad sep an ArgumentError', () {
-    expect(() => Csv.parse('"open'), throwsA(isA<ContentException>()));
-    expect(() => Csv.parse('a', sep: '"'), throwsArgumentError);
+    expect(() => CsvUtils.parse('"open'), throwsA(isA<ContentException>()));
+    expect(() => CsvUtils.parse('a', sep: '"'), throwsArgumentError);
   });
 
   test('encode round-trips', () {
@@ -35,9 +35,9 @@ void main() {
       ['a,b', 'q"', null, ' pad', 3],
       ['line\nbreak', '', 'x', 'y', 1.5],
     ];
-    final text = Csv.encode(rows);
+    final text = CsvUtils.encode(rows);
     expect(text, '"a,b","q""",," pad",3\r\n"line\nbreak",,x,y,1.5\r\n');
-    expect(Csv.parse(text), [
+    expect(CsvUtils.parse(text), [
       for (final r in rows) [for (final c in r) '${c ?? ''}'],
     ]);
   });
@@ -58,20 +58,20 @@ void main() {
 
 void streaming() {
   test('a blank line is no record (regression: became [""])', () {
-    expect(Csv.parse('a,b\n\n1,2\r\n\r\n'), [
+    expect(CsvUtils.parse('a,b\n\n1,2\r\n\r\n'), [
       ['a', 'b'],
       ['1', '2'],
     ]);
-    expect(Csv.parse('a\n""\n'), [
+    expect(CsvUtils.parse('a\n""\n'), [
       ['a'],
       [''],
     ]);
-    expect(() => Csv.parse('a', sep: ''), throwsArgumentError);
+    expect(() => CsvUtils.parse('a', sep: ''), throwsArgumentError);
   });
 
   test('encode writes a lone empty cell as "" so the row round-trips (B21)', () {
     expect(
-      Csv.encode([
+      CsvUtils.encode([
         ['a'],
         [''],
         [null],
@@ -80,8 +80,8 @@ void streaming() {
       'a\r\n""\r\n""\r\nb\r\n',
     );
     expect(
-      Csv.parse(
-        Csv.encode([
+      CsvUtils.parse(
+        CsvUtils.encode([
           ['a'],
           [''],
           ['b'],
@@ -97,7 +97,7 @@ void streaming() {
 
   test('reader.rows() streams rows across chunk boundaries', () async {
     const text = '﻿a,"b ""q"""\r\n"multi\nline",2\r\n\r\nx,y';
-    final whole = Csv.parse(text);
+    final whole = CsvUtils.parse(text);
     final bytes = utf8.encode(text);
     // Every split point: quotes, CRLF and the BOM may straddle chunks.
     for (var cut = 0; cut <= bytes.length; cut++) {

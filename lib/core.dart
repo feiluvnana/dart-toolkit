@@ -11,7 +11,7 @@
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Probe], [Meter],
 /// [Task], [Watch], [Closeable], [Origin], [ToolkitException],
 /// [ContentException], [PasswordException]. Helpers (unit literals, sizes,
-/// times, `Rate`, `Cookies`, hashes) are `package:dart_toolkit/utils.dart`.
+/// times, `Rate`, `Cookies`, hashes, CSV) are `package:dart_toolkit/utils.dart`.
 /// - [Reader]: `stream` `bytes` `text` `lines` `|` `&` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
 /// - [Probe]: `update`; `&` attaches one to a reader, a [Task] or (via

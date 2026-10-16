@@ -1,5 +1,5 @@
 /// Helpers beside the core, one separate import (no module re-exports it):
-/// unit literals, human sizes and times, pacing, cookie jars and hashes.
+/// unit literals, human sizes and times, pacing, cookie jars, hashes and CSV.
 ///
 /// ```dart
 /// final http = Http.client(rate: Rate(4, 1.seconds), cookies: await Fs.file('.session').cookies(or: Cookies()));
@@ -8,11 +8,14 @@
 /// final h = HashUtils.sha256(); await (Fs.file('disc.iso') > h); print(h.hex());  // a file's digest
 /// final id = HashUtils.md5().add(url).hex();
 /// final sig = HashUtils.sha256(key: utf8.encode(secret)).add(body).hex();       // HMAC
+/// final [keys, ...people] = await Fs.file('people.csv').csv();                 // header row first
+/// await for (final row in http.get(exportUrl).rows()) {}                        // streamed, constant memory
+/// await Fs.file('out.csv').write(CsvUtils.encode([['name', 'n'], ['a', 1]]));
 /// ```
 ///
 /// Public surface is exactly: [DurationUtils], [SizeUtils], [TimeUtils],
 /// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies],
-/// [HashUtils], [Hasher].
+/// [HashUtils], [Hasher], [CsvUtils], [ReaderCsv], [ReaderFutureCsv].
 /// - [DurationUtils]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [SizeUtils]: `bytes.size()` (`12.1 MB`).
 /// - [TimeUtils]: `now.format('yyyy-MM-dd')`; [SpanUtils]: `wait.human()` (`11 min 5 s`).
@@ -24,9 +27,14 @@
 /// - [Hasher]: `add` (text) `addBytes` `hex` `bytes`. As a [Writer] it
 ///   digests a stream; as a [Pipe] it forwards unchanged and digests, so
 ///   `reader | hasher > file` stores and checksums in one pass.
+/// - [CsvUtils]: RFC 4180 `parse` (rows) and `encode`; `reader.csv(or:)`
+///   parses any [Reader], `reader.rows()` streams its rows.
 /// Everything else is private.
 ///
 /// {@canonicalFor cookies.Cookies}
+/// {@canonicalFor csv.CsvUtils}
+/// {@canonicalFor csv.ReaderCsv}
+/// {@canonicalFor csv.ReaderFutureCsv}
 /// {@canonicalFor format.SizeUtils}
 /// {@canonicalFor hash.HashUtils}
 /// {@canonicalFor hash.Hasher}
@@ -42,6 +50,7 @@ import 'core.dart';
 import 'src/cookies.dart';
 
 export 'src/cookies.dart' show Cookies;
+export 'src/csv.dart' show CsvUtils, ReaderCsv, ReaderFutureCsv;
 export 'src/format.dart' show SizeUtils;
 export 'src/hash.dart' show HashUtils, Hasher;
 export 'src/rate.dart' show Rate;

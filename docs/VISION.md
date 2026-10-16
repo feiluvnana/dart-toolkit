@@ -1,6 +1,6 @@
 # dart_toolkit
 
-**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fifteen
+**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fourteen
 small modules (plus `core` and its helpers, `utils`) for command-line automation: fetch, drive a browser, move files, run
 programs, archive, hash, prompt, and draw a terminal UI. Each module is a thin facade over its
 engine (`dart:io`, a pinned native tool, or an in-house parser), and every module speaks the same five interfaces, so the bytes flow between them like a
@@ -56,7 +56,7 @@ at its call sites than it adds to the surface.
 | 15  | **Watching is `&`, never a parameter.** Long work returns a `Task` (`Pool.map`, `Dir.copy`, `Video.compress`, `Shell.run`); a reader is watched as it flows; any other future shows a spinner. A probe shows the whole run it is in, so where it sits never matters. |
 | 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onItem`, `onError`, `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
 | 17  | **Content moves with `>`; in-memory values use a method** (`file.write('text')`, `hash.add('text')`, `Body.json(v)`). Entries move with `copy`/`move` (modes and times kept); content with `>`. |
-| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `Csv`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source; streaming ones (`lines` `rows` `ndjson`) do not. |
+| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source; streaming ones (`lines` `rows` `ndjson`) do not. |
 | 19  | **A check is `check()` on the value** (`Response`, `Output`); `check:` is only a client-wide policy. One door in per value: content becomes a value through a reading; a static `open` is only for what has no bytes (an HLS URL). |
 | 20  | **The main input is positional, and the text a call shows is a main input** (`ask(question)`, `bar(label)`, `key(prompt)`). A function that renders an item is positional after the items (`choose(q, items, (u) => u.name)`, `Region.list(pick, (u) => u.name)`). Calls of one kind take the same options: every prompt takes `or:` and `timeout:`. |
 | 21  | **Failures are `Exception`s; `Error`s are bugs.** No toolkit failure extends an `Error`. |
@@ -132,7 +132,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 
 `utils.dart` is a separate import: no module re-exports it, so the core and each module stay
 lean. It holds what scripts use often but no module needs to name: unit literals, human text for
-sizes and times, hashes, and the shared values two modules pass along (chrome produces a `Cookies` jar,
+sizes and times, hashes, CSV, and the shared values two modules pass along (chrome produces a `Cookies` jar,
 http consumes it; a `Rate` paces http sends or any job). Helper classes are `<Module>Utils`.
 
 ```dart
@@ -165,13 +165,28 @@ final class Hasher with Writer implements Pipe { Hasher add(String text);  Hashe
 - `key:` makes an HMAC: `HashUtils.sha256(key: utf8.encode(secret)).add(body).hex()` checks a webhook
   signature, and `bytes()` keys the next step of a signing chain.
 
+**CSV** (`CsvUtils`, in-house):
+
+```dart
+abstract final class CsvUtils {
+  static List<List<String>> parse(String text, {String sep = ','});
+  static String encode(List<List<Object?>> rows, {String sep = ','});
+}
+extension ReaderCsv on Reader { Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or});  Stream<List<String>> rows({String sep = ','}); }
+```
+
+- RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM; a blank
+  line is no row. An unterminated quote is a `ContentException`. `encode` writes CRLF and quotes
+  only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory. Rows
+  keyed by the header are `final [keys, ...rows] = CsvUtils.parse(t)` and a map per row.
+
 ## 3. Names
 
 | Idea                                   | Name                                                                    | Where                                                                        |
 | -------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | content as text / bytes                | `text()` / `bytes()`                                                    | every `Reader`, `Element(s)`, `Page`                                         |
 | bytes → value                          | `html()` `json()` `image()`                                             | readings on `Reader`                                                         |
-| text → value / value → text or bytes   | `parse` / `encode`                                                      | `Html`, `Json`, `Csv`, `Yaml`, `Cookies` / `Json`, `Csv`, `Cookies`, `Image` |
+| text → value / value → text or bytes   | `parse` / `encode`                                                      | `Html`, `Json`, `CsvUtils`, `Yaml`, `Cookies` / `Json`, `CsvUtils`, `Cookies`, `Image` |
 | query a tree / typed read, null if not | `$` / `value<T>()`, `run()`                                             | `Elements`, `Element`, `Json` / `Json`, `Page`                               |
 | an attribute / every match's attribute | `attr` / `attrs`                                                        | `Element(s)`                                                                 |
 | a tree without some parts              | `not(selector)`                                                         | `Element(s)`                                                                 |
@@ -207,12 +222,11 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
-| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` (a separate import)                                                                                                                                                                                   | in-house                            |
+| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` · `CsvUtils` `parse` `encode` · `Reader.csv(or:)` `rows` (a separate import)                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
-| `csv`     | `Csv.parse` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `which` `filter` `open` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
@@ -1069,22 +1083,7 @@ build pinned by sha256 is downloaded once into the user cache (ffmpeg: Martin Ri
 and Linux, Gyan's for Windows; 7-Zip: its own release, `7zr.exe` on Windows), one process at a time.
 At most half the cores' worth of encodes run at once.
 
-### 4.14 csv
-
-```dart
-abstract final class Csv {
-  static List<List<String>> parse(String text, {String sep = ','});
-  static String encode(List<List<Object?>> rows, {String sep = ','});
-}
-extension on Reader { Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or});  Stream<List<String>> rows({String sep = ','}); }
-```
-
-- RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM; a blank
-  line is no row. An unterminated quote is a `ContentException`. `encode` writes CRLF and quotes
-  only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory. Rows
-  keyed by the header are `final [keys, ...rows] = Csv.parse(t)` and a map per row.
-
-### 4.15 yaml
+### 4.14 yaml
 
 ```dart
 abstract final class Yaml { static Json parse(String text); }

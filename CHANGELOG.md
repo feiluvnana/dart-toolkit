@@ -21,7 +21,7 @@
 - `image`/`video`/`archive`: Ctrl-C during `Image.compress`/`Video.compress` no longer leaves a hidden `.name.compress` beside the file, nor a 7z `Archive.archive` its `dart_toolkit_7z_*` work folder.
 - `chrome`: `page.run(js)` (and `html()`/`text()`) gives up on a promise that never settles with a `TimeoutException` after the page's `open(timeout:)` (default 30 s); it waited forever and kept the script alive.
 - `video`: with `Video.open(url, headers:)`, an upstream failure (refused, unresolved, TLS) surfaces as itself naming the source URL, instead of ffmpeg's bare 502 against the loopback proxy's URL.
-- `csv`: `Csv.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
+- `csv`: `CsvUtils.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
 - `html`: a selector that leads with `+` or `~` matches the receiver's later siblings: `h2.$('+ p')` is the paragraph after the heading (it parsed and never matched).
 - `core`: `Cookies.parse` (and `reader.cookies()`) of text that has lines but no `cookies.txt` line (a space-separated paste, a JSON export) is a `ContentException` instead of a silently empty jar.
 - `json`: `value<DateTime>()` reads microsecond and nanosecond epochs (they read as milliseconds: the year 57742).
@@ -68,6 +68,7 @@
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
 - `core`: helpers moved to `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: `Durations` as `DurationUtils` (`3.seconds`), `Sizes` as `SizeUtils` (`bytes.size()`), `Times` as `TimeUtils` (`now.format(…)`), `Spans` as `SpanUtils` (`d.human()`), `Rate`, `Cookies`, and `reader.cookies(or:)` as the `ReaderCookies` extension. A script that uses them adds `import 'package:dart_toolkit/utils.dart';`.
 - `hash`: moved to `package:dart_toolkit/utils.dart` as `HashUtils` (`HashUtils.sha256(expect: sum)` in a pipe, `key:` for HMAC) and `Hasher`; `package:dart_toolkit/hash.dart` is gone.
+- `csv`: moved to `package:dart_toolkit/utils.dart` as `CsvUtils.parse`/`encode`; `reader.csv(or:)` and `reader.rows()` are utils' `ReaderCsv` extension. `package:dart_toolkit/csv.dart` is gone.
 
 **Removed**
 
@@ -78,7 +79,7 @@
 - `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
 - `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
 - `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
-- `csv`: `Csv.records(text)`; `final [keys, ...rows] = Csv.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
+- `csv`: `Csv.records(text)`; `final [keys, ...rows] = CsvUtils.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
 - `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
 - `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
 - `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
