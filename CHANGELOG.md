@@ -1,141 +1,128 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+A leaner core. Helpers left the modules for `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: unit literals (`3.seconds`), sizes, times, `Rate`, `Cookies`, hashes (`lib/hash.dart` is gone), CSV (`lib/csv.dart` is gone), browser header sets, and the niche `ShellUtils.which`/`open` and `ConsoleUtils.copy`. A script that used any of them adds one line:
+
+```dart
+import 'package:dart_toolkit/utils.dart';
+```
+
+About 40 options and members with no caller went too (see Removed), among them `Http.serve`, the http disk cache, Chrome's per-call `timeout:` and `Dir.list(recursive:)`. Ctrl-C now runs a script's `finally`, `Http.client` checks statuses by default, and the audit's fixes are below.
 
 **Added**
 
-- `shell`: `Shell.run(cmd, terminal: true)` runs the child on our terminal (`git commit` opening `$EDITOR`, `ssh`, `dart test` in colour) and keeps `timeout:`, `cancel:` and the kill of its tree on Ctrl-C; the `Output` has the exit code and no text.
-- `archive`: `Archive.unarchive(dir, match: 'bin/*')` lands only the members whose path matches the glob (as `Dir.list(match:)` reads it), with the folders above them; zip and in-Dart 7z/RAR members left out are never decoded.
-- `fs`: `dir.copy(to, match: '**/*.dart')` copies only the entries `list(match:)` gives, with the folders above them, as one byte-counted `Task` (`& Console.bar('backup')`).
-- `json`: `reader.events()` streams the data of each server-sent event (`text/event-stream`) as it arrives, by the SSE rules: multi-line `data:`, `data:` with no space, comments and `event:`/`id:`/`retry:` fields (`res.events().map(Json.parse)` for LLM streaming APIs).
-- `cli`: an `Opt<DateTime>` takes a duration with a unit as that long ago (`--since 7d`, `1h30m`) besides a date; medialoader's `--since` drops its `parse: DateTime.parse` and takes `7d`.
-- `http`/`image`/`video`/`archive`/`chrome`: `Body.stream(reader)` sends `Content-Length` and `Content-Type` from `reader.origin()` when it knows them (a file, in-memory bytes, a named reader) instead of going chunked with no type, so a presigned S3 PUT works; lazy readers carry a name (`image.encode(.webp)` is `<stem>.webp`, `video.encode` `<stem>.<ext>`, `Archive.archive()` `archive.zip`/`.tgz`/`.7z`, `screenshot()` `screenshot.png`, `pdf()` `page.pdf`), so a multipart part gets a filename and type instead of the field name and `octet-stream`.
-- `fs`/`http`: a `Dir` is a `Writer`: `await (http.get(u) & bar > Fs.dir('out'))` stores the body as `out/<origin().name()>` (`content-disposition`, else the URL tail; a name with a separator is made one safe segment), and a `resume: true` client skips and resumes it as `> Fs.dir('out').file(name)` does. Any named reader works (`Fs.file(f) > dir`); a reader with no name is a `ContentException` naming `dir.file(name)`. keybox drops its `nameOf` helper.
-- `console`: `Console.pick(q, items, label, or: [...])` is a multi-select (inquirer's checkbox) returning `List<T>` in item order: on a terminal arrows move, Space ticks, `a` ticks all and Enter returns; piped or `TERM=dumb` it reads numbers and ranges (`1,3`, `2-4`); Escape, a closed stdin and `timeout:` give `or`; inside `Tui.run` it is a popup.
-- `archive`: `Archive.member(name)` is a `Pipe` from an archive to the bytes of its member at that path: `(http.get(tgz) | Archive.member('package/package.json')).json()`. A tar (gzipped, xz…) streams and stops reading once the member ends; zip, 7z and RAR decode only that member; no such member, or a folder or link there, is a `ContentException`.
-- `core`: Ctrl-C runs the script's `finally`. The first Ctrl-C fails every pending toolkit wait with the new `InterruptedException` (a `ToolkitException`): `Shell.run`/`read`/`filter` (the tree is killed), a request and a body being read, a Chrome call, a `Pool` run or lane (never retried; worker isolates end; `settle` throws it too), a prompt (the terminal is restored), a `>` run or an unpack in flight (temp files go). Waits on the outside world started after it fail at once, so a catch-all loop drains; file work still runs, so a `finally` can save state. The process exits 130 once no toolkit work has been in flight for 50 ms, after the exit hooks; a second Ctrl-C stops waiting and exits 130 at once (a third skips the hooks). `Command.run` gives 130 and prints nothing. Inside `Tui.run` Ctrl-C stays a key; `SIGTERM`/`SIGHUP` still run the hooks and exit at once.
-- `tui`: `Tui.run(state, screen, work: job)` is a screen over a job: `job` starts once the screen is shown and the screen stays after it ends; quitting cancels what the app still has in flight (the job and pending handlers fail their toolkit waits with `InterruptedException`, as on Ctrl-C, but the script goes on) and `run` returns once the job has ended; an error from the job leaves the screen and is rethrown. With no terminal (piped, `TERM=dumb`) the job runs with Console's bars and log instead of throwing. medialoader's dashboard drops its no-terminal branch, its `crashed` flag and the client closing on quit (-24 lines); its failures are now retried once in the dashboard too.
-
-**Fixed**
-
-- `tui`: an async key handler that fails no longer keeps the screen redrawing every 80 ms for the rest of the session (its end was never counted outside the redraw zone).
-- `fs`: two `file.lock(...)` calls in one process are granted in call order; the second one no longer wins while the first creates the lock's folder.
-- `fs`: unawaited `file.write(...)` / `> file` calls to one path land in call order, so the last one wins (they could finish in any order and keep a stale state). medialoader drops its own save chain.
-- `http`: a body with no length (SSE, NDJSON) reaches `lines()`/`stream()` as it arrives instead of after 64 KB or its end, and a paused consumer pauses the socket instead of buffering the rest of the body in memory.
-- `core`: a `Rate` shared by a `Pool` and an `Http.client` never lets more than its count start in one window (a start that waited could drop a live one from the window), and a start cancelled by a closed client or a failed `Pool.map` no longer counts.
-- `yaml`: a one-line flow document (minified JSON read as YAML) parses in linear time; 230 KB took 7 s.
-- `html`: `form()` reads the controls a browser posts: a form wrapped in a table (whose controls the parser places after it) and `form="id"` controls elsewhere in the page no longer give `fields: {}`.
-- `chrome`: a launched `Browser` that is never closed no longer keeps the finished script alive (POSIX): Chromium runs detached, the DevTools pipe is read in a helper isolate that holds the script open only while a call or a wait is pending, and the watchdog ends Chromium and its temp profile with the script.
-- `chrome`: `Chrome.connect` to an endpoint that accepts and never answers fails with a `BrowserException` after 30 s instead of hanging.
-- `image`/`video`/`archive`/`chrome`: a source that fails while it is spooled to a temp file (`reader.image()`, `reader.video()`, a 7-Zip unarchive, a page upload) surfaces its own error instead of `FileSystemException: File closed` naming a hidden temp.
-- `http`: `Feed.run` no longer reports success when page work failed: it is `false` unless the end was reached with every `page.add(work)` true, and a work that threw fails the run with the first error once every page's work is done (it was mapped to `false` and dropped). medialoader drops its own `ok` flag.
-- `image`/`video`: the shared encode limit (half the cores) is a held `Pool`, so a job arriving as another finishes no longer takes the slot handed to a waiter and runs one encode too many.
-- `csv`: `response.rows()` decodes the body's charset like `csv()` does; it always read UTF-8 (`café` from a windows-1252 export came out as `caf�`).
-- `http`: a header the server sends as raw UTF-8 reads as UTF-8: a non-ASCII `location` redirect goes to the right URL (`/файл`, not `/%C3%91%C2%84…`), and `name()`/`header()` no longer give mojibake.
-- `image`/`video`: spooled sources (`reader.image()`, `reader.video()`) and encode temps no longer pile up in the user cache: a source that fails mid-spool leaves no partial file, and each run spools into its own folder that a watchdog removes when the script ends (POSIX; Windows keeps the one-day sweep).
-- `image`/`video`/`archive`: Ctrl-C during `Image.compress`/`Video.compress` no longer leaves a hidden `.name.compress` beside the file, nor a 7z `Archive.archive` its `dart_toolkit_7z_*` work folder.
-- `chrome`: `page.run(js)` (and `html()`/`text()`) gives up on a promise that never settles with a `TimeoutException` after the page's `open(timeout:)` (default 30 s); it waited forever and kept the script alive.
-- `video`: with `Video.open(url, headers:)`, an upstream failure (refused, unresolved, TLS) surfaces as itself naming the source URL, instead of ffmpeg's bare 502 against the loopback proxy's URL.
-- `csv`: `CsvUtils.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
-- `html`: a selector that leads with `+` or `~` matches the receiver's later siblings: `h2.$('+ p')` is the paragraph after the heading (it parsed and never matched).
-- `core`: `Cookies.parse` (and `reader.cookies()`) of text that has lines but no `cookies.txt` line (a space-separated paste, a JSON export) is a `ContentException` instead of a silently empty jar.
-- `json`: `value<DateTime>()` reads microsecond and nanosecond epochs (they read as milliseconds: the year 57742).
-- `cli`: a duration that repeats a unit (`--wait=1m1m`) is a usage error instead of adding up to 2 minutes.
-- `html`: `:nth-child(odd of S)` takes any whitespace around `of` (a tab or newline threw), and `option:checked` follows the option `form()` posts: a single-choice select's last `selected` option, else its first enabled one.
-- `chrome`: on Linux the browser lookup walks `PATH` as `Shell.which` does, so a non-executable `chrome` file on `PATH` is skipped instead of launched.
-- `fs`: `Link.resolve()` is null only for a broken link (missing target, a loop); a permission error throws instead of reading as broken.
-- `chrome`: a DevTools reply that does not parse fails its call with a `BrowserException` instead of leaving it pending forever, and malformed UTF-8 in a reply is replaced rather than dropping the message.
-- `archive`: zip member names without the UTF-8 flag that are not UTF-8 read as CP437, the zip default (`caf\x82.txt` from Windows is `café.txt`, not a C1 control), and an Info-ZIP Unicode Path field wins when its CRC matches.
-- `tui`: CRLF text (a Windows file, an HTTP body) draws as lines in `write`, `markdown` and inputs; every `\r` drew as `�`. A `Field` keeps its text with `\n` line ends.
-- `image`/`video`/`archive`/`chrome`: the first-use download of ffmpeg, 7-Zip or Chrome for Testing is shared by the isolates of one process too (`Pool(isolates: true)` on a fresh machine downloaded once per isolate, and Chrome's resumable `.part` could be written by two at once): the OS lock, which only excludes other processes, now goes with a per-process sentinel.
-- `console`: `Console.choose` under `TERM=dumb` asks with the numbered list instead of drawing the live menu (its escapes leaked), and under `LC_ALL=C` the menu hint is ASCII.
-- `console`/`tui`: an empty `NO_COLOR=` no longer turns colour off (no-color.org: set and not empty), and `FORCE_COLOR=2`/`3` (or any value but empty, `0`, `false`) forces it like `1`.
-- `tui`: an error no handler owns (a timer or future the script started outside the Tui) fails `Tui.run` after the alternate screen is left, so its trace stays on screen; it printed on the alternate screen and vanished with it.
-- `console`: live bars and spinners redraw in place after the terminal narrows: the block counts the rows a reflowing terminal wrapped its old lines onto (as `choose` does), instead of stacking stale rows.
-- `console`: a bar made without a count and then counted by hand (`Console.bar('x')..update(3, 10)`) stops its spinner's timer, so an unclosed one no longer keeps the finished script alive.
-
-**Security**
-
-- `archive`: an archive's symlinks can no longer reach outside the target folder on a filesystem that folds case or Unicode normalisation (APFS, NTFS): links are matched case-folded, and every placed symlink is resolved by the OS and refused if it lands outside.
-- `video`: the loopback proxy behind `Video.open(url, headers:)` answers only GET and HEAD, under a random per-run path, for `Host: 127.0.0.1:<port>`; another local process or a DNS-rebound page could send any request with the secret headers while ffmpeg ran.
-- `video`/`image`: `Video.open(source, audio:)` takes only http(s) URLs (`file://`, `tcp://`, `ftp://`, `concat:` read local files or opened sockets); a local file is `Fs.file(path).video()`, and local paths reach ffmpeg as `file:<absolute path>`, never parsed as another protocol.
-- `archive`: `unarchive` of a zip past 32 MiB spools it to a file in its temp folder and reads it a member at a time instead of holding the whole zip in memory (a 768 MiB body peaked at 2.7 GB).
-- `archive`: `Archive.unarchive(dir, max:)` caps the bytes an extraction writes, hardlink copies included; past it the unpack fails with a `ContentException` and nothing lands (a 10 MB `.tar.gz` of zeros writes 10 GB without it).
-- `html`: hostile markup no longer costs quadratic time: the tree is at most 512 deep (deeper elements land beside the 512th, as in Chromium), misnested formatting (`<a><b>x</a>` × 160,000) parses in 0.2 s instead of 6.2 s, and `:has()` tries only the elements its combinators reach (`li:has(+ .z)` looks at one sibling; `div:has(a)` on 100,000 nested divs 165 s → 1.2 s).
-- `http`: a plain-http reply can no longer replace or shadow a `Secure` cookie (RFC 6265bis), and `Domain=` is refused on more shared names: `blogspot.*`, AWS's shared S3/compute hosts, CentralNic's `uk.com`-style names, Japan's prefecture registries (`tokyo.jp`) and country codes that register only below a category (`co.za`, `com.br`). A heuristic, no Public Suffix List.
-- `json`/`yaml`: a document nested deeper than 1,000 levels is a `ContentException` at parse (`Json.parse`, `reader.json()`, `ndjson()`, and YAML through nested aliases) instead of a `StackOverflowError` later in `toString`/`encode`; the depth scan costs about a tenth of the decode.
-- every module: URLs in error messages also mask secrets in the fragment (`#access_token=`), a Telegram `bot<id>:<token>` path segment, and the path after `webhooks` (Discord) or Slack's `hooks.slack.com/services`.
-- `chrome`: when a launched Chromium exits on its own (a crash, a kill), its watchdog goes with it and the temp profile is removed then, so the watchdog can no longer `kill -9` a reused pid when the script ends.
-
-**Performance**
-
-- `yaml`: quoted scalars are copied a run at a time instead of a character at a time: a 3.9 MB quoted value 93 → 8 ms, as fast as a plain one.
-- `lines()`/`ndjson()` and every streamed text read decode UTF-8 through the SDK's chunked decoder: 18 MB of CJK in 64 KB chunks 131 → 24 ms.
-- `chrome`: no longer loads the charset tables to read an RFC 8187 `filename*=` (UTF-8 or ISO-8859-1 only, as the RFC names): `import chrome.dart` start-up −18 ms wall, −40 ms CPU.
+- `core`: Ctrl-C runs the script's `finally`: the first one fails every pending toolkit wait (a program, a request or body read, a Chrome call, a pool run, a prompt, a `>` run, an unpack) with the new `InterruptedException`, file work still runs, and the script exits 130 once the toolkit is idle; a second Ctrl-C exits at once. `Command.run` gives 130 silently; inside `Tui.run` Ctrl-C stays a key.
+- `core`: `SetupException` (a `ToolkitException`) when this machine lacks what a call needs: no `HOME`, no ffmpeg/7-Zip build for this ABI, no Chrome.
+- `tui`: `Tui.run(state, screen, work: job)` shows a screen over a job: the job starts once the screen is up, quitting cancels it, an error from it is rethrown after the screen is left, and with no terminal the job runs with Console's bars and log.
+- `console`: `Console.pick(q, items, label, or: [...])` is a multi-select returning `List<T>`: Space ticks, `a` ticks all, Enter returns; piped it reads `1,3` or `2-4`; inside `Tui.run` it is a popup.
+- `shell`: `Shell.run(cmd, terminal: true)` runs the child on our terminal (`git commit` opening `$EDITOR`, `ssh`), keeping `timeout:`, `cancel:` and the tree kill.
+- `json`: `reader.events()` streams each server-sent event's data as it arrives (`res.events().map(Json.parse)` for LLM streaming APIs).
+- `archive`: `Archive.unarchive(dir, match: 'bin/*')` lands only the members the glob matches; zip, 7z and RAR members left out are never decoded.
+- `archive`: `Archive.member(name)` is a pipe to one member's bytes: `(http.get(tgz) | Archive.member('package/package.json')).json()`; a tar stops reading once the member ends.
+- `archive`: `Archive.unarchive(dir, max:)` caps the bytes an extraction writes (a `ContentException` past it, nothing lands).
+- `fs`: a `Dir` is a `Writer`: `await (http.get(u) & bar > Fs.dir('out'))` stores the body under its server name and, with `resume: true`, skips and resumes it like `> file`.
+- `fs`: `dir.copy(to, match: '**/*.dart')` copies only what `list(match:)` gives, as one byte-counted `Task`.
+- `http`: `Body.stream(reader)` sends `Content-Length` and `Content-Type` when the reader's origin knows them (a presigned S3 PUT works), and lazy readers are named (`<stem>.webp`, `archive.zip`, `screenshot.png`, `page.pdf`), so a multipart part gets a filename and type.
+- `html`: `reader.html(or:)`.
+- `cli`: `Opt<DateTime>` takes a duration as that long ago (`--since 7d`, `1h30m`).
 
 **Changed**
 
-- `tui`: `app.quit()` cancels the handlers still running: their pending toolkit waits (a request, a program, a pool lane) fail with `InterruptedException`, silently, instead of running on after `run` returned.
-- `shell`/`console`: Ctrl-C at a prompt or during `Shell.run` no longer exits 130 on the spot; it throws `InterruptedException` there (see Added), and a child that died of `SIGINT` while the script shares its terminal (the terminal's Ctrl-C reached it first) throws it too instead of returning an `Output` with code `-2`. Off a terminal that child is still an `Output`.
-- `chrome`: Ctrl-C during a pending call exits 130 after the call fails with `InterruptedException`; it exited 255 with an unhandled `BrowserException: browser closed`.
-- `archive`: `Archive.unarchive` replaces a file or link already at a member's path, like `unzip -o` and `tar -x` (it kept the old file and dropped the member); a link there is replaced, never written through.
-- `pool`: `retries:` retries every exception except a bug (`Error`), bad data (`ContentException`/`FormatException`), TLS, an HTTP 4xx other than 408/429, a `SessionException`, an `HttpRequestException` and a refused SOCKS login or ruleset: a shell's `ExitException`, a 5xx `HttpStatusException` and a `BrowserException` were never retried. The http client no longer retries a refused SOCKS login either.
-- `video`/`image`: an ffmpeg/ffprobe failure reading a URL over the network (refused, reset, unresolved, a 5xx) is a `SocketException` instead of a `ContentException`; a pinned tool download that fails for lack of network is an `HttpException`; a 7-Zip failure from a full disk or a permission is a `FileSystemException` instead of "corrupt archive".
-
-- `chrome`: a page's waits share one bound, `open(url, timeout:)` (30 s by default): `go`, `cookie`, `click`, `fill`, `select`, `upload`, `scroll`, `wait`, `idle` and `download` (and their `Future<Page>` mirrors) no longer take `timeout:`. A hand login that may take minutes is `browser.open(url, timeout: 5.minutes).cookie('sessionid')`.
-- `fs`: `Dir.list(match:)` walks as deep as the glob reaches: each `/` is one level more, so `'*/*.jpg'`, `'*/.ins.json'` and `'alice/*'` find what they name (they silently returned nothing without a `**`); `**` still crosses any number of folders.
-- `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
-- `core`: helpers moved to `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: `Durations` as `DurationUtils` (`3.seconds`), `Sizes` as `SizeUtils` (`bytes.size()`), `Times` as `TimeUtils` (`now.format(…)`), `Spans` as `SpanUtils` (`d.human()`), `Rate`, `Cookies`, and `reader.cookies(or:)` as the `ReaderCookies` extension. A script that uses them adds `import 'package:dart_toolkit/utils.dart';`.
-- `hash`: moved to `package:dart_toolkit/utils.dart` as `HashUtils` (`HashUtils.sha256(expect: sum)` in a pipe, `key:` for HMAC) and `Hasher`; `package:dart_toolkit/hash.dart` is gone.
-- `csv`: moved to `package:dart_toolkit/utils.dart` as `CsvUtils.parse`/`encode`; `reader.csv(or:)` and `reader.rows()` are utils' `ReaderCsv` extension. `package:dart_toolkit/csv.dart` is gone.
-- `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
-- `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
-- `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
-- `image`/`video`: one quality scale: `encode` defaults to 90 and `compress` to 75 in both (`Image.compress` was 80, `Video.compress` 70, a video encode 80).
-- `http`: `Http.client(check:)` defaults to `true`: a non-2xx status throws `HttpStatusException` unless the client says `check: false` (then it is a `Response` to branch on, as before). A reading's `or:` still answers a 404/410. The explicit `check: true` in medialoader and the docs go.
-- `http`: `Http.client(retries:)` defaults to 3 (it was 2, and every script passed 3).
-- `json`: `Json.encode` writes any `Iterable` (a `Set`, a `map(...)`) as a list instead of throwing `JsonUnsupportedObjectError`; medialoader's index saves its sets as they are.
-- `chrome`: `Page.url()` is a `String` (in memory, as `Response.url()`); `browser.open(u).url()` on a `Future<Page>` stays a Future.
-- `core`: a `Meter` is counted by hand (`update`) or by the runs it watches; mixing them is a `StateError` (one `update()` froze the meter against later runs, silently).
-- `image`/`video`: `Compressed` and `Kept` have private constructors (VISION rule 2): only `compress` makes them, so `Compressed(0, 0).text()` can no longer throw. Matching (`case Kept(:final reason)`) is unchanged.
-- `utils`: `HashUtils.md5/sha256(expect:)` that is not hex of the digest's length (`'not a digest'`, an md5 given to sha256) is an `ArgumentError` when the hasher is made, instead of a mismatch after the whole run.
-- `video`: `duration()` is `Duration?` and `fps()` is `double?`, null when unknown (a live stream, audio only) as `width()` is; they were `Duration.zero` and `0`. `codec()` stays ffprobe's name (a `String`).
-- `core`: an environment failure is the new `SetupException` (a `ToolkitException`, never retried by `pool`) instead of an `UnsupportedError` (no `HOME`, no pinned ffmpeg/7-Zip build for this ABI, a tool that cannot be downloaded here) or a `BrowserException` (no Chrome found): an `on ToolkitException` catches it. The message says "a compiled exe" only in a compiled exe; a `dart run` script whose download cannot start says why.
-- `image`/`video`: `compress` of a file in a known format that does not decode is `Kept(KeptReason.broken)` instead of a `ContentException`, so the sealed result is the one thing to switch on; a disk or ffmpeg start failure still throws.
-- `tui`: a binding name `Screen(keys:)` or `Region.on` does not know (`'escpae'`) is an `ArgumentError` when the map is built; it showed in the key help and never fired (Console and Page already refused one).
-- `json`: `text()`, `value<T>()` and `or()` on a `*`/`**` result read the first hit that reads (`$('**.id').text()` was null with hits, while `Elements` read their first match). medialoader's Facebook helpers `one()`/`when()` go.
-- `json`/`yaml`/`html`/`csv`/`cookies`: on a response, a 404 or 410 is the missing source for `or:`, with or without `check:` (a 404 threw under `check:`, or returned the error page's body as data). `reader.html(or:)` is new. medialoader's Facebook loader drops its `HttpStatusException` catch.
-- `fs`: `Entry.path` is a getter (`file.path`, as in `dart:io`) and `toString()` returns it: `'${dir.path}/x'` wrote into a folder named `Closure: ({Dir? from}) => String` with no warning. `path(from: dir)` is `relative(dir)`.
+- `utils`: `Durations`/`Sizes`/`Times`/`Spans` are `DurationUtils`/`SizeUtils`/`TimeUtils`/`SpanUtils` in utils; `Rate`, `Cookies` and `reader.cookies(or:)` moved there too.
+- `utils`: `Hash` is `HashUtils.md5/sha1/sha256/sha512` (a `Hasher`); `Csv` is `CsvUtils.parse`/`encode`, with `reader.csv(or:)` and `reader.rows()`.
+- `utils`: `Http.client(browser: .page/.api)` and `enum Browser` (which clashed with chrome's `Browser`) are `Http.client(headers: HttpUtils.page)` / `HttpUtils.api`.
+- `utils`: `Shell.which`/`open` are `ShellUtils.which`/`open`; `Console.copy` is `ConsoleUtils.copy`.
+- `http`: `Http.client(check:)` defaults to `true`: a non-2xx throws `HttpStatusException` unless the client says `check: false`.
+- `http`: `Http.client(retries:)` defaults to 3 (it was 2).
+- `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`.
+- `json`/`yaml`/`html`/`csv`/`cookies`: on a response, a 404 or 410 is the missing source for `or:`, with or without `check:`.
+- `chrome`: a page's waits share one bound, `browser.open(url, timeout:)` (30 s by default); `go`, `click`, `fill`, `wait`, `download` and the rest no longer take `timeout:`.
+- `chrome`: `Page.url()` is a `String`.
+- `fs`: `Entry.path` is a getter and `toString()` returns it (`'${dir.path}/x'` wrote into a folder named `Closure: …`); `path(from: dir)` is `relative(dir)`.
+- `fs`: `Dir.list(match:)` walks as deep as the glob reaches (`'*/*.jpg'`, `'alice/*'` returned nothing without a `**`).
+- `archive`: `unarchive` replaces a file or link already at a member's path, like `unzip -o` (it kept the old file); a link there is replaced, never written through.
+- `pool`: `retries:` retries every exception but a bug, bad data, a missing tool, TLS, an HTTP 4xx other than 408/429, a logged-out session, an aborted request and a refused proxy login: a shell's `ExitException`, a 5xx and a `BrowserException` were never retried.
+- `video`/`image`: an ffmpeg failure reading a URL over the network is a `SocketException` (it was a `ContentException`, so never retried); a 7-Zip failure from a full disk or a permission is a `FileSystemException`.
+- `image`/`video`: one quality scale: `encode` defaults to 90 and `compress` to 75 in both.
+- `image`/`video`: `compress` of a file that does not decode is `Kept(KeptReason.broken)` instead of a throw; `Compressed` and `Kept` have private constructors.
+- `video`: `duration()` is `Duration?` and `fps()` is `double?`, null when unknown (they were zero).
+- `json`: `text()`, `value<T>()` and `or()` on a `*`/`**` result read the first hit that reads.
+- `json`: `Json.encode` writes any `Iterable` (a `Set`) as a list instead of throwing.
+- `core`: a `Meter` counted by hand and by runs at once is a `StateError` (one `update()` froze it, silently).
+- `tui`: an unknown binding name (`'escpae'`) is an `ArgumentError` when the map is built.
+- `tui`: `app.quit()` cancels the handlers still running (their toolkit waits fail with `InterruptedException`).
+- `shell`/`console`/`chrome`: Ctrl-C at a prompt, during `Shell.run` or a Chrome call throws `InterruptedException` there instead of exiting on the spot (chrome exited 255).
+- `utils`: `HashUtils.md5/sha256(expect:)` that is not hex of the digest's length is an `ArgumentError` at once.
 
 **Removed**
 
-- `http`: `Http.serve` and `Server`/`Request`/`Reply`; the library is not a server. An OAuth loopback redirect is a few lines of `dart:io` `HttpServer` (docs/VISION.md §4.2).
-- `http`: `Http.client(connections:, idle:, insecure:)` and the same on `copy`: a client keeps at most 6 sockets per host and releases them 100 ms after its last request (`Pool(limit:)` caps concurrency); a self-signed host is trusted through `SecurityContext.defaultContext.setTrustedCertificates`.
-- `http`: `Http.client(cache:, ttl:)` and `copy(cache:, ttl:)`, the GET disk cache; a scraper under development keeps its pages with `get(u) > Fs.file(f)`.
-- `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed` from that cursor, or the `page` function returning it as `next` when its chain ends (medialoader's photo walk does).
-- `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
-- `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
-- `chrome`: `Page.back()`; going back is `page.go(previous)` with the URL you came from (`final previous = await page.url();` before leaving), or `page.run('history.back()')` for a page's own history.
-- `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
-- `csv`: `Csv.records(text)`; `final [keys, ...rows] = CsvUtils.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
-- `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
-- `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
-- `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
-- `console`: `Bar.tick` and `Console.bar(total:)`; a bar counted by hand is `bar.update(++n, total)`, which closes it at the total as `tick` did.
-- `core`: `Cookies(agent:)`, `Cookies.agent()` and `Cookies.header(url)`; http reads the jar itself. A session's user-agent is the `user-agent:` line of its cookies.txt (`Cookies.parse('# user-agent: X\n…')`, kept by `encode()`), which the client still sends unless a `user-agent` header is given.
-- `fs`: `Fs.link(path)` and `Link.create(target)`; a new link is `dart:io`'s `Link(path).create(target)`, and a `Link` handle comes from `Fs.entry(path)` or `Dir.list()` (`target()` and `resolve()` stay).
-- `chrome`: `Chrome.launch(path:, proxy:)`. `launch` takes the cached Chrome for Testing, else an installed Chrome or Chromium (on Linux the first on PATH, so a `chromium` earlier on PATH is the one used), else downloads Chrome for Testing; a browser that must reach the web through a proxy is a `Chrome.connect` to one started with `--proxy-server`.
-- `chrome`: `Page.cookies(all:)`; another site's jar is `page.go(url).cookies()`.
-- `chrome`: `Page.scroll(to:)`; `click`, `fill` and the other actions scroll their element into view, and `page.run('document.querySelector("#x").scrollIntoView()')` does it by hand. `scroll()` still goes to the bottom.
-- `fs`: `Dir.watch()`; `io.Directory(path).watch(recursive: true)` (not recursive on Linux either way).
-- `fs`: `Dir.list(recursive:)`; the whole tree is `list(match: '**')`, and a glob's own depth decides how far it walks.
-- `fs`: `Dir.size(match:)`; the bytes of some files are `[for (final e in await dir.list(match: '**/*.jpg')) if (e is File) await e.size()].fold(0, (a, b) => a + b)`.
-- `fs`: `Fs.tempDir(prefix:)`; the folder is always `tmp-…` under the system temp, and a named subfolder is `dir.dir('name')`.
-- `cli`: `Command(dotenv:, aliases:)`. An `Opt(env:)` reads the real environment (`set -a; . ./.env; set +a` before the script, or a shell wrapper); a subcommand has one name, and a near miss still suggests it.
-- `cli`: `Multi(short:)`; a repeated option is spelled `--tag a --tag b` (or, with `values:`, `--tag a,b`).
-- `hash`: `Hash.sha1(key:, expect:)` and `Hash.sha512(key:, expect:)`; an HMAC or a checked download uses `Hash.sha256(key:)` / `Hash.sha256(expect:)` (md5 keeps both for old mirrors' sums), and a sha1/sha512 sum is compared by hand: `h.hex() == sum`.
-- `console`: `Console.choose(keys:)`; Escape gives `or:` (null without one), so a "back" is `await Console.choose(q, items, label) ?? Next.back`, and another shortcut is one more item.
-- `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
+- `http`: `Http.serve` and `Server`/`Request`/`Reply`; an OAuth loopback redirect is a few lines of `dart:io` `HttpServer` (docs/VISION.md §4.2).
+- `http`: `Http.client(cache:, ttl:)`, the GET disk cache; keep pages with `get(u) > Fs.file(f)`.
+- `http`: `Http.client(connections:, idle:, insecure:)` and the same on `copy`; a client keeps 6 sockets per host for 100 ms, and `Pool(limit:)` caps concurrency.
+- `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed`.
+- `chrome`: `Chrome.launch(path:, proxy:)`; a proxied browser is a `Chrome.connect` to one started with `--proxy-server`.
+- `chrome`: `Page.reload()` (`page.go(page.url())`), `Page.back()` (`page.go(previous)`), `Page.cookies(all:)` (`page.go(url).cookies()`), `Page.scroll(to:)` (actions scroll their element into view).
+- `fs`: `Dir.list(recursive:)` (`list(match: '**')`), `Dir.size(match:)`, `Dir.watch()` (`io.Directory(p).watch()`), `Fs.tempDir(prefix:)`, `Fs.link`/`Link.create` (`io.Link(p).create(t)`).
+- `pool`: `Pool.map/settle(rate:)`; a job awaits `rate.wait()` first.
+- `json`: `Json.min(by)`; `max((i) => -by(i))`.
+- `utils`: `Csv.records`; `final [keys, ...rows] = CsvUtils.parse(text)`.
+- `utils`: `Hash.sha1/sha512(key:, expect:)` (md5 and sha256 keep both); `Cookies(agent:)`, `agent()` and `header(url)`.
+- `video`: `Video.compress(codec:)`; `Fs.file(p).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
+- `cli`: `Command(dotenv:, aliases:)` and `Multi(short:)`.
+- `console`: `Bar.tick` and `Console.bar(total:)` (`bar.update(++n, total)`); `Console.choose(keys:)` (Escape gives `or:`).
+- `tui`: `Region.diff` (`Shell.run(['diff', '-u', a, b])`), `Region.focused()`, `Pick.addAll`/`remove`/`removeWhere` (`pick.set([...])`).
+
+**Fixed**
+
+- `fs`: unawaited `file.write(...)` / `> file` calls to one path land in call order, so the last one wins.
+- `fs`: two `file.lock(...)` calls in one process are granted in call order.
+- `fs`: `Link.resolve()` is null only for a broken link; a permission error throws.
+- `http`: a body with no length (SSE, NDJSON) reaches `lines()` as it arrives instead of after 64 KB, and a paused consumer pauses the socket instead of buffering the body.
+- `http`: a raw UTF-8 header reads as UTF-8: a non-ASCII `location` redirect goes to the right URL.
+- `http`: `Feed.run` no longer reports success when page work failed; a work that threw fails the run with its error.
+- `core`: a `Rate` shared by a `Pool` and an `Http.client` never lets more than its count start in one window.
+- `chrome`: a launched `Browser` that is never closed no longer keeps the finished script alive (POSIX).
+- `chrome`: `Chrome.connect` to an endpoint that never answers fails after 30 s; `page.run(js)` on a promise that never settles times out; a DevTools reply that does not parse fails its call instead of hanging.
+- `chrome`: on Linux the browser lookup skips a non-executable `chrome` on `PATH`.
+- `image`/`video`/`archive`/`chrome`: a source that fails while spooled to a temp file surfaces its own error instead of `File closed`.
+- `image`/`video`: spooled sources and encode temps no longer pile up in the user cache, and Ctrl-C during `compress` leaves no `.name.compress`, nor a 7z `archive` its work folder.
+- `image`/`video`: the shared encode limit never runs one encode too many.
+- `image`/`video`/`archive`/`chrome`: the first-use download of ffmpeg, 7-Zip or Chrome is shared by a process's isolates too (`Pool(isolates: true)` downloaded once per isolate).
+- `video`: with `Video.open(url, headers:)`, an upstream failure surfaces as itself instead of ffmpeg's bare 502.
+- `html`: `form()` reads a table-wrapped form's controls and `form="id"` controls.
+- `html`: a selector that leads with `+` or `~` matches later siblings (`h2.$('+ p')`); `:nth-child(odd of S)` takes any whitespace; `option:checked` follows what `form()` posts.
+- `yaml`: a one-line flow document (minified JSON) parses in linear time (230 KB took 7 s).
+- `json`: `value<DateTime>()` reads microsecond and nanosecond epochs.
+- `csv`: `response.rows()` decodes the body's charset; `CsvUtils.encode` keeps a row whose only cell is empty.
+- `cookies`: `Cookies.parse` of text with no `cookies.txt` line is a `ContentException`, not an empty jar.
+- `cli`: a duration that repeats a unit (`--wait=1m1m`) is a usage error.
+- `archive`: zip names without the UTF-8 flag read as CP437, and an Info-ZIP Unicode Path field wins.
+- `console`: `Console.choose` under `TERM=dumb` asks with the numbered list, and its hint is ASCII under `LC_ALL=C`.
+- `console`: live bars redraw in place after the terminal narrows.
+- `console`: a bar made without a count and counted by hand stops its spinner timer, so it no longer keeps the script alive.
+- `console`/`tui`: an empty `NO_COLOR=` keeps colour, and `FORCE_COLOR=2`/`3` forces it.
+- `tui`: CRLF text draws as lines (every `\r` drew as `�`).
+- `tui`: an error no handler owns fails `Tui.run` after the alternate screen is left, so its trace stays visible.
+- `tui`: an async key handler that fails no longer keeps the screen redrawing every 80 ms.
+
+**Security**
+
+- `archive`: symlinks can no longer reach outside the target on a filesystem that folds case or Unicode (APFS, NTFS); every placed link is resolved by the OS and refused outside.
+- `archive`: `unarchive` of a zip past 32 MiB spools it to a temp file instead of holding it in memory (768 MiB peaked at 2.7 GB).
+- `video`: the loopback proxy behind `Video.open(url, headers:)` answers only GET/HEAD under a random path for `Host: 127.0.0.1:<port>`.
+- `video`/`image`: `Video.open(source, audio:)` takes only http(s) URLs; local paths reach ffmpeg as `file:<absolute path>`.
+- `html`: hostile markup is no longer quadratic: the tree is at most 512 deep, and `:has()` tries only what its combinators reach.
+- `http`: a plain-http reply can no longer replace a `Secure` cookie, and `Domain=` is refused on more shared names (`blogspot.*`, AWS hosts, `uk.com`, `tokyo.jp`, `co.za`), by a heuristic, no Public Suffix List.
+- `json`/`yaml`: a document nested deeper than 1,000 levels is a `ContentException` at parse instead of a `StackOverflowError` later.
+- every module: URLs in error messages also mask fragment secrets (`#access_token=`), Telegram bot tokens and Discord/Slack webhook paths.
+- `chrome`: a Chromium that exits on its own takes its watchdog with it, so the watchdog can never `kill -9` a reused pid.
+
+**Performance**
+
+- `lines()`/`ndjson()` and every streamed text read decode UTF-8 through the SDK's chunked decoder: 18 MB of CJK 131 → 24 ms.
+- `yaml`: quoted scalars are copied a run at a time: a 3.9 MB quoted value 93 → 8 ms.
+- `chrome`: `import chrome.dart` no longer loads the charset tables: start-up −18 ms wall, −40 ms CPU.
 
 ## 0.1.0
 
