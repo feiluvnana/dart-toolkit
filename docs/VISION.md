@@ -39,31 +39,31 @@ at its call sites than it adds to the surface.
 
 | #   | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type.                                                                                                                                                                                                                                                 |
+| 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only (a held `Pool(limit:)` is also a value), so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type.                                                                                                                                                                                                                                                 |
 | 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. The exceptions are the unit literals `3.seconds`, `1.5.minutes` (`DurationUtils` on `num`, in utils), which spell a constant, `Entry.path` (a getter and `toString()`, as in `dart:io`, so `'${dir.path}/x'` builds a path), and `DateTime.format(…)` / `Duration.human()` (`TimeUtils`, `SpanUtils`), which render a value for a person; none reads toolkit state. Sealed results and exceptions (`Compressed`, `Kept`, `Outcome`, `HttpStatusException`) carry public final fields on purpose: they are matched with patterns (`case Kept(:final reason)`). Each library doc says `Public surface is exactly: …`.                          |
-| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through), `&` (watch) and `>` (pipe into). |
+| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through), `&` (watch) and `>` (pipe into). |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name.                                                                                                                                                                                                                         |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                                                                                                                                                                                                                                                                   |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                                                                                                                                                                                                                                                                   |
-| 7   | **Outcomes are values; only failing to reach throws.** A non-zero exit is an `Output`, malformed HTML still parses, a missing path is `null`. What throws is the network, the disk, a program that won't start, a wait that runs out. HTTP is the one default the other way: a non-2xx throws `HttpStatusException` (scripts want the 200 or a stop), and `Http.client(check: false)` gives the `Response` to branch on.                                                                                                                                                                                                                                |
+| 7   | **Outcomes are values; only failing to reach throws.** A non-zero exit is an `Output`, malformed HTML still parses, a missing path is `null`. What throws is the network, the disk, a program that won't start, a wait that runs out, data the toolkit rejects (`ContentException`) and Ctrl-C (`InterruptedException`). HTTP is the one default the other way: a non-2xx throws `HttpStatusException` (scripts want the 200 or a stop), and `Http.client(check: false)` gives the `Response` to branch on.                                                                                                                                                                                                                                |
 | 8   | **Never null for collections, nullable for single lookups.** No match gives an empty `Elements`; a missing attribute, header or option gives `null`.                                                                                                                                                                                                                                                                                                                                        |
 | 9   | **In memory is sync, I/O is async.** There are no sync twins.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 10  | **Inputs are positional, options are named and optional** with defaults. There are no option objects, builders, or flags that change the result type. In-memory data is a `String` (UTF-8) or a `List<int>`.                                                                                                                                                                                                                                                                                |
 | 11  | **Types over runtime checks.** Generics carry the value type (`Opt<int>`, `value<T>()`, `Pool.map<T, R>`), sealed types make `switch` exhaustive (`Entry`), and `Object` parameters are kept to data and `body:`.                                                                                                                                                                                                                                                                           |
 | 12  | **`close()` releases a resource and is idempotent.** Whatever holds a process, socket, terminal or isolate cleans up on `close()`, on an error, and on Ctrl-C. Nothing keeps a finished script alive.                                                                                                                                                                                                                                                                                       |
 | 13  | **Engines stay private and swappable.** An engine type never appears in a public signature, and engine exceptions are rethrown as Dart's own (§5). Tests use real servers, files, browsers and pseudo-terminals, never the engine, so a swap is proven by the same suite.                                                                                                                                                                                                                   |
-| 14  | **No code generation, no linked native code.** Native tools (ffmpeg) are downloaded on first use, pinned by sha256, and run as processes. Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`). |
+| 14  | **No code generation, no linked native code.** Native tools (ffmpeg/ffprobe, 7-Zip, Chrome for Testing) are downloaded on first use, pinned by sha256, and run as processes. Dart 3.13+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`). |
 | 15  | **Watching is `&`, never a parameter.** Long work returns a `Task` (`Pool.map`, `Dir.copy`, `Video.compress`, `Shell.run`); a reader is watched as it flows; any other future shows a spinner. A probe shows the whole run it is in, so where it sits never matters. |
-| 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onItem`, `onError`, `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
+| 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onPage` (`Feed.run`), `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
 | 17  | **Content moves with `>`; in-memory values use a method** (`file.write('text')`, `hash.add('text')`, `Body.json(v)`). Entries move with `copy`/`move` (modes and times kept); content with `>`. |
-| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source (a missing file, an HTTP 404 or 410, with or without `check:`); streaming ones (`lines` `rows` `ndjson` `events`) do not. |
+| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every parsed whole-value reading (`json` `yaml` `html` `csv` `cookies`, `File.text/bytes`) takes `or:` for a missing source (a missing file, an HTTP 404 or 410, with or without `check:`); streaming ones (`lines` `rows` `ndjson` `events`) do not. |
 | 19  | **A check is `check()` on the value** (`Response`, `Output`); `check:` is only a client-wide policy. One door in per value: content becomes a value through a reading; a static `open` is only for what has no bytes (an HLS URL). |
 | 20  | **The main input is positional, and the text a call shows is a main input** (`ask(question)`, `bar(label)`, `key(prompt)`). A function that renders an item is positional after the items (`choose(q, items, (u) => u.name)`, `Region.list(pick, (u) => u.name)`). Calls of one kind take the same options: every prompt takes `or:` and `timeout:`. |
 | 21  | **Failures are `Exception`s; `Error`s are bugs.** No toolkit failure extends an `Error`. |
 
 ## 2. Core: Reader, Writer, Pipe, Probe, Closeable
 
-`core.dart` is re-exported by every module except `cli` and `tui`, which use only `ToolkitException` from it.
+`core.dart` is re-exported by every module except `cli` and `tui`, which use only `ToolkitException` and `InterruptedException` from it (`utils` re-exports nothing of it).
 
 ```dart
 abstract mixin class Reader {                     // bytes you can read; implement stream()
@@ -92,14 +92,14 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 | `Response` (http)                                                  |   ✓    |        |      |     ✓     |
 | `File` (fs)                                                        |   ✓    |   ✓    |      |           |
 | `Output` `Shell.read()` (shell), `Download` `Capture` (chrome), `Console.input()` |   ✓    |        |      |           |
-| `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` |   ✓    |        |      |           |
-| `Archive.unarchive(dir)`, `Console.out()`                           |        |   ✓    |      |           |
+| `page.screenshot()` `pdf()`, `image.encode()`, `video.encode()`, `Archive.archive()`, `Console.logged()` |   ✓    |        |      |           |
+| `Dir` (`> Fs.dir('out')`), `Archive.unarchive(dir)`, `Console.out()` |        |   ✓    |      |           |
 | `Hasher`                                                           |        |   ✓    |  ✓   |           |
 | `Bar` (console; a `Probe`)                                         |        |        |      |     ✓     |
 | `Archive.gzip()` `gunzip()` `member()`, `Shell.filter()`           |        |        |  ✓   |           |
-| `Browser`, `Page`                                                  |        |        |      |     ✓     |
+| `Client` (http), `Browser`, `Page`                                 |        |        |      |     ✓     |
 
-Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()` and `image()`.
+Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()` (`ndjson()`, `events()`), `yaml()`, `image()`, `video()`; utils adds `csv()`, `rows()`, `cookies()`.
 Lazy readers name what they make in `origin().name()`: `image.encode(.webp)` is `<stem>.webp`,
 `video.encode(.mp4)` `<stem>.mp4`, `Archive.archive()` `archive.zip` (`.tgz`, `.7z` …),
 `screenshot()` `screenshot.png`, `pdf()` `page.pdf`; a multipart part takes that filename and type.
@@ -201,7 +201,7 @@ extension ReaderCsv on Reader { Future<List<List<String>>> csv({String sep = ','
 | an attribute / every match's attribute | `attr` / `attrs`                                                        | `Element(s)`                                                                 |
 | a tree without some parts              | `not(selector)`                                                         | `Element(s)`                                                                 |
 | feed data / watch progress / count by hand | `add(data)` / `work & probe` / `update(done, total)`               | `Hasher` / every reader, `Task`, future / `Bar`, `Meter`                     |
-| release / remove from disk / make      | `close()` / `delete()` / `create()`                                     | `Closeable` / `Entry` / `Dir`, `Link`                                        |
+| release / remove from disk / make      | `close()` / `delete()` / `create()`                                     | `Closeable` / `Entry` / `Dir`                                                |
 | final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`                                           | `Response` (`Page` has `url()`)                                              |
 | a file name / a size in bytes          | `name()` / `size()`                                                     | `Entry`, `Download`, `Response`, `Capture` / `File`, `Response`, `Origin`    |
 | run a program, an app, a CLI / jobs    | `run` / `map`, `settle`                                                 | `Shell`, `Tui`, `Command` / `Pool`                                           |
@@ -220,38 +220,40 @@ extension ReaderCsv on Reader { Future<List<List<String>>> csv({String sep = ','
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env`
-`json` `pretty` `limit` `max` `retries` `check` `short` `or` `rate` `cookies` `csrf`
-`isolates` `match` `sep` `resume`
+`pretty` `limit` `max` `retries` `check` `short` `or` `rate` `cookies` `csrf` `login`
+`isolates` `match` `sep` `resume` `terminal` `cancel` `work` `key` `values` `version`
+`audio` `codec` `at` `all` `files` `pause` `perHost` `onWait` `on` `highlight`
 `required` `parse` `params` `commands` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
-`empty` `header` `onSubmit` `since` `history` `query` `live` `total` `keep`
-`password` `format` `expect` `from`.
+`empty` `header` `onSubmit` `since` `history` `query` `keep`
+`password` `format` `expect`.
 
 ## 4. Modules
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException` `SetupException`                                                                                                                                                                                   | in-house                            |
-| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` · `CsvUtils` `parse` `encode` · `Reader.csv(or:)` `rows` · `HttpUtils` `page` `api` · `ShellUtils` `which` `open` · `ConsoleUtils` `copy` (a separate import)                                                                                                                                                                                   | in-house                            |
+| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException` `SetupException` `InterruptedException` | in-house                            |
+| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` · `CsvUtils` `parse` `encode` · `Reader.csv(or:)` `rows` · `HttpUtils` `page` `api` · `ShellUtils` `which` `open` · `ConsoleUtils` `copy` (a separate import) | in-house; `package:crypto` (hashes) |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
-| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
+| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name` · `Resource` · `BrowserException` | in-house DevTools client (a launched Chrome's pipe; a `dart:io` WebSocket for `connect` and on Windows) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` `events` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
-| `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
+| `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `relative` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `touch` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `copy(match:)` `size` `create` (a `Writer`) · `Link` `target` `resolve` · `LockedException`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `filter` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
-| `archive` | `Archive.archive` `unarchive` `member` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
+| `archive` | `Archive.archive` `unarchive` `member` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | in-house zip, tar, xz, 7z/RAR readers; 7-Zip (downloaded, pinned) for 7z writes and big or exotic reads |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` (a `Task`) · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
 | `console` | `Console.ask` `confirm` `choose` `pick` `key` `bar` `log` `logged` `table` `notify` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
-| `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`, `bars`, `log`) · `Color` · `Style` · `Meter` (core's)                                                                                                                                                                                                                                                       | in-house                            |
-| `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
-| `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `format` `codec` `audioCodec` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
+| `tui`     | `Tui.run` · `App` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`, `bars`, `log`) · `Color` · `Style` · `Pixels` · `Meter` (core's) · `RegionWidgets` `RegionMarkdown` (extensions)                                                                                                                                                                                                                                                       | in-house                            |
+| `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` · `Pixels` · `Compression` `Compressed` `Kept` `KeptReason` | ffmpeg (downloaded, pinned) |
+| `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `format` `codec` `audioCodec` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` · `Compression` `Compressed` `Kept` `KeptReason` | ffmpeg, ffprobe (downloaded, pinned) |
 
 A module imports only core and its engine. The exceptions are `video`, which imports `image` for `frame()`, `chrome`, which imports `html`
 for `Elements` and `json` for `run`'s `Json` result, and `html`, which imports `json` for
 `Elements.json()` (embedded data) and re-exports it, and `yaml`, which imports and re-exports `json` (its `parse`
-returns a `Json`). `console` and `tui`
+returns a `Json`). `archive`, `image` and `video` import `shell` (and `image`/`video` `pool`) to run
+their pinned tools, whose one-time download runs http/fs/archive in an isolate spawned by URI. `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
 ### 4.1 html
@@ -274,9 +276,10 @@ final class Element {
 - The parser is in-house and follows the WHATWG algorithm (implied `html`/`head`/`body`,
   auto-closed `p`/`li`/cells, implied `tbody`/`tr`, foster parenting, formatting reconstruction
   and the adoption agency, raw text, the full named-entity table, SVG/MathML). Scripting is on:
-  `noscript` content is text. A corpus test holds it to package:html's tree on 50 real pages.
-- `parse` never throws on bad markup and never recurses (20,000-deep pages are fine). Input that
-  starts with `<!doctype` or `<html` is a whole document (so `$('body')` works); anything else is
+  `noscript` content is text. A corpus test holds it to package:html's tree on 52 real pages.
+- `parse` never throws on bad markup and never recurses; the tree is at most 512 deep (deeper elements
+  land beside the 512th, as in Chromium). Input that starts (after whitespace, comments and `<?xml …?>`)
+  with `<!doctype`, `<html`, `<head` or `<body` is a whole document (so `$('body')` works); anything else is
   a fragment. A fragment with loose text is returned as its root, which holds the text and the
   elements and matches no selector itself.
 - With a base, links come back absolute: URL attributes (`href`, `src`, `data-src`, `poster`,
@@ -462,7 +465,8 @@ final class Download with Reader { String name(); }   // returned when the downl
 final class Capture with Reader { int status();  String url();  String? header(String name);  String name(); }
 ```
 
-- `chrome` speaks the DevTools protocol itself over a `dart:io` WebSocket (no engine package).
+- `chrome` speaks the DevTools protocol itself (no engine package): over the pipe of a launched Chrome
+  (`--remote-debugging-pipe`, no TCP port; Windows uses the port), and a `dart:io` WebSocket for `connect`.
   `launch` takes Chrome for Testing already in the user cache, else an installed Chrome/Chromium
   (on Linux the first on PATH), else downloads Chrome for Testing once per machine; a headless run without a
   profile uses `chrome-headless-shell` (starts ~4x faster). `profile` keeps logins (session cookies
@@ -470,7 +474,7 @@ final class Capture with Reader { int status();  String url();  String? header(S
   attaches (`http://host:9222` or `ws://…`), and its `close` closes the tabs it opened, restores
   the download behaviour and disconnects.
 - Tab setup happens at `open`: `headers` (including `user-agent`), `block` by resource type
-  (`'image'`, `'font'`, `'media'`, `'stylesheet'`), and the viewport. Dialogs are always
+  (`{.image, .font, .media, .stylesheet}`), and the viewport. Dialogs are always
   dismissed.
 - Actions wait until the first match is attached, visible and enabled (`upload`: attached only,
   since file inputs are usually hidden). They time out after the page's `open(timeout:)` (30 s)
@@ -578,7 +582,7 @@ final class Dir extends Entry with Writer {   // > dir stores a reader as dir/<o
   File file(String name);  Dir dir(String name);
   Task<List<Entry>> list({String? match});  Future<Dir> create();   // list counts entries; match sets the depth
   Task<Dir> copy(String to, {String? match});   // match: only the entries list(match:) gives, with their folders
-  Future<({int files, int bytes})> size();   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
+  Future<({int files, int bytes})> size();   // recursive; skips .part, .part.tag, .x.tmp…, .x.compress ; missing = zeros
 }
 final class Link extends Entry {
   Future<String> target();  Future<Entry?> resolve();   // a new link is dart:io's Link(path).create(target)
@@ -620,9 +624,9 @@ final class Link extends Entry {
   cron run fails at once with a `LockedException` (`locked by another process`). Both are scopes, not handles: nothing
   to forget, nothing keeps the script alive. `Fs.homeDir()` is `HOME`/`USERPROFILE`;
   `Fs.scriptDir()` is the running script's folder; `modified()` is the mtime and `touch(t)` sets it.
-  `dir.size()` is `(files:, bytes:)` of finished files: download partials (`x.part`, `x.part.tag`)
-  and atomic-write temps are left out, so a folder mid-download counts what has landed. A script that also
-  imports `dart:io` adds `hide File, Directory, Link`.
+  `dir.size()` is `(files:, bytes:)` of finished files: download partials (`x.part`, `x.part.tag`),
+  atomic-write temps (`.x.tmp…`) and compress encodes (`.x.compress`) are left out, so a folder mid-download counts what has landed. A script that also
+  imports `dart:io` adds `hide File, Link, Pipe`.
 
 ### 4.6 shell
 
@@ -679,7 +683,7 @@ abstract final class Archive {
 ```
 
 - `unarchive` checks every member first: absolute paths and `..` escapes are a
-  `FormatException`. It then extracts into a temp sibling and moves the members into `dir`,
+  `ContentException`. It then extracts into a temp sibling and moves the members into `dir`,
   merging with what is already there: a member replaces a file or link at its path (like
   `unzip -o`; renamed over it, never written through a link), other files stay. `match:` lands
   only the members whose path matches the glob, read as `Dir.list(match:)` reads it (`'bin/*'`,
@@ -696,11 +700,12 @@ abstract final class Archive {
   stops reading at the end of the first member at that path; zip, 7z and RAR decode only that
   member. No such member, or a folder or link there, is a `ContentException`.
 - `gunzip` checks the gzip trailer. Truncated or corrupt data fails the run with a
-  `FormatException`; `unarchive` drops zero padding after a `.tar.gz` whose tar is whole.
+  `ContentException`; `unarchive` drops zero padding after a `.tar.gz` whose tar is whole.
 - Writing streams for zip (zip64 when needed), tar and tgz. **7-Zip** (see [Native tools](#native-tools))
   writes 7z: LZMA2 on every core, into a temp file. Reading streams tar, tgz and `.tar.xz` (x86,
-  ARM64 and delta filters included) member by member in Dart; zip, and 7z/RAR up to 32 MiB, decode
-  in memory on their own isolate, so Ctrl-C and redraws stay live. A bigger 7z/RAR, one using a
+  ARM64 and delta filters included) member by member in Dart; zip, 7z and RAR up to 32 MiB decode
+  in memory on their own isolate, so Ctrl-C and redraws stay live (a bigger zip is spooled to a
+  temp file and read a member at a time). A bigger 7z/RAR, one using a
   method Dart lacks (BCJ2, RAR 1.5, VM filters), `.tar.bz2`/`.zst`/`.Z`/`.lzma`, cab, ar and xar
   go to 7-Zip; its output is sandbox-checked and merged exactly as Dart's (Windows' 7zr reads 7z
   only, so RAR and the rest stay Dart-only or unsupported there). RAR is read-only.
@@ -741,8 +746,9 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
 - `retries:` re-runs a failing job with the shared jittered backoff; a job paces itself with
   `await rate.wait()` (or the client's `rate:`).
   A shell's exit, a 5xx, a browser or network failure is retried; a bug (`Error`), bad data
-  (`ContentException`), TLS, an HTTP 4xx (but 408/429), a logged-out session or a refused proxy
-  login fails at once, and so does Ctrl-C (`InterruptedException`: no new item starts, worker
+  (`ContentException`/`FormatException`), a missing tool (`SetupException`), TLS, an HTTP 4xx
+  (but 408/429), an aborted request or an unfollowable redirect (`HttpRequestException`), a
+  logged-out session or a refused proxy login fails at once, and so does Ctrl-C (`InterruptedException`: no new item starts, worker
   isolates end, and `settle` throws it too). An exception says whose fault: data →
   `ContentException`, the network or the disk → an `IOException`.
   Together they replace hand-written retry loops around shells, browsers and flaky I/O.
@@ -772,7 +778,7 @@ final class Rest<T> extends Param<List<T>> { Rest(String name, String help, {boo
 final class Command {
   Command(String name, String help, {List<Param<Object?>> params = const [], List<Command> commands = const [],
       FutureOr<void> Function(Context context)? handler, String? version});
-  Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure (also returned)
+  Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure, 130 Ctrl-C (also returned)
 }
 final class Context { T call<T>(Param<T> param);  String usage(); }
 final class UsageException extends ToolkitException { const UsageException(String message); }
@@ -806,7 +812,8 @@ final class UsageException extends ToolkitException { const UsageException(Strin
     and exit 64. Unknown names suggest the closest option or command name.
   - A handler's `UsageException` is a 64, and any other `Exception` prints its message (every line) and is a 1:
     a toolkit error prints its `message`, a plain `Exception('…')` prints without the prefix, so
-    `throw Exception('User not found')` is how a script fails.
+    `throw Exception('User not found')` is how a script fails. An `InterruptedException` is a 130
+    and prints nothing.
   - An `Error` (a bug) propagates with its stack trace.
 
 ```dart
@@ -837,7 +844,8 @@ abstract final class Console {
 final class Bar with Probe implements Closeable { Bar update(int done, int? total); }   // by hand: bar.update(++n, total)
 ```
 
-- Everything goes to stderr, so stdout stays clean for data.
+- Prompts, bars, spinners and `log` go to stderr, so stdout stays clean for data; `table` and
+  `out()` write to stdout (the output).
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
   prompt restores the terminal and fails it with `InterruptedException` (§5).
 - **A closed stdin is not an error.** `ask` gives its `or` (`''` by default) and `choose` its `or` (null without one), and so
@@ -903,7 +911,7 @@ final class Field {                          // an editor's text, cursor and his
   String text();  List<String> history();  Field set(String text);  String submit();
 }
 final class Scroll { Scroll({bool follow = true}); }
-// Every drawing method also takes write's {Color? color, Color? background, Set<Style> style}, and
+// Every drawing method but log and picture also takes write's {Color? color, Color? background, Set<Style> style}, and
 // the ones without their own mouse handling (write markdown box bar spin) take
 // {Map<String, Binding>? on}, bound to what they drew (a box: its header row).
 final class Region {
@@ -923,14 +931,16 @@ final class Region {
   Region spin(String label, {DateTime? since});
   Region bars();                                // every live Console.bar a row (✓/✗ for 2 s once ended)
   Region log({bool Function(({DateTime at, String text, bool failed}) line)? only, Color? color, Color? failures});
+  Region picture(Pixels image);               // the rest of the region as half-blocks, aspect kept
 }
+abstract interface class Pixels { int width();  int height();  (int, int, int) pixel(int x, int y); }   // image.pixels()
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
   factory Color.index(int index);  factory Color.rgb(int r, int g, int b);   // 0–255, else ArgumentError
 }
 enum Style { bold, dim, italic, underline, strike, reverse }
 ```
 
-`r.picture(await image.pixels(width: 80))` draws an image in half-block cells; `tui` and `image` never load each other (they share a private pixel interface).
+`r.picture(await image.pixels(width: 80))` draws an image in half-block cells; `tui` and `image` never load each other (they share the `Pixels` interface, exported by both).
 
 - **Events on what was drawn.** `on:` on `write`, `markdown`, `bar`, `spin` and `box` (its
   header row) binds a `Binding` map, as `Region.on` does for the rest of a region; interactive
@@ -1009,7 +1019,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
     renders as closed. Layout is cached by `(source, width)`.
   - `rows`/`cols`: a size above 0 is fixed, 0 shares what is left. `box(title)` borders the rest
     and returns the inside. `popup` is drawn last, centered. `bar` lays out like `Console.bar`.
-    `bar` keeps to one row (the bar shrinks, then the label is cut) and with `rate:` shows it;
+    `bar` keeps to one row (the bar shrinks, then the label is cut) and shows the meter's rate;
     `spin(since:)` says the time as `Duration.human()` does.
     `scroll` lays out its content once per redraw and paints only the viewport.
   - Colours are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR` drops them
@@ -1035,7 +1045,8 @@ enum Style { bold, dim, italic, underline, strike, reverse }
     is active throws `StateError`. After `quit`, `run` returns without waiting for pending
     handlers. Nothing is left listening to the terminal, so the script exits when `main` ends.
     On POSIX, input is read through a restartable child `cat /dev/tty`.
-  - It throws `StdoutException` when stdout is not a terminal.
+  - Without `work:`, it throws `StdoutException` when stdout is not a terminal or `TERM=dumb`; with
+    `work:` the job runs with Console instead.
 
 ```dart
 typedef Hit = ({String title, String url});
@@ -1072,6 +1083,10 @@ final class Image {
   Future<Pixels> pixels({int? width, int? height});
 }
 extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).image()
+sealed class Compression { String text(); }      // also video's; private constructors
+final class Compressed extends Compression { final int before, after; }
+final class Kept extends Compression { final KeptReason reason; }
+enum KeptReason { unknown, lossy, notSmaller, broken }
 ```
 
 - Engine: ffmpeg (see [Native tools](#native-tools)). `image()` on a file reads it in place; any
@@ -1152,12 +1167,13 @@ keeps catching it. None is an `Error`: an `Error` is a bug.
 
 | Thrown                      | When                                                                                                                                                                                                                                                                                                  |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HttpStatusException`       | a non-2xx status surfaced by `check` or by piping its body (`status` `method` `url` `snippet`); extends `HttpException`                                                                                                                                                                               |
-| `HttpRequestException`      | a request aborted by `close()` or a redirect that cannot be followed (`method` `url` `reason`); extends `HttpException`                                                                                                                                                                               |
+| `HttpStatusException`       | a non-2xx status: thrown by a client with `check: true` (the default), or by `check()`/piping the body under `check: false` (`status` `method` `url` `snippet`); extends `HttpException` |
+| `HttpRequestException`      | a request aborted by `close()`, more than 10 redirects, or a redirect that cannot be followed (`method` `url` `reason`: a `RequestFailure`); extends `HttpException` |
+| `SessionException`          | a request that landed on one of the client's `login:` paths (`url`); a `ToolkitException`; `pool` never retries it |
 | `ContentException`          | invalid content the toolkit rejects (JSON, selectors, archives, images, checksums); extends `FormatException`                                                                                                                                                                                         |
 | `PasswordException`         | an encrypted archive with no or the wrong password; extends `ContentException`                                                                                                                                                                                                                        |
 | `ExitException` (shell), `LockedException` (fs) | a program that exited non-zero under `check()`, as a read or as a filter; a lock another holder keeps |
-| `BrowserException`          | a tab action the page itself fails (click, PDF, download); a `ToolkitException`                                                                                                                                                                                                                       |
+| `BrowserException`          | a tab action the page itself fails (click, PDF, download), or a browser that won't start or answer; a `ToolkitException` |
 | `SetupException`            | this machine lacks what a call needs: ffmpeg, 7-Zip or Chrome not on PATH and not downloadable here (a compiled exe, an ABI with no pinned build), no `HOME` for the cache; `pool` never retries it |
 | `UsageException` (cli)      | a handler rejects its input, giving exit 64                                                                                                                                                                                                                                                           |
 | `InterruptedException`      | Ctrl-C arrived while the toolkit waited: a program, a request or a body being read, a Chrome call, a pool lane, a prompt, a `>` run or an unpack in flight (or a `Tui.run` quit while its work waited); `pool` never retries it, `Command.run` gives 130 |
@@ -1197,7 +1213,7 @@ try {
   costs one `await`.
 - An engine stays until an A/B measurement (alternating rounds, medians, from one sitting) shows it
   is the bottleneck. A module compiles only its own engine.
-- Each module has one test file, with a test per listed member and per mirror. Tests use real
+- Each module's tests live in `test/<module>*_test.dart`, with a test per listed member and per mirror. Tests use real
   resources: a loopback server, temp folders, Chromium, a pseudo-terminal for `console`/`tui`, and
   real `sh`/`grep`.
 - Every fixed bug keeps a regression test.
