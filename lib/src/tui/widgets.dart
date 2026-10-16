@@ -23,7 +23,8 @@ final class Pick<T> {
   T? selected() => _items.isEmpty ? null : _items[_index.clamp(0, _items.length - 1)];
 
   /// Replace the items, keeping the selected item if it is still there,
-  /// else selecting 0.
+  /// else selecting 0: `set([...pick.items(), ...more])`,
+  /// `set([for (final i in pick.items()) if (keep(i)) i])`.
   Pick<T> set(List<T> items) {
     final cur = selected();
     _items
@@ -43,30 +44,6 @@ final class Pick<T> {
   /// Returns this.
   Pick<T> add(T item) {
     _items.add(item);
-    return this;
-  }
-
-  /// Append all [items] without rebuilding; the selection is untouched.
-  /// Returns this.
-  Pick<T> addAll(Iterable<T> items) {
-    _items.addAll(items);
-    return this;
-  }
-
-  /// Remove [item] from the list. Returns this.
-  Pick<T> remove(T item) {
-    final cur = selected();
-    _items.remove(item);
-    _reselect(cur);
-    return this;
-  }
-
-  /// Remove items satisfying [test] in place (one pass, no copy).
-  /// Returns this.
-  Pick<T> removeWhere(bool Function(T item) test) {
-    final cur = selected();
-    _items.removeWhere(test);
-    _reselect(cur);
     return this;
   }
 

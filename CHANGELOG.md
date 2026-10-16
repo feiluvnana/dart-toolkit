@@ -74,6 +74,7 @@
 - `csv`: `Csv.records(text)`; `final [keys, ...rows] = Csv.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
 - `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
 - `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
+- `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
 
 ## 0.1.0
 

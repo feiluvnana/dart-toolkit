@@ -241,21 +241,15 @@ void main() {
       expect(p.index(), 0);
     });
 
-    test('add, addAll, remove, removeWhere mutate and preserve selection', () {
+    test('add appends and set filters, both preserving the selection', () {
       final p = Pick<String>(['a', 'b']);
-      p.add('c');
-      expect(p.items(), ['a', 'b', 'c']);
-      p.addAll(['d', 'e']);
-      expect(p.items(), ['a', 'b', 'c', 'd', 'e']);
+      p.add('c').add('d');
+      expect(p.items(), ['a', 'b', 'c', 'd']);
       p.select(2); // 'c'
-      p.remove('b');
-      expect(p.items(), ['a', 'c', 'd', 'e']);
+      p.set([for (final x in p.items()) if (x != 'b') x]);
+      expect(p.items(), ['a', 'c', 'd']);
       expect(p.selected(), 'c');
       expect(p.index(), 1);
-      p.removeWhere((x) => x == 'a' || x == 'd');
-      expect(p.items(), ['c', 'e']);
-      expect(p.selected(), 'c');
-      expect(p.index(), 0);
     });
 
     test('Pick append is O(1) amortised with unmodifiable view', () {

@@ -836,7 +836,7 @@ typedef Binding = (String label, FutureOr<void> Function() action);
 final class Pick<T> {                       // a list's items and selection; O(1) amortised append
   Pick([List<T> items = const []]);
   List<T> items();  int index();  T? selected();  Pick<T> set(List<T> items);  Pick<T> select(int index);
-  Pick<T> add(T item);  Pick<T> addAll(Iterable<T> items);  Pick<T> remove(T item);  Pick<T> removeWhere(bool Function(T item) test);
+  Pick<T> add(T item);   // filter or remove with set([...])
 }
 final class Field {                          // an editor's text, cursor and history
   Field({String text = '', List<String> history = const []});
