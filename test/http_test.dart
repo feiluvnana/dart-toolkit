@@ -1221,6 +1221,55 @@ Future<void> main() async {
         expect((await c.get('$url/file')).status(), 200);
       });
 
+      test('T3: a connection dropped mid-body keeps the .part; the next run resumes it', () async {
+        // Raw HTTP, so the first answer can die mid-body; past the 64 KB a
+        // response prefetches whole, so the bytes stream to the .part.
+        final big = List.generate(200000, (i) => i * 7 % 256);
+        final drop = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(drop.close);
+        final ranges = <String?>[];
+        drop.listen((sock) {
+          final head = StringBuffer();
+          late final StreamSubscription<List<int>> sub;
+          sub = sock.listen((data) {
+            head.write(latin1.decode(data));
+            if (!head.toString().contains('\r\n\r\n')) return;
+            unawaited(sub.cancel());
+            final range = RegExp(r'^range: (\S+)', caseSensitive: false, multiLine: true).firstMatch('$head')?[1];
+            ranges.add(range);
+            if (range == null) {
+              sock.add(latin1.encode('HTTP/1.1 200 OK\r\ncontent-length: 200000\r\netag: "d1"\r\n\r\n'));
+              sock.add(big.sublist(0, 100000));
+              sock.flush().then((_) => Future<void>.delayed(const Duration(milliseconds: 200))).then((_) => sock.destroy()); // mid-body
+            } else {
+              sock.add(
+                latin1.encode(
+                  'HTTP/1.1 206 Partial Content\r\ncontent-range: bytes 100000-199999/200000\r\n'
+                  'content-length: 100000\r\netag: "d1"\r\n\r\n',
+                ),
+              );
+              sock.add(big.sublist(100000));
+              sock.flush().then((_) => sock.close());
+            }
+          });
+        });
+        final to = _Path('${dir.path}/drop.bin');
+        final u = 'http://127.0.0.1:${drop.port}/f';
+        final once = Http.client(resume: true, retries: 0);
+        await expectLater(once.get(u) > to, throwsA(isA<IOException>()));
+        expect(await File('${to.path}.part').length(), 100000);
+        await (once.get(u) > to);
+        expect(ranges.last, 'bytes=100000-');
+        expect(await File(to.path).readAsBytes(), big);
+      });
+
+      test('T3: a pipe that fails deletes the .part', () async {
+        final to = _Path('${dir.path}/pipe.bin');
+        await expectLater(c.get('$url/file') | _Broken() > to, throwsStateError);
+        expect(File('${to.path}.part').existsSync(), isFalse);
+        expect(File('${to.path}.part.tag').existsSync(), isFalse);
+      });
+
       test('without resume every pipe downloads again', () async {
         final plain = _Path('${dir.path}/p.bin');
         await (Http.client().get('$url/file') > plain);
@@ -1512,5 +1561,15 @@ final class _Failing with Reader {
   Stream<List<int>> stream() async* {
     yield 'partial'.codeUnits;
     throw StateError('disk gone');
+  }
+}
+
+/// A pipe that fails on its first chunk (not a transport error).
+final class _Broken with Pipe {
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) async* {
+    await for (final _ in input) {
+      throw StateError('pipe broke');
+    }
   }
 }
