@@ -178,6 +178,11 @@ Future<void> main(List<String> args) async {
           b.bar(Meter()..update(1, 2)).write('x', color: Color.red);
         }, keys: {'escape': ('', () => quitOnEscape(app))}),
       );
+    case 'rootthrow':
+      // An error no handler owns (a timer the script started before):
+      // its trace must land on the normal screen, after the Tui left.
+      Timer(const Duration(milliseconds: 500), () => throw StateError('root boom'));
+      await Tui.run<int>(0, (s, app) => Screen((r) => r.write('drawn')));
     case 'dumb':
       try {
         await Tui.run<int>(0, (s, app) => Screen((r) => r.write('drawn')));

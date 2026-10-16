@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io' as io;
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 

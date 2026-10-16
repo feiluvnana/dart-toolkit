@@ -77,6 +77,15 @@ void main() {
       expect(out, contains(' echo '));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    test('P10: an uncaught error during Tui.run prints after the alternate screen is left', () async {
+      final (_, bytes, code) = await _pty(mode: 'rootthrow', feeds: const []);
+      final out = utf8.decode(bytes, allowMalformed: true);
+      final left = out.lastIndexOf('\x1b[?1049l');
+      expect(left, isNot(-1), reason: out);
+      expect(out.substring(left), contains('root boom'), reason: out);
+      expect(code, isNot(0));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('modifiers, insert, SS3, alt; focus reports and clicks add no keys', () async {
       final (log, _, _) = await _pty(
         mode: 'keys',

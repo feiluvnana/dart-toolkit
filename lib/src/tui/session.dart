@@ -288,11 +288,28 @@ final class _Session<S> implements term.TuiBridge {
     // Handlers run in the redraw zone; the loop itself stays outside it, or
     // its own timers and awaits would wake it forever and starve I/O.
     runZoned(() => _zone = Zone.current, zoneSpecification: _spec());
+    // An error no handler owns (a timer the script started earlier) would
+    // print on the alternate screen and vanish with it: it fails the run
+    // instead, so its trace lands after the screen is left.
+    final uncaught = RawReceivePort((Object? m) {
+      if (m case [final String e, final String? st]) {
+        _fatal ??= _Uncaught(e);
+        _fatalStack ??= StackTrace.fromString(st ?? '');
+        _wake();
+      }
+    });
+    Isolate.current
+      ..setErrorsFatal(false)
+      ..addErrorListener(uncaught.sendPort);
     await _enter();
     try {
       await _loop();
       return _state;
     } finally {
+      Isolate.current
+        ..removeErrorListener(uncaught.sendPort)
+        ..setErrorsFatal(true);
+      uncaught.close();
       await _leave();
     }
   }
@@ -1547,4 +1564,15 @@ final class _Session<S> implements term.TuiBridge {
     }
     _errorLog.clear();
   }
+}
+
+/// An error that reached the isolate uncaught during [Tui.run], as the VM
+/// reports it: its text.
+final class _Uncaught extends Error {
+  _Uncaught(this._text);
+
+  final String _text;
+
+  @override
+  String toString() => _text;
 }
