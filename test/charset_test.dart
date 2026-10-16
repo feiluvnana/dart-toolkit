@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:dart_toolkit/src/charset.dart';
 import 'package:test/test.dart';
 
@@ -55,5 +59,41 @@ void main() {
         }
       });
     }
+  });
+
+  test('streamed UTF-8 decodes as fast as the SDK decoder, split sequences included (B14)', () {
+    final bytes = utf8.encode(List.filled(200000, '日本語のテキスト、 😀a').join());
+    final chunks = [
+      for (var i = 0; i < bytes.length; i += 65536)
+        Uint8List.sublistView(bytes, i, i + 65536 > bytes.length ? bytes.length : i + 65536),
+    ];
+    int ours() {
+      final sw = Stopwatch()..start();
+      final d = IncrementalDecoder('utf-8');
+      final out = StringBuffer();
+      for (final c in chunks) {
+        out.write(d.add(c));
+      }
+      out.write(d.finish());
+      expect(out.length, 200000 * 13);
+      return sw.elapsedMicroseconds;
+    }
+
+    int sdk() {
+      final sw = Stopwatch()..start();
+      final out = <String>[];
+      final sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(
+        ChunkedConversionSink<String>.withCallback(out.addAll),
+      );
+      chunks.forEach(sink.add);
+      sink.close();
+      return sw.elapsedMicroseconds;
+    }
+
+    ours(); // warm up
+    sdk();
+    final best = [for (var i = 0; i < 3; i++) (ours(), sdk())];
+    final a = best.map((r) => r.$1).reduce(min), b = best.map((r) => r.$2).reduce(min);
+    expect(a, lessThan(b * 2.5 + 5000), reason: 'ours $a µs, the SDK $b µs'); // was 4.3x
   });
 }

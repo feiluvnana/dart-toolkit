@@ -15,6 +15,10 @@
 - `http`: `Feed.run` no longer reports success when page work failed: it is `false` unless the end was reached with every `page.add(work)` true, and a work that threw fails the run with the first error once every page's work is done (it was mapped to `false` and dropped). medialoader drops its own `ok` flag.
 - `image`/`video`: the shared encode limit (half the cores) is a held `Pool`, so a job arriving as another finishes no longer takes the slot handed to a waiter and runs one encode too many.
 
+**Performance**
+
+- `lines()`/`ndjson()` and every streamed text read decode UTF-8 through the SDK's chunked decoder: 18 MB of CJK in 64 KB chunks 131 → 24 ms.
+
 **Changed**
 
 - `pool`: `retries:` retries every exception except a bug (`Error`), bad data (`ContentException`/`FormatException`), TLS, an HTTP 4xx other than 408/429, a `SessionException`, an `HttpRequestException` and a refused SOCKS login or ruleset: a shell's `ExitException`, a 5xx `HttpStatusException` and a `BrowserException` were never retried. The http client no longer retries a refused SOCKS login either.

@@ -225,7 +225,6 @@ final class IncrementalDecoder {
   int _b = 0; // gb18030 second
   int _c = 0; // gb18030 third
   bool _flag = false; // euc-jp jis0212
-  List<int> _tail = const []; // utf-8 incomplete tail
   int _odd = -1; // utf-16 dangling byte
   int _hi = 0; // utf-16 pending high surrogate
 
@@ -299,72 +298,19 @@ final class IncrementalDecoder {
     return out.toString();
   }
 
+  /// UTF-8 through the SDK's chunked decoder, which keeps a split sequence
+  /// itself without copying the chunk.
   void _utf8(List<int> chunk, bool last, StringBuffer out) {
-    // Avoid per-chunk copies when there's no split tail (the common case).
-    if (_tail.isEmpty) {
-      var end = chunk.length;
-      if (!last && chunk.isNotEmpty) {
-        // Withhold a possibly-incomplete trailing sequence.
-        var k = chunk.length;
-        var cont = 0;
-        while (k > 0 && cont < 4 && (chunk[k - 1] & 0xC0) == 0x80) {
-          k--;
-          cont++;
-        }
-        if (cont == 0) {
-          if (k > 0) {
-            final lead = chunk[k - 1];
-            if (lead >= 0xC2 && lead <= 0xF4) end = k - 1;
-          }
-        } else if (k > 0) {
-          final lead = chunk[k - 1];
-          var need = -1;
-          if (lead >= 0xC2 && lead <= 0xDF) {
-            need = 1;
-          } else if (lead >= 0xE0 && lead <= 0xEF) {
-            need = 2;
-          } else if (lead >= 0xF0 && lead <= 0xF4) {
-            need = 3;
-          }
-          if (need >= 0 && cont < need) end = k - 1;
-        }
-      }
-      out.write(utf8.decode(chunk.sublist(0, end), allowMalformed: true));
-      _tail = end == chunk.length ? const [] : chunk.sublist(end);
-      return;
+    final sink = _u8 ??= const Utf8Decoder(allowMalformed: true).startChunkedConversion(_u8out);
+    sink.addSlice(chunk, 0, chunk.length, last);
+    for (final s in _u8out.parts) {
+      out.write(s);
     }
-    final data = [..._tail, ...chunk];
-    var end = data.length;
-    if (!last) {
-      // Withhold a possibly-incomplete trailing sequence so the next chunk
-      // can complete it; anything else decodes now (invalid bytes → FFFD).
-      var k = data.length;
-      var cont = 0;
-      while (k > 0 && cont < 4 && (data[k - 1] & 0xC0) == 0x80) {
-        k--;
-        cont++;
-      }
-      if (cont == 0) {
-        if (k > 0) {
-          final lead = data[k - 1];
-          if (lead >= 0xC2 && lead <= 0xF4) end = k - 1;
-        }
-      } else if (k > 0) {
-        final lead = data[k - 1];
-        var need = -1;
-        if (lead >= 0xC2 && lead <= 0xDF) {
-          need = 1;
-        } else if (lead >= 0xE0 && lead <= 0xEF) {
-          need = 2;
-        } else if (lead >= 0xF0 && lead <= 0xF4) {
-          need = 3;
-        }
-        if (need >= 0 && cont < need) end = k - 1;
-      }
-    }
-    out.write(utf8.decode(data.sublist(0, end), allowMalformed: true));
-    _tail = end == data.length ? const [] : data.sublist(end);
+    _u8out.parts.clear();
   }
+
+  ByteConversionSink? _u8;
+  final _u8out = _Strings();
 
   void _utf16(List<int> chunk, bool little, bool last, StringBuffer out) {
     final List<int> data;
@@ -2872,3 +2818,14 @@ const _big5Data =
     '00746c0037300074740093f1006a2c007482004953024a8c02415f024a79028b8f005b46028c0302189e0074c802198800750e0074e900751e028ed9021a4b005bd7028eac00938500754d00754a00756700756e024f82003f04024d1300758e00745d00759e0075b400760200762c00765100764f00766f0076760263f50076900081ef0037f802691102690e0076a1'
     '0076a50076b70076cc026f9f00846202509d02517d021e1c00771e0077260077400064af0252200077580232ac0077af0289640289680216c10077f4007809021376024a120068ca0078af0078c70078d30096a500792e0255e00078d70079340078b102760c008fb8008884028b2b02608302261c00798600890000690200798002585700799d027b3900793c0079a9'
     '006e2a027126003ea80079c602910d0079d4';
+
+/// Collects what a chunked decoder emits.
+final class _Strings implements Sink<String> {
+  final parts = <String>[];
+
+  @override
+  void add(String data) => parts.add(data);
+
+  @override
+  void close() {}
+}
