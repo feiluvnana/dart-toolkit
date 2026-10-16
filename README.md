@@ -4,7 +4,7 @@ Scripting in Dart without the boilerplate: HTTP, HTML, files, archives, shells, 
 
 ```yaml
 dependencies:
-  dart_toolkit: ^0.1.0
+  dart_toolkit: ^0.2.0
 ```
 
 ## Tour
@@ -19,6 +19,9 @@ import 'package:dart_toolkit/pool.dart';
 import 'package:dart_toolkit/utils.dart';
 
 Future<void> main() async {
+  const sum = 'e3b0c442…'; // the sha256 the release page publishes
+  final urls = ['https://example.com/a', 'https://example.com/b'];
+
   // Settings live on the client: stated once, not on every call.
   final http = Http.client(rate: Rate(4, 1.seconds));
 
@@ -54,7 +57,7 @@ Ctrl-C fails whatever the toolkit is waiting on with `InterruptedException` (pro
 | Import | For | Highlights |
 |---|---|---|
 | `core` | the shared model | `Reader` (`bytes` `text` `lines`), `Writer`, `Pipe`, `Probe` (`&`), `Task`, `Meter`, `Closeable`, `Origin` |
-| `utils` | helpers, a separate import | `3.seconds`, `bytes.size()`, `now.format(…)`, `d.human()`, `Rate` (`perHost:`), `Cookies` (`reader.cookies(or:)`), `HashUtils.md5()` … `sha512()` (in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()`), `CsvUtils.parse`/`encode`, `reader.csv(or:)`, streamed `reader.rows()`, `HttpUtils.page`/`api` (a browser's headers for `Http.client(headers:)`), `ShellUtils.which`/`open`, `ConsoleUtils.copy` |
+| `utils` | helpers, a separate import | `3.seconds`, `bytes.size()`, `now.format(…)`, `d.human()`, `Rate` (`perHost:`), `Cookies` (`reader.cookies(or:)`), `HashUtils.md5()` … `sha512()` (in a pipe, `hex()` `bytes()`; md5/sha256 take `expect:` to verify and `key:` for HMAC), `CsvUtils.parse`/`encode`, `reader.csv(or:)`, streamed `reader.rows()`, `HttpUtils.page`/`api` (a browser's headers for `Http.client(headers:)`), `ShellUtils.which`/`open`, `ConsoleUtils.copy` |
 | `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` (or `> Fs.dir('out')`, named by the server) that skips and resumes, safe retries, `Body.multipart`, `Body.stream` (length and type from the reader; lazy readers are named), `sent()`, `Http.pool`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run), `login:` paths that throw `SessionException` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `markup()`, `text()` that reads like a page; re-exports `json` |
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`, `reader.ndjson()`, `reader.events()` (server-sent events, live) |
