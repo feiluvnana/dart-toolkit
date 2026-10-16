@@ -5,7 +5,6 @@ build/
 coverage/
 # repo-only
 /.claude/
-/prompts/
 /projects/
 /tool/
 /test/

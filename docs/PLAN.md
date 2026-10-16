@@ -77,8 +77,3 @@ puppeteer is gone; `lib/src/chrome_find.dart` uses `path:`, the cached Chrome fo
 
 ### L6. Native tools on Linux (ffmpeg, ffprobe, 7zzs)
 On x64 and arm64 Linux with no ffmpeg/7zz on PATH run `dart test test/image_test.dart test/video_test.dart test/archive_test.dart`: Martin Riedl's static ffmpeg and 7-Zip's `7zzs` download once into `$XDG_CACHE_HOME/dart_toolkit/` (or `~/.cache`). Record the result here.
-
-## §3 Open
-
-### O1. `Console.ask(timeout:)` on piped stdin keeps the VM alive
-An ask abandoned by a timeout leaves an isolate blocked in `readLineSync`, and the VM waits for it even after `kill()`. Fixing it needs stdin read as a stream with pushback, which gives up "never reads past its line" for children sharing stdin. Decide whether that trade is worth it before coding.
