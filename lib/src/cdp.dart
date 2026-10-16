@@ -32,7 +32,7 @@ typedef Msg = Map<String, Object?>;
 /// One browser connection.
 final class Cdp {
   Cdp._(this._ws) {
-    _ws.listen(_onMessage, onDone: _onDone, onError: (Object _) => _onDone(), cancelOnError: true);
+    _ws.listen(_onMessage, onDone: _onDone, onError: _onDone, cancelOnError: true);
     browser.on('Target.detachedFromTarget', (e) => _sessions.remove(e['sessionId'])?._end());
   }
 
@@ -60,11 +60,15 @@ final class Cdp {
   }
 
   Future<void> close() async {
+    _closing = true;
     try {
       await _ws.close();
     } catch (_) {}
     _onDone();
   }
+
+  /// Set by [close]: a send from then on fails at once.
+  var _closing = false;
 
   void _onMessage(Object? data) {
     final Msg msg;
@@ -91,8 +95,10 @@ final class Cdp {
     session._emit(msg['method']! as String, (msg['params'] as Msg?) ?? const {});
   }
 
-  void _onDone() {
+  /// The connection ended; [error] is the socket's, when it failed.
+  void _onDone([Object? error]) {
     if (_done.isCompleted) return;
+    _cause = error;
     _done.complete();
     for (final s in [..._sessions.values, browser]) {
       s._end();
@@ -101,12 +107,15 @@ final class Cdp {
     _fail((_) => true, 'browser closed');
   }
 
+  /// Why the connection failed, if it did.
+  Object? _cause;
+
   void _fail(bool Function(CdpSession) which, String why) {
     for (final id in [..._pending.keys]) {
       final (done, method, s) = _pending[id]!;
       if (!which(s)) continue;
       _pending.remove(id);
-      done.completeError(BrowserException('$method: $why'));
+      done.completeError(BrowserException('$method: $why', cause: _cause));
     }
   }
 }
@@ -130,11 +139,18 @@ final class CdpSession {
 
   /// Send [method]; completes with its result, or throws [BrowserException].
   Future<Msg> send(String method, [Msg params = const {}]) {
-    if (_gone.isCompleted) return Future.error(BrowserException('$method: target closed'));
+    if (_gone.isCompleted || _cdp._closing) {
+      return Future.error(BrowserException('$method: target closed', cause: _cdp._cause));
+    }
     final done = Completer<Msg>();
     final n = ++_cdp._next;
     _cdp._pending[n] = (done, method, this);
-    _cdp._ws.add(jsonEncode({'id': n, 'method': method, 'params': params, 'sessionId': ?id}));
+    try {
+      _cdp._ws.add(jsonEncode({'id': n, 'method': method, 'params': params, 'sessionId': ?id}));
+    } catch (e) {
+      _cdp._pending.remove(n);
+      return Future.error(BrowserException('$method: browser closed', cause: e));
+    }
     return done.future;
   }
 
@@ -146,19 +162,33 @@ final class CdpSession {
   }
 
   /// The next [method] event that passes [where]. Fails with a
-  /// [TimeoutException] after [timeout] and with [BrowserException] when
-  /// the session ends first.
+  /// [TimeoutException] after [timeout], with [BrowserException] when the
+  /// session ends first, and with [where]'s error when it throws.
   Future<Msg> once(String method, {bool Function(Msg params)? where, Duration? timeout}) {
     final done = Completer<Msg>();
+    if (_gone.isCompleted) return Future.error(BrowserException('browser closed', cause: _cdp._cause));
     late final void Function() off;
     Timer? timer;
+    late final void Function() ended;
     void finish() {
       off();
       timer?.cancel();
+      _waiters.remove(ended);
     }
 
+    ended = () {
+      finish();
+      done.completeError(BrowserException('browser closed', cause: _cdp._cause));
+    };
+
     off = on(method, (e) {
-      if (where != null && !where(e)) return;
+      try {
+        if (where != null && !where(e)) return;
+      } catch (error, st) {
+        finish();
+        done.completeError(error, st);
+        return;
+      }
       finish();
       done.complete(e);
     });
@@ -168,12 +198,12 @@ final class CdpSession {
         if (!done.isCompleted) done.completeError(TimeoutException(method, timeout));
       });
     }
-    gone.then((_) {
-      finish();
-      if (!done.isCompleted) done.completeError(BrowserException('browser closed'));
-    });
+    _waiters.add(ended);
     return done.future;
   }
+
+  /// The pending [once] calls, failed when the session ends.
+  final _waiters = <void Function()>{};
 
   void _emit(String method, Msg params) {
     final list = _handlers[method];
@@ -181,13 +211,20 @@ final class CdpSession {
     for (final h in [...list]) {
       try {
         h(params);
-      } catch (_) {}
+      } catch (e) {
+        // One bad handler must not stop the others or the connection.
+        io.stderr.writeln('chrome: a $method handler failed: $e');
+      }
     }
   }
 
   void _end() {
     if (_gone.isCompleted) return;
     _gone.complete();
+    for (final w in [..._waiters]) {
+      w();
+    }
+    _waiters.clear();
     _cdp._fail((s) => s == this, 'target closed');
   }
 }
