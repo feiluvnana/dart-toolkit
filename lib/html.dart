@@ -277,8 +277,9 @@ final class Elements extends Iterable<Element> {
   /// `client.post(f.action, body: .form({...f.fields, 'user': u}))`. The
   /// `action` resolves against the base, and an empty or absent one is the
   /// document's own URL (not `<base href>`); the `method` is upper case
-  /// (`GET` by default). `fields` maps every named control to its current
-  /// values in document order, hidden ones included: a repeated name or a
+  /// (`GET` by default). `fields` maps every named control the form owns
+  /// (as a browser: inside it, after it in a table, or `form="id"`) to its
+  /// current values in document order, hidden ones included: a repeated name or a
   /// `<select multiple>` keeps every value, and unchecked boxes, buttons
   /// and file inputs are left out. Null when there is no form.
   ({String action, String method, Map<String, List<String>> fields})? form() {
@@ -286,7 +287,30 @@ final class Elements extends Iterable<Element> {
     if (form == null) return null;
     final fields = <String, List<String>>{};
     void add(String name, String value) => (fields[name] ??= []).add(value);
-    for (final c in _queryRoots([form], 'input, select, textarea')) {
+    // The form's controls by owner, as a browser posts them: the ones the
+    // parser gave it (a form in a table holds none), descendants, and
+    // `form="id"` ones anywhere in the document.
+    final id = form.attributes['id'];
+    bool inside(dom.Element c) {
+      for (var p = c.parent; p != null; p = p.parent) {
+        if (identical(p, form)) return true;
+      }
+      return false;
+    }
+
+    bool owned(dom.Element c) => switch (c.attributes['form']) {
+      final ref? => id != null && id.isNotEmpty && ref == id,
+      _ => switch (dom.formOwner[c]) {
+        final owner? => identical(owner, form),
+        null => inside(c),
+      },
+    };
+    var top = form;
+    while (top.parent != null) {
+      top = top.parent!;
+    }
+    for (final c in _queryRoots([top], 'input, select, textarea')) {
+      if (!owned(c)) continue;
       final name = c.attributes['name'];
       if (name == null || name.isEmpty || c.attributes.containsKey('disabled')) continue;
       switch (c.localName) {

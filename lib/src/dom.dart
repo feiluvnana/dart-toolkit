@@ -59,6 +59,10 @@ final class Text extends Node {
 /// Where an element lives: the HTML vocabulary, or embedded SVG/MathML.
 enum Space { html, svg, math }
 
+/// The form a parsed control belongs to by the parser's form pointer (a
+/// table-wrapped form holds none of its controls).
+final formOwner = Expando<Element>('form owner');
+
 /// An element: a name, attributes in source order, child nodes.
 final class Element extends Node {
   Element(this.localName, [Map<String, String>? attributes, this.space = Space.html])

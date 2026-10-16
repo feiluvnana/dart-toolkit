@@ -417,6 +417,9 @@ final _systemId = RegExp(r"""system\s*["']""");
 
 const _voidHead = {'base', 'basefont', 'bgsound', 'link', 'meta'};
 const _headish = {'base', 'basefont', 'bgsound', 'link', 'meta', 'noframes', 'script', 'style', 'template', 'title'};
+/// The controls `form()` reads, owned by the open form when parsed.
+const _controls = {'input', 'select', 'textarea'};
+
 const _formattingNames = {
   'a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 's', 'small', 'strike', 'strong', 'tt', 'u', //
 };
@@ -1256,6 +1259,14 @@ final class _Builder {
 
   Element _insert(String name, Map<String, String> attrs, [Space space = Space.html]) {
     final el = Element(name, attrs, space);
+    final owner = form;
+    if (owner != null &&
+        space == Space.html &&
+        _controls.contains(name) &&
+        !attrs.containsKey('form') &&
+        !open.any((e) => e.localName == 'template')) {
+      formOwner[el] = owner;
+    }
     _place(el);
     open.add(el);
     return el;

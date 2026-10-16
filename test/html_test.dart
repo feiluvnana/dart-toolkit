@@ -606,6 +606,25 @@ void main() {
       });
     });
 
+    test('form() reads a table-wrapped form and form="id" controls (B7)', () {
+      final login = Html.parse(
+        '<html><body><table><form action="/in"><tr><td><input name="user" value="u">'
+        '<input type="hidden" name="csrf" value="t"></td></tr></form></table></body></html>',
+      ).form()!;
+      expect(login.fields, {
+        'user': ['u'],
+        'csrf': ['t'],
+      });
+      final split = Html.parse(
+        '<html><body><form id="f"><input name="a" value="1"></form>'
+        '<input name="b" form="f" value="2"><form id="g"><input name="c" form="other"></form></body></html>',
+      ).form()!;
+      expect(split.fields, {
+        'a': ['1'],
+        'b': ['2'],
+      });
+    });
+
     test('form() without an action posts to the document URL, not <base href> (regression)', () {
       const page =
           '<html><head><base href="https://cdn.test/assets/"></head><body><form><input name="a"></form>'
