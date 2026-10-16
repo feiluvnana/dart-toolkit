@@ -912,11 +912,11 @@ abstract final class Console {
     final widths = <int>[];
     for (var r = 0; r < visible; r++) {
       final current = start + r == selected;
-      final box = marked == null
-          ? ''
-          : marked.contains(start + r)
-          ? (_ascii ? ' [x]' : ' ◉')
-          : (_ascii ? ' [ ]' : ' ○');
+      final box = switch (marked?.contains(start + r)) {
+        null => '',
+        true => _ascii ? ' [x]' : ' ◉',
+        false => _ascii ? ' [ ]' : ' ○',
+      };
       final choice = term.truncateWidth(choices[start + r], (width - box.length).clamp(0, width));
       final row = '${current ? (_ascii ? '>' : '❯') : ' '}$box${choice.isEmpty ? '' : ' $choice'}';
       widths.add(term.displayWidth(row));

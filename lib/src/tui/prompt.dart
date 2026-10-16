@@ -249,11 +249,11 @@ extension on _Session<dynamic> {
       p.start = p.start.clamp(0, n - p.shown);
       final m = p.marked;
       for (var k = p.start; k < p.start + p.shown; k++) {
-        final box = m == null
-            ? ''
-            : m.contains(k)
-            ? (_caps.ascii ? '[x] ' : '◉ ')
-            : (_caps.ascii ? '[ ] ' : '○ ');
+        final box = switch (m?.contains(k)) {
+          null => '',
+          true => _caps.ascii ? '[x] ' : '◉ ',
+          false => _caps.ascii ? '[ ] ' : '○ ',
+        };
         lines.add(('${k == sel ? '❯ ' : '  '}$box${p.choices[k]}', 0));
       }
       p.top = head; // made absolute once the popup is placed

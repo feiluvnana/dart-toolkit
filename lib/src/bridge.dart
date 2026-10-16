@@ -36,6 +36,5 @@ abstract class TuiBridge {
   Future<List<int>?> promptPick(String question, List<String> choices, Set<int> initial, {Duration? timeout});
 }
 
-
 /// Clipboard copy as OSC 52 (base64, so [text] cannot break out).
 String copyCodes(String text) => '\x1b]52;c;${base64.encode(utf8.encode(text))}\x1b\\';
