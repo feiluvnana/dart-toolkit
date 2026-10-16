@@ -222,6 +222,33 @@ void main() {
     );
   });
 
+  test('S3: secret client headers go only to the base origin, or the first one without base', () async {
+    final seen = <String, Map<String, String?>>{};
+    final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => other.close(force: true));
+    other.listen((r) {
+      seen['${r.uri}'] = {'auth': r.headers.value('authorization'), 'key': r.headers.value('x-api-key'), 'ua': r.headers.value('x-app')};
+      r.response.close();
+    });
+    final evil = 'http://localhost:${other.port}'; // another origin: localhost, not 127.0.0.1
+    final home = 'http://127.0.0.1:${other.port}';
+    const h = {'authorization': 'Bearer SECRET', 'x-api-key': 'K', 'x-app': 'me'};
+    final based = Http.client(base: '$home/', headers: h);
+    await based.get('/a').status();
+    await based.get('$evil/b').status();
+    await based.get('//localhost:${other.port}/c').status();
+    await based.get('$evil/d', headers: {'authorization': 'Bearer MINE'}).status(); // per call: as asked
+    final first = Http.client(headers: h);
+    await first.get('$home/e').status();
+    await first.get('$evil/f').status();
+    expect(seen['/a'], {'auth': 'Bearer SECRET', 'key': 'K', 'ua': 'me'});
+    expect(seen['/b'], {'auth': null, 'key': null, 'ua': 'me'});
+    expect(seen['/c'], {'auth': null, 'key': null, 'ua': 'me'});
+    expect(seen['/d']!['auth'], 'Bearer MINE');
+    expect(seen['/e'], {'auth': 'Bearer SECRET', 'key': 'K', 'ua': 'me'});
+    expect(seen['/f'], {'auth': null, 'key': null, 'ua': 'me'});
+  });
+
   test('B1: a SOCKS proxy that never answers times out and lets the script exit', () async {
     final r = await runDart('''
 import 'dart:io';

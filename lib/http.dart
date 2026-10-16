@@ -254,8 +254,10 @@ abstract final class Http {
   ///
   /// - [base]: relative URLs resolve against it (`Uri.resolve`).
   /// - [headers]: sent on every request; a per-call header of the same name
-  ///   wins for that call. Without a `user-agent` one, requests send the
-  ///   jar's `agent()`, else a current desktop Chrome's.
+  ///   wins for that call. Secret ones (`authorization`, `cookie`, names
+  ///   with `token`, `key`, `auth` …) go only to [base]'s origin, or without
+  ///   [base] to the first request's. Without a `user-agent` one, requests
+  ///   send the jar's `agent()`, else a current desktop Chrome's.
   /// - [timeout]: the connect, the wait for the headers, then any stall
   ///   streaming.
   /// - [retries]: re-sends only when the request provably was not
@@ -574,6 +576,17 @@ final class _Client extends Client {
   /// Requests in flight, for [_Pool]'s choice.
   var _inFlight = 0;
 
+  /// The origin secret client headers are for: `base:`'s, else the first
+  /// request's. Other origins get the rest of the client headers.
+  late String? _home = _s.base == null ? null : _origin(_s.base!);
+
+  /// The client headers for [uri], secrets only at home.
+  Map<String, String> _headersFor(Uri uri) {
+    final here = _origin(uri);
+    if ((_home ??= here) == here || _s.headers.isEmpty) return _s.headers;
+    return _without(_s.headers, names.isSecretHeader);
+  }
+
   var _sent = 0;
 
   @override
@@ -732,7 +745,7 @@ final class _Client extends Client {
     required bool retry429,
   }) async {
     if (_closed) throw _aborted(method, uri);
-    final sent = _merge(_s.headers, headers ?? const {});
+    final sent = _merge(_headersFor(uri), headers ?? const {});
     // A Range answer is a slice: neither served from nor stored under the URL.
     final dir = method == 'GET' && !sent.keys.any((k) => k.toLowerCase() == 'range') ? _s.cache : null;
     // Keyed before sending: a set-cookie in the answer must not move the key.
@@ -1371,6 +1384,9 @@ Uri _withQuery(Uri url, Map<String, Object?>? query) {
   _JsonBody(:final _value) => (bytes: utf8.encode(jsonEncode(_value)), type: 'application/json'),
   _StreamBody() || _MultipartBody() => throw StateError('body is not encoded in memory'),
 };
+
+/// `scheme://host:port`, the port spelled out.
+String _origin(Uri u) => '${u.scheme}://${u.host.toLowerCase()}:${u.port}';
 
 /// [base] with [extra] laid over it, names compared case-insensitively.
 Map<String, String> _merge(Map<String, String> base, Map<String, String> extra) {
