@@ -63,7 +63,10 @@ abstract final class Tui {
   /// `go`/`status` and resize; spinners tick every 80 ms. Returns
   /// the state once [App.quit] is called. A second [run] while
   /// one is active throws [StateError]. Throws `StdoutException` when stdout
-  /// is not a terminal.
+  /// is not a terminal. Leave with [App.quit] (and `exitCode` for a status),
+  /// never `exit()` in a handler: where dart leads the terminal's session
+  /// (`ssh -t host dart app.dart`) the session ends before the terminal is
+  /// restored, and it stays raw.
   static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color? accent}) {
     if (_active) throw StateError('Tui.run is already active');
     _active = true;

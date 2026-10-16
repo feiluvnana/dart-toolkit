@@ -826,7 +826,7 @@ abstract final class Tui {
 }
 final class App<S> {
   void go(S state);  void status(String message);
-  void quit();                                     // run() returns the state
+  void quit();                                     // run() returns the state; never exit() (raw tty under ssh -t)
 }
 final class Screen {
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}});
