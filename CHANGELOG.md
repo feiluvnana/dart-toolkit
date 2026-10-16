@@ -90,6 +90,7 @@
 - `fs`: `Fs.tempDir(prefix:)`; the folder is always `tmp-…` under the system temp, and a named subfolder is `dir.dir('name')`.
 - `cli`: `Command(dotenv:, aliases:)`. An `Opt(env:)` reads the real environment (`set -a; . ./.env; set +a` before the script, or a shell wrapper); a subcommand has one name, and a near miss still suggests it.
 - `cli`: `Multi(short:)`; a repeated option is spelled `--tag a --tag b` (or, with `values:`, `--tag a,b`).
+- `hash`: `Hash.sha1(key:, expect:)` and `Hash.sha512(key:, expect:)`; an HMAC or a checked download uses `Hash.sha256(key:)` / `Hash.sha256(expect:)` (md5 keeps both for old mirrors' sums), and a sha1/sha512 sum is compared by hand: `h.hex() == sum`.
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0

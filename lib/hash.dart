@@ -9,8 +9,8 @@
 /// ```
 ///
 /// Public surface is exactly: [Hash], [Hasher].
-/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher]; `key:` makes it an
-///   HMAC.
+/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher]; on md5 and sha256
+///   `key:` makes it an HMAC and `expect:` checks the digest.
 /// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
 ///   `bytes` (finish, as text or raw); `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
 ///   unchanged and digests, so `reader | hasher > file` stores and checksums
@@ -42,13 +42,13 @@ abstract final class Hash {
   static Hasher md5({String? expect, List<int>? key}) => Hasher._(c.md5, 'md5', expect, key);
 
   /// SHA-1 hasher.
-  static Hasher sha1({String? expect, List<int>? key}) => Hasher._(c.sha1, 'sha1', expect, key);
+  static Hasher sha1() => Hasher._(c.sha1, 'sha1', null, null);
 
   /// SHA-256 hasher.
   static Hasher sha256({String? expect, List<int>? key}) => Hasher._(c.sha256, 'sha256', expect, key);
 
   /// SHA-512 hasher.
-  static Hasher sha512({String? expect, List<int>? key}) => Hasher._(c.sha512, 'sha512', expect, key);
+  static Hasher sha512() => Hasher._(c.sha512, 'sha512', null, null);
 }
 
 /// The lifecycle of a [Hasher]. Three booleans could encode eight states, of

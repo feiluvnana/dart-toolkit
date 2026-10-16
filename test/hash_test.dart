@@ -31,8 +31,8 @@ void main() {
       final step = Hash.sha256(key: Hash.sha256(key: key).add('a').bytes()).add('b').hex();
       expect(step, hasLength(64));
       await expectLater(
-        Reader.of(utf8.encode(msg)) > Hash.sha1(key: key, expect: '0' * 40),
-        throwsA(isA<ContentException>().having((e) => e.message, 'message', startsWith('hmac-sha1 mismatch'))),
+        Reader.of(utf8.encode(msg)) > Hash.sha256(key: key, expect: '0' * 64),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', startsWith('hmac-sha256 mismatch'))),
       );
     });
   });
