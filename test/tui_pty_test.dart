@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/io.dart';
 import 'support/term.dart';
 
 void main() {
@@ -21,8 +22,7 @@ void main() {
 
     test('with stdin piped, keys come from the terminal and its modes come back', () async {
       final root = Directory.current.path;
-      final log = File('${Directory.systemTemp.path}/tui-piped-$pid.log');
-      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final log = tempFile('tui-piped.log');
       final res = await Process.run('python3', [
         '$root/test/tui_pty/drive.py',
         '--size',
@@ -52,8 +52,7 @@ void main() {
 
     test('exit() in a handler still restores the modes and leaves the alternate screen', () async {
       final root = Directory.current.path;
-      final log = File('${Directory.systemTemp.path}/tui-exit-$pid.log');
-      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final log = tempFile('tui-exit.log');
       final res = await Process.run('python3', [
         '$root/test/tui_pty/drive.py',
         '--size',
@@ -181,7 +180,7 @@ void main() {
         '--',
         Platform.resolvedExecutable,
         '$root/test/tui_pty/probe.dart',
-        '${Directory.systemTemp.path}/tui-suspend-$pid.log',
+        tempFile('tui-suspend.log').path,
         'keys',
       ], workingDirectory: root);
       expect(
@@ -229,7 +228,7 @@ Future<(String, List<int>, int?)> _pty({
   // `dart test` compiles the test into a temp dir, so Platform.script is
   // useless for locating helpers; the working directory is the package root.
   final root = Directory.current.path;
-  final log = File('${Directory.systemTemp.path}/tui-pty-${DateTime.now().microsecondsSinceEpoch}.log');
+  final log = tempFile('tui-pty.log');
   final res = await Process.run(
     'python3',
     [
@@ -258,7 +257,6 @@ Future<(String, List<int>, int?)> _pty({
   var text = '';
   try {
     text = (await log.readAsString()).trim();
-    await log.delete();
   } catch (_) {}
   return (text, res.stdout as List<int>, code == null ? null : int.parse(code));
 }

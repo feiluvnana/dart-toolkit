@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/io.dart';
 
 void main() {
   group('pty (K1, K6, K10)', () {
@@ -15,8 +16,7 @@ void main() {
     // and the typed answer.
     test('a prompt parks the live block: no spinner frame while it waits', () async {
       final root = Directory.current;
-      final log = File('${Directory.systemTemp.path}/probe-park-$pid.log');
-      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final log = tempFile('probe-park.log');
       final res = await Process.run(
         'python3',
         [
@@ -56,7 +56,7 @@ void main() {
           '--',
           Platform.resolvedExecutable,
           '${root.path}/test/console_pty/probe.dart',
-          '${Directory.systemTemp.path}/probe-dumb-$pid.log',
+          tempFile('probe-dumb.log').path,
           'dumb',
         ],
         workingDirectory: root.path,
@@ -73,8 +73,7 @@ void main() {
     // alive until a line arrived.
     test('ask(timeout:) on an open pipe gives or and lets the script exit', () async {
       final root = Directory.current;
-      final log = File('${Directory.systemTemp.path}/probe-asktimeout-$pid.log');
-      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final log = tempFile('probe-asktimeout.log');
       final proc = await Process.start(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
         log.path,
@@ -94,8 +93,7 @@ void main() {
 
     test('ask(timeout:) on a terminal gives or and stops the reader', () async {
       final root = Directory.current;
-      final log = File('${Directory.systemTemp.path}/probe-ttytimeout-$pid.log');
-      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final log = tempFile('probe-ttytimeout.log');
       final res = await Process.run('python3', [
         '${root.path}/test/console_pty/drive.py',
         '--size', '24', '80', //
@@ -163,7 +161,7 @@ void main() {
             '--',
             Platform.resolvedExecutable,
             '${root.path}/test/console_pty/probe.dart',
-            '${Directory.systemTemp.path}/probe_nosuch.log',
+            tempFile('probe.log').path,
             mode,
           ],
           workingDirectory: root.path,
@@ -205,8 +203,7 @@ void main() {
     test('the tty reader child dies with us: exit(), a crash, a cancel', () async {
       final root = Directory.current;
       for (final mode in ['orphan-exit', 'orphan-crash', 'orphan-cancel']) {
-        final log = File('${Directory.systemTemp.path}/console-orphan-${DateTime.now().microsecondsSinceEpoch}.log');
-        addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+        final log = tempFile('console-orphan.log');
         // A shell owns the pty (like a login shell), so our exit sends no
         // SIGHUP that would end an orphan for us; it holds the pty open
         // while the probe's detached checker looks.
@@ -248,7 +245,7 @@ void main() {
         '--',
         Platform.resolvedExecutable,
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'leak',
       ], workingDirectory: root.path);
       expect(res.stderr, isNot(contains('did not exit')));
@@ -289,7 +286,7 @@ void main() {
           '--',
           Platform.resolvedExecutable,
           '${root.path}/test/console_pty/probe.dart',
-          '${Directory.systemTemp.path}/probe_nosuch.log',
+          tempFile('probe.log').path,
           'choose',
         ],
         workingDirectory: root.path,
@@ -304,7 +301,7 @@ void main() {
     test('piped choose reads a number; ask reads a line', () async {
       final root = Directory.current;
       final probe = '${root.path}/test/console_pty/probe.dart';
-      final log = File('${Directory.systemTemp.path}/console-pty-${DateTime.now().microsecondsSinceEpoch}.log');
+      final log = tempFile('console-pty.log');
       Future<String> run(List<String> args, String stdin) async {
         final proc = await Process.start(Platform.resolvedExecutable, [
           probe,
@@ -327,14 +324,11 @@ void main() {
       expect(await run(['eof'], ''), contains('eof=|dflt|true|false|null|y'));
       // An empty line gives `or`; without one the answer is empty.
       expect(await run(['empty'], '\n\n\n'), contains('empty=dflt||true'));
-      try {
-        await log.delete();
-      } catch (_) {}
     }, timeout: const Timeout(Duration(seconds: 180)));
 
     test('K3: SIGINT during a prompt exits 130 with the terminal restored', () async {
       final root = Directory.current;
-      final out = File('${Directory.systemTemp.path}/console-sigint-${DateTime.now().microsecondsSinceEpoch}.bin');
+      final out = tempFile('console-sigint.bin');
       final res = await Process.run('python3', [
         '${root.path}/test/console_pty/sigint_drive.py',
         out.path,
@@ -342,13 +336,10 @@ void main() {
         '--',
         Platform.resolvedExecutable,
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'secret',
       ], workingDirectory: root.path);
       expect(res.stdout, contains('EXIT=exit=130'));
-      try {
-        await out.delete();
-      } catch (_) {}
     }, timeout: const Timeout(Duration(seconds: 120)));
   }, skip: noPty);
 }
@@ -387,7 +378,7 @@ Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, Stri
       '--',
       Platform.resolvedExecutable,
       '${root.path}/test/console_pty/probe.dart',
-      '${Directory.systemTemp.path}/probe_nosuch.log',
+      tempFile('probe.log').path,
       mode,
     ],
     workingDirectory: root.path,
@@ -401,7 +392,7 @@ Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, Stri
 /// Run the choose probe under a pty with key feeds; return the log line.
 Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
   final root = Directory.current;
-  final log = File('${Directory.systemTemp.path}/console-pty-${DateTime.now().microsecondsSinceEpoch}.log');
+  final log = tempFile('console-pty.log');
   final res = await Process.run(
     'python3',
     [
@@ -417,11 +408,5 @@ Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
     stdoutEncoding: null,
   );
   if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
-  try {
-    return (await log.readAsString()).trim();
-  } finally {
-    try {
-      await log.delete();
-    } catch (_) {}
-  }
+  return (await log.readAsString()).trim();
 }

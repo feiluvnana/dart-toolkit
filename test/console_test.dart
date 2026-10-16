@@ -335,7 +335,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'over',
       ], workingDirectory: root.path);
       expect(res.stderr, contains('5/3'));
@@ -345,7 +345,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'keep',
       ], workingDirectory: root.path);
       expect(res.stdout, contains('done'));
@@ -358,7 +358,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final root = Directory.current;
       final proc = await Process.start(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'evil',
       ], workingDirectory: root.path);
       proc.stdin.write('1\n');
@@ -373,7 +373,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
-        '${Directory.systemTemp.path}/probe_nosuch.log',
+        tempFile('probe.log').path,
         'total',
       ], workingDirectory: root.path);
       expect(res.stderr, contains('T 2/4'));

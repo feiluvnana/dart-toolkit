@@ -82,3 +82,19 @@ Future<(HttpServer, String)> serve(void Function(HttpRequest request) answer) as
   server.listen(answer);
   return (server, 'http://127.0.0.1:${server.port}');
 }
+
+var _temps = 0;
+
+/// A fresh path in the system temp folder, [name] with a unique suffix
+/// before its extension, deleted when the test ends (pass or fail).
+File tempFile(String name) {
+  final dot = name.lastIndexOf('.');
+  final unique = '$pid-${DateTime.now().microsecondsSinceEpoch}-${_temps++}';
+  final file = File(
+    '${Directory.systemTemp.path}/${dot < 0 ? '$name-$unique' : '${name.substring(0, dot)}-$unique${name.substring(dot)}'}',
+  );
+  addTearDown(() async {
+    if (await file.exists()) await file.delete();
+  });
+  return file;
+}
