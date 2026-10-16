@@ -25,6 +25,7 @@
 
 **Performance**
 
+- `yaml`: quoted scalars are copied a run at a time instead of a character at a time: a 3.9 MB quoted value 93 → 8 ms, as fast as a plain one.
 - `lines()`/`ndjson()` and every streamed text read decode UTF-8 through the SDK's chunked decoder: 18 MB of CJK in 64 KB chunks 131 → 24 ms.
 
 **Changed**

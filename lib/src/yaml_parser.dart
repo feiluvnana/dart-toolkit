@@ -515,22 +515,25 @@ final class _Parser {
   bool _plainContinues(int at) => !(_c(at) == 0x3A && _blankAt(at + 1));
 
   /// A `"…"` scalar with escapes and line folding; [i] ends after it.
+  /// Literal text is copied a run at a time: [run] is where the unwritten
+  /// run starts, [ws] where its trailing blanks start (-1: none), which a
+  /// fold drops.
   String _double() {
     final start = i;
     i++;
     final out = StringBuffer();
-    var ws = StringBuffer();
+    var run = i, ws = -1;
     while (true) {
       if (i >= n) throw _error('unterminated double-quoted string', start);
       final c = s.codeUnitAt(i);
       if (c == 0x22) {
-        out.write(ws);
+        final last = s.substring(run, i);
         i++;
-        return out.toString();
+        if (out.isEmpty) return last;
+        return (out..write(last)).toString();
       }
       if (c == 0x5C) {
-        out.write(ws);
-        ws = StringBuffer();
+        out.write(s.substring(run, i));
         i++;
         if (i >= n) throw _error('unterminated double-quoted string', start);
         final e = s.codeUnitAt(i);
@@ -538,65 +541,62 @@ final class _Parser {
           // An escaped line break joins the lines without a space.
           i++;
           _skipSpacesAndBreaks();
-          continue;
+        } else {
+          out.write(_escape(e));
         }
-        out.write(_escape(e));
+        run = i;
+        ws = -1;
         continue;
       }
       if (_ws(c)) {
-        ws.writeCharCode(c);
-        i++;
-        continue;
-      }
-      if (c == 0x0A) {
-        ws = StringBuffer();
+        if (ws < 0) ws = i;
+      } else if (c == 0x0A) {
+        out.write(s.substring(run, ws < 0 ? i : ws));
         _fold(out);
+        run = i;
+        ws = -1;
         continue;
+      } else {
+        ws = -1;
       }
-      out
-        ..write(ws)
-        ..writeCharCode(c);
-      ws = StringBuffer();
       i++;
     }
   }
 
-  /// A `'…'` scalar (`''` is a quote) with line folding.
+  /// A `'…'` scalar (`''` is a quote) with line folding; copied in runs
+  /// like [_double].
   String _single() {
     final start = i;
     i++;
     final out = StringBuffer();
-    var ws = StringBuffer();
+    var run = i, ws = -1;
     while (true) {
       if (i >= n) throw _error('unterminated single-quoted string', start);
       final c = s.codeUnitAt(i);
       if (c == 0x27) {
         if (_c(i + 1) == 0x27) {
-          out
-            ..write(ws)
-            ..write("'");
-          ws = StringBuffer();
+          out.write(s.substring(run, i + 1));
           i += 2;
+          run = i;
+          ws = -1;
           continue;
         }
-        out.write(ws);
+        final last = s.substring(run, i);
         i++;
-        return out.toString();
+        if (out.isEmpty) return last;
+        return (out..write(last)).toString();
       }
       if (_ws(c)) {
-        ws.writeCharCode(c);
-        i++;
-        continue;
-      }
-      if (c == 0x0A) {
-        ws = StringBuffer();
+        if (ws < 0) ws = i;
+      } else if (c == 0x0A) {
+        out.write(s.substring(run, ws < 0 ? i : ws));
         _fold(out);
+        run = i;
+        ws = -1;
         continue;
+      } else {
+        ws = -1;
       }
-      out
-        ..write(ws)
-        ..writeCharCode(c);
-      ws = StringBuffer();
       i++;
     }
   }

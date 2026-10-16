@@ -190,6 +190,29 @@ url: http://e.com:8080/x#frag
     expect(Yaml.parse('a: &x [1, 2]\nb: *x').$('b').length, 2); // ordinary aliases still resolve
   });
 
+  test('quoted scalars: escapes, folds and quotes keep their text (B22)', () {
+    expect(Yaml.parse('k: "a  \\t b  \n  c\n\n  d \\\n   e  "').$('k').text(), 'a  \t b c\nd e  ');
+    expect(Yaml.parse("k: 'it''s  \n  two''  '").$('k').text(), "it's two'  ");
+    expect(Yaml.parse('k: ""').$('k').text(), '');
+    expect(Yaml.parse("k: ''''").$('k').text(), "'");
+  });
+
+  test('a long quoted scalar parses about as fast as a plain one (B22)', () {
+    final body = List.generate(200000, (i) => 'word$i and more').join(' ');
+    int time(String doc) {
+      Yaml.parse(doc); // warm up
+      final sw = Stopwatch()..start();
+      Yaml.parse(doc);
+      return sw.elapsedMicroseconds;
+    }
+
+    final plain = time('k: $body\n');
+    for (final quoted in ['k: "$body"\n', "k: '$body'\n"]) {
+      final t = time(quoted);
+      expect(t, lessThan(plain * 4 + 5000), reason: 'quoted ${t / plain}x plain'); // was 9-12x
+    }
+  });
+
   test('a one-line flow document (minified JSON) parses in linear time (B6)', () {
     String doc(int n) => '[${List.generate(n, (i) => '{"id": $i, "name": "item $i", "tags": ["a", "b"]}').join(', ')}]';
     final small = doc(1000), big = doc(4000);
