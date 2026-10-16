@@ -9,7 +9,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar].
-/// - `Console.ask/confirm/choose/pick/key/bar/log/logged/table/notify/copy/out/input()`
+/// - `Console.ask/confirm/choose/pick/key/bar/log/logged/table/notify/out/input()`
 ///   prompt, read keys, show progress, print above it or as columns, reach
 ///   the desktop, or read and write the script's own stdin and stdout.
 /// - [Bar] is a [Probe] (attach it with `&`) that supports `update`
@@ -570,7 +570,7 @@ abstract final class Console {
   /// Or count it by hand with [Bar.update]. Stacks with other live bars;
   /// without a terminal only the final line prints. While a state-driven
   /// `Tui.run` is active, draws in its status row instead (several at
-  /// once). With `keep: false` the line vanishes when the bar finishes (a
+  /// once), or in the screen's `Region.bars()` when it draws one. With `keep: false` the line vanishes when the bar finishes (a
   /// failed one still prints ✗).
   static Bar bar(String label, {bool keep = true}) {
     final shown = label.isEmpty ? null : term.plainLabel(label);

@@ -9,10 +9,10 @@
 /// | RAR4, RAR5 | — (the compressor is proprietary) | ✓ (solid, filters, PPMd, AES) |
 /// | `.tar.bz2` `.tar.zst` `.tar.Z` `.tar.lzma`, cab, ar, xar | — | ✓ (through 7-Zip) |
 ///
-/// Unarchiving zip, and 7z/RAR up to 32 MiB, holds the archive in memory
-/// (their directory or solid stream needs it whole) and decodes on its own
-/// isolate under a fixed budget; a bigger 7z/RAR goes to 7-Zip, which
-/// streams to disk. Tar, tgz and `.tar.xz` stream one member at a time
+/// Unarchiving a zip, 7z or RAR up to 32 MiB holds it in memory (its
+/// directory or solid stream needs it whole) and decodes on its own isolate
+/// under a fixed budget; a bigger zip is spooled to a temp file and read a
+/// member at a time, a bigger 7z/RAR goes to 7-Zip, which streams to disk. Tar, tgz and `.tar.xz` stream one member at a time
 /// (xz decodes on its own isolate too). Ctrl-C and screen redraws stay
 /// live either way. File modes and mtimes are kept; links are kept when
 /// they point inside the folder.
