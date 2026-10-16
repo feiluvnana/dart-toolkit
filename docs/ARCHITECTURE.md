@@ -12,7 +12,7 @@ csv ──────────────── core
 yaml ─────────────── json, src/names, src/yaml_parser
 pool ─────────────── core, src/format, src/progress, src/rate, src/retry
 fs ───────────────── core, src/exit, src/format, src/glob, src/names, src/posix, src/progress, src/tree (+path)
-shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/timeout
+shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/timeout, src/which
 archive ──────────── src/tar (part file) → core, shell, src/exit, src/format, src/posix, src/progress, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
 http ─────────────── core, src/charset, src/cookies, src/origin, src/posix, src/rate, src/resume, src/retry, src/timeout
 html ─────────────── json, src/dom, src/html_parser, src/selector
@@ -24,7 +24,7 @@ video ────────────── image, src/format, src/media, s
 chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/format, src/glob, src/keys, src/names, src/origin, src/progress (+path)
 
 src/media ── shell, src/cache, src/posix, src/quiet, src/tool        src/tool ── shell, src/cache, src/names, src/posix (+path)
-src/chrome_find ── src/cache, src/cdp        src/cache ── src/download_line (+path): the user cache and fetchInIsolate
+src/chrome_find ── src/cache, src/cdp, src/which      src/cache ── src/download_line (+path): the user cache and fetchInIsolate
 src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
 src/progress ── src/format: Probe, Task, Meter and the private run that feeds them
 src/fetch ── archive, http, hash, fs: spawned by URI, never imported

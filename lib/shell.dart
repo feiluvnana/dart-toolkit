@@ -33,6 +33,7 @@ import 'src/names.dart' as names;
 import 'src/progress.dart' show task;
 import 'src/quiet.dart';
 import 'src/timeout.dart';
+import 'src/which.dart' as paths;
 export 'core.dart';
 
 /// A program that ran and exited non-zero: [errorCode] is its exit code and
@@ -301,30 +302,7 @@ abstract final class Shell {
   /// Where [program] resolves on `PATH` (with `PATHEXT` on Windows), or
   /// null when it is not installed. Starts no process. A name with a path
   /// separator is checked as that path.
-  static Future<String?> which(String program) async {
-    final windows = io.Platform.isWindows;
-    final exts = windows
-        ? ['', ...(io.Platform.environment['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').where((e) => e.isNotEmpty)]
-        : const [''];
-    Future<String?> probe(String base) async {
-      for (final ext in exts) {
-        final path = '$base$ext';
-        final st = await io.FileStat.stat(path);
-        if (st.type != io.FileSystemEntityType.file) continue;
-        if (windows || st.mode & 0x49 != 0) return path; // any execute bit (0o111)
-      }
-      return null;
-    }
-
-    if (program.contains('/') || (windows && program.contains(r'\'))) return probe(program);
-    final sep = windows ? ';' : ':';
-    for (final dir in (io.Platform.environment['PATH'] ?? '').split(sep)) {
-      if (dir.isEmpty) continue;
-      final hit = await probe('$dir${windows ? r'\' : '/'}$program');
-      if (hit != null) return hit;
-    }
-    return null;
-  }
+  static Future<String?> which(String program) => paths.which([program]);
 
   static void _checkCommand(List<String> command) {
     if (command.isEmpty) {

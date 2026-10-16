@@ -14,13 +14,14 @@ import 'package:path/path.dart' as p;
 
 import 'cache.dart';
 import 'cdp.dart';
+import 'which.dart';
 
 /// The cached Chrome for Testing, else an installed Chrome or Chromium,
 /// else Chrome for Testing downloaded now.
 Future<String> chromeExecutable({required bool headless}) async {
   final cached = _testingPath(headless: headless);
   if (cached != null && io.File(cached.exe).existsSync()) return cached.exe;
-  return installedChrome() ?? await testingChrome(headless: headless);
+  return await installedChrome() ?? await testingChrome(headless: headless);
 }
 
 /// The pinned Chrome for Testing. Google publishes no hashes and signs the
@@ -57,30 +58,23 @@ const _sha256 = {
 }
 
 /// The first installed Chrome or Chromium, or null.
-String? installedChrome() {
+Future<String?> installedChrome() async {
   final env = io.Platform.environment;
-  final List<String> candidates;
-  if (io.Platform.isMacOS) {
-    candidates = [
-      for (final root in ['/Applications', '${env['HOME']}/Applications']) ...[
-        '$root/Google Chrome.app/Contents/MacOS/Google Chrome',
-        '$root/Chromium.app/Contents/MacOS/Chromium',
-      ],
-    ];
-  } else if (io.Platform.isWindows) {
-    candidates = [
-      for (final root in [env['PROGRAMFILES'], env['PROGRAMFILES(X86)'], env['LOCALAPPDATA']])
-        if (root != null)
-          for (final vendor in ['Google\\Chrome', 'Chromium']) '$root\\$vendor\\Application\\chrome.exe',
-    ];
-  } else {
-    candidates = [
-      for (final dir in (env['PATH'] ?? '').split(':'))
-        if (dir.isNotEmpty)
-          for (final name in ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome'])
-            '$dir/$name',
-    ];
+  if (!io.Platform.isMacOS && !io.Platform.isWindows) {
+    return which(const ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome']);
   }
+  final candidates = io.Platform.isMacOS
+      ? [
+          for (final root in ['/Applications', '${env['HOME']}/Applications']) ...[
+            '$root/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '$root/Chromium.app/Contents/MacOS/Chromium',
+          ],
+        ]
+      : [
+          for (final root in [env['PROGRAMFILES'], env['PROGRAMFILES(X86)'], env['LOCALAPPDATA']])
+            if (root != null)
+              for (final vendor in ['Google\\Chrome', 'Chromium']) '$root\\$vendor\\Application\\chrome.exe',
+        ];
   for (final c in candidates) {
     if (io.File(c).existsSync()) return c;
   }
