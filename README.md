@@ -20,7 +20,7 @@ import 'package:dart_toolkit/utils.dart';
 
 Future<void> main() async {
   // Settings live on the client: stated once, not on every call.
-  final http = Http.client(retries: 3, rate: Rate(4, 1.seconds), check: true);
+  final http = Http.client(rate: Rate(4, 1.seconds), check: true);
 
   // Download, verify and unpack in one pass; a bad checksum never lands.
   await (http.get('https://example.com/tool.tar.xz') | HashUtils.sha256(expect: sum) > Archive.unarchive('opt'));

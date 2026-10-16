@@ -285,7 +285,7 @@ abstract final class Http {
   ///   `HttpUtils.api` are what a desktop browser sends.
   /// - [timeout]: the connect, the wait for the headers, then any stall
   ///   streaming.
-  /// - [retries]: re-sends only when the request provably was not
+  /// - [retries] (3): re-sends only when the request provably was not
   ///   processed. Any in-memory body retries on connect/DNS failures before
   ///   sending, 429 and 503; GET, HEAD, PUT and DELETE also on timeouts,
   ///   network errors and 502/504. Backoff doubles from 1 s with ±25%
@@ -322,7 +322,7 @@ abstract final class Http {
     String? base,
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 30),
-    int retries = 2,
+    int retries = 3,
     Rate? rate,
     bool check = false,
     Cookies? cookies,

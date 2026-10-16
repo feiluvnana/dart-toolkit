@@ -101,7 +101,7 @@ void main() {
     });
     addTearDown(p.close);
     final sw = Stopwatch()..start();
-    final c = Http.client(proxy: 'socks5://u:p@127.0.0.1:${p.port}', retries: 3);
+    final c = Http.client(proxy: 'socks5://u:p@127.0.0.1:${p.port}');
     await expectLater(c.get('http://example.test/').text(), throwsA(isA<SocketException>()));
     expect((logins, sw.elapsed < const Duration(milliseconds: 900)), (1, true));
     var asked = 0;
@@ -110,7 +110,7 @@ void main() {
       return answer(2)(greeting, s, rest);
     });
     addTearDown(rules.close);
-    final r = Http.client(proxy: 'socks5://127.0.0.1:${rules.port}', retries: 3);
+    final r = Http.client(proxy: 'socks5://127.0.0.1:${rules.port}');
     await expectLater(r.get('http://example.test/').text(), throwsA(isA<SocketException>()));
     expect(asked, 1);
   });

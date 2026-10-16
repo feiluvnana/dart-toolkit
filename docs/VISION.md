@@ -7,7 +7,7 @@ engine (`dart:io`, a pinned native tool, or an in-house parser), and every modul
 pipe in a shell, and everything that takes time can be watched the same way.
 
 ```dart
-final http = Http.client(retries: 3, check: true);
+final http = Http.client(check: true);
 final title = await http.get('https://example.com').html().$('title').text();
 final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 await (Fs.file('photo.jpg').image().resize(width: 800).encode(.jpg) > Fs.file('thumb.jpg'));
@@ -314,7 +314,7 @@ final user = (await ig.get('/$name/').html()).json().$('**.xig_user_by_username'
 ```dart
 abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
-      int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
+      int retries = 3, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, bool resume = false,
       int max = 256 << 20,                        // max: bytes a body read into memory may decode to
       List<String> login = const []});            // sign-in paths: landing on one throws SessionException
@@ -415,7 +415,7 @@ final class Response with Reader implements Closeable {
 
 ```dart
 final shop = Http.client(base: 'https://shop.example/', headers: {'accept-language': 'ko-KR'},
-    retries: 3, rate: Rate(1, 250.milliseconds));
+    rate: Rate(1, 250.milliseconds));
 final page = await shop.get('list.php', query: {'page': p}).html();
 final me = await api.get('me').check().json();
 final ig = Http.client(base: _ig, cookies: session, csrf: (cookie: 'csrftoken', header: 'x-csrftoken'));

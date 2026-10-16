@@ -29,7 +29,7 @@ final class Download {
 
 // Images and videos come from the CDNs: no rate limit, retries, resumes;
 // every user's files share 8 lanes.
-final cdn = Http.client(retries: 3, resume: true);
+final cdn = Http.client(resume: true);
 final _lanes = Pool(limit: 8);
 
 // One user's download: what its explorers share. A failed one is reported

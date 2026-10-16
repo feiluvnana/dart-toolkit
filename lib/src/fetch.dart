@@ -34,7 +34,7 @@ Future<void> main(List<String> args, SendPort reply) async {
 /// so a reader never sees half of it.
 Future<void> fetch(String url, String sha256, String mode, String dir, {String? name, Probe? progress}) async {
   final app = mode == 'app';
-  final http = Http.client(retries: 3, check: true, resume: app, timeout: Duration(seconds: app ? 120 : 30));
+  final http = Http.client(check: true, resume: app, timeout: Duration(seconds: app ? 120 : 30));
   try {
     // A hash mismatch fails the run before anything is written or unpacked.
     final body = http.get(url) & progress | HashUtils.sha256(expect: sha256);

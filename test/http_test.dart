@@ -442,7 +442,7 @@ void abortTests() {
     tearDown(() => srv.close(force: true));
 
     test('fails an in-flight body read promptly, without retrying', () async {
-      final c = Http.client(retries: 3);
+      final c = Http.client();
       final res = await c.get('$url/slow');
       final read = res.bytes();
       final sw = Stopwatch()..start();
@@ -454,7 +454,7 @@ void abortTests() {
     test('a pending request fails and is not retried', () async {
       var hits = 0;
       final (_, slow) = await serve((r) => hits++); // never answers
-      final c = Http.client(retries: 3);
+      final c = Http.client();
       final f = c.get('$slow/');
       final expectation = expectLater(
         f,
@@ -473,7 +473,7 @@ void abortTests() {
           ..statusCode = 503
           ..close(),
       );
-      final c = Http.client(retries: 3);
+      final c = Http.client();
       final f = c.get('$bad/');
       final expectation = expectLater(f, throwsA(isA<HttpRequestException>()));
       await Future<void>.delayed(const Duration(milliseconds: 300));
