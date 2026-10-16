@@ -1,3 +1,7 @@
+// ffmpeg runs (and may be downloaded) here, so `-P quick` skips it.
+@Tags(['media'])
+library;
+
 import 'dart:io' as io;
 
 import 'package:dart_toolkit/fs.dart';

@@ -19,7 +19,7 @@ Pass this file to every subagent: the repo has no CLAUDE.md, so the review agent
 - Tui is alternate-screen only and has no colour by default (colour is opt-in per call); scrollback output belongs to Console.
 
 ## Gate and commits
-- Gate: `dart analyze lib test projects tool` is clean and the full `dart test` passes. `dart test -P quick` (skips the `pty`, `chrome` and `slow` tags) is for the inner loop only, never the gate.
+- Gate: `dart analyze lib test projects tool` is clean and the full `dart test` passes. `dart test -P quick` (skips the `pty`, `chrome`, `slow` and `media` tags) is for the inner loop only, never the gate.
 - Every bug fix gets a regression test that fails without the fix. Tests that check a process exits must spawn a child.
 - One commit per finding, message `<area>: <imperative summary>`, no trailers (no Co-Authored-By), never push, never publish, never amend or rebase.
 - The tree may hold another session's uncommitted work: commit with `git commit -- <paths>` (or stage hunks) so only your change goes in.

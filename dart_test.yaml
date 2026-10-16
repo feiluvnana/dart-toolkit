@@ -1,11 +1,12 @@
 # `dart test` runs everything. `dart test -P quick` skips the tests that
-# drive a real pty or Chromium, or wait out real timeouts and backoffs
-# (each takes seconds), for a fast inner loop.
+# drive a real pty or Chromium, run ffmpeg (which may download it), or wait
+# out real timeouts and backoffs (each takes seconds), for a fast inner loop.
 tags:
   pty: {}
   chrome: {}
   slow: {}
+  media: {}
 
 presets:
   quick:
-    exclude_tags: pty || chrome || slow
+    exclude_tags: pty || chrome || slow || media
