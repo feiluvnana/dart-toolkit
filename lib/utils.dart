@@ -59,10 +59,9 @@
 /// {@canonicalFor time.TimeUtils}
 library;
 
-import 'dart:io' show PathNotFoundException;
-
 import 'core.dart';
 import 'src/cookies.dart';
+import 'src/missing.dart';
 
 export 'src/console_utils.dart' show ConsoleUtils;
 export 'src/cookies.dart' show Cookies;
@@ -76,24 +75,17 @@ export 'src/time.dart' show DurationUtils, SpanUtils, TimeUtils;
 /// `reader.cookies()`: a Netscape `cookies.txt` session from any [Reader].
 extension ReaderCookies on Reader {
   /// The session in this reader (see [Cookies.parse]); [or] when the source
-  /// does not exist (a first run, before any login).
+  /// is missing (a first run, before any login; an HTTP 404 or 410).
   ///
   /// ```dart
   /// final jar = await Fs.file('.ins.session').cookies(or: Cookies());
   /// ```
-  Future<Cookies> cookies({Cookies? or}) async {
-    try {
-      return Cookies.parse(await text());
-    } on PathNotFoundException {
-      if (or != null) return or;
-      rethrow;
-    }
-  }
+  Future<Cookies> cookies({Cookies? or}) => orMissing(this, or, (r) async => Cookies.parse(await r.text()));
 }
 
 /// The Future mirror (rule 4).
 extension ReaderFutureCookies on Future<Reader> {
-  Future<Cookies> cookies({Cookies? or}) async => (await this).cookies(or: or);
+  Future<Cookies> cookies({Cookies? or}) => orMissing(this, or, (r) => r.cookies());
 }
 
 /// Header sets for `Http.client(headers:)` or a call's `headers:`, for sites

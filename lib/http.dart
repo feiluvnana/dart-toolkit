@@ -47,6 +47,7 @@ import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
 import 'src/cookies.dart' show Cookies;
 import 'src/decoders.dart';
+import 'src/missing.dart' show missing;
 import 'src/origin.dart' as names;
 import 'src/rate.dart' as rate;
 import 'src/rate.dart' show Rate;
@@ -194,6 +195,8 @@ final class HttpStatusException extends HttpException implements ToolkitExceptio
     // A 4xx is the server's answer to this request: `pool` never retries
     // it (408 and 429 say "later", so they are retried).
     if (status >= 400 && status < 500 && status != 408 && status != 429) retry.permanent(this);
+    // A 404/410 is "the source is not there" for every reading's `or:`.
+    if (status == 404 || status == 410) missing(this);
   }
 
   /// HTTP status.

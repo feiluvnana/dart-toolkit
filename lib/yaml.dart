@@ -13,11 +13,11 @@
 /// Everything else is private.
 library;
 
-import 'dart:io' show PathNotFoundException;
 
 import 'json.dart';
 export 'json.dart';
 
+import 'src/missing.dart';
 import 'src/names.dart' as names;
 import 'src/yaml_parser.dart' as y;
 
@@ -67,24 +67,21 @@ int _size(Object? v, Map<Object, int> seen) {
   return seen[v] = n > _maxNodes ? _maxNodes + 1 : n;
 }
 
-/// `reader.yaml()`: [or] is returned when the source does not exist.
+/// `reader.yaml()`: [or] is returned when the source is missing.
 extension ReaderYaml on Reader {
-  /// The body parsed as YAML into a [Json]; [or] when the source does not exist.
-  Future<Json> yaml({Json? or}) async {
-    final String text;
-    try {
-      text = await this.text();
-    } on PathNotFoundException {
-      if (or != null) return or;
-      rethrow;
-    }
-    final o = origin();
-    final url = o.url();
-    return _parse(text, o.path() ?? (url == null ? null : names.redact(url)));
-  }
+  /// The body parsed as YAML into a [Json]; [or] when the source is missing
+  /// (a missing file, an HTTP 404 or 410).
+  Future<Json> yaml({Json? or}) => orMissing(this, or, _yaml);
+}
+
+Future<Json> _yaml(Reader r) async {
+  final text = await r.text();
+  final o = r.origin();
+  final url = o.url();
+  return _parse(text, o.path() ?? (url == null ? null : names.redact(url)));
 }
 
 /// The Future mirror (rule 4).
 extension ReaderFutureYaml on Future<Reader> {
-  Future<Json> yaml({Json? or}) async => (await this).yaml(or: or);
+  Future<Json> yaml({Json? or}) => orMissing(this, or, (r) => r.yaml());
 }

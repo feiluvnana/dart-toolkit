@@ -15,20 +15,13 @@ const web = 'https://www.facebook.com';
 
 final _digits = RegExp(r'^\d+$');
 
-// A page: its markup, the JSON its scripts embed, and its text. A missing
-// page (404) is empty.
+// A page: its elements, the JSON its scripts embed, and its markup. A
+// missing page (404, 410) is empty.
 typedef Doc = ({Elements page, Json data, String text});
 
 Future<Doc> load(Client c, String path) async {
-  try {
-    final res = await c.get(path);
-    final text = await res.text();
-    final page = Html.parse(text, base: res.url());
-    return (page: page, data: page.json(), text: text);
-  } on HttpStatusException catch (e) {
-    if (e.status != 404) rethrow;
-    return (page: Html.parse(''), data: Json.of(const []), text: '');
-  }
+  final page = await c.get(path).html(or: Html.parse(''));
+  return (page: page, data: page.json(), text: page.markup());
 }
 
 // The first of [paths] (`**.a|**.b`) found, as text.

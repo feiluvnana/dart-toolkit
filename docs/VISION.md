@@ -56,7 +56,7 @@ at its call sites than it adds to the surface.
 | 15  | **Watching is `&`, never a parameter.** Long work returns a `Task` (`Pool.map`, `Dir.copy`, `Video.compress`, `Shell.run`); a reader is watched as it flows; any other future shows a spinner. A probe shows the whole run it is in, so where it sits never matters. |
 | 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onItem`, `onError`, `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
 | 17  | **Content moves with `>`; in-memory values use a method** (`file.write('text')`, `hash.add('text')`, `Body.json(v)`). Entries move with `copy`/`move` (modes and times kept); content with `>`. |
-| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source; streaming ones (`lines` `rows` `ndjson`) do not. |
+| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source (a missing file, an HTTP 404 or 410, with or without `check:`); streaming ones (`lines` `rows` `ndjson`) do not. |
 | 19  | **A check is `check()` on the value** (`Response`, `Output`); `check:` is only a client-wide policy. One door in per value: content becomes a value through a reading; a static `open` is only for what has no bytes (an HLS URL). |
 | 20  | **The main input is positional, and the text a call shows is a main input** (`ask(question)`, `bar(label)`, `key(prompt)`). A function that renders an item is positional after the items (`choose(q, items, (u) => u.name)`, `Region.list(pick, (u) => u.name)`). Calls of one kind take the same options: every prompt takes `or:` and `timeout:`. |
 | 21  | **Failures are `Exception`s; `Error`s are bugs.** No toolkit failure extends an `Error`. |
@@ -254,7 +254,7 @@ share one private terminal layer: stdin, key decoding, signal handling and resto
 
 ```dart
 abstract final class Html { static Elements parse(String html, {String? base}); }
-extension on Reader { Future<Elements> html(); }     // base = the response's final URL or the file's URI
+extension on Reader { Future<Elements> html({Elements? or}); }     // base = the response's final URL or the file's URI; or: when missing
 final class Elements extends Iterable<Element> {
   Elements $(String selector);  Element operator [](int i);  Elements not(String selector);
   String text();  List<String> texts();  String markup();  String? attr(String name);  List<String> attrs(String name);
@@ -517,7 +517,7 @@ final class Json extends Iterable<Json> {
   Json max(num Function(Json item) by);   // a null Json when empty; the smallest is max((i) => -by(i))
   List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
-extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }   // or: when the source does not exist
+extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }   // or: when the source is missing
 ```
 
 - `$('a.b.0')` walks dotted paths, and a numeric segment indexes an array (`items.-1` is the

@@ -38,6 +38,7 @@ export 'core.dart';
 import 'src/exit.dart' as exit;
 import 'src/format.dart' show Unit;
 import 'src/glob.dart';
+import 'src/missing.dart';
 import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/progress.dart' show Run, relay, task;
@@ -342,26 +343,12 @@ final class File extends Entry with Reader, Writer {
   /// The bytes; [or] is returned when the file does not exist (every other
   /// failure still throws).
   @override
-  Future<List<int>> bytes({List<int>? or}) async {
-    try {
-      return await io.File(_path).readAsBytes();
-    } on io.PathNotFoundException {
-      if (or != null) return or;
-      rethrow;
-    }
-  }
+  Future<List<int>> bytes({List<int>? or}) => orMissing(this, or, (_) => io.File(_path).readAsBytes());
 
   /// UTF-8 text (malformed bytes replaced); [or] is returned when the file
   /// does not exist (every other failure still throws).
   @override
-  Future<String> text({String? or}) async {
-    try {
-      return await super.text();
-    } on io.PathNotFoundException {
-      if (or != null) return or;
-      rethrow;
-    }
-  }
+  Future<String> text({String? or}) => orMissing(this, or, (_) => super.text());
 
   @override
   Future<void> consume(Stream<List<int>> input) => _inOrder(() async {

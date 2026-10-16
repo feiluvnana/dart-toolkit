@@ -21,11 +21,11 @@
 library;
 
 import 'dart:convert';
-import 'dart:io' show PathNotFoundException;
 
 import 'core.dart';
 export 'core.dart';
 
+import 'src/missing.dart';
 import 'src/names.dart' as names;
 
 /// A JSON value: an object, array, scalar, or null.
@@ -566,28 +566,11 @@ Object? _scalar<E>(Object? e) {
 /// where the bytes came from: `invalid JSON from https://x/api (HTTP 503):
 /// Unexpected character` (URL credentials redacted; a file names its path).
 ///
-/// [or] is returned when the source does not exist (a missing file:
-/// `PathNotFoundException`); every other failure still throws.
+/// [or] is returned when the source is missing (a missing file, an HTTP
+/// 404 or 410); every other failure still throws.
 extension ReaderJson on Reader {
-  /// The body decoded as JSON; [or] when the source does not exist.
-  Future<Json> json({Json? or}) async {
-    final List<int> bytes;
-    try {
-      bytes = await this.bytes();
-    } on PathNotFoundException {
-      if (or != null) return or;
-      rethrow;
-    }
-    final Object? v;
-    try {
-      // Decodes the bytes directly, without a String in between.
-      v = _utf8Json.convert(bytes);
-    } on FormatException catch (e) {
-      throw ContentException('invalid JSON${_from(origin())}: ${e.message}', e.source, e.offset, e);
-    }
-    if (_tooDeepBytes(bytes)) throw ContentException('invalid JSON${_from(origin())}: nested deeper than $_maxDepth levels');
-    return Json._(v);
-  }
+  /// The body decoded as JSON; [or] when the source is missing.
+  Future<Json> json({Json? or}) => orMissing(this, or, _json);
 
   /// NDJSON (JSON Lines): one [Json] per non-blank line, as the lines
   /// arrive, so a large log reads in constant memory. A bad line is a
@@ -678,9 +661,22 @@ String _from(Origin o) {
   return status == null ? from : '$from (HTTP $status)';
 }
 
+Future<Json> _json(Reader r) async {
+  final bytes = await r.bytes();
+  final Object? v;
+  try {
+    // Decodes the bytes directly, without a String in between.
+    v = _utf8Json.convert(bytes);
+  } on FormatException catch (e) {
+    throw ContentException('invalid JSON${_from(r.origin())}: ${e.message}', e.source, e.offset, e);
+  }
+  if (_tooDeepBytes(bytes)) throw ContentException('invalid JSON${_from(r.origin())}: nested deeper than $_maxDepth levels');
+  return Json._(v);
+}
+
 /// Same, from an async reader.
 extension ReaderFutureJson on Future<Reader> {
-  Future<Json> json({Json? or}) async => (await this).json(or: or);
+  Future<Json> json({Json? or}) => orMissing(this, or, (r) => r.json());
   Stream<Json> ndjson() => Stream.fromFuture(this).asyncExpand((r) => r.ndjson());
 }
 

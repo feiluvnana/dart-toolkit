@@ -28,6 +28,7 @@ export 'json.dart' show Json, JsonFuture, ReaderJson, ReaderFutureJson;
 
 import 'src/dom.dart' as dom;
 import 'src/html_parser.dart' as parser;
+import 'src/missing.dart';
 import 'src/selector.dart' as sel;
 
 /// Entry point: parse HTML source into top-level [Elements].
@@ -742,13 +743,15 @@ String? _baseFor(Origin o) {
 /// (or the file's URI) from the typed [Origin]; other readers parse without
 /// a base.
 extension ReaderHtml on Reader {
-  /// The body parsed as HTML, its URL (or file) the base for links.
-  Future<Elements> html() async => Html.parse(await text(), base: _baseFor(origin()));
+  /// The body parsed as HTML, its URL (or file) the base for links; [or]
+  /// when the source is missing (a missing file, an HTTP 404 or 410).
+  Future<Elements> html({Elements? or}) =>
+      orMissing(this, or, (r) async => Html.parse(await r.text(), base: _baseFor(r.origin())));
 }
 
 /// Same, from an async reader.
 extension ReaderFutureHtml on Future<Reader> {
-  Future<Elements> html() async => (await this).html();
+  Future<Elements> html({Elements? or}) => orMissing(this, or, (r) => r.html());
 }
 
 /// Future mirrors (rule 4). The extension name is import-only; never reference it.
