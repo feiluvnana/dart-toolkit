@@ -27,6 +27,23 @@ typedef Link = ({String name, String target, bool hard});
 /// Every path whose mode is set after the merge: path, mode, folder.
 typedef Modes = List<(String, int, bool)>;
 
+/// The bytes an unpack may write (`unarchive(dir, max:)`; null is no
+/// cap): each file and each hardlink copy takes its size from it.
+final class Budget {
+  Budget(this.max);
+
+  final int? max;
+  var _used = 0;
+
+  /// Takes [n] bytes for member [name]; past [max] a [ContentException].
+  void take(int n, String name) {
+    final m = max;
+    if (m != null && (_used += n) > m) {
+      throw ContentException('archive unpacks to more than max: $m bytes (at $name)');
+    }
+  }
+}
+
 /// Runs one step of an in-memory reader. A [ContentException] passes; any
 /// other failure (a RangeError from a damaged header, an OutOfMemoryError
 /// from a hostile size) is damage too, rethrown naming [what].
@@ -43,8 +60,9 @@ T guard<T>(String what, T Function() body) {
 /// Unpacks [entries] (an in-memory zip, 7z or RAR) into [tmp], on a worker
 /// isolate: every name and link is checked first, then each member is
 /// decoded and written in turn (any damage it hits named after it), links
-/// last. Returns the modes to set.
-Modes unpackEntries(List<Entry> entries, String tmp) {
+/// last; every byte written is taken from [budget]. Returns the modes to
+/// set.
+Modes unpackEntries(List<Entry> entries, String tmp, Budget budget) {
   final folded = <String, String>{};
   final links = <Link>[];
   for (final e in entries) {
@@ -71,12 +89,14 @@ Modes unpackEntries(List<Entry> entries, String tmp) {
     if (written.add(dest) && io.File(dest).existsSync()) {
       throw ContentException('archive members collide on this filesystem: ${e.name}');
     }
-    io.File(dest).writeAsBytesSync(guard(e.name, e.data));
+    final data = guard(e.name, e.data);
+    budget.take(data.length, e.name);
+    io.File(dest).writeAsBytesSync(data);
     final t = e.mtime;
     if (t != null) io.File(dest).setLastModifiedSync(t);
     modes.add((dest, e.mode, false));
   }
-  modes.addAll(placeLinks(tmp, links, modes));
+  modes.addAll(placeLinks(tmp, links, modes, budget));
   return modes;
 }
 
@@ -129,14 +149,15 @@ List<String>? _resolve(List<String> parts, Map<String, String> symlinks, [int de
 /// Puts [links] into [tmp], where every other member already is. A
 /// symlink must resolve inside the root through the archive's own links
 /// (its target is kept as written); a hardlink must name a file of the
-/// archive and lands as a copy of it, with its mode ([modes]) and mtime.
+/// archive and lands as a copy of it, with its mode ([modes]) and mtime,
+/// its size taken from [budget].
 /// Anything else fails by name before the first link is made, and a placed
 /// symlink the OS resolves outside [tmp] (a filesystem folding case or
 /// Unicode normalisation) fails once they are in. A link never
 /// replaces a member, and nothing is placed through a link. Returns the
 /// modes of the copies. Shared by every format, and by any extractor that
 /// fills [tmp] itself.
-Modes placeLinks(String tmp, List<Link> links, Modes modes) {
+Modes placeLinks(String tmp, List<Link> links, Modes modes, Budget budget) {
   if (links.isEmpty) return const [];
   final symlinks = {
     for (final l in links)
@@ -183,6 +204,7 @@ Modes placeLinks(String tmp, List<Link> links, Modes modes) {
       if (io.FileSystemEntity.typeSync(src, followLinks: false) != io.FileSystemEntityType.file) {
         throw ContentException('archive hardlink target is not a file of the archive: ${l.name} -> ${l.target}');
       }
+      budget.take(io.File(src).lengthSync(), l.name);
       io.File(src).copySync(dest);
       io.File(dest).setLastModifiedSync(io.File(src).lastModifiedSync());
       out.add((dest, modeOf[src] ?? 0, false));

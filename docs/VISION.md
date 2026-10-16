@@ -608,7 +608,7 @@ await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.lo
 enum ArchiveFormat { zip, tar, tgz, sevenzip }   // what archive writes; unarchive also reads RAR, .tar.xz/.bz2/.zst/.Z, cab, ar, xar
 abstract final class Archive {
   static Reader archive(List<String> paths, {ArchiveFormat format = .zip, String dir = '.', String? password}); // files and folders, named relative to dir
-  static Writer unarchive(String dir, {String? password}); // format from the magic bytes
+  static Writer unarchive(String dir, {String? password, int? max}); // format from the magic bytes; max: bytes written
   static Pipe gzip();  static Pipe gunzip();
 }
 ```

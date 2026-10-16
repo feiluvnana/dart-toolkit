@@ -1615,6 +1615,27 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       );
     });
 
+    test('S12: unarchive(max:) caps the bytes written, hardlink copies included', () async {
+      final big = List.filled(300 << 10, 0);
+      final tar = tarOf([
+        [..._tarBlock('a.bin', big.length, 0x30), ..._tarBody(big)],
+        _tarLink('b.bin', 'a.bin', typeflag: 0x31),
+      ]);
+      await (Reader.of(big) > Fs.file(p('src/a.bin')));
+      await (Reader.of(big) > Fs.file(p('src/b.bin')));
+      final zipped = await Archive.archive(['.'], dir: p('src')).bytes();
+      for (final (name, bytes) in [('tar', tar), ('tgz', await (Reader.of(tar) | Archive.gzip()).bytes()), ('zip', zipped)]) {
+        await expectLater(
+          Archive.unarchive(p('$name-capped'), max: 500 << 10).consume(Stream.value(bytes)),
+          refused('max'),
+          reason: name,
+        );
+        expect(await Fs.entry(p('$name-capped')), isNull, reason: name);
+        await Archive.unarchive(p(name), max: 600 << 10).consume(Stream.value(bytes));
+        expect(await Fs.file(p('$name/b.bin')).size(), big.length, reason: name);
+      }
+    });
+
     test('S1: a link the filesystem folds (case, NFC/NFD) onto another cannot reach past the folder', () async {
       if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       // A pax header carrying a UTF-8 path, then the link itself.

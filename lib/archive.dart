@@ -111,8 +111,14 @@ abstract final class Archive {
   /// hardlink lands as a copy); one that points outside fails by name.
   /// [password] opens encrypted archives (zip AES or legacy ZipCrypto, 7z
   /// AES, RAR4/RAR5); an encrypted member without it, or with the wrong one,
-  /// is a [PasswordException] before anything lands in [dir].
-  static Writer unarchive(String dir, {String? password}) => _Unpacker(dir, password);
+  /// is a [PasswordException] before anything lands in [dir]. [max] caps
+  /// the bytes written (hardlink copies included): past it the unpack fails
+  /// with a [ContentException] and nothing lands; a 7-Zip extraction (big
+  /// 7z/RAR, cab, ar, xar) is counted as its output moves in.
+  static Writer unarchive(String dir, {String? password, int? max}) {
+    if (max != null && max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
+    return _Unpacker(dir, password, max);
+  }
 
   /// Streaming gzip compression.
   static Pipe gzip() => _GzipPipe(compress: true);
@@ -347,9 +353,12 @@ final class _Packed with Reader {
 /// One unpack's temp tree: members land here sandbox-checked, then merge
 /// into the target. Holds the modes to apply after the merge.
 final class _Extraction {
-  _Extraction(this.tmp);
+  _Extraction(this.tmp, int? max) : budget = un.Budget(max);
 
   final io.Directory tmp;
+
+  /// What may still be written (`max:`).
+  final un.Budget budget;
 
   // Modes collected during extraction: one `chmod <mode> p1 p2 …` per
   // distinct mode afterwards (usually 2–3 forks per archive, not one per
@@ -418,7 +427,7 @@ final class _Extraction {
         }
 
         await posix.writeAll(spool, all());
-        _modes.addAll(await _isolated(_unzipFileJob(spool.path, password, tmp.path)));
+        _modes.addAll(await _isolated(_unzipFileJob(spool.path, password, tmp.path, budget.max)));
       } finally {
         if (await stage.exists()) await stage.delete(recursive: true);
       }
@@ -426,7 +435,7 @@ final class _Extraction {
     }
     final acc = BytesBuilder(copy: false);
     head.forEach(acc.add);
-    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), _Format.zip, password, tmp.path)));
+    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), _Format.zip, password, tmp.path, budget.max)));
   }
 
   /// [work]'s result, computed on its own isolate (registered, so an
@@ -495,7 +504,7 @@ final class _Extraction {
     }
     final bytes = acc.takeBytes();
     try {
-      _modes.addAll(await _isolated(_unpackJob(bytes, format, password, tmp.path)));
+      _modes.addAll(await _isolated(_unpackJob(bytes, format, password, tmp.path, budget.max)));
     } on ContentException catch (e) {
       if (!native || !e.message.startsWith('unsupported')) rethrow;
       // Start over clean: the Dart decoder may have landed some members.
@@ -573,14 +582,16 @@ final class _Extraction {
           if (d != null) await io.Directory(d).create(recursive: true);
         } else if (e is io.File) {
           final dest = await _prepare(name, file: true);
-          if (dest != null) await e.rename(dest);
+          if (dest == null) continue;
+          budget.take(await e.length(), name);
+          await e.rename(dest);
         }
       }
     } finally {
       _cancel = null;
       if (await stage.exists()) await stage.delete(recursive: true);
     }
-    _modes.addAll(un.placeLinks(tmp.path, _links, _modes));
+    _modes.addAll(un.placeLinks(tmp.path, _links, _modes, budget));
   }
 
   /// Completes to stop a running 7-Zip.
@@ -641,6 +652,7 @@ final class _Extraction {
         case _TarBody():
           final pending = appleDouble;
           if (pending == null) {
+            if (dest case final d?) budget.take(ev.bytes.length, d);
             await _out?.writeFrom(ev.bytes);
             break;
           }
@@ -652,12 +664,14 @@ final class _Extraction {
             break;
           }
           await open(pending);
+          budget.take(head.length, pending);
           await _out?.writeFrom(head);
         case _TarEnd():
           final pending = appleDouble;
           if (pending != null) {
             appleDouble = null;
             await open(pending);
+            budget.take(head.length, pending);
             await _out?.writeFrom(head);
           }
           await _out?.close();
@@ -671,7 +685,7 @@ final class _Extraction {
           dest = null;
       }
     }
-    _modes.addAll(un.placeLinks(tmp.path, _links, _modes));
+    _modes.addAll(un.placeLinks(tmp.path, _links, _modes, budget));
   }
 
   /// Never delete the target: create it and merge each top-level
@@ -820,11 +834,11 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
 }
 
 /// A job for [_Extraction._isolated] capturing only what it needs.
-un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp) =>
-    () => un.unpackEntries(_entries(bytes, format, password), tmp);
+un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp, int? max) =>
+    () => un.unpackEntries(_entries(bytes, format, password), tmp, un.Budget(max));
 
 /// A job unpacking the zip spooled at [path], read by offset.
-un.Modes Function() _unzipFileJob(String path, String? password, String tmp) => () {
+un.Modes Function() _unzipFileJob(String path, String? password, String tmp, int? max) => () {
   final f = io.File(path).openSync();
   try {
     Uint8List read(int at, int n) {
@@ -837,7 +851,7 @@ un.Modes Function() _unzipFileJob(String path, String? password, String tmp) => 
       return got == n ? out : Uint8List.sublistView(out, 0, got);
     }
 
-    return un.unpackEntries(_zipEntries(() => zip.readZipAt(f.lengthSync(), read), password), tmp);
+    return un.unpackEntries(_zipEntries(() => zip.readZipAt(f.lengthSync(), read), password), tmp, un.Budget(max));
   } finally {
     f.closeSync();
   }
@@ -972,12 +986,13 @@ _Format _sniff(List<int> head) {
 }
 
 final class _Unpacker with Writer {
-  _Unpacker(this._dir, this._password) {
+  _Unpacker(this._dir, this._password, this._max) {
     writing[this] = _consume;
   }
 
   final String _dir;
   final String? _password;
+  final int? _max;
 
   @override
   Future<void> consume(Stream<List<int>> input) => _consume(input, null);
@@ -1009,7 +1024,7 @@ final class _Unpacker with Writer {
       // never inside it. Use the absolute path so '.' (whose dirname is
       // '.') still gets a sibling outside itself.
       final d = p.normalize(_dir);
-      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))))..run = run;
+      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))), _max)..run = run;
       // An interrupt skips `finally`: the exit hook stops the decoder, then
       // removes the temp folder.
       final token = exit.onExit(() async {
