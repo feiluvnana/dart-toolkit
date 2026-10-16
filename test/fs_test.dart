@@ -131,6 +131,44 @@ void main() {
       expect(await Fs.file(p('t4/a.bin')).size(), 3000);
     });
 
+    test('M5: dir copy with match: copies only the matching files, as one byte-counted task', () async {
+      await Fs.file(p('src/a.dart')).write('a' * 100);
+      await Fs.file(p('src/lib/b.dart')).write('b' * 200);
+      await Fs.file(p('src/lib/c.txt')).write('c' * 400);
+      await Fs.file(p('src/lib/deep/d.dart')).write('d' * 300);
+      await Fs.file(p('src/e.md')).write('e');
+      final bar = Meter();
+      final c = await (Fs.dir(p('src')).copy(p('dst'), match: '**/*.dart') & bar);
+      expect(c, isA<Dir>());
+      expect([for (final e in await Fs.dir(p('dst')).list(match: '**')) e.relative(Fs.dir(p('dst')))], [
+        'a.dart',
+        'lib',
+        'lib/b.dart',
+        'lib/deep',
+        'lib/deep/d.dart',
+      ]);
+      expect(await Fs.file(p('dst/lib/deep/d.dart')).text(), 'd' * 300);
+      expect((bar.done(), bar.total()), (600, 600));
+      // One level, through the Future mirror, unwatched.
+      await Future.value(Fs.dir(p('src'))).copy(p('top'), match: '*.md');
+      expect([for (final e in await Fs.dir(p('top')).list(match: '**')) e.relative(Fs.dir(p('top')))], ['e.md']);
+    });
+
+    test('M5: a matching copy replaces dest links on the way, never writes through them', () async {
+      await Fs.file(p('src/sub/f.txt')).write('f');
+      await Fs.file(p('src/g.txt')).write('g');
+      await Fs.file(p('outside.txt')).write('o');
+      await Fs.dir(p('elsewhere')).create();
+      await io.Link(p('dst/sub')).create(p('elsewhere'), recursive: true);
+      await io.Link(p('dst/g.txt')).create(p('outside.txt'));
+      await Fs.dir(p('src')).copy(p('dst'), match: '**/*.txt');
+      expect(await Fs.entry(p('dst/sub')), isA<Dir>());
+      expect(await Fs.file(p('dst/sub/f.txt')).text(), 'f');
+      expect(await Fs.file(p('dst/g.txt')).text(), 'g');
+      expect(await Fs.dir(p('elsewhere')).list(), isEmpty);
+      expect(await Fs.file(p('outside.txt')).text(), 'o');
+    });
+
     test('copy and move keep the type and make parents', () async {
       await Fs.file(p('a.txt')).write('x');
       final c = await Fs.file(p('a.txt')).copy(p('d/e.txt'));

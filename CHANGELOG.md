@@ -6,6 +6,7 @@
 
 - `shell`: `Shell.run(cmd, terminal: true)` runs the child on our terminal (`git commit` opening `$EDITOR`, `ssh`, `dart test` in colour) and keeps `timeout:`, `cancel:` and the kill of its tree on Ctrl-C; the `Output` has the exit code and no text.
 - `archive`: `Archive.unarchive(dir, match: 'bin/*')` lands only the members whose path matches the glob (as `Dir.list(match:)` reads it), with the folders above them; zip and in-Dart 7z/RAR members left out are never decoded.
+- `fs`: `dir.copy(to, match: '**/*.dart')` copies only the entries `list(match:)` gives, with the folders above them, as one byte-counted `Task` (`& Console.bar('backup')`).
 
 **Fixed**
 

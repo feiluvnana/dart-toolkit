@@ -570,6 +570,7 @@ final class File extends Entry with Reader, Writer {
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
   Task<List<Entry>> list({String? match});  Future<Dir> create();   // list counts entries; match sets the depth
+  Task<Dir> copy(String to, {String? match});   // match: only the entries list(match:) gives, with their folders
   Future<({int files, int bytes})> size();   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
@@ -589,6 +590,8 @@ final class Link extends Entry {
   - They move an entry (`>` moves content). They keep modes and timestamps (folders too) and create parents.
   - They are `Task`s: `Fs.dir('photos').copy(backup) & Console.bar('backup')` counts the bytes
     against the tree's size. Watched, the copy streams in-process; unwatched, a fresh folder is one `cp -pPR`.
+  - `dir.copy(to, match: '**/*.dart')` copies only what `list(match:)` would give, with the folders
+    above it, as one byte-counted `Task`; a link on the way in `to` is replaced, never written through.
   - `move` renames, and falls back to copy-then-delete only across devices.
   - A missing source, or a destination inside the source, throws before anything is written.
 - `exists()` checks the handle's kind, following links for `File`/`Dir` (`Link` checks itself).

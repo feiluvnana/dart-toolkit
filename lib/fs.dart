@@ -576,14 +576,21 @@ final class Dir extends Entry {
   @override
   Future<void> delete() => _delete(_path, io.FileSystemEntityType.directory);
 
+  /// With [match] only the entries whose path matches the glob are copied
+  /// (read as [list] reads it: `'**/*.dart'`), with the folders above them;
+  /// files keep their modes and times, links stay links.
   @override
-  Task<Dir> copy(String to) => task((run) async {
+  Task<Dir> copy(String to, {String? match}) => task((run) async {
     final kind = await _checkSource(_path, to, io.FileSystemEntityType.directory);
     // A handle on a link copies the folder it points at (`cp -P` and the
     // walk below would copy the link itself).
     final from = kind == io.FileSystemEntityType.link ? await io.Directory(_path).resolveSymbolicLinks() : _path;
     await _ensureParent(to);
     await _removeDestLink(to);
+    if (match != null) {
+      await _copyMatching(from, to, match, run);
+      return Dir._(to);
+    }
     // One `cp -pPR` keeps modes, times and links with a single fork. It
     // only matches the merge semantics for a fresh destination (into an
     // existing tree `cp` would nest instead), so an existing target, a
@@ -622,6 +629,52 @@ final class Dir extends Entry {
     }
     return Dir._(to);
   });
+}
+
+/// `Dir.copy(to, match:)`: the entries of [from] that [match] matches, into
+/// [to] with the folders above them. A link on the way in [to] is replaced
+/// by a folder, and one at a file's path by the file: nothing is written
+/// through a link.
+Future<void> _copyMatching(String from, String to, String match, Run run) async {
+  final cut = from.endsWith('/') || from.endsWith(r'\') ? from.length : from.length + 1;
+  final found = await Dir._(from)._list(match, Run());
+  final made = <String>{};
+  Future<void> folder(String dir) async {
+    if (!made.add(dir)) return;
+    if (dir != to) await folder(p.dirname(dir));
+    if (await io.FileSystemEntity.isLink(dir)) await io.Link(dir).delete();
+    await io.Directory(dir).create();
+  }
+
+  final files = <(String, String)>[];
+  for (final e in found) {
+    final dest = p.join(to, e._path.substring(cut));
+    await folder(e is Dir ? dest : p.dirname(dest));
+    if (e is Link) {
+      await Link._(dest)._create(await io.Link(e._path).target());
+    } else if (e is File) {
+      files.add((e._path, dest));
+    }
+  }
+  final onBytes = await _counter(run, () async {
+    var n = 0;
+    for (final (src, _) in files) {
+      n += await io.File(src).length();
+    }
+    return n;
+  });
+  // A few files at a time: thousands at once would run out of descriptors.
+  final next = files.iterator;
+  Future<void> lane() async {
+    while (next.moveNext()) {
+      final (src, dest) = next.current;
+      if (await io.FileSystemEntity.isLink(dest)) await io.Link(dest).delete();
+      await tree.copyFile(src, dest, onBytes: onBytes);
+      await tree.preserveFileMeta(src, dest);
+    }
+  }
+
+  await Future.wait([for (var i = 0; i < 8; i++) lane()]);
 }
 
 /// When [run] is watched, report 0 of the [total] and return what counts
@@ -777,7 +830,8 @@ extension DirFuture on Future<Dir> {
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Task<Dir> copy(String to) => task((run) async => (await this).copy(to) & relay(run));
+  Task<Dir> copy(String to, {String? match}) =>
+      task((run) async => (await this).copy(to, match: match) & relay(run));
   Task<Dir> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
