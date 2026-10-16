@@ -1,27 +1,125 @@
-// Twitter's web API, as the website calls it. Import with `as twitter`.
+// Twitter's web API, as the website calls it: the media timeline (posts)
+// and the avatar and banner (profiles).
 library;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 
-import 'dashboard.dart';
-import 'download.dart';
-import 'media.dart';
-import 'platform.dart';
+import '../feed.dart';
+import '../job.dart';
+import '../platform.dart';
 
 const web = 'https://x.com';
 const bearer =
     'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
-// Rate limits: 100 calls per 15 minutes, 150 for the user media timeline.
-Rate rate(int calls) => Rate(
-  calls,
-  15.minutes,
-  pause: 2.seconds,
-  onWait: (w) => board.holdPause('Twitter rate limit: waiting ${w.human()}', w, platform: 'twt'),
-);
-final apiRate = rate(100), mediaRate = rate(150);
+final platform = Twitter();
+
+final class Twitter extends Platform {
+  @override
+  final code = 'twt', name = 'Twitter', site = web;
+
+  @override
+  final kinds = const [Kind.posts, Kind.profiles];
+
+  // Runs before categories were shared kept tweets in tweets/.
+  @override
+  final renamed = const {'tweets': Kind.posts};
+
+  @override
+  final loginCookies = const {'auth_token'};
+
+  // Rate limits: 100 calls per 15 minutes, 150 for the user media timeline.
+  late final apiRate = rate(100, 15.minutes), mediaRate = rate(150, 15.minutes);
+
+  static final _url = RegExp(
+    r'^(?:https?://)?(?:www\.|mobile\.)?(?:(?:[fv]x)?twitter|(?:fix(?:up|v))?x)\.com/([^/?#]+)(?:/status/(\d+))?',
+  );
+
+  @override
+  bool matches(String input) => _url.hasMatch(input.trim());
+
+  @override
+  Target parse(String input) {
+    final s = input.trim();
+    for (final re in [r'[?&]screen_name=([^&#]+)', r'[?&]user_id=(\d+)', r'/i/user/(\d+)']) {
+      if (RegExp(re).firstMatch(s) case final m?) return Target(this, m[1]!);
+    }
+    final m = _url.firstMatch(s);
+    if (m == null) return Target(this, username(s, name));
+    if (const {
+      'home',
+      'explore',
+      'notifications',
+      'messages',
+      'settings',
+      'i',
+      'intent',
+      'search',
+    }.contains(m[1]!.toLowerCase())) {
+      throw FormatException('"$input" is not a Twitter profile or tweet.');
+    }
+    return Target(this, m[1]!, post: m[2]);
+  }
+
+  @override
+  Client client(Cookies jar) => Http.client(
+    base: web,
+    rate: apiRate,
+    check: true,
+    cookies: jar,
+    csrf: (cookie: 'ct0', header: 'x-csrf-token'),
+    headers: {
+      'authorization': bearer,
+      'x-twitter-active-user': 'yes',
+      'x-twitter-auth-type': 'OAuth2Session',
+      'x-twitter-client-language': 'en',
+      'accept': '*/*',
+      'sec-fetch-site': 'same-origin',
+    },
+  );
+
+  @override
+  Future<void> explore(Job j) async {
+    if (j.target.post case final id?) {
+      final t = await tweet(j.api, id);
+      final owner = t.$('core.user_results.result.core.screen_name|core.user_results.result.legacy.screen_name');
+      await j.open(owner.or(j.target.user), track: false);
+      j.add(tweetFiles(t, j.folder(Kind.posts), j.index.posts[id]));
+      return j.phase(Kind.posts, '1 tweet', done: true);
+    }
+    final p = await profile(j.api, j.target.user);
+    await j.open(p.name, id: p.id);
+    late final mediaApi = j.client(mediaRate);
+    await Future.wait([
+      if (j.wants(Kind.profiles))
+        Future(
+          () => j.profiles([
+            if (p.avatar case final url?)
+              (url: url, id: Fs.sanitize(Uri.parse(url).pathSegments.last), change: 'new profile avatar', ext: ''),
+            if (p.banner case final url?)
+              (
+                url: url,
+                id: 'banner_${Fs.sanitize(Uri.parse(url).pathSegments.reversed.skip(1).firstOrNull ?? '')}',
+                change: 'new profile banner',
+                ext: '.jpg',
+              ),
+          ]),
+        ),
+      if (j.wants(Kind.posts))
+        feed(
+          j,
+          noun: 'tweet',
+          page: (cursor) => mediaTimeline(mediaApi, p.id, cursor),
+          id: tweetId,
+          items: tweetItems,
+          time: tweetTime,
+          files: (page) => [for (final t in page) ...tweetFiles(t, j.folder(Kind.posts), j.index.posts[tweetId(t)])],
+        ),
+    ]);
+  }
+}
 
 typedef Profile = ({String id, String name, String? avatar, String? banner});
 
@@ -127,7 +225,12 @@ Future<Json> tweet(Client api, String id) async {
     api.get(
       '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
       query: {
-        'variables': Json.encode({'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false}),
+        'variables': Json.encode({
+          'tweetId': id,
+          'withCommunity': false,
+          'includePromotedContent': false,
+          'withVoice': false,
+        }),
         'features': Json.encode(_features),
       },
     ),
@@ -154,7 +257,8 @@ Json mediaOf(Json tweet) => tweet.$(
 
 List<String> tweetItems(Json tweet) => [for (final m in mediaOf(tweet)) m.$('id_str').or('')];
 
-// tweets/<month>/<id>_<n>.jpg|mp4 and <id>.txt; [order] numbers the items by id.
+// <month>/<id>_<n>.jpg|mp4 in [dir] and <id>.txt beside them when there is
+// a file to go with; [order] numbers the items by id.
 List<Download> tweetFiles(Json tweet, Dir dir, [List<String>? order]) {
   final id = tweetId(tweet), at = tweetTime(tweet), month = dir.dir(at.format('yyyy-MM'));
   final out = <Download>[];
@@ -162,7 +266,10 @@ List<Download> tweetFiles(Json tweet, Dir dir, [List<String>? order]) {
     final pos = order?.indexOf(m.$('id_str').or('')) ?? -1;
     final name = '${id}_${(pos < 0 ? i : pos) + 1}';
     if (const {'video', 'animated_gif'}.contains(m.$('type').text())) {
-      final mp4s = Json.of([for (final v in m.$('video_info.variants')) if (v.$('content_type').text() == 'video/mp4') v]);
+      final mp4s = Json.of([
+        for (final v in m.$('video_info.variants'))
+          if (v.$('content_type').text() == 'video/mp4') v,
+      ]);
       if (mp4s.max((v) => v.$('bitrate').or(0)).$('url').text() case final url?) {
         out.add(Download(month.file('$name.mp4'), url: url, at: at));
       }
@@ -171,9 +278,15 @@ List<Download> tweetFiles(Json tweet, Dir dir, [List<String>? order]) {
     }
   }
   final caption = tweet
-      .$('note_tweet.note_tweet_results.result.text|legacy.full_text|legacy.retweeted_status_result.result.legacy.full_text')
+      .$(
+        'note_tweet.note_tweet_results.result.text|legacy.full_text|legacy.retweeted_status_result.result.legacy.full_text',
+      )
       .text();
-  return [...out, if (caption != null && caption.trim().isNotEmpty) Download(month.file('$id.txt'), text: caption, at: at)];
+  return [
+    ...out,
+    if (out.isNotEmpty && caption != null && caption.trim().isNotEmpty)
+      Download(month.file('$id.txt'), text: caption, at: at),
+  ];
 }
 
 Future<Json> json(Future<Response> request) async {
@@ -184,106 +297,4 @@ Future<Json> json(Future<Response> request) async {
     throw Exception('Twitter logged you out: copy a fresh .twt.session from your browser.');
   }
   return response.json();
-}
-
-final platform = Twitter();
-
-final class Twitter implements Platform {
-  @override
-  final code = 'twt', name = 'twitter', site = web;
-
-  @override
-  final categories = const [Category('tweet'), Category('profile')];
-
-  static final _url = RegExp(
-    r'^(?:https?://)?(?:www\.|mobile\.)?(?:(?:[fv]x)?twitter|(?:fix(?:up|v))?x)\.com/([^/?#]+)(?:/status/(\d+))?',
-  );
-
-  @override
-  bool matches(String input) => _url.hasMatch(input.trim());
-
-  @override
-  Target parse(String input) {
-    final s = input.trim();
-    for (final re in [r'[?&]screen_name=([^&#]+)', r'[?&]user_id=(\d+)', r'/i/user/(\d+)']) {
-      if (RegExp(re).firstMatch(s) case final m?) return Target(this, m[1]!);
-    }
-    final m = _url.firstMatch(s);
-    if (m == null) return Target(this, username(s, 'Twitter'));
-    if (const {'home', 'explore', 'notifications', 'messages', 'settings', 'i', 'intent', 'search'}.contains(m[1]!.toLowerCase())) {
-      throw FormatException('"$input" is not a Twitter profile or tweet.');
-    }
-    return Target(this, m[1]!, post: m[2]);
-  }
-
-  // The logged-in client from .twt.session (cookies.txt export plus a "user-agent: ..." line), or null.
-  @override
-  Future<Client?> login() async {
-    final jar = await Cookies.load(Fs.scriptDir().file('.twt.session'));
-    if (jar['auth_token'] == null) return null;
-    return Http.client(
-      base: web,
-      rate: apiRate,
-      check: true,
-      cookies: jar,
-      csrf: (cookie: 'ct0', header: 'x-csrf-token'),
-      headers: {
-        'authorization': bearer,
-        'x-twitter-active-user': 'yes',
-        'x-twitter-auth-type': 'OAuth2Session',
-        'x-twitter-client-language': 'en',
-        'accept': '*/*',
-        'sec-fetch-site': 'same-origin',
-      },
-    );
-  }
-
-  @override
-  Object explain(Object e) => switch (e) {
-    HttpStatusException(status: 404, :final url) => 'not found: $url',
-    HttpStatusException(status: final status && (401 || 403), :final url) =>
-      'Twitter refused (HTTP $status): your session in .twt.session may have expired or is invalid ($url)',
-    HttpStatusException(status: 429, :final url) => 'Twitter rate limit reached (HTTP 429): try again in 15 minutes ($url)',
-    _ => e,
-  };
-
-  @override
-  Future<void> explore(Job j) async {
-    if (j.target.post case final id?) {
-      final t = await tweet(j.api, id);
-      final owner = t.$('core.user_results.result.core.screen_name|core.user_results.result.legacy.screen_name');
-      await j.open(owner.or(j.target.user), track: false);
-      j.add(tweetFiles(t, j.dir.dir('tweets'), j.index.posts[id]));
-      return j.phase(j.part('tweets'), '1 tweet', done: true);
-    }
-    final p = await profile(j.api, j.target.user);
-    await j.open(p.name, id: p.id);
-    late final mediaApi = j.client(mediaRate);
-    await Future.wait([
-      if (j.wants('profile')) _profile(j, p),
-      if (j.wants('tweet'))
-        feed(
-          j,
-          folder: 'tweets',
-          noun: 'tweet',
-          page: (cursor) => mediaTimeline(mediaApi, p.id, cursor),
-          id: tweetId,
-          items: tweetItems,
-          time: tweetTime,
-          files: (page) => [for (final t in page) ...tweetFiles(t, j.dir.dir('tweets'), j.index.posts[tweetId(t)])],
-        ),
-    ]);
-  }
-
-  Future<void> _profile(Job j, Profile p) async {
-    final files = [
-      if (p.avatar case final url?) (url, Fs.sanitize(Uri.parse(url).pathSegments.last), 'new profile avatar', ''),
-      if (p.banner case final url?)
-        (url, 'banner_${Fs.sanitize(Uri.parse(url).pathSegments.reversed.skip(1).firstOrNull ?? '')}', 'new profile banner', '.jpg'),
-    ];
-    j.add([
-      for (final (url, id, change, ext) in files) Download(j.dir.dir('profiles').file('${j.seen(id, change)}_$id$ext'), url: url),
-    ]);
-    j.phase(j.part('profiles'), '${files.length} profile ${files.length == 1 ? 'asset' : 'assets'}', done: true);
-  }
 }

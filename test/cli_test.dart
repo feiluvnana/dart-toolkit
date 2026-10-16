@@ -623,7 +623,10 @@ Future<void> main(List<String> a) async {
       expect(await fails(cli, ['--quality', '0']), contains('must be between 1 and 100'));
       expect(await helps(cli, ['--help']), contains('[1-100]'));
       final wait = Opt('wait', 'W.', or: const Duration(seconds: 1), min: Duration.zero);
-      expect(await fails(Command('w', 'X.', params: [wait], handler: (_) {}), ['--wait', '-5s']), contains('at least 0s'));
+      expect(
+        await fails(Command('w', 'X.', params: [wait], handler: (_) {}), ['--wait', '-5s']),
+        contains('at least 0s'),
+      );
     });
 
     test('a default outside the bounds, or a type that does not order, is an ArgumentError', () {
@@ -635,9 +638,14 @@ Future<void> main(List<String> a) async {
   group('version:', () {
     test('--version prints name and version at any depth, skipping required checks', () async {
       final need = Opt<String>('need', 'N.', required: true);
-      final cli = Command('tool', 'X.', version: '1.2.3', commands: [
-        Command('sub', 'S.', params: [need], handler: (_) => fail('handler ran')),
-      ]);
+      final cli = Command(
+        'tool',
+        'X.',
+        version: '1.2.3',
+        commands: [
+          Command('sub', 'S.', params: [need], handler: (_) => fail('handler ran')),
+        ],
+      );
       expect(await helps(cli, ['--version']), 'tool 1.2.3\n');
       expect(await helps(cli, ['sub', '--version']), 'tool 1.2.3\n');
       expect(await helps(cli, ['--help']), contains('--version'));
@@ -759,6 +767,23 @@ void valuesTests() {
       final s = Arg('section', 'What.', values: _Section.values, or: _Section.photos);
       await Command('app', 'X.', params: [s], handler: (c) => usage = c.usage()).run([]);
       expect(usage, contains('<photos|reels>'));
+    });
+
+    test('a long values list moves after the help, so the flag column stays narrow (regression); every value as default reads all', () async {
+      late String usage;
+      final kinds = Multi(
+        'kind',
+        'What.',
+        values: ['posts', 'stories', 'highlights', 'photos', 'videos'],
+        or: const [
+          'posts', 'stories', 'highlights', 'photos', 'videos', //
+        ],
+      );
+      final short = Opt<String?>('mode', 'How.', values: ['a', 'b']);
+      await Command('app', 'X.', params: [kinds, short], handler: (c) => usage = c.usage()).run([]);
+      expect(usage, contains('--kind <value>...'));
+      expect(usage, contains('One of: posts, stories, highlights, photos, videos. [default: all]'));
+      expect(usage, contains('--mode <a|b>'));
     });
 
     test('values and parse together are an ArgumentError', () {

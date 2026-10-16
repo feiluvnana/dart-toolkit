@@ -1,15 +1,17 @@
-// Downloads Instagram, Twitter, and Facebook profiles (photos, videos,
+// Downloads Instagram, Twitter and Facebook profiles (photos, videos,
 // stories, albums, highlights, profile pictures) or single posts.
 //
 //   dart run projects/medialoader/medialoader.dart download <user|url>...
-//       [--platform=ins|twt|fbk] [--category=<cat,...>] [--since=2024-05-01]
+//       [--platform=ins|twt|fbk] [--category=posts,stories,…] [--since=2024-05-01]
 //       [--compress | --quality=<1-100> | --image-quality=<1-100> --video-quality=<1-100>]
 //       [--all] [--reset] [--dry-run]
 //   dart run projects/medialoader/medialoader.dart update [same options]
 //
-// Categories: Instagram post, story, highlight, profile; Twitter tweet,
-// profile; Facebook post, photo, video, album, story, highlight, profile.
-// A post URL (instagram.com/p/…, x.com/<user>/status/…) downloads that post.
+// Categories are shared by every platform; each has the ones it offers:
+// Instagram posts, stories, highlights, profiles; Twitter posts, profiles;
+// Facebook all seven (posts, stories, highlights, photos, videos, albums,
+// profiles). A post URL (instagram.com/p/…, x.com/<user>/status/…)
+// downloads that post.
 //
 // Every platform needs a login session next to this script: .ins.session,
 // .twt.session, .fbk.session (a cookies.txt export of the site plus a
@@ -22,36 +24,45 @@
 // time. A full-screen dashboard shows each user's folders (bar, new/had/
 // failed, size, what its explorer is doing), every file in flight with its
 // speed, and a log. Keys: r retries every failure, l saves the log to
-// .medialoader.log next to this script, q quits; clicking the log's header
-// shows only failures and rate limits; drag to select and copy. A table per
-// user prints after. Without a terminal the log prints line by line and
-// failures are retried once.
+// .medialoader.log next to this script, f shows only failures and rate
+// limits (or click the log's header), q quits; drag to select and copy. A
+// table per user prints after. Without a terminal the log prints line by
+// line and failures are retried once.
 //
-// Files go to downloads/<platform>/<user>/ next to this script: posts/<month>/,
-// tweets/<month>/, photos/<month>/, videos/<month>/, stories/<month>/,
-// highlights/<title>/, albums/<title>/, and profiles/ (every profile picture
-// seen), dated to the post. Each user's .<platform>.json remembers what the
-// runs saw and .<platform>-cursor-* where a listing stopped: a rerun lists
-// only what is newer than the files on disk and continues an interrupted
-// run; --all lists everything again.
+// Files go to downloads/<platform>/<user>/<category>/ next to this script:
+// posts, photos, videos and stories by month, highlights/<title>/,
+// albums/<title>/, and profiles/ (every picture seen), each dated to its
+// post. Each user's .<platform>.json remembers what the runs saw and
+// .<platform>-cursor-<category> where a listing stopped: a rerun lists only
+// what is newer than the files on disk and continues an interrupted run;
+// --all lists everything again.
 library;
 
 import 'package:dart_toolkit/cli.dart';
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 
-import 'download.dart' as download;
-import 'platform.dart' as platform;
+import 'job.dart';
+import 'platform.dart';
+import 'platforms.dart';
+import 'run.dart' as run;
 
-final platformOpt = Opt<String?>('platform', 'Platform of plain usernames: ins (default), twt, fbk.');
-final users = Rest<String>('user', 'Usernames, profile or post URLs, or prefixed handles (twt:user).', required: true);
-final categories = Multi<String>(
-  'category',
-  'What to grab (platform-specific, or "all").',
-  values: {'all', for (final p in platform.platforms) ...p.categories.map((c) => c.name)}.toList()..sort(),
-  or: const ['all'],
+final platformOpt = Opt<String?>(
+  'platform',
+  'Platform of plain usernames: ${platforms.map((p) => '${p.code} (${p.name})').join(', ')}; default ${platforms.first.code}.',
 );
-final since = Opt<DateTime?>('since', 'Only what was posted on or after this date (2024-05-01).', parse: DateTime.parse);
+final users = Rest<String>('user', 'Usernames, profile or post URLs, or prefixed handles (twt:user).', required: true);
+final categories = Multi<Kind>(
+  'category',
+  'What to grab; a platform takes the ones it has.',
+  values: Kind.values,
+  or: Kind.values,
+);
+final since = Opt<DateTime?>(
+  'since',
+  'Only what was posted on or after this date (2024-05-01).',
+  parse: DateTime.parse,
+);
 final all = Flag('all', 'List every post again, not only the new ones.');
 final reset = Flag('reset', 'Delete the chosen categories (after asking) and download them again.');
 final dryRun = Flag('dry-run', 'List what would download; write nothing.');
@@ -61,7 +72,7 @@ final imageQuality = Opt<int?>('image-quality', 'Image compression quality.', mi
 final videoQuality = Opt<int?>('video-quality', 'Video compression quality.', min: 1, max: 100);
 final shared = <Param<Object?>>[since, compress, quality, imageQuality, videoQuality, all, reset, dryRun];
 
-download.Options options(Context c) => (
+Options options(Context c) => (
   all: c(all),
   reset: c(reset),
   dry: c(dryRun),
@@ -75,12 +86,12 @@ final root = Fs.scriptDir().dir('downloads');
 Future<void> main(List<String> args) async {
   await Command(
     'medialoader',
-    'Download Instagram, Twitter, and Facebook profiles.',
-    version: '1.0.0',
+    'Download ${platforms.map((p) => p.name).join(', ')} profiles.',
+    version: '1.1.0',
     commands: [
       Command(
         'download',
-        'Download photos, videos, stories, highlights, albums, profiles, or single posts.',
+        'Download profiles or single posts.',
         params: [platformOpt, categories, ...shared, users],
         handler: get,
       ),
@@ -89,9 +100,9 @@ Future<void> main(List<String> args) async {
         'Update every downloaded user with the categories it already has.',
         params: shared,
         handler: (c) async {
-          final wants = await download.discover(root);
+          final wants = await run.discover(root);
           if (wants.isEmpty) return Console.log('medialoader: nothing downloaded yet, nothing to update.');
-          await download.run(wants, root, options(c));
+          await run.run(wants, root, options(c));
         },
       ),
     ],
@@ -99,27 +110,28 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> get(Context c) async {
-  final List<platform.Target> targets;
+  final List<Target> targets;
   try {
-    targets = [for (final u in c(users)) platform.parseTarget(u, c(platformOpt))];
+    targets = [for (final u in c(users)) parseTarget(u, c(platformOpt))];
   } on FormatException catch (e) {
     throw UsageException(e.message);
   }
-  final chosen = c(categories), every = chosen.contains('all');
+  final chosen = c(categories).toSet();
   final wants = {
-    for (final t in targets)
-      t: t.post != null
-          ? {t.platform.categories.first.name}
-          : {
-              for (final cat in t.platform.categories)
-                if (every || chosen.contains(cat.name)) cat.name,
-            },
+    for (final t in targets) t: t.post != null ? {Kind.posts} : {...t.platform.kinds.where(chosen.contains)},
   };
-  if (wants.values.every((w) => w.isEmpty)) {
-    throw UsageException(
-      'no target has ${chosen.join(', ')}: '
-      '${{for (final t in targets) '${t.platform.code} has ${t.platform.categories.map((c) => c.name).join(', ')}'}.join('; ')}',
-    );
+  // A user whose platform has none of the categories is skipped, unless all are.
+  String offers(Target t) => '${t.platform.name} has ${t.platform.kinds.map((k) => k.name).join(', ')}';
+  final none = [
+    for (final MapEntry(:key, :value) in wants.entries)
+      if (value.isEmpty) key,
+  ];
+  if (none.length == wants.length) {
+    throw UsageException('nothing to download: ${{for (final t in none) offers(t)}.join('; ')}');
   }
-  await download.run(wants, root, options(c));
+  for (final t in none) {
+    Console.log('skipping @${t.user}: ${offers(t)}');
+    wants.remove(t);
+  }
+  await run.run(wants, root, options(c));
 }

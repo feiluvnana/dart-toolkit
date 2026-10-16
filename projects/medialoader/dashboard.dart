@@ -23,7 +23,7 @@ final class Board {
   final speed = Speed(); // every CDN byte
   String? pause; // why a platform's calls are on hold
   Timer? _pauseTimer;
-  var done = false, failuresOnly = false, live = false, retrying = 0;
+  var done = false, crashed = false, failuresOnly = false, live = false, retrying = 0;
   final failures = <Failure>[]; // what r retries
   bool get finished => done && retrying == 0;
   int get requests => apis.fold(0, (n, c) => n + c.sent());
@@ -143,15 +143,24 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
           'show': (
             '',
             () => work()
-                .then((_) {}, onError: (Object e, _) => b.note('✗ $e', failed: true))
+                .then(
+                  (_) {},
+                  onError: (Object e, _) {
+                    b.crashed = true;
+                    b.note('✗ $e', failed: true);
+                  },
+                )
                 .whenComplete(() => b.done = true),
           ),
           'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()} (${b.events.length} lines)')),
+          'f': (b.failuresOnly ? 'all lines' : 'failures only', () => b.failuresOnly = !b.failuresOnly),
           if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
           'q escape': (
             'quit',
             () async {
-              if (b.finished || await Console.confirm('Stop downloading? The next run continues from here.')) app.quit();
+              if (b.finished || await Console.confirm('Stop downloading? The next run continues from here.')) {
+                app.quit();
+              }
             },
           ),
         },
@@ -164,19 +173,23 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
     await close();
   }
   summary();
-  exitCode = !board.finished ? 130 : (board.failures.isNotEmpty ? 1 : 0);
+  exitCode = !board.finished ? 130 : (board.failures.isNotEmpty || board.crashed ? 1 : 0);
 }
 
-Color platformColor(String code) => switch (code) {
-  'ins' => Color.magenta,
-  'twt' => Color.cyan,
-  'fbk' => Color.blue,
-  _ => Color.white,
-};
+// Each platform's tag colour: the known ones fixed, a new one the next
+// free colour, so a TikTok or Bluesky added later needs nothing here.
+const _fixed = {'ins': Color.magenta, 'twt': Color.cyan, 'fbk': Color.blue};
+const _spare = [Color.green, Color.yellow, Color.red, Color.white];
+final _picked = <String, Color>{};
+Color platformColor(String code) =>
+    _fixed[code] ?? _picked.putIfAbsent(code, () => _spare[_picked.length % _spare.length]);
 
 // medialoader [ins] · 2 users · 140/400 files · 31 new · 2 failed · 120.4 MB · 3.1 MB/s · 9 API calls · 1 min 12 s
 String title(Board b) => [
-  ['medialoader', if (b.users.isNotEmpty) '[${{for (final u in b.users) u.platform}.join(',')}]'].join(' '),
+  [
+    'medialoader',
+    if (b.users.isNotEmpty) '[${{for (final u in b.users) u.platform}.join(',')}]',
+  ].join(' '),
   '${b.users.length} ${b.users.length == 1 ? 'user' : 'users'}',
   '${b.sum((p) => p.done)}/${b.sum((p) => p.queued)} files',
   '${b.sum((p) => p.added)} new',
@@ -195,11 +208,15 @@ void draw(Region r) {
   users(left.box('users', color: border).scroll(b.usersScroll), b);
   final waiting = b.sum((p) => p.queued) - b.sum((p) => p.done) - b.transfers.length;
   transfers(
-    right.box('downloading: ${b.transfers.length}, ${waiting < 0 ? 0 : waiting} waiting', color: border).scroll(b.transfersScroll),
+    right
+        .box('downloading: ${b.transfers.length}, ${waiting < 0 ? 0 : waiting} waiting', color: border)
+        .scroll(b.transfersScroll),
     b,
   );
   // Clicking the log's header shows only failures and rate limits, and back.
-  final head = b.failuresOnly ? 'log: failures & rate limits only (click for all)' : 'log (click for failures & rate limits only)';
+  final head = b.failuresOnly
+      ? 'log: failures & rate limits only (f or click: all)'
+      : 'log (f or click: failures & rate limits only)';
   final toggle = {'click': ('', () => b.failuresOnly = !b.failuresOnly)};
   events(bottom.box(head, color: border, on: toggle).scroll(b.log), b);
 }
@@ -214,6 +231,13 @@ void tag(Region r, String? platform) {
 void users(Region r, Board b) {
   final lines = <void Function(Region)>[
     if (b.users.isEmpty) (r) => r.spin('looking up users', color: busy, style: {.bold}),
+    // Every user together: one bar over all files, and the bytes so far.
+    if (b.users.length > 1)
+      (r) {
+        r.write('all'.padRight(13), inline: true, style: {.bold});
+        r.bar(b.sum((p) => p.done), b.sum((p) => p.queued), color: b.sum((p) => p.failed) > 0 ? bad : flow);
+      },
+    if (b.users.length > 1) (r) {},
     for (final u in b.users) ...[
       (r) {
         tag(r, u.platform);
@@ -224,7 +248,12 @@ void users(Region r, Board b) {
           case User(id: null):
             r.spin('looking up profile', color: busy, style: {.bold});
           case User(:final id):
-            u.busy ? r.write('($id)  working', color: busy) : r.write('($id)  ✓ done', color: good);
+            final added = u.parts.values.fold(0, (n, p) => n + p.added);
+            final bytes = u.parts.values.fold(0, (n, p) => n + p.bytes);
+            r.write('($id)  ', inline: true, style: {.dim});
+            u.busy
+                ? r.write('working · $added new · ${bytes.size()}', color: busy)
+                : r.write('✓ done · $added new · ${bytes.size()}', color: good);
         }
       },
       for (final p in u.parts.values) ...[
@@ -296,9 +325,12 @@ const bad = Color.red, warn = Color.yellow;
 // Every log line so far into .medialoader.log next to the script; returns its path.
 Future<String> saveLog() async {
   final file = Fs.scriptDir().file('.medialoader.log');
-  await file.write([
-    for (final e in board.events) '${e.at.format('yyyy-MM-dd HH:mm:ss')}  ${e.platform == null ? '' : '[${e.platform}] '}${e.line}\n',
-  ].join());
+  await file.write(
+    [
+      for (final e in board.events)
+        '${e.at.format('yyyy-MM-dd HH:mm:ss')}  ${e.platform == null ? '' : '[${e.platform}] '}${e.line}\n',
+    ].join(),
+  );
   return file.path();
 }
 
@@ -307,7 +339,8 @@ void summary() {
   for (final u in board.users) {
     Console.table(
       [
-        for (final p in u.parts.values) [p.name, p.added, p.had, if (p.failed > 0) p.failed else null, p.bytes.size(), p.note],
+        for (final p in u.parts.values)
+          [p.name, p.added, p.had, if (p.failed > 0) p.failed else null, p.bytes.size(), p.note],
       ],
       header: ['[${u.platform}] @${u.name}', 'new', 'had', 'failed', 'size', ''],
     );

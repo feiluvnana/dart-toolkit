@@ -7,3 +7,4 @@ coverage/
 # Script
 projects/*/*
 !projects/*/*.dart
+!projects/*/platforms/

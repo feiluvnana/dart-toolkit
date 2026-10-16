@@ -39,6 +39,7 @@
 - `yaml`: an in-house reader replaces package:yaml (import startup +225 → +80 ms, ~3× faster parse); `Yaml.parse` takes no `from:`.
 - `archive`: the LZMA2 window keeps a quarter of the dictionary as slack.
 - ffmpeg and 7-Zip download in an isolate spawned by URI, so `image`, `video` and `archive` never compile http at startup; a compiled exe asks for the tool on PATH instead.
+- `cli`: a long `values:` list shows as `<value>` with the choices after the help, so one option no longer pushes every description off the screen; a `Multi` defaulting to every value shows `[default: all]`.
 
 **Fixed**
 
@@ -78,6 +79,10 @@
 - New: single post URLs (`instagram.com/p|reel/…`, `x.com/<user>/status/<id>`), `--since`, `--dry-run`, files dated to their post, failures retried once without a terminal, `--version`.
 - Fixed: `r` retried with closed clients after the run; no summary without a terminal; negative speed; partial files counted as had; requests counted twice; the CDN client sent no referer; usage errors and `--reset` showed only in the Tui; Facebook 404/429 hidden, duplicate and re-fetched media, stories downloaded again every month, the photo cursor saved before its files; whole videos read into memory and animated GIFs flattened by compression.
 - Removed: the alias options (`--compress-image`, …), folder names as category values, the posts→tweets and flat-layout migrations.
+- Categories are one shared set for every platform: `posts` `stories` `highlights` `photos` `videos` `albums` `profiles` (`--category=posts,stories`); each platform offers its own, and a user whose platform has none of the chosen ones is skipped. Folders are named after them; Twitter's `tweets/` is renamed to `posts/` on the next run.
+- Restructured so a new platform (TikTok, Bluesky, …) is one file in `platforms/` extending `Platform` plus a line in `platforms.dart`: login from `.<code>.session`, rate-limit waits, error wording, CLI values, `update` and dashboard colours come for free. `job.dart` (a user's download and index), `queue.dart` (downloads and compression), `feed.dart` (newest-first timelines), `run.dart` (a run, `update`'s discovery).
+- Fixed: `--reset` deleted every listing cursor, not only the reset categories'; it looked for the folder under the name as typed instead of the resolved one; a tweet whose media did not resolve still wrote its caption; Instagram fetched the first posts page twice per user; a crash inside the dashboard exited 0; with `--since`, the Facebook photos walk kept opening older photos' pages.
+- Dashboard: an overall progress row, each user's new files and size beside their name, `f` toggles failures only.
 ## 0.0.5
 
 **Added**

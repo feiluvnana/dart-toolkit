@@ -521,27 +521,32 @@ void main() {
       expect(entries.where((e) => e.isLink).map((e) => e.name), ['testlink']);
     });
 
-    test('damaged 7z and RAR input is a FormatException, never a crash', () async {
-      final fx = Directory('test/fixtures/archives')
-          .listSync()
-          .whereType<io.File>()
-          .where((f) => !f.path.endsWith('.md'));
-      for (final f in fx) {
-        final orig = f.readAsBytesSync();
-        for (var t = 1; t < 40; t++) {
-          final cut = orig.sublist(0, orig.length * t ~/ 40);
-          final flipped = Uint8List.fromList(orig)..[8 + (orig.length - 9) * t ~/ 40] ^= 0x10;
-          for (final input in [cut, flipped]) {
-            try {
-              await (Reader.of(input) >
-                  Archive.unarchive(p('dmg'), password: f.path.contains('7z') ? '12345678' : 'password'));
-            } on FormatException {
-              // expected
+    test(
+      'damaged 7z and RAR input is a FormatException, never a crash',
+      () async {
+        final fx = Directory('test/fixtures/archives')
+            .listSync()
+            .whereType<io.File>()
+            .where((f) => !f.path.endsWith('.md'));
+        for (final f in fx) {
+          final orig = f.readAsBytesSync();
+          for (var t = 1; t < 40; t++) {
+            final cut = orig.sublist(0, orig.length * t ~/ 40);
+            final flipped = Uint8List.fromList(orig)..[8 + (orig.length - 9) * t ~/ 40] ^= 0x10;
+            for (final input in [cut, flipped]) {
+              try {
+                await (Reader.of(input) >
+                    Archive.unarchive(p('dmg'), password: f.path.contains('7z') ? '12345678' : 'password'));
+              } on FormatException {
+                // expected
+              }
             }
           }
         }
-      }
-    }, tags: 'slow');
+      },
+      tags: 'slow',
+      timeout: const Timeout(Duration(minutes: 3)),
+    ); // ~20 s alone, more beside the whole suite
 
     test('an encrypted or truncated zip is a FormatException', () async {
       if (!await has('zip')) markTestSkipped('needs zip');
@@ -556,7 +561,7 @@ void main() {
         Reader.of(bytes.sublist(0, bytes.length - 30)) > Archive.unarchive(p('o2')),
         throwsFormatException,
       );
-    }, timeout: const Timeout(Duration(minutes: 3))); // ~20 s alone, far more beside the whole suite
+    });
   });
 
   group('Archive.archive', () {

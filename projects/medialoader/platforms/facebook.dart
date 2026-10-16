@@ -1,4 +1,5 @@
-// Facebook's web pages, read from the data they embed. Import with `as facebook`.
+// Facebook's web pages, read from the data they embed: posts, photos,
+// videos, albums, stories, highlights and profile pictures.
 library;
 
 import 'package:dart_toolkit/fs.dart';
@@ -6,20 +7,10 @@ import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/pool.dart';
 
-import 'dashboard.dart';
-import 'download.dart';
-import 'media.dart';
-import 'platform.dart';
+import '../job.dart';
+import '../platform.dart';
 
 const web = 'https://www.facebook.com';
-
-// Polite: 60 pages per 10 minutes.
-final apiRate = Rate(
-  60,
-  10.minutes,
-  pause: 2.seconds,
-  onWait: (w) => board.holdPause('Facebook rate limit: waiting ${w.human()}', w, platform: 'fbk'),
-);
 
 final _digits = RegExp(r'^\d+$');
 
@@ -31,7 +22,9 @@ Future<Doc> load(Client c, String path) async {
   try {
     final res = await c.get(path);
     final text = await res.text();
-    if (res.url().contains('/login')) throw Exception('Facebook logged you out: copy a fresh .fbk.session from your browser.');
+    if (res.url().contains('/login')) {
+      throw Exception('Facebook logged you out: copy a fresh .fbk.session from your browser.');
+    }
     final page = Html.parse(text, base: res.url());
     return (page: page, data: page.json(), text: text);
   } on HttpStatusException catch (e) {
@@ -62,7 +55,9 @@ typedef Profile = ({String id, String name, String? avatar, String? cover, Doc d
 
 Future<Profile> profile(Client c, String name) async {
   final d = await load(c, _digits.hasMatch(name) ? '/profile.php?id=$name' : '/$name/');
-  if (d.text.isEmpty || d.text.contains('>Page Not Found<') || d.text.contains("This content isn't available right now")) {
+  if (d.text.isEmpty ||
+      d.text.contains('>Page Not Found<') ||
+      d.text.contains("This content isn't available right now")) {
     throw Exception('user not found or unavailable: "$name"');
   }
   return (
@@ -88,7 +83,10 @@ Future<Photo?> photo(Client c, String id, [String set = '']) async {
       one(d.data, '**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri');
   if (url == null) return null;
   return (
-    id: d.data.$('**').where((n) => n.$('__isNode').text() == 'Photo').firstOrNull?.$('id').text() ?? one(d.data, '**.photo_id') ?? id,
+    id:
+        d.data.$('**').where((n) => n.$('__isNode').text() == 'Photo').firstOrNull?.$('id').text() ??
+        one(d.data, '**.photo_id') ??
+        id,
     url: url,
     caption: one(d.data, '**.message.text'),
     at: when(d.data, '**.publish_time|**.created_time|**.creation_time'),
@@ -106,8 +104,14 @@ Future<Video?> video(Client c, String id) async {
       (progressive.where((p) => p.$('metadata.quality').text() == 'HD').firstOrNull ?? progressive.firstOrNull)
           ?.$('progressive_url')
           .text() ??
-      one(d.data, '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url') ??
-      RegExp(r'(?:<|\\u003C)BaseURL>(https:[^<\\"]+)').firstMatch(d.text)?[1]?.replaceAll(r'\/', '/').replaceAll('&amp;', '&');
+      one(
+        d.data,
+        '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url',
+      ) ??
+      RegExp(r'(?:<|\\u003C)BaseURL>(https:[^<\\"]+)')
+          .firstMatch(d.text)?[1]
+          ?.replaceAll(r'\/', '/')
+          .replaceAll('&amp;', '&');
   if (url == null) return null;
   return (
     id: id,
@@ -132,7 +136,8 @@ List<Post> timeline(Json data) {
 Post? _post(Json node) {
   final inner = node.$('comet_sections.content.story|post');
   final story = inner.isEmpty ? node : inner;
-  const message = 'message.text|comet_sections.message.story.message.text|comet_sections.message_container.story.message.text';
+  const message =
+      'message.text|comet_sections.message.story.message.text|comet_sections.message_container.story.message.text';
   final items = <String, Item>{};
   for (final n in story.$('**')) {
     final type = n.$('__typename').text() ?? '', id = n.$('id').text();
@@ -148,7 +153,11 @@ Post? _post(Json node) {
   final id =
       story.$('post_id|legacy_token').text() ??
       node.$('post_id').text() ??
-      [story.$('id').text(), node.$('id').text(), ...items.keys].firstWhere((i) => i != null && _digits.hasMatch(i), orElse: () => null);
+      [
+        story.$('id').text(),
+        node.$('id').text(),
+        ...items.keys,
+      ].firstWhere((i) => i != null && _digits.hasMatch(i), orElse: () => null);
   if (id == null || (items.isEmpty && caption == null)) return null;
   final at = story.$('creation_time').value<int>() ?? node.$('creation_time').value<int>();
   return (
@@ -165,7 +174,10 @@ typedef StoryItem = ({String id, bool video, String url});
 List<StoryItem> storyItems(Json data) {
   final seen = <String>{};
   return [
-    for (final url in strings(data, '**.progressive_url') + strings(data, '**.browser_native_hd_url') + strings(data, '**.playable_url'))
+    for (final url
+        in strings(data, '**.progressive_url') +
+            strings(data, '**.browser_native_hd_url') +
+            strings(data, '**.playable_url'))
       if (RegExp(r'xpv_asset_id%22%3A(\d+)').firstMatch(url)?[1] ??
               RegExp(r'/m\d+/([\w-]+)\.mp4').firstMatch(url)?[1] ??
               Uri.parse(url).pathSegments.last.split('.').first
@@ -199,25 +211,22 @@ String? setIn(Iterable<String> links, [bool Function(String set)? test]) => link
     .firstOrNull;
 
 // The set of a profile's photos: the photo grid's, else any `pb.` set.
-String? profileSet(Doc d) =>
-    setIn(strings(d.data, '**.pageItems.**')) ?? setIn(links(d), (s) => s.startsWith('pb.'));
+String? profileSet(Doc d) => setIn(strings(d.data, '**.pageItems.**')) ?? setIn(links(d), (s) => s.startsWith('pb.'));
 
 final platform = Facebook();
 
-final class Facebook implements Platform {
+final class Facebook extends Platform {
   @override
-  final code = 'fbk', name = 'facebook', site = web;
+  final code = 'fbk', name = 'Facebook', site = web;
 
   @override
-  final categories = const [
-    Category('post'),
-    Category('photo'),
-    Category('video'),
-    Category('album'),
-    Category('story', 'stories'),
-    Category('highlight'),
-    Category('profile'),
-  ];
+  final kinds = const [Kind.posts, Kind.photos, Kind.videos, Kind.albums, Kind.stories, Kind.highlights, Kind.profiles];
+
+  @override
+  final loginCookies = const {'c_user', 'xs'};
+
+  // Polite: 60 pages per 10 minutes.
+  late final apiRate = rate(60, 10.minutes);
 
   static final _url = RegExp(r'^(?:https?://)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)/([^/?#]+)');
 
@@ -234,36 +243,23 @@ final class Facebook implements Platform {
     if (_url.firstMatch(s)?[1] case final seg? when !nonProfile.contains(seg.toLowerCase()) && !seg.contains('.php')) {
       return Target(this, seg);
     }
-    return Target(this, username(s, 'Facebook'));
-  }
-
-  // The logged-in client from .fbk.session (cookies.txt export plus a "user-agent: ..." line), or null.
-  @override
-  Future<Client?> login() async {
-    final jar = await Cookies.load(Fs.scriptDir().file('.fbk.session'));
-    if (jar['c_user'] == null && jar['xs'] == null) return null;
-    return Http.client(
-      base: web,
-      rate: apiRate,
-      check: true,
-      cookies: jar,
-      headers: {
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'same-origin',
-      },
-    );
+    return Target(this, username(s, name));
   }
 
   @override
-  Object explain(Object e) => switch (e) {
-    HttpStatusException(status: final status && (401 || 403), :final url) =>
-      'Facebook refused (HTTP $status): your session in .fbk.session may have expired or is invalid ($url)',
-    HttpStatusException(status: 429, :final url) => 'Facebook rate limit reached (HTTP 429): wait a few minutes ($url)',
-    _ => e,
-  };
+  Client client(Cookies jar) => Http.client(
+    base: web,
+    rate: apiRate,
+    check: true,
+    cookies: jar,
+    headers: {
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9',
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-site': 'same-origin',
+    },
+  );
 
   @override
   Future<void> explore(Job j) async {
@@ -271,13 +267,13 @@ final class Facebook implements Platform {
     await j.open(p.name, id: p.id);
     String tab(String t) => _digits.hasMatch(p.name) ? '/profile.php?id=${p.name}&sk=$t' : '/${p.name}/$t/';
     await Future.wait([
-      if (j.wants('profile')) _profile(j, p),
-      if (j.wants('post')) _posts(j, p),
-      if (j.wants('photo')) _photos(j, p, tab),
-      if (j.wants('video')) _videos(j, p, tab),
-      if (j.wants('album')) _albums(j, tab),
-      if (j.wants('story')) _stories(j, p),
-      if (j.wants('highlight')) _highlights(j, p),
+      if (j.wants(Kind.profiles)) Future(() => _profile(j, p)),
+      if (j.wants(Kind.posts)) _posts(j, p),
+      if (j.wants(Kind.photos)) _photos(j, p, tab),
+      if (j.wants(Kind.videos)) _videos(j, p, tab),
+      if (j.wants(Kind.albums)) _albums(j, tab),
+      if (j.wants(Kind.stories)) _stories(j, p),
+      if (j.wants(Kind.highlights)) _highlights(j, p),
     ]);
   }
 
@@ -290,42 +286,44 @@ final class Facebook implements Platform {
         if (r.failures().isEmpty) j.index.posts[key] = items;
       });
 
-  Future<void> _profile(Job j, Profile p) async {
-    final files = [
-      if (p.avatar case final url?) (url, Fs.sanitize(Uri.parse(url).pathSegments.last), 'new profile avatar'),
-      if (p.cover case final url?) (url, 'cover_${Fs.sanitize(Uri.parse(url).pathSegments.last)}', 'new cover photo'),
-    ];
-    j.add([for (final (url, id, change) in files) Download(j.dir.dir('profiles').file('${j.seen(id, change)}_$id'), url: url)]);
-    j.phase(j.part('profiles'), '${files.length} profile ${files.length == 1 ? 'asset' : 'assets'}', done: true);
-  }
+  void _profile(Job j, Profile p) => j.profiles([
+    if (p.avatar case final url?)
+      (url: url, id: Fs.sanitize(Uri.parse(url).pathSegments.last), change: 'new profile avatar', ext: ''),
+    if (p.cover case final url?)
+      (url: url, id: 'cover_${Fs.sanitize(Uri.parse(url).pathSegments.last)}', change: 'new cover photo', ext: ''),
+  ]);
 
   // The posts the profile page embeds: each photo or video at full size from its page.
   Future<void> _posts(Job j, Profile p) async {
-    final part = j.part('posts');
-    j.phase(part, 'fetching timeline posts');
+    j.phase(Kind.posts, 'fetching timeline posts');
     var n = 0;
     for (final post in timeline(p.doc.data)) {
       if (_known(j, 'post:${post.id}') || !j.keep(post.at)) continue;
-      final dir = j.dir.dir('posts').dir(post.at.format('yyyy-MM'));
+      final dir = j.folder(Kind.posts).dir(post.at.format('yyyy-MM'));
       // Photos and videos are numbered apart: <id>.jpg, <id>_1.mp4 …
       String name(Item i) {
-        final same = [for (final o in post.items) if (o.video == i.video) o.id];
+        final same = [
+          for (final o in post.items)
+            if (o.video == i.video) o.id,
+        ];
         return same.length > 1 ? '${post.id}_${same.indexOf(i.id) + 1}' : post.id;
       }
 
       final files = <Download>[];
       for (final i in post.items) {
         final url = i.video ? (await video(j.api, i.id))?.url ?? i.url : (await photo(j.api, i.id))?.url ?? i.url;
-        if (url != null) files.add(Download(dir.file('${name(i)}.${i.video ? 'mp4' : ext(url)}'), url: url, at: post.at));
+        if (url != null) {
+          files.add(Download(dir.file('${name(i)}.${i.video ? 'mp4' : ext(url)}'), url: url, at: post.at));
+        }
       }
       if (post.caption case final c? when c.trim().isNotEmpty) {
         files.add(Download(dir.file('${post.id}.txt'), text: c, at: post.at));
       }
       if (files.isEmpty) continue;
       _remember(j, 'post:${post.id}', files, [for (final i in post.items) i.id]);
-      j.phase(part, '${++n} posts');
+      j.phase(Kind.posts, '${++n} posts');
     }
-    j.phase(part, '$n posts', done: true);
+    j.phase(Kind.posts, '$n posts', done: true);
   }
 
   // Walks a photo set from [start] along each page's next photo into
@@ -354,10 +352,15 @@ final class Facebook implements Platform {
         continue;
       }
       known = 0;
-      if (!j.keep(ph.at)) continue;
+      // The profile's photos run newest first: past --since, the rest are older.
+      if (!j.keep(ph.at)) {
+        if (mark != null) break;
+        continue;
+      }
       final batch = _remember(j, '$key:${ph.id}', [
         Download(file, url: ph.url, at: ph.at),
-        if (ph.caption case final c? when c.trim().isNotEmpty) Download(dir(ph).file('${ph.id}.txt'), text: c, at: ph.at),
+        if (ph.caption case final c? when c.trim().isNotEmpty)
+          Download(dir(ph).file('${ph.id}.txt'), text: c, at: ph.at),
       ]);
       if (mark != null && !j.o.dry) {
         saving = saving.then((_) async {
@@ -373,8 +376,7 @@ final class Facebook implements Platform {
   }
 
   Future<void> _photos(Job j, Profile p, String Function(String) tab) async {
-    final part = j.part('photos');
-    j.phase(part, 'fetching photos index');
+    j.phase(Kind.photos, 'fetching photos index');
     final by = await load(j.api, tab('photos_by'));
     var set = profileSet(by);
     if (set == null) {
@@ -388,19 +390,21 @@ final class Facebook implements Platform {
       ids.addAll(photoIds(all));
       set = profileSet(all);
     }
-    final mark = j.cursor('photos');
+    final mark = j.cursor(Kind.photos);
     final resume = j.o.all ? '' : (await mark.text(or: '')).trim();
-    j.phase(part, 'listing photos');
+    j.phase(Kind.photos, 'listing photos');
     final n = await _walk(j, [if (resume.isNotEmpty) resume, ...ids], set ?? '', 'photo', (ph) {
-      return j.dir.dir('photos').dir(ph.at.format('yyyy-MM'));
+      return j.folder(Kind.photos).dir(ph.at.format('yyyy-MM'));
     }, mark: mark);
-    j.phase(part, '$n photos listed', done: true);
+    j.phase(Kind.photos, '$n photos listed', done: true);
   }
 
   Future<void> _videos(Job j, Profile p, String Function(String) tab) async {
-    final part = j.part('videos');
-    j.phase(part, 'fetching videos index');
-    final pages = [await load(j.api, tab('videos')), await load(j.api, tab(_digits.hasMatch(p.name) ? 'reels_tab' : 'reels'))];
+    j.phase(Kind.videos, 'fetching videos index');
+    final pages = [
+      await load(j.api, tab('videos')),
+      await load(j.api, tab(_digits.hasMatch(p.name) ? 'reels_tab' : 'reels')),
+    ];
     final ids = {
       for (final d in pages) ...[
         for (final l in links(d))
@@ -413,19 +417,18 @@ final class Facebook implements Platform {
       if (_known(j, 'video:$id')) continue;
       final v = await video(j.api, id);
       if (v == null || !j.keep(v.at)) continue;
-      final dir = j.dir.dir('videos').dir(v.at.format('yyyy-MM'));
+      final dir = j.folder(Kind.videos).dir(v.at.format('yyyy-MM'));
       _remember(j, 'video:$id', [
         Download(dir.file('${v.id}.mp4'), url: v.url, at: v.at),
         if (v.title case final t? when t.trim().isNotEmpty) Download(dir.file('${v.id}.txt'), text: t, at: v.at),
       ]);
-      j.phase(part, '${++n} videos discovered');
+      j.phase(Kind.videos, '${++n} videos discovered');
     }
-    j.phase(part, '$n videos listed', done: true);
+    j.phase(Kind.videos, '$n videos listed', done: true);
   }
 
   Future<void> _albums(Job j, String Function(String) tab) async {
-    final part = j.part('albums');
-    j.phase(part, 'fetching albums index');
+    j.phase(Kind.albums, 'fetching albums index');
     final d = await load(j.api, tab('photos_albums'));
     final albums = <String, String>{}; // set → title
     for (final n in d.data.$('**')) {
@@ -439,43 +442,48 @@ final class Facebook implements Platform {
     var n = 0;
     for (final MapEntry(key: set, value: title) in albums.entries) {
       final page = await load(j.api, '/media/set/?set=$set');
-      final name = page.data.$('**').where((n) => n.$('__isMediaSet').text() == 'Album').firstOrNull?.$('title.text').text() ??
+      final name =
+          page.data.$('**').where((n) => n.$('__isMediaSet').text() == 'Album').firstOrNull?.$('title.text').text() ??
           one(page.data, '**.title.text') ??
           title;
-      final dir = j.dir.dir('albums').dir(Fs.sanitize(name));
+      final dir = j.folder(Kind.albums).dir(Fs.sanitize(name));
       n += await _walk(j, photoIds(page), set, 'album:$set', (_) => dir);
-      j.phase(part, '${albums.length} albums, $n photos');
+      j.phase(Kind.albums, '${albums.length} albums, $n photos');
     }
-    j.phase(part, '${albums.length} albums, $n photos', done: true);
+    j.phase(Kind.albums, '${albums.length} albums, $n photos', done: true);
   }
 
   // Story files by the month they were first seen (the index keeps it), so a
   // story is downloaded once.
   List<Download> _storyFiles(Job j, List<StoryItem> items, Dir Function(DateTime seen) dir) => [
     for (final s in items)
-      if (DateTime.fromMillisecondsSinceEpoch((j.index.stories[s.id] ??= DateTime.now().millisecondsSinceEpoch ~/ 1000) * 1000)
-          case final seen)
+      if (firstSeen(j.index, s.id) case final seen)
         Download(dir(seen).file('${s.id}.${s.video ? 'mp4' : ext(s.url)}'), url: s.url, at: seen),
   ];
 
   Future<void> _stories(Job j, Profile p) async {
-    final part = j.part('stories');
-    j.phase(part, 'fetching active stories');
-    final buckets = {...strings(p.doc.data, '**.story_bucket.nodes.*.id'), ...strings(p.doc.data, '**.story_bucket.id')};
+    j.phase(Kind.stories, 'fetching active stories');
+    final buckets = {
+      ...strings(p.doc.data, '**.story_bucket.nodes.*.id'),
+      ...strings(p.doc.data, '**.story_bucket.id'),
+    };
     var files = <Download>[];
-    for (final path in [for (final b in buckets) '/stories/$b/', '/stories/${_digits.hasMatch(p.id) ? p.id : p.name}/']) {
+    for (final path in [
+      for (final b in buckets) '/stories/$b/',
+      '/stories/${_digits.hasMatch(p.id) ? p.id : p.name}/',
+    ]) {
       final items = storyItems((await load(j.api, path)).data);
-      files = _storyFiles(j, items, (seen) => j.dir.dir('stories').dir(seen.format('yyyy-MM')));
+      files = _storyFiles(j, items, (seen) => j.folder(Kind.stories).dir(seen.format('yyyy-MM')));
       if (files.isNotEmpty) break;
     }
     j.add(files);
-    j.phase(part, '${files.length} stories up now', done: true);
+    j.phase(Kind.stories, '${files.length} stories up now', done: true);
   }
 
   // Highlights: each link to /stories/highlights/<id>/ in the profile's data, titled by its object.
   Future<void> _highlights(Job j, Profile p) async {
-    final part = j.part('highlights'), index = j.index;
-    j.phase(part, 'listing highlights');
+    final index = j.index;
+    j.phase(Kind.highlights, 'listing highlights');
     final found = <String, String>{}; // id → title
     final link = RegExp(r'/stories/highlights/(\d+)');
     for (final n in p.doc.data.$('**')) {
@@ -490,7 +498,7 @@ final class Facebook implements Platform {
     for (final MapEntry(key: id, value: name) in found.entries) {
       final title = name.isEmpty ? 'highlight_$id' : name;
       final items = storyItems((await load(j.api, '/stories/highlights/$id/')).data);
-      final files = _storyFiles(j, items, (_) => j.dir.dir('highlights').dir(Fs.sanitize(title)));
+      final files = _storyFiles(j, items, (_) => j.folder(Kind.highlights).dir(Fs.sanitize(title)));
       total += files.length;
       j.add(files);
       final ids = {for (final i in items) i.id};
@@ -506,6 +514,10 @@ final class Facebook implements Platform {
       j.changed('highlight "$title" gone, files kept');
     }
     index.highlights = now;
-    j.phase(part, '${found.length} ${found.length == 1 ? 'highlight' : 'highlights'}, $total items', done: true);
+    j.phase(
+      Kind.highlights,
+      '${found.length} ${found.length == 1 ? 'highlight' : 'highlights'}, $total items',
+      done: true,
+    );
   }
 }

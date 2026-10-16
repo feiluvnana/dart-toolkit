@@ -1257,6 +1257,15 @@ String _describeArg(Param<Object?> a) {
   return d.trimLeft();
 }
 
+/// A `values:` hint short enough stays in the flag column (`<a|b>`); a long
+/// one becomes `<value>` with the choices after the help, so one option does
+/// not push every description off the screen.
+(String, String) _valuesHint(String hint) {
+  if (!hint.contains('|') || hint.length <= 24) return (hint, '');
+  final choices = hint.substring(1, hint.length - (hint.endsWith('...') ? 4 : 1)).split('|');
+  return ('<value>${hint.endsWith('...') ? '...' : ''}', ' One of: ${choices.join(', ')}.');
+}
+
 List<(String, String)> _optionRows(Command cmd) {
   final rows = <(String, String)>[];
   for (final v in cmd._params) {
@@ -1265,8 +1274,9 @@ List<(String, String)> _optionRows(Command cmd) {
         final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._or ? '[no-]' : ''}${v._name}';
         rows.add((left, v._help));
       case Opt<Object?>():
-        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
-        var right = v._help;
+        final (hint, choices) = _valuesHint(v._hint);
+        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} $hint';
+        var right = '${v._help}$choices';
         if (v._min != null || v._max != null) {
           final range = v._min == null
               ? '<= ${_shown(v._max)}'
@@ -1284,10 +1294,13 @@ List<(String, String)> _optionRows(Command cmd) {
         }
         rows.add((left, right.trimLeft()));
       case Multi<Object?>():
-        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
-        var right = v._help;
+        final (hint, choices) = _valuesHint(v._hint);
+        final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} $hint';
+        var right = '${v._help}$choices';
         if (v._or.isNotEmpty) {
-          right = '${right.isEmpty ? '' : '$right '}[default: ${v._or.map(_shown).join(', ')}]';
+          // Every value as the default reads as "all".
+          final every = v._hint.contains('|') && v._or.length == v._hint.split('|').length;
+          right = '${right.isEmpty ? '' : '$right '}[default: ${every ? 'all' : v._or.map(_shown).join(', ')}]';
         }
         rows.add((left, right.trimLeft()));
       case Arg<Object?>() || Rest<Object?>():
