@@ -389,13 +389,10 @@ void main() {
   });
 
   group('Page navigation', () {
-    test('go/back return the page; go to its own url reloads', () async {
+    test('go returns the page; go to its own url reloads', () async {
       final page = await browser.open(dataUrl('<title>One</title>'));
       expect((await page.go(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
       await page.go(dataUrl('<title>One</title>'));
-      await page.go(dataUrl('<title>Two</title>'));
-      await page.back();
-      expect((await page.html()).$('title').text(), 'One');
       await page.go(await page.url());
       expect((await page.html()).$('title').text(), 'One');
       await page.close();

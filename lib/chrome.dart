@@ -12,7 +12,7 @@
 /// Public surface is exactly: [Chrome], [Browser], [Page], [Download], [Capture], [Resource], [BrowserException].
 /// - `Chrome.launch/connect()` open a browser.
 /// - [Browser] supports `open` `pages` `close`.
-/// - [Page] supports `go` `back` `url` `html` `text` `run`
+/// - [Page] supports `go` `url` `html` `text` `run`
 ///   `cookies` `cookie` `responses` `click` `fill` `press` `select` `upload`
 ///   `scroll` `wait` `idle`
 ///   `screenshot` `pdf` `download` `close`.
@@ -600,42 +600,16 @@ final class Page implements Closeable {
     final r = await _s.send('Page.navigate', {'url': url});
     if (r['errorText'] case final String e when e.isNotEmpty) throw BrowserException('go $url: $e');
     return r['loaderId'] as String?;
-  }, sameDocument: true);
-
-  /// Go back; waits for the load event. Without history, stays. Returns this page.
-  Future<Page> back() async {
-    final h = await _s.send('Page.getNavigationHistory');
-    final at = h['currentIndex']! as int;
-    if (at == 0) return this;
-    final entry = ((h['entries']! as List)[at - 1] as Map)['id'];
-    return _navigate(_url, () async {
-      await _s.send('Page.navigateToHistoryEntry', {'entryId': entry});
-      return null;
-    });
-  }
+  });
 
   /// Run [start] and wait for the main frame's load. [start] returns the
-  /// new loader id, or null to learn it from the next `frameNavigated`
-  /// (with [sameDocument], null means a fragment change: done).
-  Future<Page> _navigate(
-    String subject,
-    Future<String?> Function() start, {
-    bool sameDocument = false,
-  }) async {
+  /// new loader id, or null for a same-document change (a fragment): done.
+  Future<Page> _navigate(String subject, Future<String?> Function() start) async {
     final limit = _timeout;
     final sw = Stopwatch()..start();
     Duration left() => limit - sw.elapsed;
     try {
-      final navigated = sameDocument
-          ? null
-          : _s.once('Page.frameNavigated', where: (e) => (e['frame']! as Map)['parentId'] == null, timeout: limit);
-      navigated?.ignore();
-      var loader = await start().timeout(limit);
-      if (navigated != null) {
-        final e = await navigated.timeout(left());
-        if (e['type'] == 'BackForwardCacheRestore') return this;
-        loader = (e['frame']! as Map)['loaderId'] as String?;
-      }
+      final loader = await start().timeout(limit);
       if (loader == null || _loads.contains(loader)) return this;
       await _s.once(
         'Page.lifecycleEvent',
@@ -1485,7 +1459,6 @@ extension BrowserFuture on Future<Browser> {
 /// Future mirrors for [Page].
 extension PageFuture on Future<Page> {
   Future<Page> go(String url) async => (await this).go(url);
-  Future<Page> back() async => (await this).back();
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();

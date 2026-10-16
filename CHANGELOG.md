@@ -63,7 +63,7 @@
 - `pool`: `retries:` retries every exception except a bug (`Error`), bad data (`ContentException`/`FormatException`), TLS, an HTTP 4xx other than 408/429, a `SessionException`, an `HttpRequestException` and a refused SOCKS login or ruleset: a shell's `ExitException`, a 5xx `HttpStatusException` and a `BrowserException` were never retried. The http client no longer retries a refused SOCKS login either.
 - `video`/`image`: an ffmpeg/ffprobe failure reading a URL over the network (refused, reset, unresolved, a 5xx) is a `SocketException` instead of a `ContentException`; a pinned tool download that fails for lack of network is an `HttpException`; a 7-Zip failure from a full disk or a permission is a `FileSystemException` instead of "corrupt archive".
 
-- `chrome`: a page's waits share one bound, `open(url, timeout:)` (30 s by default): `go`, `back`, `cookie`, `click`, `fill`, `select`, `upload`, `scroll`, `wait`, `idle` and `download` (and their `Future<Page>` mirrors) no longer take `timeout:`. A hand login that may take minutes is `browser.open(url, timeout: 5.minutes).cookie('sessionid')`.
+- `chrome`: a page's waits share one bound, `open(url, timeout:)` (30 s by default): `go`, `cookie`, `click`, `fill`, `select`, `upload`, `scroll`, `wait`, `idle` and `download` (and their `Future<Page>` mirrors) no longer take `timeout:`. A hand login that may take minutes is `browser.open(url, timeout: 5.minutes).cookie('sessionid')`.
 - `fs`: `Dir.list(match:)` walks as deep as the glob reaches: each `/` is one level more, so `'*/*.jpg'`, `'*/.ins.json'` and `'alice/*'` find what they name (they silently returned nothing without a `**`); `**` still crosses any number of folders.
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
 - `core`: helpers moved to `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: `Durations` as `DurationUtils` (`3.seconds`), `Sizes` as `SizeUtils` (`bytes.size()`), `Times` as `TimeUtils` (`now.format(…)`), `Spans` as `SpanUtils` (`d.human()`), `Rate`, `Cookies`, and `reader.cookies(or:)` as the `ReaderCookies` extension. A script that uses them adds `import 'package:dart_toolkit/utils.dart';`.
@@ -81,6 +81,7 @@
 - `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed` from that cursor, or the `page` function returning it as `next` when its chain ends (medialoader's photo walk does).
 - `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
 - `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
+- `chrome`: `Page.back()`; going back is `page.go(previous)` with the URL you came from (`final previous = await page.url();` before leaving), or `page.run('history.back()')` for a page's own history.
 - `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
 - `csv`: `Csv.records(text)`; `final [keys, ...rows] = CsvUtils.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
 - `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
