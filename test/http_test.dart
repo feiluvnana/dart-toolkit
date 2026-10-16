@@ -1329,34 +1329,6 @@ Future<void> main() async {
       expect((skipped.replayed, skipped.bytes), (1000, 1000));
     });
 
-    test('cache: a GET within ttl uses no network; vary headers key it', () async {
-      final dir = await Directory.systemTemp.createTemp('cache');
-      addTearDown(() => dir.delete(recursive: true));
-      final c = Http.client(cache: dir.path);
-      expect(await c.get('$url/vary', headers: {'x-a': '1'}).text(), 'v1');
-      expect(await c.get('$url/vary', headers: {'x-a': '1'}).text(), 'v1');
-      expect(hits['/vary'], 1);
-      expect(await c.get('$url/vary', headers: {'x-a': '2'}).text(), 'v2');
-      expect(await Http.client(cache: dir.path, ttl: Duration.zero).get('$url/vary').text(), 'v3');
-      expect(await c.post('$url/vary').text(), 'v4');
-    });
-
-    test('cache: keyed by credentials, never a Range slice, no set-cookie on disk, a private folder', () async {
-      final dir = await Directory.systemTemp.createTemp('cache');
-      addTearDown(() => dir.delete(recursive: true));
-      final store = '${dir.path}/c';
-      final alice = Http.client(cache: store, headers: {'authorization': 'Bearer A'});
-      final bob = Http.client(cache: store, headers: {'authorization': 'Bearer B'});
-      expect(await alice.get('$url/me').text(), '1 Bearer A null');
-      expect(await bob.get('$url/me').text(), '2 Bearer B null');
-      expect(await alice.get('$url/me').text(), '1 Bearer A null'); // a hit, still alice's
-      expect(await alice.get('$url/me', headers: {'range': 'bytes=1-'}).text(), '3 Bearer A bytes=1-');
-      expect(await alice.get('$url/me').text(), '1 Bearer A null');
-      final files = Directory(store).listSync().whereType<File>();
-      expect(files.where((f) => f.readAsStringSync().contains('S3CRET')), isEmpty);
-      if (!Platform.isWindows) expect(Directory(store).statSync().mode & 0x1ff, 0x1c0);
-    });
-
     test('pool: round-robin over idle members; a 429 benches a member and retries on another', () async {
       final a = Http.client(headers: {'x-a': 'a'});
       final b = Http.client(headers: {'x-a': 'b'});

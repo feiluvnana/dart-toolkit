@@ -167,7 +167,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
-`json` `pretty` `limit` `max` `retries` `insecure` `check` `short` `or` `rate` `cookies` `csrf` `cache` `ttl`
+`json` `pretty` `limit` `max` `retries` `insecure` `check` `short` `or` `rate` `cookies` `csrf`
 `idle` `connections` `isolates` `match` `dotenv` `sep` `resume`
 `required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
@@ -266,7 +266,7 @@ final user = (await ig.get('/$name/').html()).json().$('**.xig_user_by_username'
 abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
-      String? proxy, String? cache, Duration ttl = const Duration(hours: 1), List<String> insecure = const [],
+      String? proxy, List<String> insecure = const [],
       Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false,
       int max = 256 << 20,                        // max: bytes a body read into memory may decode to
       Browser? browser,                           // .page / .api: the headers a desktop browser sends
@@ -276,7 +276,7 @@ abstract final class Http {
 sealed class Client implements Closeable {
   Client copy({…every setting, null keeps it; headers merge…});   // shares jar, Rate and connections; counts in sent(), closes with this
   Cookies cookies();
-  int sent();                                     // requests on the wire (attempts, hops; not cache hits)
+  int sent();                                     // requests on the wire (attempts and hops)
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});   // head, delete: the same
   Future<Response> post(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers}); // put, patch
   Future<void> close();                           // cancels this client's requests and waits; idempotent
@@ -349,9 +349,6 @@ final class Response with Reader implements Closeable {
     A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
     keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
     synchronous block unless such a pipeline claims it, so awaiting it works as always.
-- `cache: '.cache'` answers a GET within `ttl` from disk (no network, no `Rate` slot), keyed by
-  URL, credentials and the request headers the answer `Vary`s on: for developing a scraper. Bodies
-  stream to disk; past `ttl` an `ETag`/`Last-Modified` is revalidated (a 304 keeps the copy).
 - `proxy:` is `http://` or `socks5://[user:pass@]host[:port]` (port 1080 by default; SOCKS resolves
   names); null reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`. A pool's `copy(proxy:)` throws.
 - **`Http.pool([a, b])`** sends each request to the member with the fewest in flight whose

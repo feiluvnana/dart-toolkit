@@ -120,77 +120,6 @@ void main() {
     return dir;
   }
 
-  group('cache', () {
-    test('bug 1: a page that rotates its cookie on every answer still hits', () async {
-      final dir = await temp();
-      for (var i = 0; i < 3; i++) {
-        // A fresh jar each time, as in a new run of a script under development.
-        expect(await Http.client(cache: dir.path).get('$url/rotate').text(), 'page');
-      }
-      expect(hits['/rotate'], 1);
-      // Another session (a different jar) is never served this page.
-      final other = Http.client(
-        cache: dir.path,
-        cookies: Cookies().set('user', 'bob', url: url),
-      );
-      await other.get('$url/rotate').text();
-      expect(hits['/rotate'], 2);
-    });
-
-    test('S5: an answer cached for one API key is never served to another', () async {
-      final dir = await temp();
-      final before = hits['/rotate'] ?? 0;
-      await Http.client(cache: dir.path, headers: {'x-api-key': 'ALICE'}).get('$url/rotate').text();
-      await Http.client(cache: dir.path, headers: {'x-api-key': 'BOB'}).get('$url/rotate').text();
-      await Http.client(cache: dir.path, headers: {'x-api-key': 'ALICE'}).get('$url/rotate').text();
-      expect(hits['/rotate'], before + 2); // Bob asked the server; Alice's second is a hit
-    });
-
-    test('S5: a stored entry for another request under the same name is a miss', () async {
-      final dir = await temp();
-      final c = Http.client(cache: dir.path);
-      final before = hits['/rotate'] ?? 0;
-      await c.get('$url/rotate').text();
-      // Forge a name clash: the stored entry claims to be for another URL.
-      final meta = Directory(dir.path).listSync().whereType<File>().firstWhere((f) => f.path.endsWith('.json'));
-      final json = (jsonDecode(meta.readAsStringSync()) as Map)..['request'] = 'GET $url/other';
-      meta.writeAsStringSync(jsonEncode(json));
-      await c.get('$url/rotate').text();
-      expect(hits['/rotate'], before + 2);
-    });
-
-    test('bug 2: a cached gzip answer reports its decoded size', () async {
-      final dir = await temp();
-      final c = Http.client(cache: dir.path);
-      final first = await c.get('$url/gz');
-      expect([first.size(), (await first.text()).length], [5000, 5000]);
-      final hit = await c.get('$url/gz');
-      expect([hit.size(), hit.header('content-encoding'), (await hit.text()).length], [5000, null, 5000]);
-      expect(hits['/gz'], 1);
-    });
-
-    test('bug 5: a body over limit: is cached by streaming and pipes from disk', () async {
-      final dir = await temp();
-      final c = Http.client(cache: dir.path, max: 1000);
-      for (var i = 0; i < 2; i++) {
-        final out = _File('${dir.path}/out$i');
-        await (c.get('$url/file') > out);
-        expect(await File(out.path).readAsBytes(), file);
-      }
-      expect(hits['/file'], 1);
-      await expectLater(c.get('$url/file').bytes(), throwsA(isA<ContentException>()));
-    });
-
-    test('past ttl, an ETag is revalidated: a 304 serves the stored body', () async {
-      final dir = await temp();
-      final c = Http.client(cache: dir.path, ttl: Duration.zero);
-      expect(await c.get('$url/etag').text(), 'tagged body');
-      expect(await c.get('$url/etag').text(), 'tagged body');
-      expect(await c.get('$url/etag').status(), 200);
-      expect([hits['/etag'], hits['/etag304']], [3, 2]);
-    });
-  });
-
   test('bug 3: lines() decodes a 2xx body with its charset', () async {
     expect(await Http.client().get('$url/sjis').lines().toList(), ['日本語テスト', '日本語テスト']);
   });
@@ -436,11 +365,9 @@ Future<void> main() async {
     expect(await Http.client().get('$url/ua').text(), matches(RegExp(r'^Mozilla/5\.0 .* Chrome/\d+')));
   });
 
-  test('sent() counts wire requests: redirect hops, not cache hits; a pool sums', () async {
-    final dir = await temp();
-    final c = Http.client(cache: dir.path, retries: 1);
+  test('sent() counts wire requests: redirect hops; a pool sums', () async {
+    final c = Http.client(retries: 1);
     await c.get('$url/hop').text(); // 302 + the target
-    await c.get('$url/hop').text(); // cached
     expect(c.sent(), 2);
     final pool = Http.pool([Http.client(), Http.client()]);
     await pool.get('$url/ua').status();

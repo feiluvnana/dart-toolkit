@@ -17,29 +17,11 @@ part of '../../http.dart';
 ///   The `Future<Response>` mirrors (`api.get(u).status()`) close the
 ///   response after reading.
 final class Response with Reader implements Closeable {
-  Response._(HttpClientResponse resp, this._client, this._method, this._url, {required this._head})
-    : _resp = resp,
-      _status = resp.statusCode,
-      _headers = null,
-      _file = null {
+  Response._(this._resp, this._client, this._method, this._url, {required this._head}) : _status = _resp.statusCode {
     _client._responses.add(this);
   }
 
-  /// A stored answer ([Http.client]'s `cache:`): no socket behind it, the
-  /// body read from [file] when asked for.
-  Response._stored(this._client, this._method, this._url, this._status, Map<String, String> headers, String file)
-    : _resp = null,
-      _headers = headers,
-      _file = file,
-      _head = false {
-    _done = _released = true;
-  }
-
-  /// The body file of a stored answer.
-  final String? _file;
-
-  final HttpClientResponse? _resp;
-  final Map<String, String>? _headers;
+  final HttpClientResponse _resp;
   final _Client _client;
   final String _method;
   final int _status;
@@ -155,9 +137,7 @@ final class Response with Reader implements Closeable {
 
   /// Response header [name] (case-insensitive) or `null` if absent.
   String? header(String name) {
-    final headers = _headers;
-    if (headers != null) return headers[name.toLowerCase()];
-    final values = _resp!.headers[name];
+    final values = _resp.headers[name];
     if (values == null || values.isEmpty) return null;
     return values.join(', ');
   }
@@ -169,7 +149,7 @@ final class Response with Reader implements Closeable {
   /// (no `content-length`, or a compressed body decoded on the fly).
   int? size() {
     final encoding = header('content-encoding');
-    if (encoding != null && encoding.toLowerCase() != 'identity' && _resp != null) return null;
+    if (encoding != null && encoding.toLowerCase() != 'identity') return null;
     final n = int.tryParse(header('content-length')?.trim() ?? '');
     return n == null || n < 0 ? null : n;
   }
@@ -200,17 +180,6 @@ final class Response with Reader implements Closeable {
     if (_closed) throw StateError('response is closed: ${names.redact(url())}');
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
-    if (_file case final file?) {
-      final f = File(file);
-      final max = _client._s.max;
-      if (await f.length() > max) {
-        throw ContentException(
-          'response body over $max bytes: pipe it to a file, or raise Http.client(max:) '
-          '(${names.redact(url())})',
-        );
-      }
-      return (_cached = await f.readAsBytes()).asUnmodifiableView();
-    }
     if (_preReady != null) return (await (_reading ??= _readAll())).asUnmodifiableView();
     final reading = _reading;
     if (reading != null) return (await reading).asUnmodifiableView();
@@ -246,7 +215,6 @@ final class Response with Reader implements Closeable {
     if (!ok()) return _refused();
     final cached = _cached;
     if (cached != null) return Stream.value(cached.asUnmodifiableView());
-    if (_file case final file?) return File(file).openRead();
     if (_preReady != null) return _fromPrefetch();
     if (_streaming) throw StateError('body already streaming: ${names.redact(url())}');
     _streaming = true;
@@ -292,9 +260,9 @@ final class Response with Reader implements Closeable {
     if (len == null || len > _prefix) return _abandon();
     _closed = true;
     try {
-      await _resp!.drain<void>().timeout(_drainBudget);
+      await _resp.drain<void>().timeout(_drainBudget);
     } catch (_) {
-      await _detach(_resp!);
+      await _detach(_resp);
     } finally {
       _finish();
     }
@@ -333,8 +301,7 @@ final class Response with Reader implements Closeable {
       try {
         await _preSub?.cancel();
       } catch (_) {}
-      final resp = _resp;
-      if (resp != null) await _detach(resp);
+      await _detach(_resp);
     }
     _finish();
   }
@@ -347,7 +314,7 @@ final class Response with Reader implements Closeable {
     out = StreamController<List<int>>(
       sync: true,
       onListen: () {
-        sub = _resp!
+        sub = _resp
             .timeout(
               limit,
               onTimeout: (sink) =>
@@ -384,7 +351,7 @@ final class Response with Reader implements Closeable {
     final killer = _killer;
     if (killer != null && !_done) {
       killer(error);
-    } else if (!_done && _resp != null) {
+    } else if (!_done) {
       unawaited(_detach(_resp));
     }
     _finish();

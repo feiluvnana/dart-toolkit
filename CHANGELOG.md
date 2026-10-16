@@ -5,6 +5,7 @@
 **Removed**
 
 - `http`: `Http.serve` and `Server`/`Request`/`Reply`; the library is not a server. An OAuth loopback redirect is a few lines of `dart:io` `HttpServer` (docs/VISION.md §4.2).
+- `http`: `Http.client(cache:, ttl:)` and `copy(cache:, ttl:)`, the GET disk cache; a scraper under development keeps its pages with `get(u) > Fs.file(f)`.
 
 ## 0.1.0
 

@@ -46,13 +46,11 @@ export 'core.dart';
 import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
 import 'src/origin.dart' as names;
-import 'src/posix.dart' as posix;
 import 'src/rate.dart' as rate;
 import 'src/resume.dart';
 import 'src/retry.dart' as retry;
 import 'src/timeout.dart';
 
-part 'src/http/cache.dart';
 part 'src/http/feed.dart';
 part 'src/http/proxy.dart';
 part 'src/http/response.dart';
@@ -315,10 +313,6 @@ abstract final class Http {
   /// - [proxy]: `http://host:port` or `socks5://host:port` (credentials
   ///   allowed, port 1080 by default, names resolved by a SOCKS proxy); null
   ///   reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` like curl.
-  /// - [cache]: a folder; a GET within [ttl] of a stored 200 uses no
-  ///   network and no [rate] slot (for development). Past [ttl], an answer
-  ///   with an `ETag` or `Last-Modified` is revalidated: a 304 keeps it.
-  ///   Bodies stream to disk, never whole in memory.
   /// - [insecure] lists hosts whose bad certificate is accepted (each with
   ///   its subdomains), on every redirect hop.
   /// - [idle]: an idle client releases its sockets after this, so a
@@ -355,8 +349,6 @@ abstract final class Http {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    String? cache,
-    Duration ttl = const Duration(hours: 1),
     List<String> insecure = const [],
     Duration idle = const Duration(milliseconds: 100),
     int connections = 6,
@@ -377,8 +369,6 @@ abstract final class Http {
       check: check,
       cookies: cookies ?? Cookies(),
       csrf: csrf,
-      cache: cache,
-      ttl: ttl,
       resume: resume,
       max: max,
       browser: browser,
@@ -431,8 +421,6 @@ sealed class Client implements Closeable {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    String? cache,
-    Duration? ttl,
     List<String>? insecure,
     Duration? idle,
     int? connections,
@@ -446,7 +434,7 @@ sealed class Client implements Closeable {
   Cookies cookies();
 
   /// How many requests this client has put on the wire: every attempt and
-  /// redirect hop, not cache hits. A pool counts its members.
+  /// redirect hop. A pool counts its members.
   int sent();
 
   /// GET [url] (relative to `base:`), [query] appended; completes when the
@@ -486,8 +474,6 @@ final class _Settings {
     required this.check,
     required this.cookies,
     required this.csrf,
-    required this.cache,
-    required this.ttl,
     required this.resume,
     required this.max,
     required this.browser,
@@ -502,8 +488,6 @@ final class _Settings {
   final bool check;
   final Cookies cookies;
   final ({String cookie, String header})? csrf;
-  final String? cache;
-  final Duration ttl;
   final bool resume;
   final int max;
   final Browser? browser;
@@ -656,8 +640,6 @@ final class _Client extends Client {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    String? cache,
-    Duration? ttl,
     List<String>? insecure,
     Duration? idle,
     int? connections,
@@ -686,8 +668,6 @@ final class _Client extends Client {
         check: check ?? s.check,
         cookies: cookies ?? s.cookies,
         csrf: csrf ?? s.csrf,
-        cache: cache ?? s.cache,
-        ttl: ttl ?? s.ttl,
         resume: resume ?? s.resume,
         max: max ?? s.max,
         browser: browser ?? s.browser,
@@ -806,25 +786,6 @@ final class _Client extends Client {
   }) async {
     if (_closed) throw _aborted(method, uri);
     final sent = _merge(_headersFor(uri), headers ?? const {});
-    // A Range answer is a slice: neither served from nor stored under the URL.
-    final dir = method == 'GET' && !sent.keys.any((k) => k.toLowerCase() == 'range') ? _s.cache : null;
-    // Keyed before sending: a set-cookie in the answer must not move the key.
-    final cache = dir == null ? null : _Cache(dir, uri, sent, this);
-    var wire = sent;
-    _Entry? stale;
-    if (cache != null) {
-      final entry = await cache.read();
-      if (entry != null && entry.fresh(_s.ttl)) return _checked(entry.response(this, method), check);
-      // Past ttl but validated: ask whether it changed (304 = no body).
-      if (entry != null &&
-          !sent.keys.any((k) => const {'if-none-match', 'if-modified-since'}.contains(k.toLowerCase()))) {
-        final etag = entry.headers['etag'], modified = entry.headers['last-modified'];
-        if (etag != null || modified != null) {
-          stale = entry;
-          wire = {...sent, 'if-none-match': ?etag, 'if-modified-since': ?modified};
-        }
-      }
-    }
     final resendable = body?._resendable ?? true;
     final idempotent = method == 'GET' || method == 'HEAD' || method == 'PUT' || method == 'DELETE';
     final pace = _s.rate;
@@ -847,7 +808,7 @@ final class _Client extends Client {
       retryAfter = null;
       banned = false;
       try {
-        final res = await _attempt(method, uri, body, wire);
+        final res = await _attempt(method, uri, body, sent);
         final code = res.status();
         final again = code == 429 && retry429 || code == 503 || (idempotent && (code == 502 || code == 504));
         if (resendable && again && attempt < _s.retries) {
@@ -857,12 +818,6 @@ final class _Client extends Client {
           attempt++;
           continue;
         }
-        if (stale != null && code == 304) {
-          final entry = await cache!.refresh(stale, res);
-          await res.close();
-          return await _checked(entry.response(this, method), check);
-        }
-        if (cache != null && code == 200) return await _checked(await cache.write(res, this), check);
         res._prefetch();
         return await _checked(res, check);
       } on _Failed catch (f) {
@@ -1113,8 +1068,6 @@ final class _Pool extends Client {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    String? cache,
-    Duration? ttl,
     List<String>? insecure,
     Duration? idle,
     int? connections,
@@ -1137,8 +1090,6 @@ final class _Pool extends Client {
           check: check,
           cookies: cookies,
           csrf: csrf,
-          cache: cache,
-          ttl: ttl,
           insecure: insecure,
           idle: idle,
           connections: connections,
