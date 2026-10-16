@@ -1537,6 +1537,19 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       }
     });
 
+    test('B9: a source that fails mid .tar.bz2 keeps its error, not "corrupt archive"', () async {
+      if (Platform.isWindows || !await has('bzip2')) return markTestSkipped('needs bzip2');
+      final rnd = Random(9); // incompressible: the source drops mid-stream
+      await (Reader.of(List.generate(1 << 20, (_) => rnd.nextInt(256))) > Fs.file(p('src/a.txt')));
+      expect((await Process.run('tar', ['cf', p('t.tar'), '-C', p('src'), 'a.txt'])).exitCode, 0);
+      expect((await Process.run('bzip2', ['-f', '-q', p('t.tar')])).exitCode, 0);
+      final bytes = await io.File(p('t.tar.bz2')).readAsBytes();
+      await expectLater(
+        _Dropped(bytes.sublist(0, bytes.length ~/ 2)) > Archive.unarchive(p('out')),
+        throwsA(isA<SocketException>()),
+      );
+    });
+
     test('7-Zip reads .tar.bz2, .tar.zst and ar for us', () async {
       if (Platform.isWindows) return markTestSkipped("Windows' 7zr reads 7z only");
       await Fs.file(p('src/a.txt')).write('hello');
@@ -1771,4 +1784,18 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       expect(await Hash.sha256().of(Fs.file(p('big/big.txt'))), '${made.stdout}'.trim());
     }, tags: 'slow');
   });
+}
+
+/// A source whose connection drops after [_bytes].
+final class _Dropped with Reader {
+  _Dropped(this._bytes);
+  final List<int> _bytes;
+  @override
+  Stream<List<int>> stream() async* {
+    for (var i = 0; i < _bytes.length; i += 1 << 16) {
+      yield _bytes.sublist(i, min(i + (1 << 16), _bytes.length));
+      await Future<void>.delayed(Duration.zero);
+    }
+    throw const SocketException('connection reset');
+  }
 }

@@ -1111,10 +1111,12 @@ final class _Unpacker with Writer {
             await x.tar(_parseTar(_gunzipChecked(rest(), tar: true), container: 'gzip'));
           case _Format.bzip2 || _Format.zstd || _Format.compress || _Format.lzma:
             final unpack = Shell.filter([await tool(Tool.sevenzip), 'x', '-si', '-so', '-t${_sevenzipType[format]}']);
+            // Only 7-Zip's own failure means bad data: a source error (a
+            // dropped connection) passes through for retry and resume.
             final tarBytes = unpack.transform(rest()).handleError((Object e) {
-              final why = e is io.ProcessException ? e.message.trim().split('\n').last : '$e';
+              final why = (e as io.ProcessException).message.trim().split('\n').last;
               throw ContentException('corrupt archive: ${format.name} data: $why', null, null, e);
-            }, test: (e) => e is! ContentException);
+            }, test: (e) => e is io.ProcessException);
             await x.tar(_parseTar(tarBytes, container: format.name));
           case _Format.cab || _Format.ar || _Format.xar:
             await x._native(rest(), _password);
