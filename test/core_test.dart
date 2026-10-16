@@ -82,6 +82,16 @@ void main() {
       expect((m.done(), m.total()), (4, 4));
     });
 
+    test('E12: a Meter is counted by hand or by its runs; mixing is a StateError', () async {
+      final hand = Meter()..update(1, 10);
+      expect(() => Reader.of([1, 2]) & hand > null, throwsStateError);
+      expect((hand.done(), hand.total()), (1, 10));
+      final watched = Meter();
+      await (Reader.of([1, 2]) & watched > null);
+      expect(() => watched.update(5, 9), throwsStateError);
+      expect((watched.done(), watched.total()), (2, 2));
+    });
+
     test('a failing run ends its probes with the error', () async {
       final heard = <(int, int?)>[];
       await expectLater(Reader.of([1]) & _Heard(heard) > _Refuse(), throwsStateError);

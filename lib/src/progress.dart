@@ -374,7 +374,8 @@ extension Watch<T> on Future<T> {
 ///
 /// One meter may watch many runs at once; it sums them. Bytes a resumed
 /// download replays from its `.part` fill the count but not the rate.
-/// [update] sets a count by hand (`Meter()..update(done, queued)`).
+/// [update] sets a count by hand (`Meter()..update(done, queued)`); a meter
+/// is one or the other, and mixing them is a [StateError].
 final class Meter with Probe {
   Meter() {
     watchers[this] = _MeterWatch(this);
@@ -383,6 +384,7 @@ final class Meter with Probe {
   final _tally = Tally();
   final _window = Window();
   (int, int?)? _hand;
+  var _watching = false;
 
   /// The count so far.
   int done() => _hand?.$1 ?? _tally.done;
@@ -399,6 +401,7 @@ final class Meter with Probe {
   /// total)`) shows no rate.
   @override
   void update(int done, int? total) {
+    if (_watching) throw StateError('this Meter counts the runs it watches; a count by hand is a Meter of its own');
     final before = _hand?.$1;
     _hand = (done, total);
     if (before != null) _window.add(done - before);
@@ -412,7 +415,11 @@ final class _MeterWatch implements Watcher {
   final Meter _m;
 
   @override
-  void begin(Object run) => _m._tally.begin(run);
+  void begin(Object run) {
+    if (_m._hand != null) throw StateError('this Meter is counted by hand (update); a watched run needs a Meter of its own');
+    _m._watching = true;
+    _m._tally.begin(run);
+  }
 
   @override
   void report(Object run, int done, int? total, Unit unit, int fresh) {
