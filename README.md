@@ -57,7 +57,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`, `reader.ndjson()` |
 | `csv` | CSV | RFC 4180 `parse`, `encode`, `reader.csv(or:)`, streamed `reader.rows()` |
 | `yaml` | reading YAML | in-house YAML 1.2 reader, `file.yaml().$('version').text()`: the `json` reading API |
-| `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `watch()`, `dir.size()`, watchable `copy`/`move`/`list`, `Fs.tempDir`, `file.lock(timeout:)`, `modified()`/`touch(t)`, `Fs.sanitize(name)` |
+| `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `dir.size()`, watchable `copy`/`move`/`list`, `Fs.tempDir`, `file.lock(timeout:)`, `modified()`/`touch(t)`, `Fs.sanitize(name)` |
 | `archive` | zip, tar, tgz, 7z, RAR, bz2/zst, cab/ar/xar | `archive(paths, password:)` (zip and tar stream, 7z via 7-Zip LZMA2; a probe sees the input packed), `unarchive(dir)` for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 in Dart, big or exotic ones via 7-Zip; modes, mtimes and inside links kept |
 | `hash` | md5 … sha512, HMAC | in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()` |
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:)` (a `Task`; `.check()`), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe`, `Shell.which`, `Shell.open` |

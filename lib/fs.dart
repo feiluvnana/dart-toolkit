@@ -20,7 +20,7 @@
 ///   (`copy`, `move` and `Dir.list` are [Task]s: `dir.copy(to) & Console.bar('backup')`).
 ///   `copy`/`move` move an entry with its modes and times; `>` moves content.
 /// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
-/// - [Dir] supports `file` `dir` `list` `size` `watch` `create`.
+/// - [Dir] supports `file` `dir` `list` `size` `create`.
 /// - [Link] supports `target` `resolve`.
 /// Everything else is private.
 library;
@@ -521,21 +521,6 @@ final class Dir extends Entry {
     return [for (final (_, e) in found) e];
   }
 
-  /// The files created or changed under this folder, as they happen:
-  /// `dir.watch().listen(upload)`. Deletions and folders are left out, and so
-  /// are the temp files of atomic writes (the finished file is reported).
-  /// Recursive on macOS and Windows; Linux watches this folder only. Cancel
-  /// the subscription to stop.
-  Stream<File> watch() =>
-      io.Directory(_path)
-          .watch(recursive: !io.Platform.isLinux)
-          .where((e) => e.type != io.FileSystemEvent.delete && !e.isDirectory)
-          .map((e) => e is io.FileSystemMoveEvent ? e.destination ?? e.path : e.path)
-          .where((path) => !posix.isTmpName(p.basename(path)))
-          .asyncExpand((path) async* {
-            if (await io.FileSystemEntity.isFile(path)) yield File._(path);
-          });
-
   /// How many files are under this folder (recursively, links not
   /// followed) and their bytes. In-flight toolkit files are left out:
   /// download partials (`x.part`, `x.part.tag`), atomic-write temps
@@ -786,7 +771,6 @@ extension DirFuture on Future<Dir> {
   Task<List<Entry>> list({bool recursive = false, String? match}) =>
       task((run) async => (await this).list(recursive: recursive, match: match) & relay(run));
   Future<({int files, int bytes})> size({String? match}) async => (await this).size(match: match);
-  Stream<File> watch() => Stream.fromFuture(this).asyncExpand((d) => d.watch());
   Future<Dir> create() async => (await this).create();
 }
 
