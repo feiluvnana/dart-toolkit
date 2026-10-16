@@ -96,7 +96,7 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 | `Archive.unarchive(dir)`, `Console.out()`                           |        |   ✓    |      |           |
 | `Hasher`                                                           |        |   ✓    |  ✓   |           |
 | `Bar` (console; a `Probe`)                                         |        |        |      |     ✓     |
-| `Archive.gzip()` `gunzip()`, `Shell.filter()`                      |        |        |  ✓   |           |
+| `Archive.gzip()` `gunzip()` `member()`, `Shell.filter()`           |        |        |  ✓   |           |
 | `Browser`, `Page`                                                  |        |        |      |     ✓     |
 
 Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()` and `image()`.
@@ -240,7 +240,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `filter` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
-| `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
+| `archive` | `Archive.archive` `unarchive` `member` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` (a `Task`) · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
 | `console` | `Console.ask` `confirm` `choose` `pick` `key` `bar` `log` `logged` `table` `notify` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
@@ -671,6 +671,7 @@ enum ArchiveFormat { zip, tar, tgz, sevenzip }   // what archive writes; unarchi
 abstract final class Archive {
   static Reader archive(List<String> paths, {ArchiveFormat format = .zip, String dir = '.', String? password}); // files and folders, named relative to dir
   static Writer unarchive(String dir, {String? password, int? max, String? match}); // format from the magic bytes; max: bytes written; match: a glob of members
+  static Pipe member(String name);   // archive bytes → that member's bytes: (get(u) | Archive.member('package/package.json')).json()
   static Pipe gzip();  static Pipe gunzip();
 }
 ```
@@ -689,6 +690,9 @@ abstract final class Archive {
 - `archive` takes files and folders like `zip -r` (`['.']` with `dir:` is a folder's contents;
   `dir:` may be a link), stores links that point inside `dir` and refuses others, and an empty
   folder round-trips in every format.
+- `member(name)` reads one file without unpacking the rest: a tar (gzipped, xz…) streams and
+  stops reading at the end of the first member at that path; zip, 7z and RAR decode only that
+  member. No such member, or a folder or link there, is a `ContentException`.
 - `gunzip` checks the gzip trailer. Truncated or corrupt data fails the run with a
   `FormatException`; `unarchive` drops zero padding after a `.tar.gz` whose tar is whole.
 - Writing streams for zip (zip64 when needed), tar and tgz. **7-Zip** (see [Native tools](#native-tools))

@@ -23,11 +23,13 @@
 /// await (Archive.archive(['docs'], format: .sevenzip, password: pw) > Fs.file('docs.7z'));
 /// await (http.get(url) > Archive.unarchive('vendor', password: pw)); // any format above
 /// await (http.get(url) | Archive.gunzip() > Fs.file('dump.sql'));    // a truncated stream fails
+/// final pkg = await (http.get(tgz) | Archive.member('package/package.json')).json();
 /// ```
 ///
 /// Public surface is exactly: [Archive], [ArchiveFormat].
 /// - `Archive.archive()` is a [Reader] of the archive, `unarchive()` a [Writer].
-/// - `Archive.gzip()`/`gunzip()` are streaming [Pipe]s.
+/// - `Archive.gzip()`/`gunzip()` are streaming [Pipe]s; `member(name)` is a
+///   [Pipe] to one member's bytes.
 /// Everything else is private.
 library;
 
@@ -124,6 +126,15 @@ abstract final class Archive {
     if (max != null && max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
     return _Unpacker(dir, password, max, match == null ? null : glob(match));
   }
+
+  /// A [Pipe] from an archive stream to the bytes of its member at the path
+  /// [name] (`'package/package.json'`; a leading `./` is ignored), so one
+  /// file is read without unpacking the rest:
+  /// `(http.get(u) | Archive.member('package/package.json')).json()`. A tar
+  /// (also gzipped, xz…) streams, stops at the member's end and takes the
+  /// first member at that path; zip, 7z and RAR decode only that member. No
+  /// such member, or a folder or link there, is a [ContentException].
+  static Pipe member(String name) => _MemberPipe(name);
 
   /// Streaming gzip compression.
   static Pipe gzip() => _GzipPipe(compress: true);
@@ -1061,26 +1072,9 @@ final class _Unpacker with Writer {
   /// Watched, an archive 7-Zip extracts after reading it reports that
   /// extraction too.
   Future<void> _consume(Stream<List<int>> input, Run? run) async {
-    // Sniff the format from the magic bytes without consuming them: peek
-    // one tar block, then hand on the chunks as they came.
     final it = StreamIterator(input);
     try {
-      final peeked = <List<int>>[];
-      final head = <int>[];
-      while (head.length < 512 && await it.moveNext()) {
-        final c = it.current;
-        peeked.add(c);
-        head.addAll(c.take(512 - head.length));
-      }
-      Stream<List<int>> rest() async* {
-        yield* Stream.fromIterable(peeked);
-        peeked.clear();
-        while (await it.moveNext()) {
-          yield it.current;
-        }
-      }
-
-      final format = _sniff(head);
+      final (format, rest) = await _sniffed(it);
       // Normalise the target; the temp folder is a SIBLING of the target,
       // never inside it. Use the absolute path so '.' (whose dirname is
       // '.') still gets a sibling outside itself.
@@ -1098,28 +1092,15 @@ final class _Unpacker with Writer {
         await x.start();
         switch (format) {
           case _Format.zip:
-            await x.unzip(rest(), _password);
+            await x.unzip(rest, _password);
           case _Format.sevenzip || _Format.rar:
-            await x.solid(rest(), format, _password);
-          case _Format.xz:
-            await x.tar(_parseTar(_offloaded(rest(), xz.xzStream), container: 'xz'));
-          case _Format.gzip:
-            await x.tar(_parseTar(_gunzipChecked(rest(), tar: true), container: 'gzip'));
-          case _Format.bzip2 || _Format.zstd || _Format.compress || _Format.lzma:
-            final unpack = Shell.filter([await tool(Tool.sevenzip), 'x', '-si', '-so', '-t${_sevenzipType[format]}']);
-            // Only 7-Zip's own failure means bad data: a source error (a
-            // dropped connection) passes through for retry and resume.
-            final tarBytes = unpack.transform(rest()).handleError((Object e) {
-              final why = (e as ExitException).message.trim().split('\n').last;
-              throw ContentException('corrupt archive: ${format.name} data: $why', null, null, e);
-            }, test: (e) => e is ExitException);
-            await x.tar(_parseTar(tarBytes, container: format.name));
+            await x.solid(rest, format, _password);
           case _Format.cab || _Format.ar || _Format.xar:
-            await x._native(rest(), _password);
-          case _Format.tar:
+            await x._native(rest, _password);
+          default:
             // Tar streams straight to the temp sibling: links, escapes and
             // truncation fail here, before the merge.
-            await x.tar(_parseTar(rest()));
+            await x.tar(await _tarEvents(format, rest));
         }
         await x.merge(d);
       } finally {
@@ -1131,6 +1112,129 @@ final class _Unpacker with Writer {
       await it.cancel();
     }
   }
+}
+
+/// The format of what [it] reads, sniffed from its magic bytes without
+/// consuming them (one tar block is peeked), and every byte again.
+Future<(_Format, Stream<List<int>>)> _sniffed(StreamIterator<List<int>> it) async {
+  final peeked = <List<int>>[];
+  final head = <int>[];
+  while (head.length < 512 && await it.moveNext()) {
+    final c = it.current;
+    peeked.add(c);
+    head.addAll(c.take(512 - head.length));
+  }
+  Stream<List<int>> rest() async* {
+    yield* Stream.fromIterable(peeked);
+    peeked.clear();
+    while (await it.moveNext()) {
+      yield it.current;
+    }
+  }
+
+  return (_sniff(head), rest());
+}
+
+/// The tar inside [bytes] of a tar-family [format] (tar, gzip, xz, and
+/// bzip2/zstd/compress/lzma through 7-Zip) as events.
+Future<Stream<_TarEvent>> _tarEvents(_Format format, Stream<List<int>> bytes) async {
+  switch (format) {
+    case _Format.xz:
+      return _parseTar(_offloaded(bytes, xz.xzStream), container: 'xz');
+    case _Format.gzip:
+      return _parseTar(_gunzipChecked(bytes, tar: true), container: 'gzip');
+    case _Format.bzip2 || _Format.zstd || _Format.compress || _Format.lzma:
+      final unpack = Shell.filter([await tool(Tool.sevenzip), 'x', '-si', '-so', '-t${_sevenzipType[format]}']);
+      // Only 7-Zip's own failure means bad data: a source error (a
+      // dropped connection) passes through for retry and resume.
+      final tarBytes = unpack.transform(bytes).handleError((Object e) {
+        final why = (e as ExitException).message.trim().split('\n').last;
+        throw ContentException('corrupt archive: ${format.name} data: $why', null, null, e);
+      }, test: (e) => e is ExitException);
+      return _parseTar(tarBytes, container: format.name);
+    case _Format.tar:
+      return _parseTar(bytes);
+    case _Format.zip || _Format.sevenzip || _Format.rar || _Format.cab || _Format.ar || _Format.xar:
+      throw StateError('${format.name} is not a tar');
+  }
+}
+
+/// [Archive.member]: one member's bytes out of an archive stream. A tar
+/// (plain or compressed) streams, and stops reading once the member ends;
+/// any other format lands just that member in a temp folder first.
+final class _MemberPipe with Pipe {
+  _MemberPipe(String name) : _path = un.segments(name).join('/') {
+    if (_path.isEmpty) throw ArgumentError.value(name, 'name', 'must name a member');
+  }
+
+  final String _path;
+
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) async* {
+    final it = StreamIterator(input);
+    try {
+      final (format, rest) = await _sniffed(it);
+      switch (format) {
+        case _Format.zip || _Format.sevenzip || _Format.rar || _Format.cab || _Format.ar || _Format.xar:
+          yield* _landed(rest);
+        default:
+          yield* _streamed(await _tarEvents(format, rest));
+      }
+    } finally {
+      await it.cancel();
+    }
+  }
+
+  Stream<List<int>> _streamed(Stream<_TarEvent> events) async* {
+    var inside = false;
+    await for (final ev in events) {
+      switch (ev) {
+        case _TarHeader(:final name) when un.segments(name).join('/') == _path:
+          if (ev.kind != un.Kind.file) throw ContentException(_notFile(ev.kind));
+          inside = true;
+        case _TarBody() when inside:
+          yield ev.bytes;
+        case _TarEnd() when inside:
+          return; // the rest of the archive is never read
+        default:
+          break;
+      }
+    }
+    throw ContentException(_missing);
+  }
+
+  Stream<List<int>> _landed(Stream<List<int>> bytes) async* {
+    final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_member_');
+    final token = exit.onExit(() async {
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
+    });
+    try {
+      await _Unpacker(tmp.path, null, null, RegExp('^${RegExp.escape(_path)}\$')).consume(bytes);
+      final file = p.joinAll([tmp.path, ..._path.split('/')]);
+      switch (await io.FileSystemEntity.type(file, followLinks: false)) {
+        case io.FileSystemEntityType.file:
+          yield* io.File(file).openRead();
+        case io.FileSystemEntityType.notFound:
+          throw ContentException(_missing);
+        case io.FileSystemEntityType.link:
+          throw ContentException(_notFile(un.Kind.symlink));
+        default:
+          throw ContentException(_notFile(un.Kind.dir));
+      }
+    } finally {
+      exit.offExit(token);
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  String get _missing => 'no member "$_path" in the archive';
+
+  String _notFile(un.Kind kind) =>
+      'member "$_path" is a ${kind == un.Kind.dir ? 'folder' : 'link'} in the archive, not a file';
 }
 
 /// [input] through [transform] on its own isolate, so a CPU-bound decoder

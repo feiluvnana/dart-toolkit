@@ -1086,6 +1086,44 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       }
     });
 
+    test('G4: Archive.member pipes one member\'s bytes out of a tar, tgz or zip; a missing one is a ContentException', () async {
+      await Fs.file(p('src/package/package.json')).write('{"name":"x"}');
+      await Fs.file(p('src/package/lib/a.txt')).write('A');
+      for (final format in [ArchiveFormat.tar, ArchiveFormat.tgz, ArchiveFormat.zip]) {
+        final pack = Archive.archive(['.'], dir: p('src'), format: format);
+        await (pack > Fs.file(p('a.${format.name}')));
+        final file = Fs.file(p('a.${format.name}'));
+        expect(await (file | Archive.member('package/package.json')).text(), '{"name":"x"}', reason: format.name);
+        expect(await (file | Archive.member('./package/lib/a.txt')).text(), 'A', reason: format.name);
+        await expectLater(
+          (file | Archive.member('package.json')).text(),
+          throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('no member "package.json"'))),
+          reason: format.name,
+        );
+        await expectLater(
+          (file | Archive.member('package/lib')).text(),
+          throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('folder'))),
+          reason: format.name,
+        );
+      }
+      expect(() => Archive.member('./'), throwsArgumentError);
+      final rar = Fs.file('test/fixtures/archives/rar5_multiple_files.rar');
+      expect(await (rar | Archive.member('test4.bin')).bytes(), hasLength(4096));
+      expect(Directory.systemTemp.listSync().where((e) => e.path.contains('dart_toolkit_member_')), isEmpty);
+    });
+
+    test('G4: Archive.member stops reading a tgz once its member ends', () async {
+      final rnd = Random(4);
+      await Fs.file(p('src/a/first.txt')).write('first');
+      await Fs.file(p('src/b/big.bin')).write(String.fromCharCodes(List.generate(4 << 20, (_) => 33 + rnd.nextInt(90))));
+      await (Archive.archive(['a', 'b'], dir: p('src'), format: ArchiveFormat.tgz) > Fs.file(p('s.tgz')));
+      final size = await Fs.file(p('s.tgz')).size();
+      var read = 0;
+      final counted = _Chunks(io.File(p('s.tgz')).openRead(0, size), (n) => read += n);
+      expect(await (counted | Archive.member('a/first.txt')).text(), 'first');
+      expect(read, lessThan(size ~/ 2), reason: 'the big member after it is never fetched');
+    });
+
     test('M4: a matched hardlink lands even when its target is not matched', () async {
       final tar = [
         ..._tarBlock('pkg/real.bin', 3, 0x30),
@@ -2013,4 +2051,16 @@ final class _Dropped with Reader {
     }
     throw const SocketException('connection reset');
   }
+}
+
+/// A reader over [_source] that reports each chunk's length as it is read.
+final class _Chunks with Reader {
+  _Chunks(this._source, this._seen);
+  final Stream<List<int>> _source;
+  final void Function(int bytes) _seen;
+  @override
+  Stream<List<int>> stream() => _source.map((c) {
+    _seen(c.length);
+    return c;
+  });
 }
