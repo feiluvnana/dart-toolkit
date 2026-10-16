@@ -611,11 +611,10 @@ final class Page implements Closeable {
   /// Run [start] and wait for the main frame's load. [start] returns the
   /// new loader id, or null for a same-document change (a fragment): done.
   Future<Page> _navigate(String subject, Future<String?> Function() start) async {
-    final limit = _timeout;
     final sw = Stopwatch()..start();
-    Duration left() => limit - sw.elapsed;
+    Duration left() => _timeout - sw.elapsed;
     try {
-      final loader = await start().timeout(limit);
+      final loader = await start().timeout(_timeout);
       if (loader == null || _loads.contains(loader)) return this;
       await _s.once(
         'Page.lifecycleEvent',
@@ -623,7 +622,7 @@ final class Page implements Closeable {
         timeout: left(),
       );
     } on TimeoutException {
-      throw _Timeout('navigation timed out', limit, subject);
+      throw _Timeout('navigation timed out', _timeout, subject);
     }
     return this;
   }
@@ -737,12 +736,11 @@ final class Page implements Closeable {
   /// the page's timeout (`open(timeout: 5.minutes)` for a hand login), and
   /// [BrowserException] when the window is closed meanwhile.
   Future<String> cookie(String name) {
-    final limit = _timeout;
     return _whileOpen(() async {
-      final end = _clock.elapsed + limit;
+      final end = _clock.elapsed + _timeout;
       while (true) {
         if ((await cookies())[name] case final value?) return value;
-        if (_clock.elapsed >= end) throw _Timeout('no cookie "$name"', limit, _url);
+        if (_clock.elapsed >= end) throw _Timeout('no cookie "$name"', _timeout, _url);
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
     }());
@@ -1078,11 +1076,10 @@ function(value) {
   /// open longer than 5 s (a long-poll, an event stream) stops counting, so
   /// a page that keeps one open still settles. Returns this page.
   Future<Page> idle() async {
-    final limit = _timeout;
     final start = _clock.elapsed;
     for (;;) {
       final now = _clock.elapsed;
-      final left = limit - (now - start);
+      final left = _timeout - (now - start);
       var wait = left;
       var busy = false;
       var since = _settledAt;
@@ -1097,7 +1094,7 @@ function(value) {
       }
       final quiet = now - since;
       if (!busy && quiet >= _quietPeriod) return this;
-      if (left <= Duration.zero) throw _Timeout('network never idle', limit, _url);
+      if (left <= Duration.zero) throw _Timeout('network never idle', _timeout, _url);
       if (!busy && _quietPeriod - quiet < wait) wait = _quietPeriod - quiet;
       final notified = _idleNotified ??= Completer<void>();
       await notified.future.timeout(wait, onTimeout: () {});
@@ -1131,9 +1128,8 @@ function(value) {
   /// finishing share one deadline, the page's timeout. The browser's copies are
   /// removed when the browser closes.
   Future<Download> download(String selector) async {
-    final limit = _timeout;
     final sw = Stopwatch()..start();
-    Duration left() => limit - sw.elapsed < Duration.zero ? Duration.zero : limit - sw.elapsed;
+    Duration left() => _timeout - sw.elapsed < Duration.zero ? Duration.zero : _timeout - sw.elapsed;
     final events = _browser._cdp.browser;
     final prev = _dlGate;
     final gate = Completer<void>();
@@ -1163,7 +1159,7 @@ function(value) {
           try {
             begun = await begin;
           } on TimeoutException {
-            throw _Timeout('no download from $selector', limit);
+            throw _Timeout('no download from $selector', _timeout);
           }
         });
       });
@@ -1187,7 +1183,7 @@ function(value) {
               timeout: left(),
             );
       } on TimeoutException {
-        throw _Timeout('download never finished', limit, suggested);
+        throw _Timeout('download never finished', _timeout, suggested);
       } finally {
         stopHearing();
       }
