@@ -19,10 +19,10 @@ io.Process.start('cmd', ['/c', 'findstr "^" >nul & taskkill /F /T /PID %CT_PID% 
 Skip `rd` when there is no temp dir. Check that `dog.kill()` in `close()` ends the chain before `taskkill` runs. Port the H1 regression test: use `tasklist` instead of `pgrep` and `%TEMP%` instead of `TMPDIR`, and remove its Windows `skip:`. Verify with `dart test test/chrome_test.dart -n H1`.
 
 ### W3. M13: `.cmd`/`.bat` programs in `Shell.run`
-In `lib/shell.dart`, the three start sites are `Process.run` (~46), the `Process.start` in `_runLive` (~78) and the start in `filter` (~326).
+In `lib/shell.dart`, the two start sites are the `io.Process.start` in `Shell.run` and the one in `_Filter.transform` (`Shell.filter`); `Shell.open` starts the OS launcher and stays as it is.
 - Add `_resolveWindows(cmd)`: search PATH × PATHEXT (`.com .exe .bat .cmd`). If `cmd` has a directory part, try only the extensions. Return the first file that exists, else `cmd`.
 - Add `_checkBatchArgs(exe, args)`: if `exe` ends in `.bat` or `.cmd`, throw `ArgumentError` when any argument contains one of ``" & | < > ^ % ! \r \n``.
-- Route all three start sites through one helper that calls both.
+- Route both start sites through one helper that calls both.
 - Tests (Windows only): `Shell.run(['npm', '--version'])` works; `Shell.run(['x.cmd', 'a&b'])` throws `ArgumentError`; a temp `echo.cmd` given a safe argument returns its output.
 
 ### W4. Kill the whole process tree on Windows
@@ -33,7 +33,7 @@ if (io.Platform.isWindows) {
   return;
 }
 ```
-Every kill site (the run timeout, the exit hook, `filter`'s cancel and error paths) already goes through it. Test (Windows only): port `a timeout kills the grandchildren too` in `test/shell_test.dart` with `cmd /c "start /b ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"` and check with `tasklist /FI "IMAGENAME eq PING.EXE"` that none is left. Only ever kill pids we spawned.
+Put it after the `_reaped` check, which must stay first (a reaped pid may belong to someone else). Every kill site (the run timeout, a cancel, a throwing `onLine`, the exit hook, `filter`'s cancel and error paths) already goes through it. Test (Windows only): port `a timeout kills the grandchildren too` in `test/shell_test.dart` with `cmd /c "start /b ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"` and check with `tasklist /FI "IMAGENAME eq PING.EXE"` that none is left. Only ever kill pids we spawned.
 
 ### W5. M6: hide temp names
 In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <tmp>` right after creating the temp file or folder. The M6 test is skipped on Windows because `Process.kill(sigint)` is unsupported there. Drive it with `GenerateConsoleCtrlEvent` or a manual Ctrl-C instead, and record the result here.
@@ -50,7 +50,7 @@ In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <t
 `TerminalCaps.of` (`lib/src/terminal.dart`) decides `ascii` from `LC_ALL`/`LC_CTYPE`/`LANG`, which Windows rarely sets, so every Windows terminal gets the ASCII theme. Add a named parameter `bool? windows` (default `io.Platform.isWindows`) and, when true, set `ascii = !locale.contains('utf') && !(env.containsKey('WT_SESSION') || env['TERM_PROGRAM'] == 'vscode' || env.containsKey('ConEmuANSI'))`. Test in `test/terminal_keys_test.dart`: `TerminalCaps.of({'WT_SESSION': '1'}, hasTerminal: true, windows: true).ascii` is false, `TerminalCaps.of({}, hasTerminal: true, windows: true).ascii` is true. Then check by eye: Windows Terminal shows `━` bars, conhost shows `#`.
 
 ### W9. Rename retries for Defender and the indexer
-`_renameOver` in `lib/fs.dart` retries 3 × 50 ms; `File.move`, `Dir.move`, `Link.create` and `_Unpacker._moveInto` (`lib/archive.dart`) do not retry. Add `Future<T> renameRetry<T>(Future<T> Function() op)` to `lib/src/posix.dart`: on Windows retry on `osError.errorCode` 5, 32 or 33 with waits of 20, 40, 80 … ms up to 1 s in total; elsewhere call `op()` once. Route the five sites through it, plus the renames into place in `lib/src/tool.dart` `_download` (the sibling tool), `lib/src/media.dart` `replaceIfSmaller` and `lib/src/chrome_fetch.dart` `fetch` (the unpacked folder). Test (Windows only): open the target from a second isolate for 300 ms, then `Fs.file(t).write('x')` succeeds after the handle closes.
+`_renameOver` in `lib/fs.dart` retries 3 × 50 ms; `File.move`, `Dir.move`, `Link.create` and `_Extraction._moveInto` (`lib/archive.dart`) do not retry. Add `Future<T> renameRetry<T>(Future<T> Function() op)` to `lib/src/posix.dart`: on Windows retry on `osError.errorCode` 5, 32 or 33 with waits of 20, 40, 80 … ms up to 1 s in total; elsewhere call `op()` once. Route the five sites through it, plus the renames into place in `lib/src/tool.dart` `_download` (the sibling tool), `lib/src/media.dart` `replaceIfSmaller` and `lib/src/chrome_fetch.dart` `fetch` (the unpacked folder). Test (Windows only): open the target from a second isolate for 300 ms, then `Fs.file(t).write('x')` succeeds after the handle closes.
 
 ### W10. Tui restore after `exit()` on Windows
 `lib/src/tui/session.dart` `_startGuard` (a `sh` watchdog that restores the terminal when the process dies inside `Tui.run`) is POSIX only. On Windows check what `exit(3)` from a binding leaves in Windows Terminal and conhost: alternate screen, mouse reporting, VT input mode. If it is broken, add a `cmd` guard: start `cmd /c "findstr "^" >nul & <write the leave codes>"` with stdin from us, the same way as W2's watchdog, and write the leave codes with `powershell -c [Console]::Write(...)`. Record the result here.
@@ -87,7 +87,23 @@ On x64 and arm64 Linux with no ffmpeg/7zz on PATH run `dart test test/image_test
 ### L7. Chrome as root and the snap Chromium
 In a Docker container running as root, Chromium refuses to start without `--no-sandbox`; `Chrome.launch` in `lib/chrome.dart` passes no such flag. Add `if (io.Platform.isLinux && _isRoot()) '--no-sandbox'` to the launch flags, where `_isRoot()` runs `id -u` once and compares with `0` (no FFI). The snap Chromium (Ubuntu desktop) has a private `/tmp`, so the download folder (`Browser._downloadFolder`, `systemTemp`) and the upload staging folder (`Page` upload, `dart_toolkit_up`) are invisible to it: when the executable path starts with `/snap/`, create both under `~/snap/chromium/common/dart_toolkit/` instead. Check: `docker run --rm -it -v $PWD:/src -w /src dart:stable dart test test/chrome_test.dart` with `chromium` installed in the image (as root), and on an Ubuntu desktop with only the snap: the download and upload tests pass.
 
-## §3 Open
+## §3 Open (any machine)
 
 ### O2. Archive decoders off the startup path (measured, not done)
 `lib/archive.dart` imports the 7z, RAR and xz decoders, ~50 ms of JIT startup for every script that imports `archive` (2026-10-16: stubbing them out gave 565 vs 614 ms medians, 9 runs × 3). A `spawnUri` worker would drop them from startup, but a URI isolate compiles from source on every spawn: 240–380 ms per 7z/RAR/xz extraction (the shared helpers already sit in `lib/src/unpack.dart` for such a worker), and a compiled exe cannot spawn one at all. Deferred imports save nothing under JIT. Revisit only if the SDK can spawn a precompiled kernel cheaply.
+
+### O3. A regression test for a Tui whose terminal input dies
+`_inputLost` in `lib/src/tui/session.dart` ends `Tui.run` with `StdinException('the TUI lost its terminal input (…): no keys, no Ctrl-C')` when the tty reader's stream ends (it used to hang with ISIG off). It shipped without a test.
+1. In `test/tui_pty/probe.dart` add a mode `inputlost`: `Tui.run<int>(0, (s, app) => Screen((r) => r.write('up')))` inside `try`/`on StdinException catch (e)`; before it, start `Timer(const Duration(milliseconds: 500), …)` that runs `pgrep -P $pid` (`pid` from `dart:io`), and for each child pid whose `ps -o args= -p <child>` contains `cat -u /dev/tty` or `cat >/dev/null`, also `pgrep -P <child>` for its own children, then `Process.killPid` every pid found with `SIGKILL`. Only the probe's own children: never signal pid -1, 0 or anything it did not start. In the `catch`, write `lost: ${e.message}` to the log and return.
+2. In `test/tui_pty_test.dart` add a test like the existing `drive.py` ones (`--size 24 80`, mode `inputlost`, `TERM=xterm-256color`): the driver's exit code is 0 within 20 s and the log contains `lost: the TUI lost its terminal input`.
+3. Check: `dart test test/tui_pty_test.dart -n "input"` passes; with the `onDone:`/`onError:` lines in `_listenStdin` removed it times out (then put them back).
+
+### O4. Watch the 7-Zip load-only failure (T14, half closed)
+The audit saw `archive_test.dart` "7-Zip reads .tar.bz2, .tar.zst and ar for us" fail only under the full suite; the Chrome half was a real race (fixed in 593cd058), this one never failed again in ~20 full runs. Run `for i in 1 2 3 4 5; do dart test -r expanded > /tmp/run$i.txt 2>&1; grep "\[E\]" /tmp/run$i.txt; done`. If it fails, the log names the step: two parallel tests that run 7-Zip share `~/Library/Caches/dart_toolkit/7zip-26.04` (read only) and each test's own `tmp` folder, so look at `Shell.filter`'s stdin and the `-si` pipe first. Record the result here; with five clean runs, delete this item.
+
+### O5. Prune superseded pinned builds
+Pins live in versioned folders of the user cache (`dart_toolkit/chrome/155.0.8059.84/…`, `7zip-26.04`, `ffmpeg-9.0.2`); a bump leaves the old one (Chrome for Testing is ~150 MB) and the unversioned `chrome/chrome-mac-arm64`, `chrome/chrome-headless-shell-mac-arm64` from before the pin stay forever.
+1. In `lib/src/chrome_find.dart` `_testingChrome`, after a successful download (inside the lock, after the `exe` check), list `p.join(userCacheDir(), 'dart_toolkit', 'chrome')` and delete every entry that is not `_version` and does not end in `.lock` (`Directory.delete(recursive: true)`, errors ignored: another process may still run an old build).
+2. In `lib/src/tool.dart` `_download`, after the binary lands, delete the sibling folders of `_home(t)` that start with the same prefix (`7zip-` or `ffmpeg-`) and are not `_home(t)` itself.
+3. Test in `test/tool_test.dart`: with `HOME` pointed at a temp folder in a child script (`runDart(env: {'HOME': …})`), create `…/dart_toolkit/chrome/1.0/x` and `…/chrome/chrome-mac-arm64/x`, call the pruning helper (factor it out as `pruneOld(String parent, String keep)` in `lib/src/cache.dart` so the test needs no download) and check both are gone and `keep` stays.
+4. Check: `dart analyze`, `dart test test/tool_test.dart`.
