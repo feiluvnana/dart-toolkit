@@ -33,6 +33,7 @@
 **Security**
 
 - `archive`: an archive's symlinks can no longer reach outside the target folder on a filesystem that folds case or Unicode normalisation (APFS, NTFS): links are matched case-folded, and every placed symlink is resolved by the OS and refused if it lands outside.
+- `video`: the loopback proxy behind `Video.open(url, headers:)` answers only GET and HEAD, under a random per-run path, for `Host: 127.0.0.1:<port>`; another local process or a DNS-rebound page could send any request with the secret headers while ffmpeg ran.
 
 **Performance**
 

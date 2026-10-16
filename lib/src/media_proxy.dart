@@ -5,12 +5,15 @@
 /// HLS and DASH manifests are rewritten on the way so their same-origin
 /// URLs come back through the proxy; other hosts, and redirects to them, are
 /// fetched by ffmpeg directly, without the headers. The proxy lives for one
-/// ffmpeg or ffprobe run.
+/// ffmpeg or ffprobe run and answers only GET and HEAD, under a random path,
+/// for `Host: 127.0.0.1:<port>`: no other local process or rebound page
+/// borrows the headers.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:math';
 
 import 'names.dart' show redact;
 
@@ -70,8 +73,12 @@ final class _Proxy {
   /// ffmpeg fails.
   (Object, StackTrace, Uri)? _failed;
 
+  /// A path no other local process can guess: the proxy answers nothing
+  /// else, so it carries the headers only for the ffmpeg it was made for.
+  final _token = [for (var i = 0; i < 16; i++) Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0')].join();
+
   /// Where ffmpeg asks for origin number [i].
-  String _prefix(int i) => 'http://127.0.0.1:${_server.port}/$i';
+  String _prefix(int i) => 'http://127.0.0.1:${_server.port}/$_token/$i';
 
   /// [url] through the proxy when its origin is one of ours.
   String map(String url) {
@@ -93,12 +100,18 @@ final class _Proxy {
   Future<void> _forward(io.HttpRequest req) async {
     final res = req.response;
     final segments = req.uri.pathSegments;
-    final i = segments.isEmpty ? null : int.tryParse(segments.first);
-    if (i == null || i < 0 || i >= _origins.length) {
+    final i = segments.length < 2 || segments.first != _token ? null : int.tryParse(segments[1]);
+    // ffmpeg only reads; a foreign Host is a page rebinding a name to us.
+    if (i == null ||
+        i < 0 ||
+        i >= _origins.length ||
+        req.method != 'GET' && req.method != 'HEAD' ||
+        req.headers.host != '127.0.0.1' ||
+        req.headers.port != _server.port) {
       res.statusCode = 404;
       return res.close();
     }
-    final rest = req.uri.path.substring(1 + segments.first.length);
+    final rest = req.uri.path.substring(2 + _token.length + segments[1].length);
     final target = Uri.parse(
       '${_origins[i]}${rest.isEmpty ? '/' : rest}${req.uri.hasQuery ? '?${req.uri.query}' : ''}',
     );

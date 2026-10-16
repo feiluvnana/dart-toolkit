@@ -6,6 +6,7 @@ import 'dart:io' as io;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/media.dart' as media;
+import 'package:dart_toolkit/src/media_proxy.dart' as proxy;
 import 'package:dart_toolkit/video.dart';
 import 'package:test/test.dart';
 
@@ -112,6 +113,34 @@ void main() {
         throwsA(isA<ContentException>().having((e) => e.message, 'message', isNot(contains('SECRET')))),
       );
     });
+  });
+
+  test('S2: the header proxy answers only GET/HEAD on its own path token for Host 127.0.0.1:port', () async {
+    final reached = <String>[];
+    final (_, base) = await serve((r) {
+      reached.add('${r.method} ${r.uri.path} ${r.headers.value('authorization')}');
+      r.response.close();
+    });
+    await proxy.throughProxy(['$base/v.mp4'], {'authorization': 'Bearer s3cret'}, (inputs) async {
+      final mapped = Uri.parse(inputs.single);
+      final client = io.HttpClient();
+      addTearDown(() => client.close(force: true));
+      Future<int> ask(String method, Uri url, {String? host}) async {
+        final req = await client.openUrl(method, url);
+        if (host != null) req.headers.host = host;
+        final res = await req.close();
+        await res.drain<void>();
+        return res.statusCode;
+      }
+
+      final guessed = mapped.replace(path: '/0/v.mp4');
+      expect(await ask('GET', mapped), 200);
+      expect(await ask('HEAD', mapped), 200);
+      expect(await ask('DELETE', mapped), isNot(200));
+      expect(await ask('GET', mapped, host: 'evil.example'), isNot(200));
+      expect(await ask('GET', guessed), isNot(200));
+    });
+    expect(reached, ['GET /v.mp4 Bearer s3cret', 'HEAD /v.mp4 Bearer s3cret']);
   });
 
   test('a network failure is an IOException (retried by pool), a bad file a ContentException (B13)', () async {
