@@ -39,7 +39,7 @@ import 'package:path/path.dart' as p;
 import 'core.dart';
 export 'core.dart';
 
-import 'shell.dart' show Shell;
+import 'shell.dart' show ExitException, Shell;
 import 'src/exit.dart' as exit;
 import 'src/posix.dart' as posix;
 import 'src/rar.dart' as rarlib;
@@ -267,7 +267,7 @@ final class _Packed with Reader {
       ], dir: base);
       try {
         await make.transform(Stream.value(pw == null ? const <int>[] : utf8.encode('$pw\n$pw\n'))).drain<void>();
-      } on io.ProcessException catch (e) {
+      } on ExitException catch (e) {
         throw io.FileSystemException('7-Zip failed: ${e.message}', base);
       }
       yield* io.File(out).openRead();
@@ -491,7 +491,7 @@ final class _Extraction {
       );
       try {
         await done.future;
-      } on io.ProcessException catch (e) {
+      } on ExitException catch (e) {
         final why = toolTail(e.message);
         throw ContentException(
           why.contains('Wrong password') ? 'wrong password or corrupt archive' : 'corrupt archive: $why',
@@ -938,9 +938,9 @@ final class _Unpacker with Writer {
             // Only 7-Zip's own failure means bad data: a source error (a
             // dropped connection) passes through for retry and resume.
             final tarBytes = unpack.transform(rest()).handleError((Object e) {
-              final why = (e as io.ProcessException).message.trim().split('\n').last;
+              final why = (e as ExitException).message.trim().split('\n').last;
               throw ContentException('corrupt archive: ${format.name} data: $why', null, null, e);
-            }, test: (e) => e is io.ProcessException);
+            }, test: (e) => e is ExitException);
             await x.tar(_parseTar(tarBytes, container: format.name));
           case _Format.cab || _Format.ar || _Format.xar:
             await x._native(rest(), _password);

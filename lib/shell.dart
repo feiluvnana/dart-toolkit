@@ -8,11 +8,13 @@
 /// await for (final line in (Reader.of(const []) | Shell.filter(['yt-dlp', url])).lines()) { … }
 /// ```
 ///
-/// Public surface is exactly: [Shell], [Output].
+/// Public surface is exactly: [Shell], [Output], [ExitException].
 /// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe],
 ///   `Shell.open()` opens a URL or path with the OS, `Shell.which()` finds an
 ///   installed program.
 /// - [Output] supports `code` `ok` `err` (plus [Reader] over stdout).
+/// - [ExitException]: a program that ran and exited non-zero (`check:`, a
+///   filter); a program that cannot start is a plain `ProcessException`.
 /// Everything else is private.
 library;
 
@@ -28,6 +30,17 @@ import 'src/names.dart' as names;
 import 'src/timeout.dart';
 export 'core.dart';
 
+/// A program that ran and exited non-zero: [errorCode] is its exit code and
+/// [message] ends with the last 64 KB of its stderr. A [io.ProcessException],
+/// so an existing `on ProcessException` keeps catching it; one that cannot
+/// start stays a plain [io.ProcessException].
+final class ExitException extends io.ProcessException implements ToolkitException {
+  ExitException(super.executable, super.arguments, super.message, super.errorCode);
+
+  @override
+  Object? get cause => null;
+}
+
 /// Entry point: run a program, make one a filter, or open with the OS.
 /// The only OS branch in this facade is which launcher [open]
 /// uses; launching itself is per-OS by nature.
@@ -42,8 +55,8 @@ abstract final class Shell {
   /// unsets the variable for the child. [onLine] gets each line of stdout
   /// and stderr as it arrives (a dashboard pane, a log), and the [Output]
   /// still holds both. With [check] a non-zero exit throws
-  /// [io.ProcessException] carrying the exit code and the last 64 KB of
-  /// stderr (as `check:` does for a non-2xx response). With [timeout] a
+  /// [ExitException] carrying the exit code and the last 64 KB of stderr
+  /// (as `check:` does for a non-2xx response). With [timeout] a
   /// run that takes longer is killed with everything it started and throws
   /// [TimeoutException] naming the command. When [cancel] completes first
   /// (with a value or an error), the program and everything it started are
@@ -151,7 +164,7 @@ abstract final class Shell {
       final code = await proc.exitCode;
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
       if (check && code != 0) {
-        throw io.ProcessException(command[0], _shown(command).sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
+        throw ExitException(command[0], _shown(command).sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
       }
       return Output._(code, out.takeBytes(), stderr);
     } finally {
@@ -178,8 +191,8 @@ abstract final class Shell {
   }
 
   /// A process as a [Pipe]: the stream goes to its stdin, stdout comes out.
-  /// stderr is collected; a non-zero exit fails the run with a
-  /// [io.ProcessException] carrying the code and stderr. [env] overlays the
+  /// stderr is collected; a non-zero exit fails the run with an
+  /// [ExitException] carrying the code and stderr. [env] overlays the
   /// parent environment; a null value unsets the variable for the child.
   static Pipe filter(List<String> command, {String? dir, Map<String, String?>? env}) {
     _checkCommand(command);
@@ -569,7 +582,7 @@ final class _Filter implements Pipe {
     } catch (_) {}
     if (code != 0) {
       final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
-      throw io.ProcessException(_command[0], _shown(_command).sublist(1), 'exit $code: ${_tail(err)}', code);
+      throw ExitException(_command[0], _shown(_command).sublist(1), 'exit $code: ${_tail(err)}', code);
     }
   }
 

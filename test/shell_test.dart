@@ -177,6 +177,13 @@ Future<void> main() async {
       );
     }, testOn: '!windows');
 
+    test('E5: a non-zero exit with check: is an ExitException, a toolkit error', () async {
+      final e = await Shell.run(['sh', '-c', 'echo boom >&2; exit 3'], check: true).then<Object>((_) => 'ran', onError: (Object e) => e);
+      expect(e, isA<ExitException>().having((x) => x.errorCode, 'code', 3));
+      expect(e, isA<ToolkitException>().having((x) => x.message, 'message', contains('boom')));
+      await expectLater(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isNot(isA<ExitException>())));
+    });
+
     test('a program that cannot start throws ProcessException', () async {
       expect(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isA<ProcessException>()));
     });
@@ -204,7 +211,7 @@ Future<void> main() async {
     test('non-zero exit fails the run with a ProcessException', () async {
       expect(
         _Mem('x') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null,
-        throwsA(isA<ProcessException>().having((e) => e.message, 'message', contains('2'))),
+        throwsA(isA<ExitException>().having((e) => e.errorCode, 'code', 2)),
       );
     });
 
