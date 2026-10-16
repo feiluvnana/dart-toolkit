@@ -163,38 +163,31 @@ final class Opt<T> extends Param<T> {
 /// list several, comma-separated (`--kind=photo,reel`). Yes/no is always a
 /// [Flag]: `Multi<bool>` is an [ArgumentError].
 final class Multi<T> extends Param<List<T>> {
-  Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse, List<T>? values})
-    : this._withElement(name, help, _resolve<T>(name, parse, values), short: short, or: or, commas: values != null);
+  Multi(String name, String help, {List<T> or = const [], T Function(String)? parse, List<T>? values})
+    : this._withElement(name, help, _resolve<T>(name, parse, values), or: or, commas: values != null);
 
-  Multi._withElement(
-    String name,
-    String help,
-    _Reader<T> element, {
-    String? short,
-    required List<T> or,
-    required bool commas,
-  }) : _or = or,
-       super._(
-         name: name,
-         short: short,
-         help: help,
-         kind: _Kind.multi,
-         required: false,
-         hint: '${element.hint}...',
-         absent: () => List<T>.unmodifiable(List<T>.of(or)),
-         readOne: element.read,
-         readMany: (raws, what) => List<T>.unmodifiable([
-           for (final raw in raws)
-             for (final one in commas ? raw.split(',') : [raw]) element.read(one, what),
-         ]),
-         mergeMany: (parentRaws, what, child) => List<T>.unmodifiable([
-           for (final raw in parentRaws)
-             for (final one in commas ? raw.split(',') : [raw]) element.read(one, what),
-           ...((child as List?) ?? const []).cast<T>(),
-         ]),
-       ) {
+  Multi._withElement(String name, String help, _Reader<T> element, {required List<T> or, required bool commas})
+    : _or = or,
+      super._(
+        name: name,
+        short: null,
+        help: help,
+        kind: _Kind.multi,
+        required: false,
+        hint: '${element.hint}...',
+        absent: () => List<T>.unmodifiable(List<T>.of(or)),
+        readOne: element.read,
+        readMany: (raws, what) => List<T>.unmodifiable([
+          for (final raw in raws)
+            for (final one in commas ? raw.split(',') : [raw]) element.read(one, what),
+        ]),
+        mergeMany: (parentRaws, what, child) => List<T>.unmodifiable([
+          for (final raw in parentRaws)
+            for (final one in commas ? raw.split(',') : [raw]) element.read(one, what),
+          ...((child as List?) ?? const []).cast<T>(),
+        ]),
+      ) {
     _checkName(name);
-    _checkShort(short);
     _checkHelpReserved(name);
   }
 

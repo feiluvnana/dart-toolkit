@@ -89,6 +89,7 @@
 - `fs`: `Dir.size(match:)`; the bytes of some files are `[for (final e in await dir.list(match: '**/*.jpg')) if (e is File) await e.size()].fold(0, (a, b) => a + b)`.
 - `fs`: `Fs.tempDir(prefix:)`; the folder is always `tmp-…` under the system temp, and a named subfolder is `dir.dir('name')`.
 - `cli`: `Command(dotenv:, aliases:)`. An `Opt(env:)` reads the real environment (`set -a; . ./.env; set +a` before the script, or a shell wrapper); a subcommand has one name, and a near miss still suggests it.
+- `cli`: `Multi(short:)`; a repeated option is spelled `--tag a --tag b` (or, with `values:`, `--tag a,b`).
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0

@@ -709,7 +709,7 @@ final thumbs = await Pool.map(paths, makeThumb, isolates: true);
 sealed class Param<T> {}                                   // read back with context(param) as a T
 final class Flag extends Param<bool> { Flag(String name, String help, {String? short, bool or = false}); }
 final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse, List<T>? values, T? min, T? max}); } // env: the variable read when the flag is absent
-final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse, List<T>? values}); }
+final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {List<T> or = const [], T Function(String)? parse, List<T>? values}); }
 final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse, List<T>? values}); }
 final class Rest<T> extends Param<List<T>> { Rest(String name, String help, {bool required = false, T Function(String)? parse, List<T>? values}); } // the positionals after the Args, declared last
 final class Command {

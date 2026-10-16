@@ -145,7 +145,7 @@ void main() {
     });
 
     test('C1/C2: parent Multi merges typed, before and after', () async {
-      final tag = Multi<String>('tag', 'A tag.', short: 't');
+      final tag = Multi<String>('tag', 'A tag.');
       List<String> tags = const [];
       final cli = Command(
         'app',
@@ -340,7 +340,7 @@ void main() {
 
   group('commands', () {
     test('dispatch by name; ancestor options work after', () async {
-      final tag = Multi<String>('tag', 'A tag.', short: 't');
+      final tag = Multi<String>('tag', 'A tag.');
       final file = Arg<String>('file', 'F.', required: true);
       var built = '';
       List<String> tags = const [];
