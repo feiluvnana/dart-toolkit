@@ -145,11 +145,10 @@ final class ZipEntry {
   }
 }
 
-/// The members of the zip in [b], in central-directory order.
 /// [n] bytes of a zip from offset [at], both inside it.
 typedef ReadAt = Uint8List Function(int at, int n);
 
-/// The members of the zip in [b].
+/// The members of the zip in [b], in central-directory order.
 List<ZipEntry> readZip(Uint8List b) => readZipAt(b.length, (at, n) => Uint8List.sublistView(b, at, at + n));
 
 /// The members of a zip of [length] bytes read through [read]: only the
@@ -157,7 +156,7 @@ List<ZipEntry> readZip(Uint8List b) => readZipAt(b.length, (at, n) => Uint8List.
 List<ZipEntry> readZipAt(int length, ReadAt read) {
   // The end-of-central-directory record: 22 bytes plus a comment of up to
   // 64 KiB, so scan back at most that far.
-  final tailAt = length - 22 - 0xFFFF < 0 ? 0 : length - 22 - 0xFFFF;
+  final tailAt = max(0, length - 22 - 0xFFFF);
   final tail = read(tailAt, length - tailAt);
   var eocd = -1;
   for (var i = tail.length - 22; i >= 0; i--) {
@@ -173,8 +172,9 @@ List<ZipEntry> readZipAt(int length, ReadAt read) {
   if (count == 0xFFFF || dir == 0xFFFFFFFF) {
     // Zip64: a locator 20 bytes before points at the zip64 record.
     final loc = eocd - 20;
-    if (loc < 0 || _u32(read(loc, 20), 0) != 0x07064b50) _corrupt('missing zip64 locator');
-    final rec = _u64(read(loc, 20), 8);
+    final locator = loc < 0 ? null : read(loc, 20);
+    if (locator == null || _u32(locator, 0) != 0x07064b50) _corrupt('missing zip64 locator');
+    final rec = _u64(locator, 8);
     if (rec < 0 || rec + 56 > length) _corrupt('bad zip64 record');
     final r = read(rec, 56);
     if (_u32(r, 0) != 0x06064b50) _corrupt('bad zip64 record');

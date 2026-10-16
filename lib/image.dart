@@ -125,7 +125,7 @@ final class Image {
     }
     if (w < 1 || ht < 1) throw ContentException('broken image header: ${w}x$ht');
     if (w * ht > _maxPixels) throw ContentException('image too large: ${w}x$ht');
-    final stem = name == null ? '' : p.basenameWithoutExtension(name);
+    final stem = p.basenameWithoutExtension(name ?? '');
     return Image._(path, format, w, ht, const [], h, grid, stem.isEmpty ? 'image' : stem, temp);
   }
 

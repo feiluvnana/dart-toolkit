@@ -35,7 +35,8 @@ abstract final class CsvUtils {
             f.contains('"') ||
             f.contains('\n') ||
             f.contains('\r') ||
-            (f.isNotEmpty && (f.startsWith(' ') || f.endsWith(' ')));
+            f.startsWith(' ') ||
+            f.endsWith(' ');
         out.write(quote ? '"${f.replaceAll('"', '""')}"' : f);
       }
       out.write('\r\n');

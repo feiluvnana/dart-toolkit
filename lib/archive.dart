@@ -612,7 +612,6 @@ final class _Extraction {
         }
       }
     } finally {
-      _cancel = null;
       if (await stage.exists()) await stage.delete(recursive: true);
     }
     _modes.addAll(un.placeLinks(tmp.path, _links, _modes, budget));
@@ -826,12 +825,10 @@ final class _Extraction {
       }
       return;
     }
-    if (destType != io.FileSystemEntityType.notFound) {
-      if (srcIsDir != destIsDir) {
-        // Never delete on type collision: an archive file over an existing
-        // dir (or vice versa) throws instead of rm -rf.
-        throw io.FileSystemException('archive member collides with existing ${destIsDir ? 'directory' : 'file'}', dest);
-      }
+    if (destType != io.FileSystemEntityType.notFound && srcIsDir != destIsDir) {
+      // Never delete on type collision: an archive file over an existing
+      // dir (or vice versa) throws instead of rm -rf.
+      throw io.FileSystemException('archive member collides with existing ${destIsDir ? 'directory' : 'file'}', dest);
     }
     try {
       switch (srcType) {
@@ -1002,8 +999,6 @@ enum _Format {
 /// 7-Zip's `-t` name for the streamed formats.
 const _sevenzipType = {_Format.bzip2: 'bzip2', _Format.zstd: 'zstd', _Format.compress: 'Z', _Format.lzma: 'lzma'};
 
-/// Formats this module does not read, by their magic bytes, so the error
-/// names them instead of calling them a bad tar.
 /// Formats 7-Zip reads for us, by magic.
 const _viaSevenzip = <_Format, List<int>>{
   _Format.bzip2: [0x42, 0x5A, 0x68], // BZh

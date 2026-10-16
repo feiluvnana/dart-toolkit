@@ -278,7 +278,7 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async*
         }
         metaFlag = typeflag;
         emit = false;
-        if (size == 0 && metaFlag != 0) finishMeta();
+        if (size == 0) finishMeta();
         continue;
       }
       final member = _tarMember(h, typeflag, meta);
