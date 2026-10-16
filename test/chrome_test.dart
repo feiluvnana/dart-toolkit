@@ -243,7 +243,7 @@ void main() {
     });
 
     test('connect to a dead port throws', () async {
-      expect(Chrome.connect('http://127.0.0.1:1'), throwsA(anything));
+      expect(Chrome.connect('http://127.0.0.1:1'), throwsA(isA<BrowserException>()));
     });
   });
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_toolkit/chrome.dart' show Chrome;
 import 'package:dart_toolkit/src/cdp.dart';
 import 'package:test/test.dart';
 
@@ -123,5 +124,27 @@ void main() {
     );
     await fake.event('X.e', {'n': 1});
     await expectLater(next, throwsA(isA<TypeError>()));
+  });
+
+  test('B12: connect and launch failures are BrowserExceptions that say why', () async {
+    await expectLater(
+      Chrome.connect('http://127.0.0.1:1'),
+      throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('no browser to connect to'))),
+    );
+    final junk = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => junk.close(force: true));
+    junk.listen((r) => r.response
+      ..write('not json')
+      ..close());
+    await expectLater(Chrome.connect('http://127.0.0.1:${junk.port}'), throwsA(isA<BrowserException>()));
+    if (Platform.isWindows) return;
+    final dir = await Directory.systemTemp.createTemp('fake_chrome');
+    addTearDown(() => dir.delete(recursive: true));
+    final fake = File('${dir.path}/chrome')..writeAsStringSync('#!/bin/sh\necho "bad flag --x" >&2\nexit 3\n');
+    await Process.run('chmod', ['+x', fake.path]);
+    await expectLater(
+      Chrome.launch(path: fake.path),
+      throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('bad flag --x'))),
+    );
   });
 }

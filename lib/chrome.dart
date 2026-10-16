@@ -108,7 +108,13 @@ abstract final class Chrome {
         );
     final Cdp cdp;
     try {
-      cdp = await Cdp.connect(await endpoint.future.timeout(_defaultTimeout));
+      final url = await endpoint.future.timeout(
+        _defaultTimeout,
+        onTimeout: () => throw BrowserException(
+          'Chrome did not start in ${_defaultTimeout.inSeconds} s: $exe${tail.isEmpty ? '' : '\n${tail.join('\n')}'}',
+        ),
+      );
+      cdp = await Cdp.connect(url).timeout(_defaultTimeout);
     } catch (_) {
       proc.kill(io.ProcessSignal.sigkill);
       await proc.exitCode;
@@ -169,19 +175,26 @@ abstract final class Chrome {
   /// Attach to a running browser (`http://localhost:9222` or a `ws://` URL).
   /// Its [Browser.close] closes the tabs it opened, restores the download
   /// behaviour, disconnects, and leaves that browser running.
+  /// Fails with a [BrowserException] when nothing answers within 30 s.
   static Future<Browser> connect(String url) async {
-    var ws = url;
-    if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-      final client = io.HttpClient();
-      try {
-        final res = await (await client.getUrl(Uri.parse(url).resolve('/json/version'))).close();
-        final info = jsonDecode(await res.transform(utf8.decoder).join()) as Map<String, Object?>;
-        ws = info['webSocketDebuggerUrl']! as String;
-      } finally {
-        client.close(force: true);
+    try {
+      var ws = url;
+      if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+        final client = io.HttpClient()..connectionTimeout = _defaultTimeout;
+        try {
+          final res = await (await client.getUrl(Uri.parse(url).resolve('/json/version'))).close();
+          final body = await res.transform(utf8.decoder).join().timeout(_defaultTimeout);
+          ws = (jsonDecode(body) as Map<String, Object?>)['webSocketDebuggerUrl']! as String;
+        } finally {
+          client.close(force: true);
+        }
       }
+      return Browser._(await Cdp.connect(ws).timeout(_defaultTimeout));
+    } on BrowserException {
+      rethrow;
+    } catch (e) {
+      throw BrowserException('no browser to connect to at $url: $e', cause: e);
     }
-    return Browser._(await Cdp.connect(ws));
   }
 }
 
