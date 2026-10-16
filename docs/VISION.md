@@ -440,8 +440,8 @@ final class Browser implements Closeable {
   Future<List<Page>> pages();
 }
 final class Page implements Closeable {
-  Future<Page> go(String url);                                                        // wait for load; a reload is go(await url()), back is go(the url you came from)
-  Future<String> url();  Future<Elements> html();  Future<String> text();
+  Future<Page> go(String url);                                                        // wait for load; a reload is go(page.url()), back is go(the url you came from)
+  String url();  Future<Elements> html();  Future<String> text();   // url() is in memory (the mirror on Future<Page> is a Future)
   Future<Json> run(String js);   Future<Cookies> cookies();                            // the current URL's jar
   Future<String> cookie(String name);                                                   // waits until set
   Stream<Capture> responses(String pattern);                                            // XHR/fetch matching a glob

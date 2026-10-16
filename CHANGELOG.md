@@ -72,6 +72,7 @@
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
 - `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
 - `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
+- `chrome`: `Page.url()` is a `String` (in memory, as `Response.url()`); `browser.open(u).url()` on a `Future<Page>` stays a Future.
 - `core`: a `Meter` is counted by hand (`update`) or by the runs it watches; mixing them is a `StateError` (one `update()` froze the meter against later runs, silently).
 - `image`/`video`: `Compressed` and `Kept` have private constructors (VISION rule 2): only `compress` makes them, so `Compressed(0, 0).text()` can no longer throw. Matching (`case Kept(:final reason)`) is unchanged.
 - `utils`: `HashUtils.md5/sha256(expect:)` that is not hex of the digest's length (`'not a digest'`, an md5 given to sha256) is an `ArgumentError` when the hasher is made, instead of a mismatch after the whole run.

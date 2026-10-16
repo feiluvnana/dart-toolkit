@@ -266,7 +266,7 @@ void main() {
       addTearDown(() => profile.delete(recursive: true));
       final b = await Chrome.launch(profile: profile.path);
       addTearDown(b.close);
-      expect(await (await b.open('$base/')).url(), '$base/');
+      expect((await b.open('$base/')).url(), '$base/');
       final ps = await Process.run('ps', ['-ax', '-o', 'pid=,args=']);
       final pids = [
         for (final line in '${ps.stdout}'.split('\n'))
@@ -288,7 +288,7 @@ void main() {
       final again = await Chrome.launch(profile: profile.path);
       addTearDown(again.close);
       await Future<void>.delayed(const Duration(seconds: 1)); // restored tabs open late
-      expect(await Future.wait([for (final p in await again.pages()) p.url()]), isNot(contains('$base/cookie')));
+      expect([for (final p in await again.pages()) p.url()], isNot(contains('$base/cookie')));
       expect((await (await again.open('$base/')).cookies())['tok'], 'abc');
     });
 
@@ -393,14 +393,14 @@ void main() {
       final page = await browser.open(dataUrl('<title>One</title>'));
       expect((await page.go(dataUrl('<title>Two</title>')).html()).$('title').text(), 'Two');
       await page.go(dataUrl('<title>One</title>'));
-      await page.go(await page.url());
+      await page.go(page.url());
       expect((await page.html()).$('title').text(), 'One');
       await page.close();
     });
 
     test('url() is the current URL', () async {
       final page = await browser.open('$base/echo-header');
-      expect(await page.url(), '$base/echo-header');
+      expect(page.url(), '$base/echo-header');
       await page.close();
     });
   });

@@ -623,7 +623,7 @@ final class Page implements Closeable {
   }
 
   /// The current URL.
-  Future<String> url() async => _url;
+  String url() => _url;
 
   /// The rendered DOM as [Elements], with the page's URL as the base.
   /// Chain into it: `page.html().$('a')`.
