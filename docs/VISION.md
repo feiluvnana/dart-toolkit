@@ -400,7 +400,7 @@ final class Page implements Closeable {
   Future<Page> click(String selector);                                                  // auto-wait
   Future<Page> fill(String selector, String value);  Future<Page> select(String selector, String value);
   Future<Page> upload(String selector, Reader file);
-  Future<Page> press(String key);  Future<Page> scroll({String? to});                  // to the bottom, or to a selector
+  Future<Page> press(String key);  Future<Page> scroll();                               // to the bottom
   Future<Page> wait(String selector);  Future<Page> idle();
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
   Future<Download> download(String selector);

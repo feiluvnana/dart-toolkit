@@ -699,22 +699,10 @@ void main() {
       await page.close();
     });
 
-    test('scroll goes to the bottom, scroll(sel) brings an element into view', () async {
+    test('scroll goes to the bottom', () async {
       final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
       await page.scroll();
       expect(await page.run('window.scrollY > 0').value<bool>(), isTrue);
-      await page.scroll(to: '#bottom');
-      await page.close();
-    });
-
-    test('B6: scroll on a missing selector times out (named timeout, regression: positional)', () async {
-      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 500));
-      final sw = Stopwatch()..start();
-      await expectLater(
-        page.scroll(to: '#missing'),
-        throwsA(isA<TimeoutException>()),
-      );
-      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
       await page.close();
     });
   });

@@ -1059,16 +1059,9 @@ function(value) {
     }
   }
 
-  /// Bring the first match of the selector [to] into view, waiting until it
-  /// is attached (up to the page's timeout); with no selector, go to the bottom of
-  /// the page (what infinite lists need). Returns this page.
-  Future<Page> scroll({String? to}) => _act('scroll', to, () async {
-    if (to == null) {
-      await _eval('window.scrollTo(0, document.body.scrollHeight)');
-    } else {
-      await _on(to, _Ready.attached, (el) => _call(el, 'function() { this.scrollIntoViewIfNeeded(true); }'));
-    }
-  });
+  /// Go to the bottom of the page (what infinite lists need); actions
+  /// scroll their element into view themselves. Returns this page.
+  Future<Page> scroll() => _act('scroll', null, () => _eval('window.scrollTo(0, document.body.scrollHeight)'));
 
   /// Run one action; returns this page. Timeouts, [ArgumentError]s and
   /// toolkit exceptions pass through; a protocol failure is rethrown naming
@@ -1503,7 +1496,7 @@ extension PageFuture on Future<Page> {
   Future<Page> press(String key) async => (await this).press(key);
   Future<Page> select(String selector, String value) async => (await this).select(selector, value);
   Future<Page> upload(String selector, Reader file) async => (await this).upload(selector, file);
-  Future<Page> scroll({String? to}) async => (await this).scroll(to: to);
+  Future<Page> scroll() async => (await this).scroll();
   Future<Page> wait(String selector) async => (await this).wait(selector);
   Future<Page> idle() async => (await this).idle();
   Reader screenshot({bool fullPage = false}) => _later((p) => p.screenshot(fullPage: fullPage));
