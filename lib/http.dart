@@ -354,7 +354,9 @@ abstract final class Http {
   /// For a CLI OAuth login (the loopback redirect), a webhook, a folder
   /// preview. A handler error is a 500 with no detail sent, and is logged to
   /// stderr. No routing table: `switch (request.path())` is the router.
-  /// A request body over [limit] bytes is a 413.
+  /// A request body over [limit] bytes is a 413. On a loopback [host] a
+  /// request whose `Host` is not a loopback name is a 421, so a web page
+  /// cannot reach the server by DNS rebinding.
   static Future<Server> serve(
     FutureOr<Reply> Function(Request request) handler, {
     int port = 0,

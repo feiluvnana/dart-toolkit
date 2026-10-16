@@ -33,11 +33,19 @@ final class Server implements Closeable {
     }
   }
 
+  /// Bound to loopback: only loopback `Host` names are answered.
+  late final bool _loopback = _server.address.isLoopback;
+
+  static const _loopbackNames = {'127.0.0.1', 'localhost', '::1', '[::1]'};
+
   Future<void> _answer(HttpRequest req, FutureOr<Reply> Function(Request) handler) async {
     final res = req.response;
     try {
       Reply reply;
-      if (req.contentLength > _limit) {
+      final host = req.headers.host?.toLowerCase();
+      if (_loopback && (host == null || !_loopbackNames.contains(host))) {
+        reply = const Reply.status(421); // DNS rebinding: a page's own name pointed at us
+      } else if (req.contentLength > _limit) {
         reply = const Reply.status(413);
       } else {
         final request = Request._(req, _limit);

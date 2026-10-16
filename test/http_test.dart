@@ -1517,6 +1517,26 @@ void serveTests() {
       expect(log.err, contains('✗ GET /boom?code=***: Bad state: handler failed'));
     });
 
+    test('S10: a loopback server answers only loopback Host names (DNS rebinding)', () async {
+      final server = await Http.serve((r) => const Reply.text('ok'));
+      addTearDown(server.close);
+      final port = Uri.parse(server.url()).port;
+      Future<int> as(String host) async {
+        final c = HttpClient();
+        try {
+          final req = await c.get('127.0.0.1', port, '/');
+          req.headers.host = host;
+          return (await req.close()).statusCode;
+        } finally {
+          c.close(force: true);
+        }
+      }
+
+      expect(await as('127.0.0.1'), 200);
+      expect(await as('localhost'), 200);
+      expect(await as('evil.example'), 421);
+    });
+
     test('B8: a reply that fails after the handler is logged; bad JSON is a 500', () async {
       final log = await capture(() async {
         final server = await Http.serve(
