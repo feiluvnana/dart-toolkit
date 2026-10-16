@@ -12,6 +12,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'names.dart' show redact;
+
 /// Run [body] with [inputs] as ffmpeg should read them: unchanged without
 /// [headers] (or for a local path), else rewritten to the proxy.
 Future<T> throughProxy<T>(
@@ -24,6 +26,20 @@ Future<T> throughProxy<T>(
   final proxy = await _Proxy.start(origins, headers);
   try {
     return await body([for (final i in inputs) proxy.map(i)]);
+  } catch (_) {
+    // ffmpeg only saw a 502 from the proxy: the upstream failure says more.
+    if (proxy._failed case (final error, final stack, final url)) {
+      Error.throwWithStackTrace(switch (error) {
+        io.SocketException(:final message, :final osError, :final address, :final port) => io.SocketException(
+          '$message: ${redact(url)}',
+          osError: osError,
+          address: address,
+          port: port,
+        ),
+        _ => error,
+      }, stack);
+    }
+    rethrow;
   } finally {
     await proxy.close();
   }
@@ -49,6 +65,10 @@ final class _Proxy {
   final List<String> _origins;
   final Map<String, String> _headers;
   final _client = io.HttpClient()..autoUncompress = false;
+
+  /// The first upstream request that failed, and its URL: rethrown when
+  /// ffmpeg fails.
+  (Object, StackTrace, Uri)? _failed;
 
   /// Where ffmpeg asks for origin number [i].
   String _prefix(int i) => 'http://127.0.0.1:${_server.port}/$i';
@@ -82,6 +102,7 @@ final class _Proxy {
     final target = Uri.parse(
       '${_origins[i]}${rest.isEmpty ? '/' : rest}${req.uri.hasQuery ? '?${req.uri.query}' : ''}',
     );
+    var answered = false;
     try {
       final out = await _client.openUrl(req.method, target);
       out.followRedirects = false; // a redirect elsewhere must not carry the headers
@@ -91,6 +112,7 @@ final class _Proxy {
       _headers.forEach(out.headers.set);
       out.headers.set('accept-encoding', 'identity'); // manifests are rewritten as text
       final up = await out.close();
+      answered = true;
       res.statusCode = up.statusCode;
       up.headers.forEach((name, values) {
         if (!const {'transfer-encoding', 'connection', 'content-length'}.contains(name)) res.headers.set(name, values);
@@ -109,7 +131,10 @@ final class _Proxy {
         if (up.contentLength >= 0) res.contentLength = up.contentLength;
         await res.addStream(up);
       }
-    } catch (_) {
+    } catch (e, st) {
+      // Only a request that got no answer: a body cut short is ffmpeg
+      // closing a connection it no longer needs.
+      if (!answered) _failed ??= (e, st, target);
       try {
         res.statusCode = 502;
       } catch (_) {}

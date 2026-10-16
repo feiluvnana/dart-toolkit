@@ -126,6 +126,16 @@ void main() {
     await expectLater(Video.open('$base/x.mp4'.replaceFirst('http', 'file')), throwsA(isA<ContentException>()));
   });
 
+  test('with headers:, an upstream failure surfaces as itself, naming the source (B20)', () async {
+    final closed = await io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, 0);
+    final port = closed.port;
+    await closed.close();
+    await expectLater(
+      Video.open('http://127.0.0.1:$port/x.m3u8', headers: {'cookie': 'c=1'}),
+      throwsA(isA<io.SocketException>().having((e) => e.message, 'message', contains('127.0.0.1:$port/x.m3u8'))),
+    );
+  });
+
   group('probe', () {
     test('a file is probed in place', () async {
       final v = await Fs.file(clip).video();
