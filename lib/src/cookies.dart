@@ -14,18 +14,17 @@ import '../core.dart' show ContentException;
 /// ```dart
 /// await file.write(cookies.encode());               // persist a session
 /// final jar = await Fs.file('.session').cookies(or: Cookies());
-/// final client = Http.client(cookies: jar);         // sends jar.agent() too
+/// final client = Http.client(cookies: jar);         // sends the session's user-agent too
 /// ```
 final class Cookies {
-  /// An empty jar; [agent] is the `User-Agent` of the browser the session
-  /// belongs to.
-  // ignore: prefer_initializing_formals – the public argument name stays.
-  Cookies({String? agent}) : _agent = agent;
+  /// An empty jar.
+  Cookies();
 
   /// A Netscape `cookies.txt`: what [encode] writes, and what browser
   /// cookie-export extensions, curl and yt-dlp use. Comments and lines that
   /// do not parse are skipped (`#HttpOnly_` lines are cookies). A
-  /// `user-agent: …` line (or `# user-agent: …`) sets [agent]. Text with
+  /// `user-agent: …` line (or `# user-agent: …`) names the session's
+  /// browser, which a client with this jar sends. Text with
   /// content lines but none that parses (a space-separated paste, a JSON
   /// export) is a [ContentException].
   static Cookies parse(String text) {
@@ -69,13 +68,9 @@ final class Cookies {
 
   final _cookies = <String, _Cookie>{};
 
-  /// The `User-Agent` the session was exported with, or null. A client
-  /// with this jar sends it unless a `user-agent` header is given: a
-  /// session replayed under another browser's name is often logged out.
-  String? agent() => _agent;
-
   /// A Netscape `cookies.txt` (expiry 0 for a session cookie), with the
-  /// [agent] as a `# user-agent:` comment. Expired cookies are left out.
+  /// session's user-agent as a `# user-agent:` comment. Expired cookies
+  /// are left out.
   String encode() {
     _sweep();
     String flag(bool b) => b ? 'TRUE' : 'FALSE';
@@ -111,10 +106,6 @@ final class Cookies {
     return best?.value;
   }
 
-  /// The `Cookie` header a request to [url] would send, longest path first;
-  /// null when none match.
-  String? header(String url) => headerFor(this, Uri.parse(url));
-
   /// Set a host-only cookie for [url]'s host on path `/`. Returns this jar.
   Cookies set(String name, String value, {required String url}) {
     final host = Uri.parse(url).host.toLowerCase();
@@ -139,6 +130,11 @@ final class Cookies {
   @override
   String toString() => 'Cookies(${_cookies.values.map((c) => c.name).join(', ')})';
 }
+
+/// The `User-Agent` [jar]'s session was exported with, or null. A client
+/// sends it unless a `user-agent` header is given: a session replayed under
+/// another browser's name is often logged out.
+String? agentOf(Cookies jar) => jar._agent;
 
 final _agentLine = RegExp(r'^#?\s*user-agent\s*:(.*)$', caseSensitive: false);
 

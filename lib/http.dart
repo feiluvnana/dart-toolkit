@@ -305,7 +305,8 @@ abstract final class Http {
   ///   wins for that call. Secret ones (`authorization`, `cookie`, names
   ///   with `token`, `key`, `auth` …) go only to [base]'s origin, or without
   ///   [base] to the first request's. Without a `user-agent` one, requests
-  ///   send the jar's `agent()`, else a current desktop Chrome's.
+  ///   send the user-agent the jar's session file names (its `user-agent:`
+  ///   line), else a current desktop Chrome's.
   /// - [timeout]: the connect, the wait for the headers, then any stall
   ///   streaming.
   /// - [retries]: re-sends only when the request provably was not
@@ -881,7 +882,7 @@ final class _Client extends Client {
         }
       }
       if (!headers.keys.any((k) => k.toLowerCase() == 'user-agent')) {
-        req.headers.set('user-agent', _s.cookies.agent() ?? _userAgent);
+        req.headers.set('user-agent', jar.agentOf(_s.cookies) ?? _userAgent);
       }
       if (_s.browser case final b?) {
         for (final MapEntry(:key, :value) in _browserHeaders(b).entries) {
@@ -977,7 +978,7 @@ final class _Client extends Client {
 const _maxRedirects = 10;
 
 /// The `user-agent` every request sends unless a header or the jar's
-/// `agent()` names one: a current desktop Chrome, since many sites refuse
+/// session file names one: a current desktop Chrome, since many sites refuse
 /// or degrade a `Dart/…` client.
 const _userAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';

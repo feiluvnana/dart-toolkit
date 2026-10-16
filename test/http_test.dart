@@ -792,13 +792,13 @@ Future<void> main() async {
           'not a cookie line',
         ].join('\r\n'),
       );
-      expect(jar.header('https://www.example.com/app/x'), 'host=only; sid=s3cret; tok=abc');
-      expect(jar.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
-      expect(jar.header('http://www.example.com/'), isNull); // sid and tok are secure
+      expect(cookieHeader(jar, 'https://www.example.com/app/x'), 'host=only; sid=s3cret; tok=abc');
+      expect(cookieHeader(jar, 'https://api.example.com/'), 'sid=s3cret; tok=abc');
+      expect(cookieHeader(jar, 'http://www.example.com/'), isNull); // sid and tok are secure
       expect(jar['old'], isNull);
       final again = Cookies.parse(jar.encode());
-      expect(again.header('https://www.example.com/app/x'), jar.header('https://www.example.com/app/x'));
-      expect(again.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
+      expect(cookieHeader(again, 'https://www.example.com/app/x'), cookieHeader(jar, 'https://www.example.com/app/x'));
+      expect(cookieHeader(again, 'https://api.example.com/'), 'sid=s3cret; tok=abc');
     });
 
     test('Cookies.parse of text with no cookies.txt line is a ContentException (B24)', () {
@@ -808,8 +808,8 @@ Future<void> main() async {
       ]) {
         expect(() => Cookies.parse(bad), throwsA(isA<ContentException>()), reason: bad);
       }
-      expect(Cookies.parse('').header('https://example.com/'), isNull);
-      expect(Cookies.parse('# Netscape HTTP Cookie File\n# user-agent: UA\n').agent(), 'UA');
+      expect(cookieHeader(Cookies.parse(''), 'https://example.com/'), isNull);
+      expect(cookieAgent(Cookies.parse('# Netscape HTTP Cookie File\n# user-agent: UA\n')), 'UA');
     });
 
     test('a script exits once its client closes', () async {
@@ -1041,10 +1041,10 @@ void clientTests() {
       await c.get('$url/cookies').status();
       final jar = c.cookies();
       expect([jar['good'], jar['bad'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']], ['1', '2', null, null, '5', '6']);
-      expect(jar.header('$url/a/b/c'), 'deep=5; shallow=6; good=1; bad=2');
-      expect(jar.header('http://example.com/'), isNull);
+      expect(cookieHeader(jar, '$url/a/b/c'), 'deep=5; shallow=6; good=1; bad=2');
+      expect(cookieHeader(jar, 'http://example.com/'), isNull);
       jar.set('k', 'v', url: url);
-      expect(jar.header('$url/'), contains('k=v'));
+      expect(cookieHeader(jar, '$url/'), contains('k=v'));
     });
 
     test('a per-call cookie header merges with the jar by name', () async {

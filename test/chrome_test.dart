@@ -12,6 +12,8 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/chrome_find.dart';
 import 'package:test/test.dart';
 
+import 'support/io.dart';
+
 void main() {
   late Browser browser;
   late HttpServer server;
@@ -445,7 +447,7 @@ void main() {
     test('cookies() is a jar that feeds Http and survives encode/parse', () async {
       final page = await browser.open('$base/cookie');
       final jar = await page.cookies();
-      final header = jar.header('$base/')!;
+      final header = cookieHeader(jar, '$base/')!;
       expect(header, contains('tok=abc'));
       // Regression: values with `=` or `"` were quoted into an invalid header.
       expect(header, contains('b64=YQ=='));

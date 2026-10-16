@@ -419,10 +419,10 @@ Future<void> main() async {
         '# Netscape HTTP Cookie File\nuser-agent: Mozilla/5.0 Test\n127.0.0.1\tFALSE\t/\tFALSE\t0\tsid\tS1\n',
       );
       final session = await _File(f).cookies(or: Cookies());
-      expect([session['sid'], session.agent()], ['S1', 'Mozilla/5.0 Test']);
-      expect(Cookies.parse(session.encode()).agent(), 'Mozilla/5.0 Test');
+      expect([session['sid'], cookieAgent(session)], ['S1', 'Mozilla/5.0 Test']);
+      expect(cookieAgent(Cookies.parse(session.encode())), 'Mozilla/5.0 Test');
       final none = await _File('${dir.path}/missing').cookies(or: Cookies());
-      expect([none.agent(), none.encode().split('\n').length], [null, 1]);
+      expect([cookieAgent(none), none.encode().split('\n').length], [null, 1]);
       await expectLater(_File('${dir.path}/missing').cookies(), throwsA(isA<PathNotFoundException>()));
       // The client sends the jar's user-agent unless a header names one.
       expect(await Http.client(cookies: session).get('$url/ua').text(), 'Mozilla/5.0 Test');

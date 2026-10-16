@@ -80,8 +80,8 @@ abstract mixin class Reader {                     // bytes you can read; impleme
 }
 abstract mixin class Writer { Future<void> consume(Stream<List<int>> input);  Origin origin(); }   // origin: a File's path
 final class Cookies {                             // the jar chrome produces and http consumes
-  Cookies({String? agent});  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line)
-  String? operator [](String name);  String? header(String url);  String? agent();  Cookies set(String name, String value, {required String url});
+  Cookies();  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line http sends)
+  String? operator [](String name);  Cookies set(String name, String value, {required String url});
 }
 final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait, bool perHost = false});  Future<void> wait(); }
 extension Durations on num { Duration get milliseconds, seconds, minutes, hours, days; }   // 3.seconds, 1.5.minutes
@@ -178,7 +178,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
+| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
@@ -315,8 +315,8 @@ final class Response with Reader implements Closeable {
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
   and 307/308 keep the method and resend an in-memory body. `url()` is the final URL. A
   cross-origin hop drops credential headers; an https → http hop warns on stderr.
-- **User-Agent**: a current desktop Chrome unless a `user-agent` header is given or the jar has
-  an `agent()` (`reader.cookies()` reads it from the session file's `user-agent:` line).
+- **User-Agent**: a current desktop Chrome unless a `user-agent` header is given or the jar's
+  session file has a `user-agent:` line (`reader.cookies()` reads it; `encode()` keeps it).
 - **`Feed`** walks a listing API newest first with one callback per page (each cursor is visited once a run, so a
   looping feed ends; another start point is a second `Feed`): `page.stop()` ends the walk
   where the rest is known (or older than wanted), `page.add(work)` hands over what the page starts

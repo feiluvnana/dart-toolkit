@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/src/cookies.dart' as cookies;
 import 'package:test/test.dart';
 
 /// A [Reader] over [text] encoded as UTF-8, with an optional [Origin].
@@ -98,3 +99,9 @@ File tempFile(String name) {
   });
   return file;
 }
+
+/// The `Cookie` header a request to [url] would send from [jar], or null.
+String? cookieHeader(Cookies jar, String url) => cookies.headerFor(jar, Uri.parse(url));
+
+/// The user-agent [jar]'s session file names, or null.
+String? cookieAgent(Cookies jar) => cookies.agentOf(jar);

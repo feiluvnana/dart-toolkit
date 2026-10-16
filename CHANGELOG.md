@@ -77,6 +77,7 @@
 - `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
 - `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
 - `console`: `Bar.tick` and `Console.bar(total:)`; a bar counted by hand is `bar.update(++n, total)`, which closes it at the total as `tick` did.
+- `core`: `Cookies(agent:)`, `Cookies.agent()` and `Cookies.header(url)`; http reads the jar itself. A session's user-agent is the `user-agent:` line of its cookies.txt (`Cookies.parse('# user-agent: X\n…')`, kept by `encode()`), which the client still sends unless a `user-agent` header is given.
 
 ## 0.1.0
 
