@@ -218,6 +218,45 @@ void main() {
       expect(left, isEmpty);
     }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
 
+    test('S11: Chromium that exits on its own takes its watchdog and temp profile with it', () async {
+      final tmp = await Directory.systemTemp.createTemp('chrome_gone');
+      addTearDown(() => tmp.delete(recursive: true));
+      final child = await Process.start(
+        Platform.resolvedExecutable,
+        ['run', 'test/fixtures/chrome_gone.dart'],
+        environment: {'TMPDIR': tmp.path},
+      );
+      addTearDown(() => child.kill(ProcessSignal.sigkill));
+      final err = StringBuffer();
+      child.stderr.transform(utf8.decoder).listen(err.write);
+      await child.stdout.transform(utf8.decoder).firstWhere((s) => s.contains('up')).timeout(const Duration(seconds: 60));
+      Future<List<(String, String)>> ours() async {
+        final ps = await Process.run('ps', ['-ax', '-o', 'pid=,args=']);
+        return [
+          for (final line in '${ps.stdout}'.split('\n'))
+            if (line.contains(tmp.path)) (line.trim().split(' ').first, line),
+        ];
+      }
+
+      // Every process with our TMPDIR in its arguments is this test's.
+      for (final (pid, line) in await ours()) {
+        if (line.contains('--user-data-dir=')) Process.killPid(int.parse(pid), ProcessSignal.sigkill);
+      }
+      final end = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(end) &&
+          ((await ours()).isNotEmpty || tmp.listSync().any((e) => e.path.contains('dart_toolkit_chrome')))) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      final left = await ours();
+      for (final (pid, _) in left) {
+        Process.killPid(int.parse(pid), ProcessSignal.sigkill);
+      }
+      expect(left, isEmpty, reason: '$err');
+      expect(tmp.listSync().where((e) => e.path.contains('dart_toolkit_chrome')), isEmpty);
+      child.stdin.writeln('done');
+      expect(await child.exitCode.timeout(const Duration(seconds: 20)), 0, reason: '$err');
+    }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
+
     test('S10: a launched Chrome talks over a pipe and listens on no TCP port', () async {
       if (Platform.isWindows) return markTestSkipped('Windows keeps the debugging port');
       final profile = await Directory.systemTemp.createTemp('chrome_nolisten');

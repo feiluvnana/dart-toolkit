@@ -289,7 +289,19 @@ final class Browser implements Closeable {
       _hook(true);
     } else {
       _cdp.onBusy = _hook;
+      // Chromium gone on its own (a crash, a kill): its pid may be reused
+      // before the script ends, so the watchdog must not signal it then.
+      unawaited(_cdp.done.then((_) => _gone(), onError: (Object _) => _gone()));
     }
+  }
+
+  /// The connection ended without [close]: Chromium has exited.
+  Future<void> _gone() async {
+    if (_closed) return;
+    if (_dog case final dog?) dog.kill();
+    try {
+      await _temp?.delete(recursive: true);
+    } catch (_) {}
   }
 
   void _hook(bool on) {

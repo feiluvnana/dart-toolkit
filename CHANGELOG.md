@@ -41,6 +41,7 @@
 - `http`: a plain-http reply can no longer replace or shadow a `Secure` cookie (RFC 6265bis), and `Domain=` is refused on more shared names: `blogspot.*`, AWS's shared S3/compute hosts, CentralNic's `uk.com`-style names, Japan's prefecture registries (`tokyo.jp`) and country codes that register only below a category (`co.za`, `com.br`). A heuristic, no Public Suffix List.
 - `json`/`yaml`: a document nested deeper than 1,000 levels is a `ContentException` at parse (`Json.parse`, `reader.json()`, `ndjson()`, and YAML through nested aliases) instead of a `StackOverflowError` later in `toString`/`encode`; the depth scan costs about a tenth of the decode.
 - every module: URLs in error messages also mask secrets in the fragment (`#access_token=`), a Telegram `bot<id>:<token>` path segment, and the path after `webhooks` (Discord) or Slack's `hooks.slack.com/services`.
+- `chrome`: when a launched Chromium exits on its own (a crash, a kill), its watchdog goes with it and the temp profile is removed then, so the watchdog can no longer `kill -9` a reused pid when the script ends.
 
 **Performance**
 
