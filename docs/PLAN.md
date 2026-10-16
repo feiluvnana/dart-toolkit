@@ -86,3 +86,8 @@ On x64 and arm64 Linux with no ffmpeg/7zz on PATH run `dart test test/image_test
 
 ### L7. Chrome as root and the snap Chromium
 In a Docker container running as root, Chromium refuses to start without `--no-sandbox`; `Chrome.launch` in `lib/chrome.dart` passes no such flag. Add `if (io.Platform.isLinux && _isRoot()) '--no-sandbox'` to the launch flags, where `_isRoot()` runs `id -u` once and compares with `0` (no FFI). The snap Chromium (Ubuntu desktop) has a private `/tmp`, so the download folder (`Browser._downloadFolder`, `systemTemp`) and the upload staging folder (`Page` upload, `dart_toolkit_up`) are invisible to it: when the executable path starts with `/snap/`, create both under `~/snap/chromium/common/dart_toolkit/` instead. Check: `docker run --rm -it -v $PWD:/src -w /src dart:stable dart test test/chrome_test.dart` with `chromium` installed in the image (as root), and on an Ubuntu desktop with only the snap: the download and upload tests pass.
+
+## §3 Open
+
+### O2. Archive decoders off the startup path (measured, not done)
+`lib/archive.dart` imports the 7z, RAR and xz decoders, ~50 ms of JIT startup for every script that imports `archive` (2026-10-16: stubbing them out gave 565 vs 614 ms medians, 9 runs × 3). A `spawnUri` worker would drop them from startup, but a URI isolate compiles from source on every spawn: 240–380 ms per 7z/RAR/xz extraction (the shared helpers already sit in `lib/src/unpack.dart` for such a worker), and a compiled exe cannot spawn one at all. Deferred imports save nothing under JIT. Revisit only if the SDK can spawn a precompiled kernel cheaply.
