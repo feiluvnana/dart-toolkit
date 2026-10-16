@@ -650,11 +650,32 @@ final class _Parser {
   }
 
   String _hex(int digits) {
-    if (i + digits > n) throw _error('a short \\x/\\u escape');
-    final code = int.tryParse(s.substring(i, i + digits), radix: 16);
-    if (code == null || code > 0x10FFFF) throw _error('a bad \\x/\\u escape');
-    i += digits;
+    final code = _digits(digits);
+    if (code >= 0xDC00 && code <= 0xDFFF) throw _error('an unpaired surrogate escape', i - digits);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      // A JSON-style pair: `\\ud83d\\ude00`.
+      if (!s.startsWith(r'\u', i)) throw _error('an unpaired surrogate escape', i - digits);
+      i += 2;
+      final low = _digits(4);
+      if (low < 0xDC00 || low > 0xDFFF) throw _error('an unpaired surrogate escape', i - 4);
+      return String.fromCharCode(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00));
+    }
     return String.fromCharCode(code);
+  }
+
+  /// [digits] hex digits at [i] (exactly: no sign, no space), as a code point.
+  int _digits(int digits) {
+    if (i + digits > n) throw _error('a short \\x/\\u escape');
+    var code = 0;
+    for (var k = 0; k < digits; k++) {
+      final c = s.codeUnitAt(i + k), lower = c | 0x20;
+      final v = c >= 0x30 && c <= 0x39 ? c - 0x30 : (lower >= 0x61 && lower <= 0x66 ? lower - 0x57 : -1);
+      if (v < 0) throw _error('a bad \\x/\\u escape', i);
+      code = code << 4 | v;
+    }
+    if (code > 0x10FFFF) throw _error('a bad \\x/\\u escape', i);
+    i += digits;
+    return code;
   }
 
   // -- block scalars ------------------------------------------------------------

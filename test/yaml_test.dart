@@ -159,6 +159,16 @@ url: http://e.com:8080/x#frag
     bad('a: "open', 1, 'unterminated');
     bad('x: @y', 1, '"@"');
     bad('a: "\\q"', 1, 'escape');
+    // B6: exactly n hex digits (int.parse took a sign); no lone surrogate.
+    bad(r'a: "\x+1"', 1, 'escape');
+    bad(r'a: "\u 041"', 1, 'escape');
+    bad(r'a: "\ud83d"', 1, 'surrogate');
+    bad(r'a: "\ude00"', 1, 'surrogate');
+    bad(r'a: "\ud83d\u0041"', 1, 'surrogate');
+  });
+
+  test('B6: a surrogate pair escape is one code point', () {
+    expect(Yaml.parse(r'a: "\ud83d\ude00 \x41\u00e9"').$('a').text(), '\u{1F600} A\u00e9');
   });
 
   test('reader.yaml() with or: for a missing source', () async {
