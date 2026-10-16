@@ -42,38 +42,7 @@ abstract final class Charset {
   /// [contentType], then a `<meta charset>` in the first 1024 bytes of an
   /// HTML (or untyped) body, then UTF-8.
   static String decode(List<int> bytes, {String? contentType}) {
-    var start = 0;
-    String name;
-    if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-      name = 'utf-8';
-      start = 3;
-    } else if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-      name = 'utf-16le';
-      start = 2;
-    } else if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-      name = 'utf-16be';
-      start = 2;
-    } else {
-      final mime = _mime(contentType);
-      final header = headerCharset(contentType);
-      final known = header == null ? null : _labels[header.trim().toLowerCase()];
-      if (mime == 'application/json' || mime.endsWith('+json')) {
-        // RFC 8259: JSON exchanged between systems is UTF-8, whatever the
-        // header or a stray `<meta>` inside a string says.
-        name = 'utf-8';
-      } else if (known != null) {
-        name = known;
-      } else if (mime.isNotEmpty && mime != 'text/html' && mime != 'application/xhtml+xml') {
-        name = 'utf-8';
-      } else {
-        // HTML (or no type) with no usable charset: the <meta> hint.
-        final meta = metaCharset(bytes);
-        name = meta == null ? 'utf-8' : canonical(meta);
-        // A meta tag is ASCII-readable, so it cannot name UTF-16 (WHATWG).
-        if (name == 'utf-16le' || name == 'utf-16be') name = 'utf-8';
-        if (name == 'x-user-defined') name = 'windows-1252';
-      }
-    }
+    final (:name, :start) = _detect(bytes, contentType);
     if (name == 'utf-8') {
       return const Utf8Decoder(allowMalformed: true).convert(bytes, start);
     }
@@ -89,6 +58,71 @@ abstract final class Charset {
     final text = decoder.add(body);
     final rest = decoder.finish();
     return rest.isEmpty ? text : text + rest;
+  }
+
+  /// [decode] as the bytes arrive: the same rules, deciding the charset
+  /// from the first 3 bytes (a BOM), or the first 1024 when a `<meta>` may
+  /// name it; text comes out chunk by chunk after that.
+  static Stream<String> decodeStream(Stream<List<int>> input, {String? contentType}) async* {
+    final need = _sniffs(contentType) ? 1024 : 3;
+    final head = BytesBuilder(copy: false);
+    IncrementalDecoder? decoder;
+    await for (final chunk in input) {
+      if (decoder != null) {
+        final text = decoder.add(chunk);
+        if (text.isNotEmpty) yield text;
+        continue;
+      }
+      head.add(chunk);
+      if (head.length < need) continue;
+      final bytes = head.takeBytes();
+      final (:name, :start) = _detect(bytes, contentType);
+      decoder = IncrementalDecoder(name);
+      final text = decoder.add(start == 0 ? bytes : Uint8List.sublistView(bytes, start));
+      if (text.isNotEmpty) yield text;
+    }
+    if (decoder == null) {
+      final text = decode(head.takeBytes(), contentType: contentType);
+      if (text.isNotEmpty) yield text;
+      return;
+    }
+    final rest = decoder.finish();
+    if (rest.isNotEmpty) yield rest;
+  }
+
+  /// Whether the charset of a body of [contentType] may come from its
+  /// `<meta>` (HTML, or no type, without a known header charset).
+  static bool _sniffs(String? contentType) {
+    final mime = _mime(contentType);
+    final header = headerCharset(contentType);
+    final known = header != null && _labels.containsKey(header.trim().toLowerCase());
+    return !known && (mime.isEmpty || mime == 'text/html' || mime == 'application/xhtml+xml');
+  }
+
+  /// The encoding of [bytes] and where its text starts (after a BOM).
+  static ({String name, int start}) _detect(List<int> bytes, String? contentType) {
+    if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+      return (name: 'utf-8', start: 3);
+    } else if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+      return (name: 'utf-16le', start: 2);
+    } else if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+      return (name: 'utf-16be', start: 2);
+    }
+    final mime = _mime(contentType);
+    final header = headerCharset(contentType);
+    final known = header == null ? null : _labels[header.trim().toLowerCase()];
+    // RFC 8259: JSON exchanged between systems is UTF-8, whatever the
+    // header or a stray `<meta>` inside a string says.
+    if (mime == 'application/json' || mime.endsWith('+json')) return (name: 'utf-8', start: 0);
+    if (known != null) return (name: known, start: 0);
+    if (mime.isNotEmpty && mime != 'text/html' && mime != 'application/xhtml+xml') return (name: 'utf-8', start: 0);
+    // HTML (or no type) with no usable charset: the <meta> hint.
+    final meta = metaCharset(bytes);
+    var name = meta == null ? 'utf-8' : canonical(meta);
+    // A meta tag is ASCII-readable, so it cannot name UTF-16 (WHATWG).
+    if (name == 'utf-16le' || name == 'utf-16be') name = 'utf-8';
+    if (name == 'x-user-defined') name = 'windows-1252';
+    return (name: name, start: 0);
   }
 
   /// The lowercase media type of a `content-type` value (`''` when absent).

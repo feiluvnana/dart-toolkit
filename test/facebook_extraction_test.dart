@@ -1,30 +1,43 @@
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
+
 import '../projects/medialoader/facebook.dart';
 
+// A page embedding [json] the way Facebook does.
+Json embedded(String json) => Html.parse('<html><body><script type="application/json">$json</script></body></html>').json();
+
+// A profile page whose timeline holds one post with [story] as its content.
+Json timelineWith(String story) => embedded('''
+{"require": [["RelayModern", "ProfileCometTimelineFeedQuery", [], {
+  "timeline_list_feed_units": {"edges": [{"node": {
+    "__typename": "Story", "post_id": "1001", "creation_time": 1700000000,
+    "comet_sections": {"content": {"story": $story}}
+  }}]}
+}]]}
+''');
+
 void main() {
-  group('Facebook text and unicode decoding', () {
-    test('decodes unicode escape sequences and emojis correctly', () {
-      const raw =
-          r'Th\u1ea3 tim \u0111\u1ec3 b\u1ea1n Ph\u01b0\u01a1ng Linh si\u00eang \u0111\u0103ng h\u00ecnh h\u01a1n \ud83d\ude36';
-      final decoded = decodeFacebookText(raw);
-      expect(decoded, 'Thả tim để bạn Phương Linh siêng đăng hình hơn 😶');
+  group('Facebook text from the embedded JSON', () {
+    String? caption(String text) => timeline(timelineWith('{"__typename": "Story", "message": {"text": "$text"}}')).single.caption;
+
+    test('unicode escapes and emoji (surrogate pairs) decode', () {
+      expect(
+        caption(r'Thả tim để bạn Phương Linh siêng đăng hình hơn 😶'),
+        'Thả tim để bạn Phương Linh siêng đăng hình hơn 😶',
+      );
+      expect(caption(r'Tiếng Việt'), 'Tiếng Việt');
     });
 
-    test('handles quotes, newlines, and HTML entities', () {
-      const raw = r'Line 1\nLine 2\n\"Quoted\" &amp; &#039;test&#039; &quot;yes&quot;';
-      final decoded = decodeFacebookText(raw);
-      expect(decoded, 'Line 1\nLine 2\n"Quoted" & \'test\' "yes"');
+    test('quotes, newlines and symbols come through as written', () {
+      expect(caption(r'Line 1\nLine 2\n\"Quoted\" & “smart quotes” ❤'), 'Line 1\nLine 2\n"Quoted" & “smart quotes” ❤');
     });
 
-    test('handles numeric and hex entities', () {
-      const raw = r'&#8220;smart quotes&#8221; &amp; &#x2764;';
-      final decoded = decodeFacebookText(raw);
-      expect(decoded, '“smart quotes” & ❤');
-    });
-
-    test('cleanCaption forwards to decodeFacebookText', () {
-      const raw = r'Ti\u1ebfng Vi\u1ec7t';
-      expect(cleanCaption(raw), 'Tiếng Việt');
+    test('escaped Comet URLs come out plain', () {
+      final post = timeline(timelineWith(r'''
+        {"__typename": "Story", "attachments": [{"media": {"__typename": "Photo", "id": "2001",
+          "image": {"uri": "https:\/\/scontent.xx.fbcdn.net\/v\/t39.30808-6\/test.jpg%3Foh=123&oe=456"}}}]}
+      ''')).single;
+      expect(post.items.single.url, 'https://scontent.xx.fbcdn.net/v/t39.30808-6/test.jpg%3Foh=123&oe=456');
     });
   });
 
@@ -37,16 +50,13 @@ void main() {
     });
 
     test('parses username, profile ID, or URL', () {
-      expect(platform.parseUser('https://www.facebook.com/ngocvyne05'), 'ngocvyne05');
-      expect(platform.parseUser('https://www.facebook.com/profile.php?id=100083148192841'), '100083148192841');
-      expect(platform.parseUser('https://facebook.com/people/Some-Name/61569950545630'), '61569950545630');
-      expect(platform.parseUser('ngocvyne05'), 'ngocvyne05');
-      expect(platform.parseUser('@ngocvyne05'), 'ngocvyne05');
-    });
-
-    test('unescapes Facebook Comet URLs', () {
-      const raw = r'https:\/\/scontent.xx.fbcdn.net\/v\/t39.30808-6\/test.jpg\u00253Foh\u003D123\u0026oe\u003D456';
-      expect(unescapeUrl(raw), 'https://scontent.xx.fbcdn.net/v/t39.30808-6/test.jpg%3Foh=123&oe=456');
+      String user(String input) => platform.parse(input).user;
+      expect(user('https://www.facebook.com/ngocvyne05'), 'ngocvyne05');
+      expect(user('https://www.facebook.com/profile.php?id=100083148192841'), '100083148192841');
+      expect(user('https://facebook.com/people/Some-Name/61569950545630'), '61569950545630');
+      expect(user('https://www.facebook.com/stories/ngocvyne05/'), 'ngocvyne05');
+      expect(user('ngocvyne05'), 'ngocvyne05');
+      expect(user('@ngocvyne05'), 'ngocvyne05');
     });
 
     test('categories contains post, photo, video, album, story, highlight, and profile', () {
@@ -57,88 +67,62 @@ void main() {
 
   group('Facebook timeline posts extraction', () {
     test('extracts post with caption, photo, and video attachments', () {
-      const mockHtml = '''
-<html><body>
-<script type="application/json">
-{
-  "require": [
-    ["RelayModern", "ProfileCometTimelineFeedQuery", [], {
-      "timeline_list_feed_units": {
-        "edges": [
-          {
-            "node": {
-              "__typename": "Story",
-              "post_id": "1001",
-              "creation_time": 1700000000,
-              "comet_sections": {
-                "content": {
-                  "story": {
-                    "__typename": "Story",
-                    "message": {"text": "Hello world \\ud83d\\ude0a"},
-                    "attachments": [
-                      {
-                        "media": {
-                          "__typename": "Photo",
-                          "id": "2001",
-                          "image": {"uri": "https:\\/\\/scontent.xx.fbcdn.net\\/p2001.jpg"}
-                        }
-                      },
-                      {
-                        "media": {
-                          "__typename": "Video",
-                          "id": "3001",
-                          "playable_url": "https:\\/\\/scontent.xx.fbcdn.net\\/v3001.mp4"
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        ]
-      }
-    }]
-  ]
-}
-</script>
-</body></html>
-''';
-
-      final posts = extractTimelinePosts(mockHtml);
+      final posts = timeline(timelineWith(r'''
+        {"__typename": "Story", "message": {"text": "Hello world 😊"}, "attachments": [
+          {"media": {"__typename": "Photo", "id": "2001", "image": {"uri": "https:\/\/scontent.xx.fbcdn.net\/p2001.jpg"}}},
+          {"media": {"__typename": "Video", "id": "3001", "playable_url": "https:\/\/scontent.xx.fbcdn.net\/v3001.mp4"}}
+        ]}
+      '''));
       expect(posts.length, 1);
       final p = posts.first;
       expect(p.id, '1001');
-      expect(p.date, 1700000000);
+      expect(p.at, DateTime.fromMillisecondsSinceEpoch(1700000000 * 1000));
       expect(p.caption, 'Hello world 😊');
-      expect(p.photoIds, ['2001']);
-      expect(p.videoIds, ['3001']);
+      expect([for (final i in p.items) (i.id, i.video)], [('2001', false), ('3001', true)]);
+    });
+
+    test('each photo keeps its own URL (regression: every photo got the first one)', () {
+      final p = timeline(timelineWith(r'''
+        {"__typename": "Story", "attachments": [
+          {"media": {"__typename": "Photo", "id": "1", "image": {"uri": "https://x.fbcdn.net/a.jpg"}}},
+          {"media": {"__typename": "Photo", "id": "2", "photo_image": {"uri": "https://x.fbcdn.net/b.jpg"}}}
+        ]}
+      ''')).single;
+      expect([for (final i in p.items) i.url], ['https://x.fbcdn.net/a.jpg', 'https://x.fbcdn.net/b.jpg']);
+    });
+
+    test('the pinned post is read too, each post once', () {
+      final data = embedded('''
+        [{"profile_pinned_post": {"id": "77", "post": {"__typename": "Story", "creation_time": 1600000000, "message": {"text": "pinned"}}}},
+         {"profile_pinned_post": {"id": "77", "post": {"__typename": "Story", "message": {"text": "pinned"}}}}]
+      ''');
+      expect([for (final p in timeline(data)) (p.id, p.caption)], [('77', 'pinned')]);
     });
   });
 
   group('Facebook story media extraction', () {
     test('extracts and deduplicates photos and videos', () {
-      const mockStoryHtml = '''
-<html><body>
-<script type="application/json">
+      final items = storyItems(embedded(r'''
 {
   "progressive_urls": [
-    {"progressive_url": "https:\\/\\/scontent.xx.fbcdn.net\\/o1\\/v\\/m1\\/vid1.mp4?xpv_asset_id%22%3A999"}
+    {"progressive_url": "https:\/\/scontent.xx.fbcdn.net\/o1\/v\/m1\/vid1.mp4?xpv_asset_id%22%3A999"}
   ],
-  "playable_url": "https:\\/\\/scontent.xx.fbcdn.net\\/o1\\/v\\/m1\\/vid1_sd.mp4?xpv_asset_id%22%3A999",
-  "image": {"uri": "https:\\/\\/scontent.xx.fbcdn.net\\/v\\/t39.30808-6\\/111_22222_333_n.jpg"}
+  "playable_url": "https:\/\/scontent.xx.fbcdn.net\/o1\/v\/m1\/vid1_sd.mp4?xpv_asset_id%22%3A999",
+  "image": {"uri": "https:\/\/scontent.xx.fbcdn.net\/v\/t39.30808-6\/111_22222_333_n.jpg"}
 }
-</script>
-</body></html>
-''';
-
-      final media = extractStoryMedia(mockStoryHtml);
-      expect(media.any((m) => m.isVideo), isTrue);
-      expect(media.any((m) => !m.isVideo), isTrue);
-      // Videos deduplicated by asset ID
-      expect(media.where((m) => m.isVideo).length, 1);
-      // Photo extracted
-      expect(media.where((m) => !m.isVideo).first.id, '22222');
+'''));
+      // Videos deduplicated by asset ID, the photo by its id in the file name.
+      expect([for (final i in items) (i.id, i.video)], [('999', true), ('22222', false)]);
     });
+  });
+
+  test('photo ids: photo nodes first, then photo_id keys and fbid links', () {
+    final d = Html.parse('''
+      <html><body><a href="/photo/?fbid=33&set=pb.1">x</a>
+      <script type="application/json">{"a": {"__typename": "Photo", "id": "11"}, "photo_id": "22"}</script></body></html>
+    ''', base: 'https://www.facebook.com/');
+    final doc = (page: d, data: d.json(), text: '');
+    expect(photoIds(doc), ['11', '22', '33']);
+    expect(profileSet(doc), 'pb.1');
   });
 }

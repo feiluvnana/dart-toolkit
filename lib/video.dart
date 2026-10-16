@@ -1,54 +1,66 @@
-/// Decode and compress videos. Thin facade over FFmpeg.
+/// Probe, convert, trim, compress and grab frames from video and audio.
+/// Facade over ffmpeg (downloaded once on first use when PATH has no
+/// fitting copy).
 ///
 /// ```dart
-/// final clip = await http.get(videoUrl).video();
-/// await (clip.encode(VideoFormat.mp4, quality: 75) > Fs.file('compressed.mp4'));
+/// final clip = await Fs.file('in.mkv').video();                 // probes; the file is read in place
+/// await (clip.encode(.mp4) > Fs.file('out.mp4'));                // remux: copies the streams, seconds
+/// await (clip.encode(.mp4, quality: 70, height: 720, start: 10.seconds, onProgress: bar.update)
+///     > Fs.file('small.mp4'));
+/// await (clip.frame(at: 5.seconds).encode(.jpg) > Fs.file('thumb.jpg'));
+/// final saved = await Video.compress('in.mp4', quality: 70);     // (before, after) or null
+/// final live = await Video.open('https://…/master.m3u8');        // HLS/DASH, or split video + audio
 /// ```
 ///
-/// Public surface is exactly: [Video], [VideoFormat].
-/// - `Video.decode()` decodes bytes, `Reader.video()` reads a stream.
+/// Public surface is exactly: [Video], [VideoFormat], [VideoCodec].
+/// - `Video.decode()` takes bytes, `Reader.video()` a stream or a file,
+///   `Video.open()` a path or URL (HLS/DASH manifests, a separate `audio:`).
 /// - `Video.sniff()` names the format from the header bytes.
-/// - [Video] supports `width` `height` `duration` `fps` `encode`.
+/// - `Video.compress()` re-encodes a file in its own container, replacing
+///   it only when smaller.
+/// - [Video] supports `width` `height` `duration` `fps` `codec` `audio`
+///   `bitrate` `encode` `frame`.
 /// Everything else is private.
 library;
 
 import 'dart:async';
 import 'dart:io' as io;
-import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
-import 'archive.dart';
-import 'http.dart';
-import 'shell.dart';
-import 'src/cache.dart' as cache;
-import 'src/posix.dart' as posix;
+import 'image.dart';
+import 'src/media.dart' as media;
 
 export 'core.dart';
 
-/// Video formats: [Video.sniff] names one, [Video.encode] writes all supported formats.
-/// `.name` is the usual file extension.
-enum VideoFormat { mp4, webm, mkv, mov, avi }
+/// Containers [Video.encode] writes and [Video.sniff] names; `.name` is the
+/// extension. [m4a], [mp3] and [opus] keep the audio only. [avi] is read,
+/// never written (its codecs lose to mp4 at every size).
+enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }
 
-/// A video value.
+/// Video codecs [Video.encode] writes: [h264] plays everywhere, [h265] and
+/// [av1] are about half the size at the same quality, [vp9] is WebM's.
+enum VideoCodec { h264, h265, av1, vp9 }
+
+/// A video (or audio) source and what ffprobe says about it.
 final class Video {
-  Video._(
-    this._bytes,
-    this._width,
-    this._height,
-    this._duration,
-    this._fps,
-  );
+  Video._(this._inputs, this._before, this._info, [this._temp]);
 
-  final Uint8List _bytes;
-  final int _width;
-  final int _height;
-  final Duration _duration;
-  final double _fps;
+  /// Inputs in order: the source, then a separate audio source.
+  final List<String> _inputs;
 
-  /// The format named by the magic bytes, or null when they are not a supported video.
-  /// Reads the header only, no decode:
-  /// `'clip.${(Video.sniff(data) ?? .mp4).name}'` names a downloaded file.
+  /// Arguments before each `-i` (HTTP headers for a URL).
+  final List<String> _before;
+
+  final _Info _info;
+
+  /// The spooled source, when this video owns one: held so it is deleted
+  /// with the video, never before.
+  // ignore: unused_field
+  final media.Temp? _temp;
+
+  /// The format named by the magic bytes, or null when they are not a
+  /// supported video. HEIC/AVIF photos share MP4's box and are not video.
   static VideoFormat? sniff(List<int> bytes) {
     if (bytes.length < 12) return null;
 
@@ -60,20 +72,15 @@ final class Video {
       return true;
     }
 
-    // MP4 / MOV: check ftyp atom at offset 4
     if (at(4, [0x66, 0x74, 0x79, 0x70])) {
-      // Major brand at offset 8: 'qt  ' is QuickTime MOV
-      if (at(8, [0x71, 0x74, 0x20, 0x20])) return VideoFormat.mov;
+      if (media.heif(bytes) != null) return null;
+      if (at(8, [0x71, 0x74, 0x20, 0x20])) return VideoFormat.mov; // 'qt  '
+      if (at(8, [0x4D, 0x34, 0x41, 0x20])) return VideoFormat.m4a; // 'M4A '
       return VideoFormat.mp4;
     }
-    // moov or mdat at offset 4 (legacy or raw MP4)
-    if (at(4, [0x6D, 0x6F, 0x6F, 0x76]) || at(4, [0x6D, 0x64, 0x61, 0x74])) {
-      return VideoFormat.mp4;
-    }
-
-    // Matroska / WebM EBML header (1A 45 DF A3)
+    if (at(4, [0x6D, 0x6F, 0x6F, 0x76]) || at(4, [0x6D, 0x64, 0x61, 0x74])) return VideoFormat.mp4; // moov / mdat
     if (at(0, [0x1A, 0x45, 0xDF, 0xA3])) {
-      // Check for 'webm' doctype string in the first 64 bytes
+      // EBML: the doctype string tells WebM from Matroska.
       final limit = bytes.length < 64 ? bytes.length : 64;
       for (var i = 4; i <= limit - 4; i++) {
         if (bytes[i] == 0x77 && bytes[i + 1] == 0x65 && bytes[i + 2] == 0x62 && bytes[i + 3] == 0x6D) {
@@ -82,386 +89,435 @@ final class Video {
       }
       return VideoFormat.mkv;
     }
-
-    // AVI: starts with RIFF, bytes 8..11 are 'AVI '
-    if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x41, 0x56, 0x49, 0x20])) {
-      return VideoFormat.avi;
-    }
-
+    if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x41, 0x56, 0x49, 0x20])) return VideoFormat.avi;
+    if (at(0, [0x49, 0x44, 0x33]) || (bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)) return VideoFormat.mp3;
+    if (at(0, [0x4F, 0x67, 0x67, 0x53])) return VideoFormat.opus; // Ogg
     return null;
   }
 
-  /// Decode [bytes] (MP4, WebM, MKV, MOV, AVI).
-  /// Probes video metadata (dimensions, duration, framerate).
-  /// An unknown or broken format is a [ContentException].
+  /// Read [bytes]: written to a temp file once, then probed. An unknown
+  /// or broken format is a [ContentException].
   static Future<Video> decode(List<int> bytes) async {
-    if (bytes.length < 8) {
-      throw const ContentException('unknown video format: input too short');
+    final format = sniff(bytes);
+    if (format == null) throw const ContentException('unknown video format');
+    final temp = media.Temp(await media.spool(Stream.value(bytes), ext: format.name));
+    return _open(temp.path, temp: temp);
+  }
+
+  /// Probe [source], a path or a URL (`.m3u8`/`.mpd` manifests included);
+  /// [audio] adds a separate audio source (DASH serves them apart), and
+  /// [headers] go with every request ffmpeg makes for a URL (cookies,
+  /// referer).
+  static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) =>
+      _open(source, audio: audio, headers: headers);
+
+  static Future<Video> _open(String source, {String? audio, Map<String, String>? headers, media.Temp? temp}) async {
+    final before = headers == null || headers.isEmpty
+        ? const <String>[]
+        : ['-headers', headers.entries.map((e) => '${e.key}: ${e.value}\r\n').join()];
+    final inputs = [source, ?audio];
+    final infos = [for (final i in inputs) _Info.of(await media.ffprobe(i, before: before))];
+    final info = infos.length == 1 ? infos.first : infos.first.withAudio(infos.last);
+    if (info.width == null && info.audio == null) throw const ContentException('no video or audio stream found');
+    return Video._(inputs, before, info, temp);
+  }
+
+  /// Re-encode the video at [path] in its own container (h264 for MP4/MOV/
+  /// MKV, VP9 for WebM; [codec] overrides) and replace it, atomically, only
+  /// when at least 5% smaller. Audio is copied, not re-encoded. Returns
+  /// (bytes before, bytes after), or null when kept: not a video, AVI or
+  /// audio only, or no smaller.
+  static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec}) async {
+    _checkQuality(quality);
+    final head = await _head(path);
+    final format = sniff(head);
+    if (format == null ||
+        const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
+      return null;
     }
-
-    final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
-    final ffmpeg = await _ffmpegExecutable();
-
-    final tempDir = await io.Directory.systemTemp.createTemp('dart_toolkit_video_probe_');
+    final video = await open(path);
+    if (video._info.width == null) return null;
+    final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     try {
-      final ext = (sniff(raw) ?? VideoFormat.mp4).name;
-      final inPath = p.join(tempDir.path, 'input.$ext');
-      await io.File(inPath).writeAsBytes(raw);
-
-      // Run ffmpeg with null sink to inspect streams
-      final result = await io.Process.run(ffmpeg, [
-        '-hide_banner',
-        '-i',
-        inPath,
-        '-t',
-        '0.001',
-        '-f',
-        'null',
-        '-',
-      ]);
-
-      final stderrText = result.stderr.toString();
-      final info = _parseVideoInfo(stderrText);
-      if (info == null) {
-        throw ContentException('unknown video format or no video stream found: $stderrText');
-      }
-
-      return Video._(raw, info.width, info.height, info.duration, info.fps);
-    } on FormatException {
+      await video._encodeTo(tmp, format, quality: quality, codec: codec);
+    } catch (_) {
+      await io.File(tmp).delete().catchError((_) => io.File(tmp));
       rethrow;
-    } on Exception catch (e) {
-      throw ContentException('failed to probe video: $e');
+    }
+    return media.replaceIfSmaller(path, tmp, by: 0.05);
+  }
+
+  /// Width in pixels as displayed (rotation applied); null for audio only.
+  int? width() => _info.width;
+
+  /// Height in pixels as displayed; null for audio only.
+  int? height() => _info.height;
+
+  /// Length; [Duration.zero] when unknown (a live stream).
+  Duration duration() => _info.duration;
+
+  /// Frames per second; 0 for audio only.
+  double fps() => _info.fps;
+
+  /// The video codec as ffprobe names it (`h264`, `hevc`, `av1`, `vp9`), or
+  /// null for audio only.
+  String? codec() => _info.codec;
+
+  /// The audio codec (`aac`, `opus`, `mp3`), or null when there is no audio.
+  String? audio() => _info.audio;
+
+  /// Overall bits per second, or null when unknown.
+  int? bitrate() => _info.bitrate;
+
+  /// A [Reader] of the converted video, made when read (lazily). Store it
+  /// with `> Fs.file(…)`.
+  ///
+  /// With no [quality], [width], [height] or [codec] the streams are
+  /// **copied** into the new container when it can hold them (seconds,
+  /// not minutes, and no loss); [start]/[end] then cut at keyframes.
+  /// Otherwise the video is encoded: [quality] 1–100 (default 80) maps to
+  /// the codec's CRF, [width]/[height] scale keeping the aspect ratio when
+  /// one is given, [codec] picks the encoder (default: h264, VP9 for WebM).
+  /// Audio is copied when the container takes it, else AAC (Opus for WebM).
+  /// [onProgress] hears microseconds written and the total.
+  ///
+  /// A bad quality or size, or [VideoFormat.avi], is an [ArgumentError]
+  /// here, not when the reader is read.
+  Reader encode(
+    VideoFormat format, {
+    int? quality,
+    int? width,
+    int? height,
+    VideoCodec? codec,
+    Duration? start,
+    Duration? end,
+    void Function(int done, int? total)? onProgress,
+  }) {
+    _checkEncode(format, quality, width, height, codec);
+    return _Encoded(
+      () async => this,
+      format,
+      quality: quality,
+      width: width,
+      height: height,
+      codec: codec,
+      start: start,
+      end: end,
+      onProgress: onProgress,
+    );
+  }
+
+  /// The frame shown at [at] (default: the first) as an [Image].
+  Future<Image> frame({Duration at = Duration.zero}) async {
+    if (_info.width == null) throw StateError('audio only: no frames');
+    final out = await media.tempOut('png');
+    await media.ffmpeg([
+      if (at > Duration.zero) ...['-ss', _secs(at)],
+      ..._before,
+      '-i',
+      _inputs.first,
+      '-frames:v',
+      '1',
+      '-y',
+      out,
+    ]);
+    try {
+      return await Image.decode(await io.File(out).readAsBytes());
     } finally {
-      try {
-        await tempDir.delete(recursive: true);
-      } catch (_) {}
+      await io.File(out).delete().catchError((_) => io.File(out));
     }
   }
 
-  /// Width in pixels.
-  int width() => _width;
+  Future<void> _encodeTo(
+    String out,
+    VideoFormat format, {
+    int? quality,
+    int? width,
+    int? height,
+    VideoCodec? codec,
+    Duration? start,
+    Duration? end,
+    void Function(int done, int? total)? onProgress,
+  }) async {
+    final info = _info;
+    final audioOnly = const {VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format);
+    final encodeVideo = !audioOnly && (quality != null || width != null || height != null || codec != null);
+    final vcodec = codec ?? (format == VideoFormat.webm ? VideoCodec.vp9 : VideoCodec.h264);
+    final q = quality ?? 80;
+    final args = <String>[
+      for (final input in _inputs) ...[
+        if (start != null) ...['-ss', _secs(start)],
+        ..._before,
+        '-i',
+        input,
+      ],
+      if (end != null) ...['-t', _secs(end - (start ?? Duration.zero))],
+      if (!audioOnly && info.width != null) ...['-map', '0:v:0'],
+      if (info.audio != null) ...['-map', _inputs.length > 1 ? '1:a:0' : '0:a:0?'],
+      if (audioOnly) '-vn',
+    ];
+    final needs = <String>{};
+    if (!audioOnly && info.width != null) {
+      if (!encodeVideo && _fits(format, info.codec)) {
+        args.addAll(['-c:v', 'copy']);
+      } else {
+        if (width != null || height != null) {
+          args.addAll(['-vf', 'scale=${width == null ? -2 : width ~/ 2 * 2}:${height == null ? -2 : height ~/ 2 * 2}']);
+        }
+        final (name, crf) = switch (vcodec) {
+          VideoCodec.h264 => ('libx264', 51 - (q - 1) * 33 / 99),
+          VideoCodec.h265 => ('libx265', 51 - (q - 1) * 31 / 99),
+          VideoCodec.av1 => ('libsvtav1', 63 - (q - 1) * 43 / 99),
+          VideoCodec.vp9 => ('libvpx-vp9', 63 - (q - 1) * 48 / 99),
+        };
+        needs.add(name);
+        args.addAll(['-c:v', name, '-crf', '${crf.round()}', '-pix_fmt', 'yuv420p']);
+        if (vcodec == VideoCodec.h264 || vcodec == VideoCodec.h265) args.addAll(['-preset', 'medium']);
+        if (vcodec == VideoCodec.h265 && format != VideoFormat.mkv) args.addAll(['-tag:v', 'hvc1']);
+        if (vcodec == VideoCodec.av1) args.addAll(['-preset', '8']);
+        if (vcodec == VideoCodec.vp9) args.addAll(['-b:v', '0', '-row-mt', '1']);
+      }
+    }
+    if (info.audio != null) {
+      if (_fitsAudio(format, info.audio)) {
+        args.addAll(['-c:a', 'copy']);
+      } else {
+        final (name, rate) = switch (format) {
+          VideoFormat.webm || VideoFormat.opus => ('libopus', '96k'),
+          VideoFormat.mp3 => ('libmp3lame', '160k'),
+          _ => ('aac', '128k'),
+        };
+        if (name != 'aac') needs.add(name);
+        args.addAll(['-c:a', name, '-b:a', rate]);
+      }
+    }
+    if (format == VideoFormat.mp4 || format == VideoFormat.mov || format == VideoFormat.m4a) {
+      args.addAll(['-movflags', '+faststart']);
+    }
+    final total = info.duration > Duration.zero
+        ? ((end ?? info.duration) - (start ?? Duration.zero)).inMicroseconds
+        : null;
+    await media.ffmpeg([...args, '-f', _muxer(format), '-y', out], needs: needs, total: total, onProgress: onProgress);
+  }
+}
 
-  /// Height in pixels.
-  int height() => _height;
+String _secs(Duration d) => (d.inMicroseconds / 1e6).toStringAsFixed(3);
 
-  /// Duration of the video.
-  Duration duration() => _duration;
+String _muxer(VideoFormat f) => switch (f) {
+  VideoFormat.mp4 => 'mp4',
+  VideoFormat.webm => 'webm',
+  VideoFormat.mkv => 'matroska',
+  VideoFormat.mov => 'mov',
+  VideoFormat.m4a => 'ipod',
+  VideoFormat.mp3 => 'mp3',
+  VideoFormat.opus => 'opus',
+  VideoFormat.avi => throw ArgumentError.value(f, 'format', 'avi is read, not written: use mp4'),
+};
 
-  /// Video frame rate (frames per second).
-  double fps() => _fps;
+/// Whether [format] holds video in [codec] as is.
+bool _fits(VideoFormat format, String? codec) => switch (format) {
+  VideoFormat.mkv => true,
+  VideoFormat.webm => const {'vp8', 'vp9', 'av1'}.contains(codec),
+  VideoFormat.mp4 || VideoFormat.mov => const {'h264', 'hevc', 'av1', 'vp9', 'mpeg4'}.contains(codec),
+  _ => false,
+};
 
-  /// A [Reader] of the encoded / compressed video, compressed when read (lazily:
-  /// nothing runs until the reader is read or stored).
-  /// Store it with `> Fs.file(…)`, hash it, or upload it.
-  ///
-  /// [quality] (1–100, default: 80) controls the compression level, mapped to CRF
-  /// (higher quality produces higher bitrate / larger file size; lower quality compresses more aggressively).
-  /// Optional [width] and [height] can scale the resolution while preserving aspect ratio.
-  /// A bad quality or non-positive size throws [ArgumentError] here, not when the reader is read.
-  Reader encode(VideoFormat format, {int quality = 80, int? width, int? height}) {
-    _checkEncode(format, quality, width: width, height: height);
-    return _Encoded(this, format, quality: quality, width: width, height: height);
+/// Whether [format] holds audio in [codec] as is.
+bool _fitsAudio(VideoFormat format, String? codec) => switch (format) {
+  VideoFormat.mkv => true,
+  VideoFormat.webm ||
+  VideoFormat.opus => const {'opus', 'vorbis'}.contains(codec) && (format == VideoFormat.webm || codec == 'opus'),
+  VideoFormat.mp4 || VideoFormat.mov => const {'aac', 'mp3', 'alac', 'ac3', 'eac3', 'opus'}.contains(codec),
+  VideoFormat.m4a => const {'aac', 'alac'}.contains(codec),
+  VideoFormat.mp3 => codec == 'mp3',
+  VideoFormat.avi => false,
+};
+
+/// The facts [Video] reports, from ffprobe's JSON.
+final class _Info {
+  _Info(this.width, this.height, this.duration, this.fps, this.codec, this.audio, this.bitrate);
+
+  factory _Info.of(Map<String, Object?> json) {
+    final streams = ((json['streams'] as List?) ?? const []).cast<Map<String, Object?>>();
+    final format = (json['format'] as Map?) ?? const {};
+    final v = streams.where((s) => s['codec_type'] == 'video' && (s['disposition'] as Map?)?['attached_pic'] != 1).firstOrNull;
+    final a = streams.where((s) => s['codec_type'] == 'audio').firstOrNull;
+    int? w = v?['width'] as int?, h = v?['height'] as int?;
+    final rotation = ((v?['side_data_list'] as List?) ?? const [])
+        .cast<Map<String, Object?>>()
+        .map((d) => d['rotation'])
+        .whereType<num>()
+        .firstOrNull;
+    if (rotation != null && rotation.abs() % 180 == 90) (w, h) = (h, w);
+    final secs = double.tryParse('${format['duration'] ?? v?['duration'] ?? a?['duration'] ?? ''}');
+    return _Info(
+      w,
+      h,
+      secs == null ? Duration.zero : Duration(microseconds: (secs * 1e6).round()),
+      _rate('${v?['avg_frame_rate'] ?? ''}') ?? _rate('${v?['r_frame_rate'] ?? ''}') ?? 0,
+      v?['codec_name'] as String?,
+      a?['codec_name'] as String?,
+      int.tryParse('${format['bit_rate'] ?? ''}'),
+    );
+  }
+
+  final int? width;
+  final int? height;
+  final Duration duration;
+  final double fps;
+  final String? codec;
+  final String? audio;
+  final int? bitrate;
+
+  _Info withAudio(_Info other) => _Info(width, height, duration, fps, codec, other.audio, bitrate);
+
+  static double? _rate(String s) {
+    final parts = s.split('/');
+    if (parts.length != 2) return double.tryParse(s);
+    final n = double.tryParse(parts[0]), d = double.tryParse(parts[1]);
+    return n == null || d == null || d == 0 ? null : n / d;
+  }
+}
+
+Future<List<int>> _head(String path) async {
+  final f = await io.File(path).open();
+  try {
+    return await f.read(64);
+  } finally {
+    await f.close();
+  }
+}
+
+void _checkQuality(int quality) {
+  if (quality < 1 || quality > 100) throw ArgumentError.value(quality, 'quality', 'must be 1..100');
+}
+
+void _checkEncode(VideoFormat format, int? quality, int? width, int? height, VideoCodec? codec) {
+  if (quality != null) _checkQuality(quality);
+  if ((width != null && width < 1) || (height != null && height < 1)) {
+    throw ArgumentError.value(width ?? height, width != null ? 'width' : 'height', 'must be >= 1');
+  }
+  if (format == VideoFormat.avi) throw ArgumentError.value(format, 'format', 'avi is read, not written: use mp4');
+  if (codec != null) {
+    final ok = switch (format) {
+      VideoFormat.webm => codec == VideoCodec.vp9 || codec == VideoCodec.av1,
+      VideoFormat.mp4 || VideoFormat.mov || VideoFormat.mkv => true,
+      _ => false,
+    };
+    if (!ok) throw ArgumentError.value(codec, 'codec', '${format.name} cannot hold ${codec.name}');
   }
 }
 
 /// Bytes → a video value.
 extension ReaderVideo on Reader {
-  /// Decode the video stream.
-  Future<Video> video() async => Video.decode(await bytes());
+  /// Probe the video: a file is read in place, any other stream is written
+  /// to a temp file once (never held in memory).
+  Future<Video> video() async {
+    final path = origin().path();
+    if (path != null && await io.File(path).exists()) return Video.open(path);
+    final first = <int>[];
+    final spooled = await media.spool(
+      stream().map((chunk) {
+        if (first.length < 64) first.addAll(chunk.take(64 - first.length));
+        return chunk;
+      }),
+    );
+    final format = Video.sniff(first);
+    if (format == null) {
+      await io.File(spooled).delete().catchError((_) => io.File(spooled));
+      throw const ContentException('unknown video format');
+    }
+    return Video._open(spooled, temp: media.Temp(spooled));
+  }
 }
 
 /// Same, from an async reader.
 extension ReaderFutureVideo on Future<Reader> {
-  /// Decode the video stream.
+  /// Probe the video (see [ReaderVideo.video]).
   Future<Video> video() async => (await this).video();
 }
 
 /// Future mirrors (rule 4). The extension name is import-only; never reference it.
 extension VideoFuture on Future<Video> {
-  Future<int> width() async => (await this).width();
-  Future<int> height() async => (await this).height();
+  Future<int?> width() async => (await this).width();
+  Future<int?> height() async => (await this).height();
   Future<Duration> duration() async => (await this).duration();
   Future<double> fps() async => (await this).fps();
+  Future<String?> codec() async => (await this).codec();
+  Future<String?> audio() async => (await this).audio();
+  Future<int?> bitrate() async => (await this).bitrate();
+  Future<Image> frame({Duration at = Duration.zero}) async => (await this).frame(at: at);
 
   /// Mirror of [Video.encode].
-  Reader encode(VideoFormat format, {int quality = 80, int? width, int? height}) {
-    _checkEncode(format, quality, width: width, height: height);
-    return _FutureEncoded(this, format, quality: quality, width: width, height: height);
-  }
-}
-
-void _checkEncode(VideoFormat format, int quality, {int? width, int? height}) {
-  if (quality < 1 || quality > 100) {
-    throw ArgumentError.value(quality, 'quality', 'must be 1..100');
-  }
-  if ((width != null && width < 1) || (height != null && height < 1)) {
-    throw ArgumentError.value(width ?? height, width != null ? 'width' : 'height', 'must be >= 1');
+  Reader encode(
+    VideoFormat format, {
+    int? quality,
+    int? width,
+    int? height,
+    VideoCodec? codec,
+    Duration? start,
+    Duration? end,
+    void Function(int done, int? total)? onProgress,
+  }) {
+    _checkEncode(format, quality, width, height, codec);
+    return _Encoded(
+      () => this,
+      format,
+      quality: quality,
+      width: width,
+      height: height,
+      codec: codec,
+      start: start,
+      end: end,
+      onProgress: onProgress,
+    );
   }
 }
 
 final class _Encoded with Reader {
-  _Encoded(this._video, this._format, {required this.quality, this.width, this.height});
+  _Encoded(
+    this._video,
+    this._format, {
+    this.quality,
+    this.width,
+    this.height,
+    this.codec,
+    this.start,
+    this.end,
+    this.onProgress,
+  });
 
-  final Video _video;
+  final Future<Video> Function() _video;
   final VideoFormat _format;
-  final int quality;
+  final int? quality;
   final int? width;
   final int? height;
-
-  @override
-  Stream<List<int>> stream() =>
-      _compressStream(_video._bytes, _format, quality: quality, width: width, height: height);
-}
-
-final class _FutureEncoded with Reader {
-  _FutureEncoded(this._future, this._format, {required this.quality, this.width, this.height});
-
-  final Future<Video> _future;
-  final VideoFormat _format;
-  final int quality;
-  final int? width;
-  final int? height;
+  final VideoCodec? codec;
+  final Duration? start;
+  final Duration? end;
+  final void Function(int done, int? total)? onProgress;
 
   @override
   Stream<List<int>> stream() async* {
-    final video = await _future;
-    yield* _compressStream(video._bytes, _format, quality: quality, width: width, height: height);
-  }
-}
-
-class _VideoInfo {
-  _VideoInfo({
-    required this.width,
-    required this.height,
-    required this.duration,
-    required this.fps,
-  });
-
-  final int width;
-  final int height;
-  final Duration duration;
-  final double fps;
-}
-
-_VideoInfo? _parseVideoInfo(String stderr) {
-  final streamMatch = RegExp(r'Stream #\d+:\d+.*?: Video:.*').firstMatch(stderr);
-  if (streamMatch == null) return null;
-  final streamLine = streamMatch.group(0)!;
-
-  final dimMatch = RegExp(r'\b(\d{2,5})x(\d{2,5})\b').firstMatch(streamLine);
-  if (dimMatch == null) return null;
-  final width = int.parse(dimMatch.group(1)!);
-  final height = int.parse(dimMatch.group(2)!);
-
-  final fpsMatch =
-      RegExp(r'(\d+(?:\.\d+)?)\s*fps').firstMatch(streamLine) ?? RegExp(r'(\d+(?:\.\d+)?)\s*tbr').firstMatch(streamLine);
-  final fps = fpsMatch != null ? double.parse(fpsMatch.group(1)!) : 30.0;
-
-  final durationMatch = RegExp(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)').firstMatch(stderr);
-  Duration duration = Duration.zero;
-  if (durationMatch != null) {
-    final h = int.parse(durationMatch.group(1)!);
-    final m = int.parse(durationMatch.group(2)!);
-    final s = double.parse(durationMatch.group(3)!);
-    final micros = (s * 1000000).round();
-    duration = Duration(hours: h, minutes: m, microseconds: micros);
-  }
-
-  return _VideoInfo(
-    width: width,
-    height: height,
-    duration: duration,
-    fps: fps,
-  );
-}
-
-Stream<List<int>> _compressStream(
-  Uint8List inputBytes,
-  VideoFormat format, {
-  required int quality,
-  int? width,
-  int? height,
-}) async* {
-  final ffmpeg = await _ffmpegExecutable();
-  final tempDir = await io.Directory.systemTemp.createTemp('dart_toolkit_video_enc_');
-  try {
-    final inExt = (Video.sniff(inputBytes) ?? VideoFormat.mp4).name;
-    final inPath = p.join(tempDir.path, 'input.$inExt');
-    final outPath = p.join(tempDir.path, 'output.${format.name}');
-
-    await io.File(inPath).writeAsBytes(inputBytes);
-
-    final args = <String>[
-      '-hide_banner',
-      '-y',
-      '-i',
-      inPath,
-    ];
-
-    if (width != null || height != null) {
-      if (width != null && height != null) {
-        final w = (width ~/ 2) * 2;
-        final h = (height ~/ 2) * 2;
-        args.addAll(['-vf', 'scale=$w:$h']);
-      } else if (width != null) {
-        final w = (width ~/ 2) * 2;
-        args.addAll(['-vf', 'scale=$w:-2']);
-      } else {
-        final h = (height! ~/ 2) * 2;
-        args.addAll(['-vf', 'scale=-2:$h']);
-      }
-    }
-
-    switch (format) {
-      case VideoFormat.mp4:
-      case VideoFormat.mov:
-      case VideoFormat.mkv:
-        // quality 1..100 -> CRF 51..18
-        final crf = (51 - ((quality - 1) * 33 / 99)).round();
-        args.addAll([
-          '-c:v',
-          'libx264',
-          '-crf',
-          '$crf',
-          '-preset',
-          'medium',
-          '-c:a',
-          'aac',
-          '-b:a',
-          '128k',
-        ]);
-        if (format == VideoFormat.mp4 || format == VideoFormat.mov) {
-          args.addAll(['-movflags', '+faststart']);
-        }
-        break;
-
-      case VideoFormat.webm:
-        // quality 1..100 -> CRF 63..15
-        final crf = (63 - ((quality - 1) * 48 / 99)).round();
-        args.addAll([
-          '-c:v',
-          'libvpx-vp9',
-          '-crf',
-          '$crf',
-          '-b:v',
-          '0',
-          '-c:a',
-          'libopus',
-          '-b:a',
-          '128k',
-        ]);
-        break;
-
-      case VideoFormat.avi:
-        // quality 1..100 -> qscale 31..1
-        final qscale = (31 - ((quality - 1) * 30 / 99)).round();
-        args.addAll([
-          '-c:v',
-          'mpeg4',
-          '-qscale:v',
-          '$qscale',
-          '-c:a',
-          'libmp3lame',
-          '-b:a',
-          '128k',
-        ]);
-        break;
-    }
-
-    args.add(outPath);
-
-    final proc = await io.Process.run(ffmpeg, args);
-    if (proc.exitCode != 0) {
-      throw ContentException('video encoding failed (exit ${proc.exitCode}): ${proc.stderr}');
-    }
-
-    final outFile = io.File(outPath);
-    if (!await outFile.exists()) {
-      throw const ContentException('video encoding failed: output file not created');
-    }
-
-    await for (final chunk in outFile.openRead()) {
-      yield chunk;
-    }
-  } finally {
+    final video = await _video();
+    // mp4/mov need a seekable output (faststart), so encode to a temp file.
+    final out = await media.tempOut(_format.name);
     try {
-      await tempDir.delete(recursive: true);
-    } catch (_) {}
-  }
-}
-
-String? _cachedFfmpegPath;
-
-Future<String> _ffmpegExecutable() async {
-  if (_cachedFfmpegPath != null && io.File(_cachedFfmpegPath!).existsSync()) {
-    return _cachedFfmpegPath!;
-  }
-
-  // 1. Check system PATH via Shell.which
-  final onPath = await Shell.which('ffmpeg');
-  if (onPath != null) {
-    _cachedFfmpegPath = onPath;
-    return onPath;
-  }
-
-  // 2. Check user cache directory
-  final cacheDir = p.join(cache.userCacheDir(), 'dart_toolkit', 'ffmpeg');
-  final exeName = io.Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
-  final cachedExe = p.join(cacheDir, exeName);
-  if (await io.File(cachedExe).exists()) {
-    _cachedFfmpegPath = cachedExe;
-    return cachedExe;
-  }
-
-  // 3. Download portable binary into user cache
-  await _downloadFfmpeg(cacheDir, cachedExe);
-  _cachedFfmpegPath = cachedExe;
-  return cachedExe;
-}
-
-Future<void> _downloadFfmpeg(String cacheDir, String targetExe) async {
-  final url = _platformFfmpegUrl();
-  if (url == null) {
-    throw StateError(
-      'No prebuilt FFmpeg available for this platform (${io.Platform.operatingSystem} ${io.Platform.version}). '
-      'Please install ffmpeg on PATH.',
-    );
-  }
-
-  await io.Directory(cacheDir).create(recursive: true);
-  final http = Http.client();
-  try {
-    await (http.get(url) > Archive.unarchive(cacheDir));
-  } finally {
-    http.close();
-  }
-
-  if (!io.Platform.isWindows) {
-    try {
-      await posix.chmod(targetExe, 0x1ed);
+      await video._encodeTo(
+        out,
+        _format,
+        quality: quality,
+        width: width,
+        height: height,
+        codec: codec,
+        start: start,
+        end: end,
+        onProgress: onProgress,
+      );
     } catch (_) {
-      try {
-        await io.Process.run('chmod', ['+x', targetExe]);
-      } catch (_) {}
+      await io.File(out).delete().catchError((_) => io.File(out));
+      rethrow;
     }
+    yield* media.readAndDelete(out);
   }
-
-  if (!await io.File(targetExe).exists()) {
-    throw ContentException('Failed to extract FFmpeg executable to $targetExe');
-  }
-}
-
-String? _platformFfmpegUrl() {
-  if (io.Platform.isWindows) {
-    return 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-win-64.zip';
-  } else if (io.Platform.isMacOS) {
-    return 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-macos-64.zip';
-  } else if (io.Platform.isLinux) {
-    final isArm = io.Platform.version.contains('arm');
-    if (isArm) {
-      return 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-linux-arm-64.zip';
-    }
-    return 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-linux-64.zip';
-  }
-  return null;
 }

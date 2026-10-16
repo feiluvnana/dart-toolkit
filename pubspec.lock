@@ -17,14 +17,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "14.5.0"
-  archive:
-    dependency: transitive
-    description:
-      name: archive
-      sha256: "0d58d1fa1fddf6588251ccf2819f3fb3b6d0452c1b2813ac7413a05592bfbefe"
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.5.2"
   args:
     dependency: transitive
     description:
@@ -97,14 +89,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.2"
-  ffi:
-    dependency: transitive
-    description:
-      name: ffi
-      sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.2.0"
   file:
     dependency: transitive
     description:
@@ -137,14 +121,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.15.7"
-  http:
-    dependency: transitive
-    description:
-      name: http
-      sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.6.0"
   http_multi_server:
     dependency: transitive
     description:
@@ -161,14 +137,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.2"
-  image:
-    dependency: "direct main"
-    description:
-      name: image
-      sha256: "89ed75b2f8231fe676808c5564f9590d728024ded7ac782a7ed8474f1c95b72a"
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.12.0"
   io:
     dependency: transitive
     description:
@@ -241,14 +209,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.9.1"
-  petitparser:
-    dependency: transitive
-    description:
-      name: petitparser
-      sha256: "2f1564aadb14215e478563b5406cb80729d022158c01dc50c96013c2f7eb4790"
-      url: "https://pub.dev"
-    source: hosted
-    version: "7.1.0"
   pool:
     dependency: transitive
     description:
@@ -257,14 +217,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.5.3"
-  posix:
-    dependency: transitive
-    description:
-      name: posix
-      sha256: bc1bad54ad2b735816e31f8d4600cfde6c7839975085ddfbca48b6c9f7c4044e
-      url: "https://pub.dev"
-    source: hosted
-    version: "6.5.2"
   pub_semver:
     dependency: transitive
     description:
@@ -273,14 +225,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
-  puppeteer:
-    dependency: "direct main"
-    description:
-      name: puppeteer
-      sha256: "272fae28aa8491b76830fba82737007938c7f8a56d6d0aa314aee0298eb2a39f"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.26.0"
   shelf:
     dependency: transitive
     description:
@@ -450,7 +394,7 @@ packages:
     source: hosted
     version: "1.2.1"
   yaml:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: yaml
       sha256: f67cdd8e07d3c6329146aaef1ba043542b3134c12489f553ca9a7435d1068aea

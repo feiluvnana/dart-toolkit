@@ -6,6 +6,8 @@
 /// final done = await Pool.settle(files, (f) => cdn.save(f.url, f.to));   // never throws
 /// for (final Failed(:item, :error) in done.failures()) Console.log('✗ $item: $error');
 /// final thumbs = await Pool.map(paths, makeThumb, isolates: true);       // CPU work
+/// final lanes = Pool(limit: 8);                                          // one limit shared by many callers
+/// await lanes.run(() => cdn.get(url) > file);
 /// ```
 ///
 /// Public surface is exactly: [Pool], [Outcome], [Done], [Failed], [Outcomes].
@@ -13,12 +15,15 @@
 ///   stack once the jobs in flight finish.
 /// - `Pool.settle()` never throws: one [Outcome] per item, in input order.
 /// - Both take `limit` `retries` `rate` `isolates` `onDone`.
+/// - `Pool(limit:)` holds lanes that any number of calls share:
+///   `pool.run(job)` waits for a free lane, first come first served.
 /// Nothing stays running between calls, so nothing needs closing.
 library;
 
 export 'core.dart';
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io' as io;
 import 'dart:isolate';
 
@@ -40,7 +45,37 @@ import 'src/retry.dart' as retry;
 ///   throws stays as it is.
 /// - [onDone] runs after every job, success or failure, so a bar's
 ///   `onDone: bar.tick` tear-off fits.
-abstract final class Pool {
+///
+/// A held `Pool(limit: n)` is the same limit across calls that start at
+/// different times (a download queue fed by several crawlers): [run] waits
+/// for one of its `n` lanes. Nothing to close: an idle pool holds nothing.
+final class Pool {
+  /// [limit] lanes shared by every [run] on this pool (4 by default).
+  Pool({int limit = 4}) : _free = limit {
+    if (limit < 1) throw ArgumentError.value(limit, 'limit', 'must be at least 1');
+  }
+
+  int _free;
+  final _waiting = Queue<Completer<void>>();
+
+  /// Run [job] once a lane is free, first come first served, and return
+  /// what it returns (or rethrow what it throws). The lane is freed either way.
+  Future<R> run<R>(FutureOr<R> Function() job) async {
+    if (_free > 0) {
+      _free--;
+    } else {
+      final turn = Completer<void>();
+      _waiting.add(turn);
+      await turn.future;
+    }
+    try {
+      return await job();
+    } finally {
+      // Hand the lane straight to the next waiter, so a newcomer cannot jump the queue.
+      _waiting.isEmpty ? _free++ : _waiting.removeFirst().complete();
+    }
+  }
+
   /// Run [job] over every item, results in input order. The first error
   /// stops new jobs, waits for those in flight, and is rethrown with its
   /// original type and stack.

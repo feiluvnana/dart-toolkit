@@ -120,6 +120,13 @@ void main() {
       expect([t.row(2), t.row(3), t.row(4)].map((r) => r.trimRight()), ['l1', 'l2', 'l3']);
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    // _pty fails when the probe does not exit by itself after main returns.
+    test('after Tui.run returns, nothing keeps the VM alive (no exit() needed)', () async {
+      final (log, _, code) = await _pty(mode: 'after', feeds: const [(1.0, 'q'), (1.4, 'y'), (1.6, r'\r')]);
+      expect(log, 'after n=3');
+      expect(code, 0);
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('a second run in the same process works', () async {
       final (log, _, _) = await _pty(mode: 'second');
       expect(log, 'second-ok');

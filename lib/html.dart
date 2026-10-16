@@ -7,22 +7,25 @@
 /// final next = await http.get(url).html().$('a.next').attr('href');
 /// ```
 ///
-/// Public surface is exactly: [Html], [Elements], [Element].
+/// Public surface is exactly: [Html], [Elements], [Element] (and
+/// everything `json` exports, since `json()` returns a [Json]).
 /// - `Html.parse()` parses HTML and returns [Elements].
-/// - [Elements] supports `$` `[]` `not` `text` `texts` `attr` `attrs`
+/// - [Elements] supports `$` `[]` `not` `text` `texts` `html` `attr` `attrs`
 ///   `json` (embedded data) `table` (rows as maps) `form` (fields to post)
 ///   (plus [Iterable] helpers).
-/// - [Element] supports `$` `not` `text` `attr` `parent`.
+/// - [Element] supports `$` `text` `html` `attr` `parent`.
 /// A selector the engine rejects is a [ContentException] naming the selector.
 /// Everything else is private.
 library;
 
 import 'json.dart';
 export 'core.dart';
+// The json names by `show`: a bare `export 'json.dart'` re-exports core
+// through json and costs +60 ms at startup (A/B, 2026-10-16).
+export 'json.dart' show Json, JsonFuture, ReaderJson, ReaderFutureJson;
 
 import 'src/dom.dart' as dom;
 import 'src/html_parser.dart' as parser;
-import 'src/names.dart' as names;
 import 'src/selector.dart' as sel;
 
 /// Entry point: parse HTML source into top-level [Elements].
@@ -31,15 +34,16 @@ abstract final class Html {
   /// whitespace, comments and an `<?xml …?>` declaration) with `<!doctype`,
   /// `<html`, `<head` or `<body` is a whole document (so `$('body')` works);
   /// anything else is a fragment.
-  /// [base] is the base for relative links: with one, URL attributes
-  /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and made
+  /// [base] is the document's URL and the base for relative links: with
+  /// one, URL attributes (see [Element.attr]) are trimmed and made
   /// absolute. The base is parsed once per [Elements] and shared with every
-  /// child. A document's
-  /// `<base href>` overrides it. A fragment with loose top-level text is
-  /// returned as its root, which holds the text and every element (and
-  /// matches no selector itself).
+  /// child. A document's `<base href>` overrides it for links (a form
+  /// without an `action` still posts to [base]). A fragment with loose
+  /// top-level text is returned as its root, which holds the text and every
+  /// element (and matches no selector itself).
   static Elements parse(String html, {String? base}) {
     final baseUri = _parseBase(base);
+    final doc = _Ctx(baseUri, baseUri);
     var s = html.replaceFirst('﻿', '').trimLeft();
     while (s.startsWith('<!--') || s.startsWith('<?')) {
       final end = s.startsWith('<?') ? s.indexOf('>') : s.indexOf('-->');
@@ -52,8 +56,10 @@ abstract final class Html {
       final found = <dom.Element>[];
       _baseHref.collect(root, found);
       final declared = found.firstOrNull?.attributes['href']?.trim();
-      final base = declared == null || declared.isEmpty ? baseUri : _resolveBase(baseUri, declared) ?? baseUri;
-      return Elements._([for (final n in root.children) Element._(n, base)], base);
+      final ctx = declared == null || declared.isEmpty
+          ? doc
+          : _Ctx(_resolveBase(baseUri, declared) ?? baseUri, baseUri);
+      return Elements._([for (final n in root.children) Element._(n, ctx)], ctx);
     }
     final nodes = parser.parseFragment(html);
     final root = _hold(nodes);
@@ -61,10 +67,19 @@ abstract final class Html {
       // Loose text (`Tom &amp; Jerry`) has no element to live in: the
       // fragment's root holds it, so text() reads it. The root itself never
       // matches a selector, so no element appears that the source lacks.
-      return Elements._([Element._(root, baseUri)], baseUri);
+      return Elements._([Element._(root, doc)], doc);
     }
-    return Elements._([for (final n in root.children) Element._(n, baseUri)], baseUri);
+    return Elements._([for (final n in root.children) Element._(n, doc)], doc);
   }
+}
+
+/// What every element of one parse shares: the base for links (after
+/// `<base href>`) and the document's own URL.
+final class _Ctx {
+  const _Ctx(this.base, this.doc);
+
+  final Uri? base;
+  final Uri? doc;
 }
 
 /// Detach every node in [found] with one pass per parent (one `remove()`
@@ -78,7 +93,7 @@ void _removeAll(List<dom.Element> found) {
   }
   for (final p in parents) {
     p.nodes.removeWhere(dead.contains);
-    p.edits++;
+    dom.touch(p);
   }
   for (final m in found) {
     m.parent = null;
@@ -114,22 +129,24 @@ Uri? _parseBase(String? base) {
 
 /// A list of elements. Query with `$()`, read with `[]`.
 final class Elements extends Iterable<Element> {
-  Elements._(this._items, this._baseUri);
+  Elements._(this._items, this._ctx);
 
   final List<Element> _items;
 
-  /// The base for relative links, parsed once and shared with every child.
-  final Uri? _baseUri;
+  /// The base for links and the document URL, shared with every child.
+  final _Ctx _ctx;
 
   /// Matches in document order without duplicates: every element that is one
   /// of these elements or a descendant of one. The element itself is matched
   /// with the engine's `matches`, so combinators see the real tree.
+  /// `:scope` is any of these elements, and a selector may start with a
+  /// combinator relative to them: `list.$('> li')` is the direct items.
   /// Selectors are parsed once and cached (64-entry LRU keyed by the
   /// selector string): scrapes running the same selectors per page are O(1).
   Elements $(String selector) {
     return Elements._([
-      for (final el in _queryRoots([for (final e in _items) e._el], selector)) Element._(el, _baseUri),
-    ], _baseUri);
+      for (final el in _queryRoots([for (final e in _items) e._el], selector)) Element._(el, _ctx),
+    ], _ctx);
   }
 
   /// Element at [index] (throws [RangeError] if out of bounds).
@@ -141,44 +158,34 @@ final class Elements extends Iterable<Element> {
   Elements not(String selector) {
     final group = _parseSelector(selector);
     final out = <Element>[];
-    try {
-      for (final item in _items) {
-        if (group.matches(item._el)) continue;
-        final clone = item._el.clone(true);
-        final found = <dom.Element>[];
-        group.collect(clone, found);
-        _removeAll(found);
-        out.add(Element._(clone, _baseUri));
-      }
-    } on FormatException catch (e) {
-      throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
-    } on StackOverflowError {
-      rethrow; // a document nested too deep, not a bad selector
-    } catch (e) {
-      throw ContentException("invalid selector '$selector': $e");
+    for (final item in _items) {
+      if (group.matches(item._el, scope: {item._el})) continue;
+      final clone = item._el.clone(true);
+      final found = <dom.Element>[];
+      group.collect(clone, found, scope: {clone});
+      _removeAll(found);
+      out.add(Element._(clone, _ctx));
     }
-    return Elements._(out, _baseUri);
+    return Elements._(out, _ctx);
   }
 
   /// Reads the **first** match (`''` when there is none), like [attr]; for
   /// every match use [texts].
   /// Reads like `innerText`, so scraped text needs no `.trim()`.
-  String text() {
-    final first = _items.firstOrNull;
-    if (first == null) return '';
-    return first.text();
-  }
+  String text() => _items.firstOrNull?.text() ?? '';
 
   /// Every match's text in document order. Pairs `text`/`texts` like
   /// `attr`/`attrs`.
   List<String> texts() => [for (final e in _items) e.text()];
 
+  /// The first match's markup, itself included (`''` when there is none);
+  /// see [Element.html].
+  String html() => _items.firstOrNull?.html() ?? '';
+
   /// The first match's attribute, or `null` when nothing matched or the
-  /// attribute is absent. Case-insensitive; `href`/`src` resolve with the base.
-  String? attr(String name) {
-    final first = _items.firstOrNull;
-    return first?.attr(name);
-  }
+  /// attribute is absent. Case-insensitive; links resolve with the base (see
+  /// [Element.attr]).
+  String? attr(String name) => _items.firstOrNull?.attr(name);
 
   /// Every match's value of [name] in document order, absent ones skipped.
   /// Links resolve against the base, so `$('a.item').attrs('href')` is the
@@ -186,13 +193,14 @@ final class Elements extends Iterable<Element> {
   List<String> attrs(String name) => [for (final e in _items) ?e.attr(name)];
 
   /// The embedded data in these elements: every `<script>` of type
-  /// `application/json` or `application/ld+json`, or with id
-  /// `__NEXT_DATA__`, parsed into one [Json] list in document order.
-  /// Invalid ones are skipped. `page.json().$('**.user')` searches them all.
+  /// `application/json` or `application/ld+json` (parameters such as
+  /// `; charset=utf-8` allowed), or with id `__NEXT_DATA__`, parsed into one
+  /// [Json] list in document order. Invalid ones are skipped.
+  /// `page.json().$('**.user')` searches them all.
   Json json() {
     final out = <Object?>[];
     for (final el in _queryRoots([for (final e in _items) e._el], 'script')) {
-      final type = (el.attributes['type'] ?? '').trim().toLowerCase();
+      final type = (el.attributes['type'] ?? '').split(';').first.trim().toLowerCase();
       if (type != 'application/json' && type != 'application/ld+json' && el.attributes['id'] != '__NEXT_DATA__') {
         continue;
       }
@@ -207,12 +215,14 @@ final class Elements extends Iterable<Element> {
 
   /// The first table among these elements as rows of `header → cell text`.
   /// The first row (`<th>` or `<td>`) names the columns; a `colspan`
-  /// repeats its cell; a nested table belongs to its own cell.
-  /// Empty when there is no table.
+  /// repeats its cell across columns and a `rowspan` down the rows below; a
+  /// nested table belongs to its own cell. Empty when there is no table.
   List<Map<String, String>> table() {
     final table = _queryRoots([for (final e in _items) e._el], 'table').firstOrNull;
     if (table == null) return const [];
     final rows = <List<String>>[];
+    // Cells a rowspan carries into later rows: column → (text, rows left).
+    final carried = <int, (String, int)>{};
     void collect(dom.Element parent) {
       for (final child in parent.children) {
         switch (child.localName) {
@@ -220,14 +230,33 @@ final class Elements extends Iterable<Element> {
             collect(child);
           case 'tr':
             final cells = <String>[];
+            void fill() {
+              while (true) {
+                final c = carried[cells.length];
+                if (c == null) return;
+                final (text, left) = c;
+                cells.add(text);
+                if (left <= 1) {
+                  carried.remove(cells.length - 1);
+                } else {
+                  carried[cells.length - 1] = (text, left - 1);
+                }
+              }
+            }
+
             for (final cell in child.children) {
               if (cell.localName != 'td' && cell.localName != 'th') continue;
+              fill();
               final span = (int.tryParse(cell.attributes['colspan'] ?? '') ?? 1).clamp(1, 1000);
-              final text = Element._(cell, _baseUri).text();
+              var down = (int.tryParse(cell.attributes['rowspan'] ?? '') ?? 1).clamp(0, 65534);
+              if (down == 0) down = 65534; // rowspan=0: to the end of the table
+              final text = Element._(cell, _ctx).text();
               for (var k = 0; k < span; k++) {
+                if (down > 1) carried[cells.length] = (text, down - 1);
                 cells.add(text);
               }
             }
+            fill();
             rows.add(cells);
         }
       }
@@ -244,34 +273,45 @@ final class Elements extends Iterable<Element> {
 
   /// The first form among these elements, ready to post:
   /// `client.post(f.action, body: .form({...f.fields, 'user': u}))`. The
-  /// `action` resolves against the base (the page itself when absent), the
-  /// `method` is upper case (`GET` by default), and `fields` holds every named
-  /// control's current value, hidden ones included (unchecked boxes, buttons
-  /// and file inputs left out). Null when there is no form.
-  ({String action, String method, Map<String, String> fields})? form() {
+  /// `action` resolves against the base, and an empty or absent one is the
+  /// document's own URL (not `<base href>`); the `method` is upper case
+  /// (`GET` by default). `fields` maps every named control to its current
+  /// values in document order, hidden ones included: a repeated name or a
+  /// `<select multiple>` keeps every value, and unchecked boxes, buttons
+  /// and file inputs are left out. Null when there is no form.
+  ({String action, String method, Map<String, List<String>> fields})? form() {
     final form = _queryRoots([for (final e in _items) e._el], 'form').firstOrNull;
     if (form == null) return null;
-    final fields = <String, String>{};
+    final fields = <String, List<String>>{};
+    void add(String name, String value) => (fields[name] ??= []).add(value);
     for (final c in _queryRoots([form], 'input, select, textarea')) {
       final name = c.attributes['name'];
       if (name == null || name.isEmpty || c.attributes.containsKey('disabled')) continue;
       switch (c.localName) {
         case 'textarea':
-          fields[name] = c.text;
+          add(name, c.text);
         case 'select':
-          final options = _queryRoots([c], 'option');
-          final chosen = options.where((o) => o.attributes.containsKey('selected')).firstOrNull ?? options.firstOrNull;
-          if (chosen != null) fields[name] = chosen.attributes['value'] ?? Element._(chosen, null).text();
+          final options = [
+            for (final o in _queryRoots([c], 'option'))
+              if (!o.attributes.containsKey('disabled')) o,
+          ];
+          final selected = options.where((o) => o.attributes.containsKey('selected')).toList();
+          final chosen = c.attributes.containsKey('multiple')
+              ? selected
+              : [?(selected.lastOrNull ?? options.firstOrNull)];
+          for (final o in chosen) {
+            add(name, o.attributes['value'] ?? Element._(o, _ctx).text());
+          }
         default:
           final type = (c.attributes['type'] ?? 'text').toLowerCase();
           if (const {'submit', 'button', 'image', 'reset', 'file'}.contains(type)) continue;
           if ((type == 'checkbox' || type == 'radio') && !c.attributes.containsKey('checked')) continue;
-          fields[name] = c.attributes['value'] ?? (type == 'checkbox' || type == 'radio' ? 'on' : '');
+          add(name, c.attributes['value'] ?? (type == 'checkbox' || type == 'radio' ? 'on' : ''));
       }
     }
-    final action = Element._(form, _baseUri).attr('action');
+    final action = Element._(form, _ctx).attr('action');
     return (
-      action: action == null || action.isEmpty ? (_baseUri?.toString() ?? '') : action,
+      action: action == null || action.isEmpty ? (_ctx.doc?.toString() ?? '') : action,
       method: (form.attributes['method'] ?? 'get').trim().toUpperCase(),
       fields: fields,
     );
@@ -286,46 +326,28 @@ final class Elements extends Iterable<Element> {
 
 /// A single element.
 final class Element {
-  Element._(this._el, this._baseUri);
+  Element._(this._el, this._ctx);
 
   final dom.Element _el;
 
-  /// The base for relative links, shared from the parent [Elements].
-  final Uri? _baseUri;
+  /// The base for links and the document URL, shared from the parent
+  /// [Elements].
+  final _Ctx _ctx;
 
   /// Matches that are this element or a descendant of it, in document order
   /// without duplicates. The element itself is matched with the engine's
-  /// `matches`, so combinators see the real tree.
+  /// `matches`, so combinators see the real tree. `:scope` is this element,
+  /// and a leading combinator is relative to it: `ul.$('> li')`.
   Elements $(String selector) {
     return Elements._([
-      for (final el in _queryRoots([_el], selector)) Element._(el, _baseUri),
-    ], _baseUri);
+      for (final el in _queryRoots([_el], selector)) Element._(el, _ctx),
+    ], _ctx);
   }
 
-  /// A copy of this element without every match of [selector] and its
-  /// subtree. The receiver is unchanged.
-  Element not(String selector) {
-    final clone = _el.clone(true);
-    List<dom.Element> found;
-    try {
-      final group = _parseSelector(selector);
-      found = [];
-      if (group.matches(clone)) {
-        // Self matches whole (like Elements.without drops it): clear content.
-        clone.nodes.clear();
-        return Element._(clone, _baseUri);
-      }
-      group.collect(clone, found);
-    } on FormatException catch (e) {
-      throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
-    } on StackOverflowError {
-      rethrow; // a document nested too deep, not a bad selector
-    } catch (e) {
-      throw ContentException("invalid selector '$selector': $e");
-    }
-    _removeAll(found);
-    return Element._(clone, _baseUri);
-  }
+  /// The element's markup, itself included (`outerHTML`): attributes in
+  /// source order, text escaped, raw text (`script`, `style`) as it is, void
+  /// elements without an end tag.
+  String html() => _serialize(_el);
 
   /// Text like `innerText`, so scraped text needs no `.trim()`. Runs of
   /// spaces collapse to one space, and a run that holds a newline becomes one
@@ -406,32 +428,160 @@ final class Element {
     return out.toString();
   }
 
-  /// Attribute [name] (case-insensitive) or `null` if absent. URL attributes
-  /// (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and, with a
-  /// base URL, resolved to absolute URLs.
+  /// Attribute [name] (case-insensitive) or `null` if absent. With a base
+  /// URL, links come back absolute: the URL attributes (`href`, `src`,
+  /// `data-src`, `poster`, `action`) are trimmed and resolved, every
+  /// candidate of a `srcset`/`data-srcset` is resolved (descriptors kept),
+  /// and a `<meta>` `content` that is a path (`/`, `./`, `../`) is resolved,
+  /// so `page.$('meta[property="og:image"]').attr('content')` is a URL to
+  /// fetch. Other values are as written.
   String? attr(String name) {
-    final raw = _el.attributes[name.toLowerCase()];
+    final key = name.toLowerCase();
+    final raw = _el.attributes[key];
     if (raw == null) return null;
-    if (!_urlAttrs.contains(name.toLowerCase())) return raw;
-    final value = raw.trim();
-    final base = _baseUri;
-    if (base == null || value.isEmpty) return value;
-    try {
-      return base.resolve(value).toString();
-    } catch (_) {
-      return value;
+    final base = _ctx.base;
+    if (_urlAttrs.contains(key)) return _resolve(base, raw.trim());
+    if (key == 'srcset' || key == 'data-srcset') return base == null ? raw.trim() : _srcset(base, raw);
+    if (key == 'content' && base != null && _el.localName == 'meta') {
+      final v = raw.trim();
+      if (v.startsWith('/') || v.startsWith('./') || v.startsWith('../')) return _resolve(base, v);
     }
+    return raw;
   }
 
   /// Parent element, or `null` at top level.
   Element? parent() {
     final p = sel.up(_el);
-    return p == null ? null : Element._(p, _baseUri);
+    return p == null ? null : Element._(p, _ctx);
   }
 }
 
 /// URL attributes: trimmed and resolved against the base.
 const _urlAttrs = {'href', 'src', 'data-src', 'poster', 'action'};
+
+/// [value] against [base]; as it is without a base or when it is not a URL.
+String _resolve(Uri? base, String value) {
+  if (base == null || value.isEmpty) return value;
+  try {
+    return base.resolve(value).toString();
+  } on FormatException {
+    return value;
+  }
+}
+
+/// A `srcset` with every candidate URL resolved against [base]: candidates
+/// are split as the HTML standard does (a URL runs to whitespace, a comma
+/// ends a candidate outside parentheses) and rejoined with `, `.
+String _srcset(Uri base, String v) {
+  bool space(int c) => c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D;
+  final out = <String>[];
+  var i = 0;
+  while (i < v.length) {
+    while (i < v.length && (space(v.codeUnitAt(i)) || v.codeUnitAt(i) == 0x2C)) {
+      i++;
+    }
+    if (i >= v.length) break;
+    final start = i;
+    while (i < v.length && !space(v.codeUnitAt(i))) {
+      i++;
+    }
+    var url = v.substring(start, i);
+    var desc = '';
+    if (url.endsWith(',')) {
+      url = url.replaceFirst(RegExp(r',+$'), '');
+    } else {
+      final from = i;
+      var depth = 0;
+      while (i < v.length) {
+        final c = v.codeUnitAt(i);
+        if (c == 0x28) depth++;
+        if (c == 0x29 && depth > 0) depth--;
+        if (c == 0x2C && depth == 0) break;
+        i++;
+      }
+      desc = v.substring(from, i).trim();
+    }
+    final abs = _resolve(base, url);
+    out.add(desc.isEmpty ? abs : '$abs $desc');
+  }
+  return out.join(', ');
+}
+
+/// Void elements: no end tag, no content.
+const _void = {
+  'area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', //
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+};
+
+/// Elements whose text serializes unescaped (scripting is on, so
+/// `noscript` too).
+const _rawText = {'style', 'script', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext', 'noscript'};
+
+/// [root] as HTML (the "serializing HTML fragments" algorithm, root
+/// included); the holder of loose top-level nodes writes its content only.
+/// An explicit stack: a page nested 10,000 deep must not overflow.
+String _serialize(dom.Element root) {
+  final out = StringBuffer();
+  // A String is an end tag to write; a node is content.
+  final stack = <Object>[root];
+  while (stack.isNotEmpty) {
+    final item = stack.removeLast();
+    switch (item) {
+      case String():
+        out.write(item);
+      case dom.Text():
+        final p = item.parent;
+        final raw = p != null && p.space == dom.Space.html && _rawText.contains(p.localName);
+        out.write(raw ? item.data : _escape(item.data, attribute: false));
+      case dom.Element():
+        final holder = item.localName == '#root';
+        if (!holder) {
+          out
+            ..write('<')
+            ..write(item.localName);
+          for (final MapEntry(:key, :value) in item.attributes.entries) {
+            out
+              ..write(' ')
+              ..write(key)
+              ..write('="')
+              ..write(_escape(value, attribute: true))
+              ..write('"');
+          }
+          out.write('>');
+          if (item.space == dom.Space.html && _void.contains(item.localName)) continue;
+          stack.add('</${item.localName}>');
+        }
+        for (var i = item.nodes.length - 1; i >= 0; i--) {
+          stack.add(item.nodes[i]);
+        }
+    }
+  }
+  return out.toString();
+}
+
+/// HTML's escaping: `&` and no-break space always, then `"` in an
+/// attribute or `<` `>` in text.
+String _escape(String s, {required bool attribute}) {
+  var plain = true;
+  for (var i = 0; i < s.length && plain; i++) {
+    final c = s.codeUnitAt(i);
+    plain = c != 0x26 && c != 0xA0 && (attribute ? c != 0x22 : c != 0x3C && c != 0x3E);
+  }
+  if (plain) return s;
+  final out = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    final c = s.codeUnitAt(i);
+    out.write(switch (c) {
+      0x26 => '&amp;',
+      0xA0 => '&nbsp;',
+      0x22 when attribute => '&quot;',
+      0x3C when !attribute => '&lt;',
+      0x3E when !attribute => '&gt;',
+      _ => String.fromCharCode(c),
+    });
+  }
+  return out.toString();
+}
 
 /// Elements that break lines in `text()` (like `innerText`).
 const _blocks = {
@@ -503,16 +653,16 @@ sel.Selector _parseSelector(String selector) {
 /// One query path for [Element.$] and [Elements.$]: every root that matches
 /// plus every matching descendant, in document order without duplicates.
 /// Roots match through the engine's `matches`, so no wrapper stands between
-/// a combinator and the real tree. A root inside another root is dropped
-/// first: the outer walk already covers it (`$('div').$('a')` on nested
-/// divs walks the tree once, not once per div).
+/// a combinator and the real tree; every root is in `:scope`. A root inside
+/// another root is dropped from the walk: the outer walk already covers it
+/// (`$('div').$('a')` on nested divs walks the tree once, not once per div).
 List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
   final group = _parseSelector(selector);
+  final scope = Set<dom.Element>.identity()..addAll(roots);
   if (roots.length > 1) {
-    final all = roots.toSet();
     bool nested(dom.Element el) {
       for (var p = sel.up(el); p != null; p = sel.up(p)) {
-        if (all.contains(p)) return true;
+        if (scope.contains(p)) return true;
       }
       return false;
     }
@@ -522,49 +672,37 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
         if (!nested(r)) r,
     ];
   }
-  final seen = <dom.Element>{};
+  final seen = Set<dom.Element>.identity();
   final out = <dom.Element>[];
-  void add(dom.Element el) {
-    if (seen.add(el)) out.add(el);
-  }
-
-  try {
-    for (final root in roots) {
-      if (group.matches(root)) add(root);
-      final found = <dom.Element>[];
-      group.collect(root, found);
-      for (final el in found) {
-        add(el);
-      }
+  for (final root in roots) {
+    if (group.matches(root, scope: scope) && seen.add(root)) out.add(root);
+    final found = <dom.Element>[];
+    group.collect(root, found, scope: scope);
+    for (final el in found) {
+      if (seen.add(el)) out.add(el);
     }
-  } on FormatException catch (e) {
-    throw ContentException("invalid selector '$selector': ${e.message}", e.source, e.offset);
-  } on StackOverflowError {
-    rethrow; // a document nested too deep, not a bad selector
-  } catch (e) {
-    throw ContentException("invalid selector '$selector': $e");
   }
   return out;
 }
 
+/// The base for `html()`: the final URL when present, else the file path
+/// as a `file:` URI.
+String? _baseFor(Origin o) {
+  final url = o.url(), path = o.path();
+  if (url != null && url.isNotEmpty) return url;
+  if (path == null) return null;
+  try {
+    return Uri.file(path).toString();
+  } on ArgumentError {
+    return null; // a path this platform cannot express as a URI
+  }
+}
+
 /// Bytes → a value. Relative links resolve against the response's URL
 /// (or the file's URI) from the typed [Origin]; other readers parse without
-/// a base. A failure on an error page names the HTTP status in the message.
+/// a base.
 extension ReaderHtml on Reader {
-  Future<Elements> html() async {
-    final text = await this.text();
-    final o = origin();
-    try {
-      return Html.parse(
-        text,
-        base: names.baseUrlFor(url: o.url(), path: o.path()),
-      );
-    } on FormatException catch (e) {
-      final status = o.status();
-      if (status == null || (status >= 200 && status < 300)) rethrow;
-      throw ContentException('${e.message} (HTTP $status)', e.source, e.offset, e);
-    }
-  }
+  Future<Elements> html() async => Html.parse(await text(), base: _baseFor(origin()));
 }
 
 /// Same, from an async reader.
@@ -579,18 +717,19 @@ extension ElementsFuture on Future<Elements> {
   Future<Elements> not(String selector) async => (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<List<String>> texts() async => (await this).texts();
+  Future<String> html() async => (await this).html();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<List<String>> attrs(String name) async => (await this).attrs(name);
   Future<Json> json() async => (await this).json();
   Future<List<Map<String, String>>> table() async => (await this).table();
-  Future<({String action, String method, Map<String, String> fields})?> form() async => (await this).form();
+  Future<({String action, String method, Map<String, List<String>> fields})?> form() async => (await this).form();
 }
 
 /// Future mirrors for [Element].
 extension ElementFuture on Future<Element> {
   Future<Elements> $(String selector) async => (await this).$(selector);
-  Future<Element> not(String selector) async => (await this).not(selector);
   Future<String> text() async => (await this).text();
+  Future<String> html() async => (await this).html();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<Element?> parent() async => (await this).parent();
 }

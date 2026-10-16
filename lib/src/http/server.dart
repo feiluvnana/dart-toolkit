@@ -4,9 +4,10 @@ part of '../../http.dart';
 /// A running [Http.serve]. Close it to stop: until then it keeps the script
 /// alive, as a server should.
 final class Server implements Closeable {
-  Server._(this._server);
+  Server._(this._server, this._limit);
 
   final HttpServer _server;
+  final int _limit;
   final _inFlight = <Future<void>>{};
   var _closed = false;
 
@@ -36,11 +37,20 @@ final class Server implements Closeable {
     final res = req.response;
     try {
       Reply reply;
-      try {
-        reply = await handler(Request._(req));
-      } catch (e) {
-        stderr.writeln('✗ ${req.method} ${names.redact(req.uri)}: $e'); // an OAuth code or token stays out of logs
-        reply = const Reply.status(500);
+      if (req.contentLength > _limit) {
+        reply = const Reply.status(413);
+      } else {
+        final request = Request._(req, _limit);
+        try {
+          reply = await handler(request);
+        } catch (e) {
+          if (request._over) {
+            reply = const Reply.status(413);
+          } else {
+            stderr.writeln('✗ ${req.method} ${names.redact(req.uri)}: $e'); // an OAuth code or token stays out of logs
+            reply = const Reply.status(500);
+          }
+        }
       }
       res.statusCode = reply._status;
       switch (reply) {
@@ -73,9 +83,11 @@ final class Server implements Closeable {
 
 /// A request to an [Http.serve] handler: a [Reader] of its body.
 final class Request with Reader {
-  Request._(this._req);
+  Request._(this._req, this._limit);
 
   final HttpRequest _req;
+  final int _limit;
+  var _over = false;
 
   /// `GET`, `POST` …
   String method() => _req.method;
@@ -95,8 +107,20 @@ final class Request with Reader {
   @override
   Origin origin() => Origin(url: _req.requestedUri.toString());
 
+  /// The body; past the server's `limit:` the read fails (and the
+  /// handler's answer becomes a 413).
   @override
-  Stream<List<int>> stream() => _req;
+  Stream<List<int>> stream() async* {
+    var n = 0;
+    await for (final chunk in _req) {
+      n += chunk.length;
+      if (n > _limit) {
+        _over = true;
+        throw ContentException('request body over $_limit bytes: ${_req.method} ${names.redact(_req.uri)}');
+      }
+      yield chunk;
+    }
+  }
 }
 
 /// What an [Http.serve] handler answers.

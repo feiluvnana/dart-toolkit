@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/src/format.dart' as fmt;
+import 'package:dart_toolkit/src/resume.dart' show replays;
+import 'package:dart_toolkit/src/terminal.dart' as term;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -22,6 +25,34 @@ import 'package:dart_toolkit/console.dart';
 void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long', 'c']]);
 ''');
     expect(r.stdout, '\x1b[32mok\x1b[0m    a\nx y   b\nlong  c\n');
+  });
+
+  group('Speed', () {
+    test('counts over a 5 s window; negative deltas are ignored', () {
+      var now = 0;
+      final m = fmt.Meter(() => now);
+      expect(m.rate(), 0);
+      m.add(1000);
+      m.add(-500); // a counter that went back
+      now = 2000;
+      m.add(1000);
+      expect(m.rate(), 1000); // 2000 bytes over 2 s
+      now = 10000;
+      expect(m.rate(), 0, reason: 'idle past the window');
+    });
+
+    test('as a pipe it passes bytes and leaves out replayed resume bytes', () async {
+      final speed = Speed();
+      replays[speed]!(3); // the resume path: 3 bytes come back from the .part
+      final out = await (_Mem('hello') | speed).bytes();
+      expect(utf8.decode(out), 'hello');
+      expect(speed.rate(), 2, reason: '2 fresh bytes over the 1 s floor');
+      expect(speed.add(-4).rate(), 2);
+    });
+  });
+
+  test('notify sends OSC 777 with a title and a body', () {
+    expect(term.notifyCodes('done'), matches(RegExp('\x1b]777;notify;[^;\x07]+;done\x07')));
   });
 
   group('Console.choose', () {
@@ -203,7 +234,7 @@ Future<void> main() async {
       expect(err, isNot(contains('\x1b')));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
-    test('setTotal fills in a total that arrives later; log prints above', () async {
+    test('update fills in a total that arrives later; log prints above', () async {
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',

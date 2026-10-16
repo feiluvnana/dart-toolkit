@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
-import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+import 'package:dart_toolkit/src/resume.dart' show PassThrough, replays;
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
@@ -1015,7 +1015,9 @@ void clientTests() {
           case '/cookies':
             r.response.headers
               ..add('set-cookie', 'good=1; Path=/')
-              ..add('set-cookie', 'bad=2; Expires=not a date at all; Path=/')
+              ..add('set-cookie', 'bad=2; Expires=not a date at all; Path=/') // the attribute is ignored
+              ..add('set-cookie', '=nameless; Path=/')
+              ..add('set-cookie', 'noequals; Path=/')
               ..add('set-cookie', 'tld=3; Domain=com; Path=/')
               ..add('set-cookie', 'ip=4; Domain=0.0.1; Path=/')
               ..add('set-cookie', 'deep=5; Path=/a/b')
@@ -1082,8 +1084,8 @@ void clientTests() {
       final c = Http.client();
       await c.get('$url/cookies').status();
       final jar = c.cookies();
-      expect([jar['good'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']], ['1', null, null, '5', '6']);
-      expect(jar.header('$url/a/b/c'), 'deep=5; shallow=6; good=1');
+      expect([jar['good'], jar['bad'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']], ['1', '2', null, null, '5', '6']);
+      expect(jar.header('$url/a/b/c'), 'deep=5; shallow=6; good=1; bad=2');
       expect(jar.header('http://example.com/'), isNull);
       jar.set('k', 'v', url: url);
       expect(jar.header('$url/'), contains('k=v'));
@@ -1242,6 +1244,21 @@ Future<void> main() async {
       expect(File('${to.path}.part').existsSync(), isFalse);
     });
 
+    test('resume tells rate meters how many bytes come back from disk (regression: speed counted the .part)', () async {
+      final dir = await Directory.systemTemp.createTemp('replayed');
+      addTearDown(() => dir.delete(recursive: true));
+      final body = List.generate(1000, (i) => i % 256);
+      final c = Http.client(resume: true);
+      final to = _Path('${dir.path}/f.bin');
+      await File('${to.path}.part').writeAsBytes(body.sublist(0, 400));
+      final resumed = _Replays();
+      await (c.get('$url/file') | resumed > to);
+      expect((resumed.replayed, resumed.bytes), (400, 1000));
+      final skipped = _Replays();
+      await (c.get('$url/file') | skipped > to);
+      expect((skipped.replayed, skipped.bytes), (1000, 1000));
+    });
+
     test('cache: a GET within ttl uses no network; vary headers key it', () async {
       final dir = await Directory.systemTemp.createTemp('cache');
       addTearDown(() => dir.delete(recursive: true));
@@ -1333,6 +1350,20 @@ Future<void> main() async {
 
 /// A pass-through pipe that counts bytes, marked as such like a Bar.
 final class _Count with Pipe implements PassThrough {
+  var bytes = 0;
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input.map((c) {
+    bytes += c.length;
+    return c;
+  });
+}
+
+/// A pass-through pipe that hears the replay count, as `Speed` does.
+final class _Replays with Pipe implements PassThrough {
+  _Replays() {
+    replays[this] = (n) => replayed += n;
+  }
+  var replayed = 0;
   var bytes = 0;
   @override
   Stream<List<int>> transform(Stream<List<int>> input) => input.map((c) {

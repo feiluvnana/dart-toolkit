@@ -7,11 +7,13 @@
 /// await Pool.map(urls, fetch, onDone: bar.tick); // closes at its total
 /// ```
 ///
-/// Public surface is exactly: [Console], [Bar], [Color].
+/// Public surface is exactly: [Console], [Bar], [Speed], [Color].
 /// - `Console.ask/confirm/choose/key/spin/bar/log/table/notify/copy/clear()` prompt,
 ///   read keys, show progress, print above it or as columns, or reach the desktop;
 ///   `Console.accent` colours live lines.
-/// - [Bar] supports `tick` `update` `setTotal` (plus [Pipe]/[Closeable]).
+/// - [Bar] supports `tick` `update` (plus [Pipe]/[Closeable]).
+/// - [Speed] supports `add` `rate` (plus [Pipe]): a rate meter for progress
+///   drawn by hand, as in a Tui.
 /// Everything else is private.
 library;
 
@@ -25,7 +27,8 @@ export 'core.dart';
 import 'src/exit.dart' as exit;
 import 'src/format.dart' as fmt;
 import 'src/keys.dart' as keys;
-import 'src/resume.dart' show PassThrough, sizers;
+import 'src/resume.dart' show PassThrough, replays, sizers;
+import 'dart:math' as math;
 import 'src/terminal.dart' as term;
 import 'src/terminal.dart' show Color;
 export 'src/terminal.dart' show Color;
@@ -50,6 +53,31 @@ abstract final class Console {
   /// its last row.
   static var _drawn = 0;
   static var _lastPaint = 0;
+
+  /// Open prompts and tables: while any is writing, the live block is
+  /// erased and does not repaint, so the 80 ms redraw never lands on a
+  /// question or a typed answer.
+  static var _parked = 0;
+
+  static void _park() {
+    if (_parked++ > 0 || _drawn == 0) return;
+    io.stderr.write(_erase());
+    _drawn = 0;
+  }
+
+  static void _unpark() {
+    if (--_parked == 0) _paint(force: true);
+  }
+
+  /// Run [body] with the live block parked (see [_park]).
+  static Future<T> _parkedFor<T>(Future<T> Function() body) async {
+    _park();
+    try {
+      return await body();
+    } finally {
+      _unpark();
+    }
+  }
 
   /// Spinner frames: one timer for every spinner, running only while one
   /// is live (so it never keeps the script alive).
@@ -100,7 +128,7 @@ abstract final class Console {
   /// that breaks the move-up); the block keeps to the screen height, newest
   /// lines first.
   static void _paint({bool force = false}) {
-    if (_lives.isEmpty) return;
+    if (_lives.isEmpty || _parked > 0) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastPaint < 80) return;
     _lastPaint = now;
@@ -151,7 +179,9 @@ abstract final class Console {
   /// Read one line. An empty line gives [or] when it is set (shown as
   /// `[or]` after the question) and `''` otherwise. A closed stdin gives
   /// [or], or null without it. With [secret], echo is turned off
-  /// (passwords) and [or] is not shown.
+  /// (passwords) and [or] is not shown. With [timeout], no answer in that
+  /// time also gives [or]: the reader is stopped, so an unanswered prompt
+  /// never keeps the script alive.
   /// Asynchronous: timers, downloads and bars keep running while one waits.
   /// Ctrl-C restores the terminal and exits with 130. While a state-driven
   /// [Tui.run] is active, shows as a popup (Escape closes it like EOF).
@@ -160,36 +190,41 @@ abstract final class Console {
   /// instead of trusting the inherited ones: a run killed mid-menu can
   /// leave echo off, which makes typing invisible while Enter still
   /// submits. The captured modes are restored afterwards.
-  static Future<String?> ask(String question, {bool secret = false, String? or}) async {
+  static Future<String?> ask(String question, {bool secret = false, String? or, Duration? timeout}) async {
     final shown = or == null || secret ? question : '$question [$or]';
     final String? line;
     try {
-      line = await _ask(shown, secret: secret);
+      line = await _ask(shown, secret: secret, timeout: timeout);
     } on io.StdinException {
+      return or;
+    } on TimeoutException {
       return or;
     }
     if (line == null) return or;
     return line.isEmpty && or != null ? or : line;
   }
 
-  /// One prompt and one line: null when the Tui popup was cancelled; throws
-  /// [io.StdinException] on a closed stdin.
-  static Future<String?> _ask(String question, {required bool secret}) async {
+  /// One prompt and one line: null when the Tui popup was cancelled or
+  /// timed out; throws [io.StdinException] on a closed stdin and
+  /// [TimeoutException] when [timeout] passes.
+  static Future<String?> _ask(String question, {required bool secret, Duration? timeout}) async {
     final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.promptAsk(question, secret: secret);
-    io.stderr.writeln(term.safeText(question));
-    final modes = term.captureModes();
-    term.setLineModes(echo: !secret);
-    // Terminal restore on signals (first), via the single owner in
-    // src/exit.dart; browsers registered earlier run after us.
-    final token = exit.onExit(() => term.restoreModes(modes));
-    try {
-      return await _readLine(secret: secret);
-    } finally {
-      exit.offExit(token);
-      term.restoreModes(modes);
-      if (secret) io.stderr.writeln();
-    }
+    if (bridge != null) return bridge.promptAsk(question, secret: secret, timeout: timeout);
+    return _parkedFor(() async {
+      io.stderr.writeln(term.safeText(question));
+      final modes = term.captureModes();
+      term.setLineModes(echo: !secret);
+      // Terminal restore on signals (first), via the single owner in
+      // src/exit.dart; browsers registered earlier run after us.
+      final token = exit.onExit(() => term.restoreModes(modes));
+      try {
+        return await _readLine(secret: secret, timeout: timeout);
+      } finally {
+        exit.offExit(token);
+        term.restoreModes(modes);
+        if (secret) io.stderr.writeln();
+      }
+    });
   }
 
   /// Yes/no. Enter, a closed stdin and Escape in a Tui popup give [or]
@@ -264,10 +299,12 @@ abstract final class Console {
     }
     final bindings = _canonicalBindings(keys);
     try {
-      if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
-        return await _chooseNumbered(question, items, labels);
-      }
-      return await _chooseInteractive(question, items, labels, selected, bindings, or);
+      return await _parkedFor(() async {
+        if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
+          return await _chooseNumbered(question, items, labels);
+        }
+        return await _chooseInteractive(question, items, labels, selected, bindings, or);
+      });
     } on io.StdinException {
       return or;
     }
@@ -338,7 +375,9 @@ abstract final class Console {
   ///
   /// Where raw mode is unavailable (or piped), a line is read instead and
   /// its first character counts as the key (an empty line counts as Enter).
-  static Future<String> key({String? prompt}) async {
+  static Future<String> key({String? prompt}) => _parkedFor(() => _key(prompt));
+
+  static Future<String> _key(String? prompt) async {
     if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
       term.setLineModes(); // undo a half-applied raw mode: fallback prompts stay visible
       final line = await _ask(prompt ?? 'Press a key, then Enter:', secret: false);
@@ -424,17 +463,23 @@ abstract final class Console {
       }
     }
     final bold = header != null && term.TerminalCaps.forStdout.styled;
-    for (final (r, row) in cells.indexed) {
-      final numeric = r == 0 && header != null ? const <Object?>[] : rows[r - (header == null ? 0 : 1)];
-      final line = StringBuffer();
-      for (final (i, c) in row.indexed) {
-        final pad = ' ' * (widths[i] - cellWidth(c));
-        final right = i < numeric.length && numeric[i] is num;
-        if (i > 0) line.write('  ');
-        line.write(right ? '$pad$c' : (i == row.length - 1 ? c : '$c$pad'));
+    // The live block is on the same terminal: erase it around the rows.
+    _park();
+    try {
+      for (final (r, row) in cells.indexed) {
+        final numeric = r == 0 && header != null ? const <Object?>[] : rows[r - (header == null ? 0 : 1)];
+        final line = StringBuffer();
+        for (final (i, c) in row.indexed) {
+          final pad = ' ' * (widths[i] - cellWidth(c));
+          final right = i < numeric.length && numeric[i] is num;
+          if (i > 0) line.write('  ');
+          line.write(right ? '$pad$c' : (i == row.length - 1 ? c : '$c$pad'));
+        }
+        final text = '$line'.trimRight();
+        io.stdout.writeln(bold && r == 0 ? '\x1b[1m$text\x1b[22m' : text);
       }
-      final text = '$line'.trimRight();
-      io.stdout.writeln(bold && r == 0 ? '\x1b[1m$text\x1b[22m' : text);
+    } finally {
+      _unpark();
     }
   }
 
@@ -534,12 +579,12 @@ abstract final class Console {
   /// One cooked line from the shared broadcast stdin, without blocking the
   /// event loop. Handles `\n` and `\r`; in secret mode backspace edits by
   /// grapheme (not byte, so multibyte passwords survive).
-  static Future<String> _readLine({required bool secret}) async {
+  static Future<String> _readLine({required bool secret, Duration? timeout}) async {
     // Piped stdin is read line by line off the event loop while nothing has
     // subscribed to it: a subscription drops lines that arrive between
     // prompts and keeps the script alive until the writer closes the pipe.
     if (!term.stdinTty && term.stdinUnclaimed && (_linePushback?.isEmpty ?? true)) {
-      final line = await term.pipedLine();
+      final line = await term.pipedLine(timeout: timeout);
       if (line == null) throw const io.StdinException('stdin is closed');
       return line;
     }
@@ -553,7 +598,9 @@ abstract final class Console {
     // A pushback that already holds a full line resolves immediately.
     final pushNewline = buf.indexWhere((b) => b == 0x0a || b == 0x0d);
     late final StreamSubscription<List<int>> sub;
+    Timer? timer;
     void finish([List<int>? rest]) {
+      timer?.cancel();
       if (rest != null && rest.isNotEmpty) _linePushback = rest;
       sub.cancel().then(
         (_) {
@@ -617,6 +664,14 @@ abstract final class Console {
       },
       cancelOnError: false,
     );
+    if (timeout != null) {
+      // No answer in time: stop listening, so the tty reader stops too.
+      timer = Timer(timeout, () {
+        if (result.isCompleted) return;
+        result.completeError(TimeoutException('no answer', timeout));
+        unawaited(sub.cancel().then((_) {}, onError: (_) {}));
+      });
+    }
     return result.future;
   }
 
@@ -793,9 +848,9 @@ abstract final class Console {
 
 /// Decoded-key source for [Console._withKeys]: stdin bytes accumulate from
 /// the listener, and each wait parks on a completer the listener completes —
-/// no polling loop, no per-pump buffer copy. One 150 ms timer resolves a lone
-/// ESC; a split multi-byte sequence simply waits for its sequel (or stdin
-/// closing) with no timer at all.
+/// no polling loop, no per-pump buffer copy. A held run (a lone ESC, a split
+/// sequence or character) is resolved by the Tui's own rule,
+/// `term.resolveHeld`, so both read a key the same way.
 final class _KeyReader {
   final _pending = <int>[];
 
@@ -825,9 +880,10 @@ final class _KeyReader {
   /// The next decoded key name, waiting for bytes as needed: special keys
   /// by name (`'up'`, `'enter'` …), single typed characters as themselves
   /// (`'w'`). Longer typed runs, pastes and mouse/focus reports are not
-  /// keys and are skipped. A lone ESC that gains no sequel within 150 ms
-  /// counts as `escape` (it is not held forever, and it never swallows the
-  /// next key). `null` when stdin closed with nothing left to decode.
+  /// keys and are skipped. A lone ESC that gains no sequel within
+  /// `term.escapeWait` counts as `escape` (it is not held forever, and it
+  /// never swallows the next key). `null` when stdin closed with nothing
+  /// left to decode.
   Future<String?> nextKey() => _pump(
     (event) => switch (event) {
       term.TermKey(:final name) => name,
@@ -875,18 +931,25 @@ final class _KeyReader {
           _pending.clear();
           return null;
         }
-        if (parsed.consumed == 0 && _pending.length == 1 && _pending[0] == 0x1b) {
-          // A lone ESC: hold briefly for its sequel; on quiet, it is Escape.
-          if (await _escQuiet()) {
-            _pending.clear();
-            // Surface it as a key event for the caller to take (or skip,
-            // when its picker wants nothing of it).
-            final esc = pick(term.TermKey('escape'));
-            if (esc != null) return esc;
-          }
-          continue;
+        // A held run: wait for its sequel, and on quiet ask the shared
+        // resolver what it was (Escape, a dropped split, or keep holding).
+        final held = DateTime.now();
+        var key = term.resolveHeld(_pending, Duration.zero);
+        while (key == null) {
+          final waited = DateTime.now().difference(held);
+          final left = (waited < term.escapeWait ? term.escapeWait : term.heldWait) - waited;
+          // Past both waits only a paste is still held: wait for its end.
+          if (!await _quiet(left > Duration.zero ? left : null)) break;
+          key = term.resolveHeld(_pending, DateTime.now().difference(held));
         }
-        // A split sequence or split UTF-8: the sequel arrives via [_add].
+        if (key != null) {
+          _pending.clear();
+          // Surface it as a key event for the caller to take (or skip,
+          // when its picker wants nothing of it).
+          final hit = key.isEmpty ? null : pick(term.TermKey(key));
+          if (hit != null) return hit;
+        }
+        continue;
       } else if (_done) {
         return null;
       }
@@ -895,12 +958,17 @@ final class _KeyReader {
     }
   }
 
-  /// True when the quiet period elapsed with no new bytes (a lone Escape);
-  /// false when bytes arrived or stdin closed first.
-  Future<bool> _escQuiet() async {
+  /// True when [quiet] elapsed with no new bytes; false when bytes arrived
+  /// or stdin closed first. A null [quiet] waits for bytes only.
+  Future<bool> _quiet(Duration? quiet) async {
+    if (_done) return false;
     final wake = _wake = Completer<void>();
+    if (quiet == null) {
+      await wake.future;
+      return false;
+    }
     var timedOut = false;
-    final timer = Timer(const Duration(milliseconds: 150), () {
+    final timer = Timer(quiet, () {
       timedOut = true;
       _wake = null;
       try {
@@ -922,17 +990,23 @@ abstract final class _Live {
 /// A progress bar: a [Pipe] counting the bytes that pass, [Closeable] at end.
 ///
 /// A bar used in a pipe counts bytes and shows sizes and a rate
-/// (`12.1/40 MB  1.2 MB/s`); used with [tick], it counts items
-/// (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total shows a
-/// count and a rate with no bar, so `Console.bar(res.size())`
-/// just works.
+/// (`12.1/40 MB  1.2 MB/s`, over the last 5 s); used with [tick], it counts
+/// items (`12/40  3.1/s`). Once piped, it stays in bytes. A `null` total
+/// shows a count and a rate with no bar, so `Console.bar(res.size())`
+/// just works. Bytes a resumed download replays from its `.part` fill the
+/// bar but not the rate.
 final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   Bar._(this._total, {this._label, this._keep = true}) : _bridge = null, _bridgeId = null {
-    sizers[this] = _sized;
+    _hooks();
   }
 
   Bar._bridged(this._bridge, this._bridgeId, this._total, {this._label}) : _keep = true {
+    _hooks();
+  }
+
+  void _hooks() {
     sizers[this] = _sized;
+    replays[this] = (bytes) => _replay += bytes;
   }
 
   /// Whether the final line stays when the bar finishes.
@@ -945,31 +1019,34 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   var _done = 0;
   var _closed = false;
   var _piped = false;
+  var _replay = 0;
+  final _meter = fmt.Meter();
 
-  /// Rate clock: started at the first tick, so setup time never dilutes the
-  /// displayed speed.
+  /// Run clock for the final line's average: started at the first tick, so
+  /// setup time never dilutes it.
   final Stopwatch _clock = Stopwatch();
 
   /// Add [count] (1 by default; non-positive is ignored). A bar counting
   /// items closes itself when it reaches its total, so a loop needs no
   /// `close()`. Piped bytes past the total are kept (the length may be the
   /// compressed size); the bar fills and stays full. Returns this bar.
-  Bar tick([int count = 1]) {
+  Bar tick([int count = 1]) => _advance(count, count);
+
+  /// [count] more done, of which [fresh] count towards the rate (the rest
+  /// were replayed from disk).
+  Bar _advance(int count, int fresh) {
+    if (_closed) return this;
+    if (!_clock.isRunning) _clock.start();
+    if (count <= 0) return this;
+    _done += count;
+    _meter.add(fresh);
     final bridge = _bridge;
     final id = _bridgeId;
     if (bridge != null && id != null) {
-      if (_closed) return this;
-      if (!_clock.isRunning) _clock.start();
-      if (count <= 0) return this; // documented: ignored, in the status row too
-      _done += count;
-      bridge.barTick(id, count);
-      _closeAtTotal();
-      return this;
+      bridge.barTick(id, count, fresh);
+    } else {
+      _render();
     }
-    if (_closed) return this;
-    if (!_clock.isRunning) _clock.start();
-    if (count > 0) _done += count;
-    _render();
     _closeAtTotal();
     return this;
   }
@@ -980,64 +1057,58 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   }
 
   /// Show [done] of [total], for a total that grows as work is found
-  /// (`bar.update(done, queued)`). Closes at the total like [tick].
+  /// (`bar.update(done, queued)`), or that arrives late (a download's
+  /// length comes with its headers). Closes at the total like [tick].
   Bar update(int done, int? total) {
-    if (total != _total) setTotal(total);
+    if (total != _total) _setTotal(total);
     return tick(done - _done);
   }
 
   /// A resumable download piped through this bar reports its length; a total
   /// set by hand wins.
   void _sized(int bytes) {
-    if (_total == null) setTotal(bytes);
+    if (_total == null) _setTotal(bytes);
   }
 
-  /// Set the total once it is known (a download's length arrives with its
-  /// headers). Returns this bar.
-  Bar setTotal(int? total) {
+  void _setTotal(int? total) {
     _total = total;
+    if (_closed) return;
     final bridge = _bridge;
     final id = _bridgeId;
     if (bridge != null && id != null) {
-      if (!_closed) bridge.barTotal(id, total);
-    } else if (!_closed) {
+      bridge.barTotal(id, total);
+    } else {
       _render();
     }
-    return this;
   }
 
   /// Print the final line. A ticked bar does this itself at its total; call
   /// it for bars that may stop early (in `finally`) and for piped ones.
   @override
   Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
     final bridge = _bridge;
     final id = _bridgeId;
     if (bridge != null && id != null) {
-      if (_closed) return;
-      _closed = true;
       bridge.barEnded(id, true);
       return;
     }
-    if (_closed) return;
-    _closed = true;
     if (Console._lives.contains(this)) {
       Console._endLive(this, _keep ? _text(Console._columns()) : null);
     } else if (_keep) {
-      final label = _label == null ? '' : '$_label ';
-      final total = _total;
       final secs = _clock.elapsed.inMilliseconds / 1000;
+      final rate = secs > 0 ? _meter.counted / secs : 0.0;
+      // No bar without a terminal: the counts, and the rate unless a
+      // counted total says it all.
+      final total = _total;
+      final known = total != null && total > 0;
+      final label = _label == null ? '' : '$_label ';
       if (_piped) {
-        final rate = secs > 0 ? _done / secs : 0.0;
-        if (total != null && total > 0) {
-          io.stderr.writeln('$label${fmt.fmtSize(_done)}/${fmt.fmtSize(total)}  ${fmt.fmtRate(rate)}');
-        } else {
-          io.stderr.writeln('$label${fmt.fmtSize(_done)}  ${fmt.fmtRate(rate)}');
-        }
-      } else if (total != null && total > 0) {
-        io.stderr.writeln('$label$_done/$total');
+        final counts = known ? '${fmt.fmtSize(_done)}/${fmt.fmtSize(total)}' : fmt.fmtSize(_done);
+        io.stderr.writeln('$label$counts  ${fmt.fmtRate(rate)}');
       } else {
-        final rate = secs > 0 ? _done / secs : 0.0;
-        io.stderr.writeln('$label$_done  ${fmt.fmtCount(rate)}/s');
+        io.stderr.writeln(known ? '$label$_done/$total' : '$label$_done  ${fmt.fmtCount(rate)}/s');
       }
     }
   }
@@ -1048,21 +1119,27 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   /// [Reader.to] rethrows, so the next bar can start at once.
   @override
   void abort(Object error) {
+    if (_closed) return;
+    _closed = true;
     final bridge = _bridge;
     final id = _bridgeId;
     if (bridge != null && id != null) {
-      if (_closed) return;
-      _closed = true;
       bridge.barEnded(id, false);
       return;
     }
-    if (_closed) return;
-    _closed = true;
     Console._endLive(this, '${Console._failMark} ${_label ?? ''}'.trimRight());
   }
 
   @override
-  Stream<List<int>> transform(Stream<List<int>> input) async* {
+  Stream<List<int>> transform(Stream<List<int>> input) {
+    // The replay count belongs to the stream the resume path starts right
+    // after announcing it: take it now, before the generator waits.
+    final skip = _replay;
+    _replay = 0;
+    return _pass(input, skip);
+  }
+
+  Stream<List<int>> _pass(Stream<List<int>> input, int skip) async* {
     // async* (not a hand-rolled controller) so the stream's backpressure
     // survives: a slow writer pauses this loop at yield, keeping memory at
     // a few chunks whatever the size of the data.
@@ -1076,7 +1153,9 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
     var ok = false;
     try {
       await for (final chunk in input) {
-        tick(chunk.length);
+        final replayed = math.min(skip, chunk.length);
+        skip -= replayed;
+        _advance(chunk.length, chunk.length - replayed);
         yield chunk;
       }
       await close();
@@ -1097,65 +1176,64 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
 
   @override
   String _text(int cols) {
-    final label = _label == null ? '' : '$_label ';
     // The live line draws in [Console.accent] (empty unless styled). The
     // colour wraps the fitted text, so every width fit measures the plain
-    // line.
+    // line. The last column stays empty (a full row would autowrap).
     final on = Console._accentOn;
-    // The last column stays empty (a full row would autowrap), so the line
-    // is laid out for cols - 1: laid out for cols, a narrow terminal always
-    // lost the rate to an ellipsis while the bar had room to give.
-    final fitted = term.truncateWidth(_line(cols - 1, label), cols - 1);
-    return '$on$fitted${on.isEmpty ? '' : _reset}';
+    final line = term.barLine(
+      cols - 1,
+      label: _label,
+      done: _done,
+      total: _total,
+      bytes: _piped,
+      rate: _meter.rate(),
+      ascii: Console._ascii,
+    );
+    return '$on$line${on.isEmpty ? '' : _reset}';
+  }
+}
+
+/// A rate meter for progress drawn by hand, as in a Tui: bytes or items
+/// per second over the last 5 seconds.
+///
+/// ```dart
+/// final speed = Speed();                          // one for every download
+/// await (http.get(url) | speed | Pipe.tap(t.update) > Fs.file(name));
+/// r.write('${speed.rate().size()}/s');            // 1.2 MB/s
+/// ```
+///
+/// As a [Pipe] it counts the bytes that pass, and leaves out the ones a
+/// resumed download replays from its `.part`; [add] counts by hand.
+/// Counts that go back (a negative delta) are ignored. One meter may be
+/// shared by many pipelines at once.
+final class Speed with Pipe implements PassThrough {
+  Speed() {
+    replays[this] = (bytes) => _replay += bytes;
   }
 
-  /// One live line for byte and item bars alike: `label bar counts rate`.
-  /// The bar width falls out of the fixed part (`width = cols − fixed`,
-  /// capped at 20) in O(1) instead of probing up to 10 widths per frame.
-  String _line(int cols, String label) {
-    final total = _total;
-    final secs = _clock.elapsed.inMilliseconds / 1000;
-    final rate = secs > 0 ? _done / secs : 0.0;
-    final String counts;
-    final String rateText;
-    if (_piped) {
-      counts = total != null && total > 0 ? '${fmt.fmtSize(_done)}/${fmt.fmtSize(total)}' : fmt.fmtSize(_done);
-      rateText = fmt.fmtRate(rate);
-    } else {
-      counts = total != null && total > 0 ? '$_done/$total' : '$_done';
-      rateText = '${fmt.fmtCount(rate)}/s';
-    }
-    if (total == null || total <= 0) {
-      // Unknown total: count and rate, no bar.
-      var line = '$label$counts  $rateText';
-      if (term.displayWidth(line) > cols) {
-        final room = cols - term.displayWidth('$counts  $rateText') - 1;
-        if (room <= 0) {
-          line = '$counts  $rateText';
-        } else {
-          line = '${term.truncateWidth(label.trimRight(), room)} $counts  $rateText';
-        }
-      }
-      return line;
-    }
-    var width = cols - term.displayWidth('$label  $counts  $rateText');
-    if (width > 20) width = 20;
-    if (width < 0) width = 0;
-    final cells = fmt.barGlyphs(_done, total, width, ascii: Console._ascii);
-    var line = '$label$cells  $counts  $rateText';
-    if (term.displayWidth(line) > cols) {
-      final room = cols - term.displayWidth('$cells  $counts  $rateText') - 1;
-      if (room <= 0) {
-        line = '$cells  $counts  $rateText';
-        if (term.displayWidth(line) > cols) {
-          // Even the bar alone doesn't fit: drop to count+rate.
-          line = '$counts  $rateText';
-        }
-      } else {
-        line = '${term.truncateWidth(label.trimRight(), room)} $cells  $counts  $rateText';
-      }
-    }
-    return line;
+  final _meter = fmt.Meter();
+  var _replay = 0;
+
+  /// Count [count] more now; zero or negative is ignored. Returns this.
+  Speed add(int count) {
+    _meter.add(count);
+    return this;
+  }
+
+  /// Per second over the last 5 s (over the time since the first count,
+  /// at least 1 s, when that is shorter); 0 after 5 s with nothing counted.
+  double rate() => _meter.rate();
+
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) {
+    var skip = _replay;
+    _replay = 0;
+    return input.map((chunk) {
+      final replayed = math.min(skip, chunk.length);
+      skip -= replayed;
+      _meter.add(chunk.length - replayed);
+      return chunk;
+    });
   }
 }
 

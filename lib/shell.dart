@@ -45,7 +45,11 @@ abstract final class Shell {
   /// [io.ProcessException] carrying the exit code and the last 64 KB of
   /// stderr (as `check:` does for a non-2xx response). With [timeout] a
   /// run that takes longer is killed with everything it started and throws
-  /// [TimeoutException] naming the command.
+  /// [TimeoutException] naming the command. When [cancel] completes first
+  /// (with a value or an error), the program and everything it started are
+  /// killed and the run returns what was captured, as an [Output] with the
+  /// kill's exit code (`-9` on POSIX): the caller asked, so nothing throws
+  /// unless [check] does.
   static Future<Output> run(
     List<String> command, {
     String? dir,
@@ -53,9 +57,13 @@ abstract final class Shell {
     bool live = false,
     bool check = false,
     Duration? timeout,
+    Future<void>? cancel,
     void Function(String line)? onLine,
   }) async {
     _checkCommand(command);
+    // Listened to before the first await, so an error-completed cancel is
+    // a cancel, never an unhandled error.
+    final cancelled = cancel?.then((_) {}, onError: (Object _) {});
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -76,6 +84,9 @@ abstract final class Shell {
     // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child and
     // its descendants too, instead of leaving them orphaned under init.
     final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
+    // Once reaped, its pid may belong to someone else: never signal it then.
+    var exited = false;
+    unawaited(proc.exitCode.then((_) => exited = true));
     try {
       try {
         await proc.stdin.close();
@@ -116,10 +127,28 @@ abstract final class Shell {
           collect(proc.stderr, err, live ? io.stderr : null),
           proc.exitCode,
         ]);
+        // A cancel kills the tree, then lets the pipes drain briefly: a
+        // descendant that escaped the tree must not hold the run open.
+        Future<void> stop(Future<void> cancelled) async {
+          await cancelled;
+          if (!exited) {
+            await _killTree(proc, io.ProcessSignal.sigkill);
+            await proc.exitCode;
+          }
+          try {
+            await work.timeout(const Duration(milliseconds: 200));
+          } catch (_) {
+            for (final sub in subs) {
+              await sub.cancel();
+            }
+          }
+        }
+
+        final ended = Future.any<void>([work, if (cancelled != null) stop(cancelled)]);
         if (timeout == null) {
-          await work;
+          await ended;
         } else {
-          await work.timeout(
+          await ended.timeout(
             timeout,
             onTimeout: () async {
               await _killTree(proc, io.ProcessSignal.sigkill);

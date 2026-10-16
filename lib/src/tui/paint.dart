@@ -109,6 +109,7 @@ extension _SessionPaint on _Session<dynamic> {
   }
 
   void _paint() {
+    if (_suspending) return; // the terminal is the shell's until the stop
     final s = _buildFrame();
     if (s == null) return;
     out(s);

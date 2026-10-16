@@ -20,18 +20,23 @@ final class Response with Reader implements Closeable {
   Response._(HttpClientResponse resp, this._client, this._method, this._url, {required this._head})
     : _resp = resp,
       _status = resp.statusCode,
-      _headers = null {
+      _headers = null,
+      _file = null {
     _client._responses.add(this);
   }
 
-  /// A stored answer ([Http.client]'s `cache:`): no socket behind it.
-  Response._cached(this._client, this._method, this._url, this._status, Map<String, String> headers, Uint8List bytes)
+  /// A stored answer ([Http.client]'s `cache:`): no socket behind it, the
+  /// body read from [file] when asked for.
+  Response._stored(this._client, this._method, this._url, this._status, Map<String, String> headers, String file)
     : _resp = null,
       _headers = headers,
+      _file = file,
       _head = false {
-    _cached = bytes;
     _done = _released = true;
   }
+
+  /// The body file of a stored answer.
+  final String? _file;
 
   final HttpClientResponse? _resp;
   final Map<String, String>? _headers;
@@ -182,9 +187,12 @@ final class Response with Reader implements Closeable {
   @override
   Future<String> text() async => charset.Charset.decode(await bytes(), contentType: header('content-type'));
 
-  /// The text line by line; works on any status, like [text].
+  /// The text line by line as it arrives, decoded like [text]; works on
+  /// any status.
   @override
-  Stream<String> lines() => ok() ? super.lines() : Stream.fromFuture(text()).expand(LineSplitter.split);
+  Stream<String> lines() => ok()
+      ? charset.Charset.decodeStream(stream(), contentType: header('content-type')).transform(const LineSplitter())
+      : Stream.fromFuture(text()).expand(LineSplitter.split);
 
   /// The body as bytes, cached like [text]: an unmodifiable view, no copy.
   @override
@@ -192,6 +200,17 @@ final class Response with Reader implements Closeable {
     if (_closed) throw StateError('response is closed: ${names.redact(url())}');
     final cached = _cached;
     if (cached != null) return cached.asUnmodifiableView();
+    if (_file case final file?) {
+      final f = File(file);
+      final limit = _client._s.limit;
+      if (await f.length() > limit) {
+        throw ContentException(
+          'response body over $limit bytes: pipe it to a file, or raise Http.client(limit:) '
+          '(${names.redact(url())})',
+        );
+      }
+      return (_cached = await f.readAsBytes()).asUnmodifiableView();
+    }
     if (_preReady != null) return (await (_reading ??= _readAll())).asUnmodifiableView();
     final reading = _reading;
     if (reading != null) return (await reading).asUnmodifiableView();
@@ -227,6 +246,7 @@ final class Response with Reader implements Closeable {
     if (!ok()) return _refused();
     final cached = _cached;
     if (cached != null) return Stream.value(cached.asUnmodifiableView());
+    if (_file case final file?) return File(file).openRead();
     if (_preReady != null) return _fromPrefetch();
     if (_streaming) throw StateError('body already streaming: ${names.redact(url())}');
     _streaming = true;

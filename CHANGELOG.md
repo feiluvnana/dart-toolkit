@@ -1,5 +1,83 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+
+- `image`: now runs on ffmpeg (package:image is gone; import startup 892 → ~330 ms). Reads HEIC (tile grids included) and AVIF, writes WebP and AVIF; `image()` on a file reads it in place, other readers go to a temp file once, never memory. `resize`/`crop` record steps and `encode` runs them in one ffmpeg call. `Image.compress(path, quality:)` re-encodes in the same format and replaces the file only when ≥ 5% smaller (returns `(before, after)` or null); animated, CMYK and HEIC files are left alone, JPEG EXIF/ICC survive. `image.pixels(width:)` for `Region.picture`; `format()`.
+- `video`: `Video.open(path or URL, audio:, headers:)` (HLS/DASH, a separate audio source); `encode` copies streams when no quality/size/codec is asked (remux), `codec:` (`h264` `h265` `av1` `vp9`), `start:`/`end:`, `onProgress:`; audio-only `m4a`/`mp3`/`opus`; `frame(at:)` → `Image`; `codec()` `audio()` `bitrate()`; `Video.compress(path, quality:, codec:)`.
+- ffmpeg/ffprobe 9.0.2: a PATH copy is used when it has the encoders a call needs, else a static build pinned by sha256 is downloaded once into the user cache (native arm64 on Apple silicon), one process at a time; encodes share a limit of half the cores and run through `shell`, so Ctrl-C ends them.
+- `core`: `bytes.size()` (`12.1 MB`).
+- `http`: `Body.multipart({name: String | Reader})` (streamed with readers); `Rate(perHost: true)`; ETag/Last-Modified revalidation in `cache:`; `socks5://`/`socks5h://` proxies; `client.sent()`; `Cookies.load(reader)`, `Cookies.agent()`, `Cookies(agent:)`; `Http.serve(limit:)` (413 over 64 MB).
+- `fs`: `Dir.size({match})` → `(files, bytes)`, skipping partial and temp files; `File.touch([time])`.
+- `pool`: `Pool(limit:)` with `run(job)`: shared FIFO lanes.
+- `shell`: `Shell.run(cancel:)`.
+- `chrome`: `page.cookies(all: true)`; `run` takes a function source; Chrome for Testing downloads with resume (chrome-headless-shell for headless runs); `connect` takes an `http://` URL.
+- `console`: `Console.ask(timeout:)` returns `or` and stops its reader, so the script can exit; `Speed` (`add`, `rate`, and a `Pipe`): a 5 s rate that ignores negative counts and bytes a resumed download replays.
+- `tui`: `Region.write(inline: true)` spans measured in cells; `Region.bar(since:)` shows the rate.
+- `cli`: `Opt(min:, max:)` (usage shows `[1-100]`); `Command(version:)` answers `--version` at any depth.
+- `html`: `:scope` and a leading `>`/`+`/`~` relative to the receiver (`ul.$('> li')`); `Element`/`Elements.html()`; `srcset`/`data-srcset`/`<meta content>` paths resolve against the base.
+- `json`: negative indexes (`items.-1`); `asList<Json>()`/`asMap<Json>()` wrap their values; `Reader.ndjson()`.
+- `csv`: `Reader.rows()` streams records.
+- `hash`: `Hasher.base64()`/`bytes()`; `key:` (HMAC) on every algorithm.
+- `archive`: symlinks are kept when they resolve inside `dir` (hardlinks land as copies; others fail naming `name -> target`), and `archive` stores links that point inside `dir`; zip64; the zip writer streams (a 140 MB file: 769 → 290 MiB peak); bzip2, zstd, lz4, lzip, .Z, .lzma, cab, ar and xar are named in the error; zip/7z/RAR decode on their own isolate and `.tar.xz` streams through one, so Ctrl-C and UIs stay live.
+- `archive`: 7-Zip 26.04 (pinned, downloaded once like ffmpeg) writes 7z with LZMA2 on every core, and reads what Dart should not hold or cannot decode: 7z/RAR over 32 MiB (no whole archive or solid folder in memory), BCJ2/RAR 1.5/VM-filter archives, `.tar.bz2`, `.tar.zst`, `.tar.Z`, `.lzma`, cab, ar (`.deb`) and xar (`.pkg`); its output is sandbox-checked and merged exactly as Dart's. Windows gets the 7z-only `7zr.exe`.
+- `archive`: `.tar.xz` with x86, ARM64 and delta filters (as `xz --x86` and 7-Zip's own releases write them).
+
+**Changed**
+
+- `image`: `Image.decode` is async; `Image` no longer implements the pixel interface (use `pixels()`); `ImageFormat` gains `avif`, `heic` (read only). JPEG `quality` is calibrated to the old scale by SSIM.
+- `video`: `width()`/`height()` are null for audio only; size is as displayed (rotation applied); `VideoFormat.avi` is read only; `encode(quality:)` defaults to a stream copy.
+- `http`: requests send a desktop Chrome User-Agent by default (or the jar's `agent()`); the set-cookie parser is in-house and lenient, with a small public-suffix list; `cache:` streams bodies to disk; cookie files read and write a `user-agent:` line.
+- `pool`: `Pool` is a `final class` you can hold.
+- `fs`: atomic writes fsync the file before the rename.
+- `chrome`: an in-house DevTools client over `dart:io` WebSocket replaces puppeteer (import startup +1352 → +307 ms); a cached or installed Chrome is used before downloading; `scroll(to:, timeout:)`; downloads use `allowAndName`; a script throwing in `run` is a `BrowserException`.
+- `console`/`tui`: one key-hold rule: a lone ESC is Escape after 50 ms (was 30 ms in the Tui, 150 ms in Console), a split sequence waits up to 1 s; bars show a 5 s rate; `Region.bar` keeps to one row; fenced code renders plain in the accent colour.
+- `archive`: `ArchiveFormat.sevenZip` is `ArchiveFormat.sevenzip`.
+- `json`: `|` separates whole paths (`$('a.b|c')` is `a.b`, else `c`); wildcards flatten; `or<String>` reads any scalar as text; `Reader.json` decodes bytes directly (10–30% faster).
+- `html`: re-exports json's names; `form().fields` is `Map<String, List<String>>`.
+- `yaml`: an in-house reader replaces package:yaml (import startup +225 → +80 ms, ~3× faster parse); `Yaml.parse` takes no `from:`.
+- `archive`: the LZMA2 window keeps a quarter of the dictionary as slack.
+- ffmpeg and 7-Zip download in an isolate spawned by URI, so `image`, `video` and `archive` never compile http at startup; a compiled exe asks for the tool on PATH instead.
+
+**Fixed**
+
+- `video`: `sniff` called HEIC/AVIF photos mp4; the whole video was held in memory and copied per call; probing parsed stderr; audio was always re-encoded; the ffmpeg download was x86_64 on Apple silicon, unchecked and raced on first use.
+- `http`: the cache never hit when a response set a cookie; a cached gzip answer reported its wire size; `lines()` ignored the charset; `Http.pool` skipped `resume:`; `copy(timeout:)` kept the old connect timeout; pool `copy(proxy:)`; resume made two GETs for a changed file and restarted a complete `.part`; strict cookie parsing dropped browser-accepted cookies; proxy default port, relative URL in the pool abort error, silent https→http redirects, unbounded server bodies.
+- `fs`/`shell` docs match the code (`tempDir`/`homeDir`/`scriptDir`, timeout kills the tree, 64 KB of stderr).
+- `chrome`: closing a connected browser restores its download behaviour; `download` hears downloads started in iframes; `fill` works on `contenteditable`; a profile keeps session cookies.
+- `console`: prompts and `table` erase and repaint the live block instead of being overwritten by it.
+- `tui`: a lone UTF-8 lead byte (a split read over SSH) is no longer Escape; the status row keeps combining marks; `✗` is `x` under LANG=C; Ctrl-Z waits for the tty reader before stopping.
+- `console`: OSC 777 notifications carry a title and a body.
+- `cli`: dotenv values belong to one run, not the process.
+- `yaml`: multi-document input read the first document only as documented (it threw); the source URL is redacted in errors.
+- `html`: `table()` honours `rowspan`; ld+json scripts with parameters are read; an empty form `action` posts to the document URL; selector errors name the selector once and engine bugs are no longer reported as bad selectors; `*-of-type` and `:nth-child(… of S)` are cached per parent (1–2.8 s → 5–21 ms on 20k siblings).
+- `csv`: a blank line is no longer a record.
+- `archive`: mtimes are kept for zip, tar, 7z and RAR, and the 7z writer stores them; a non-tar `.xz` no longer says "gzip data"; the AppleDouble check no longer depends on chunk splits; a `.tar.gz` with zero padding unpacks; `dir:` can be a link; the xz index size check.
+- `core`: a piped reader no longer reports its source file's path, so `(file | pipe).image()`/`.video()` and uploads read the piped bytes instead of the file.
+- `image`/`video`: a stream is spooled to a temp file as it arrives (never held in memory), and the temp file is deleted with the last value that uses it.
+- `json`: a `*`/`**` path matching nothing no longer wins over the next `|` path.
+- `fs`: `Dir.size` skips the temp files of an encode in flight.
+
+**Removed**
+
+- `image`: the isolate thresholds and decode budget (ffmpeg runs in its own process).
+- `video`: writing AVI.
+- `chrome`: `DownloadFuture.name()`, `src/tabs.dart` and the puppeteer dependency.
+- `tui`: the markdown code highlighter (~480 lines of keyword tables).
+- `console`: `Bar.setTotal` (use `update(done, total)`).
+- `html`: `Element.not` (filter with `Elements.not`).
+- the package:yaml dependency.
+- `archive`: the 4 GiB / 65,535-member refusals (zip64).
+- `archive`: the in-house Deflate-only 7z writer (it made files the size of zip; kept as a test fixture builder).
+
+
+**medialoader**
+
+- Rewritten on `Image`/`Video.compress`, `Speed`, `Pool(limit:)`, `Dir.size`, `Cookies.load`, `csrf:`, `sent()`, inline Tui spans and `Opt(min:, max:)`: 3,705 → 2,141 lines; Facebook reads the page's embedded JSON instead of ~40 regexes.
+- New: single post URLs (`instagram.com/p|reel/…`, `x.com/<user>/status/<id>`), `--since`, `--dry-run`, files dated to their post, failures retried once without a terminal, `--version`.
+- Fixed: `r` retried with closed clients after the run; no summary without a terminal; negative speed; partial files counted as had; requests counted twice; the CDN client sent no referer; usage errors and `--reset` showed only in the Tui; Facebook 404/429 hidden, duplicate and re-fetched media, stories downloaded again every month, the photo cursor saved before its files; whole videos read into memory and animated GIFs flattened by compression.
+- Removed: the alias options (`--compress-image`, …), folder names as category values, the posts→tweets and flat-layout migrations.
 ## 0.0.5
 
 **Added**

@@ -15,8 +15,8 @@
 ///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
 ///   an untrusted string a safe file name.
 /// - [Entry] supports `path` `name` `parent` `exists` `delete` `copy` `move`.
-/// - [File] supports `write` `append` `size` (plus [Reader]/[Writer]).
-/// - [Dir] supports `file` `dir` `list` `create`.
+/// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
+/// - [Dir] supports `file` `dir` `list` `size` `watch` `create`.
 /// - [Link] supports `target` `resolve` `create`.
 /// Everything else is private.
 library;
@@ -24,6 +24,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
@@ -242,6 +243,22 @@ final class File extends Entry with Reader, Writer {
   /// Size in bytes.
   Future<int> size() => io.File(_path).length();
 
+  /// Set the modification time to [time] (now by default), creating an
+  /// empty file when none is there, as `touch` does. Follows links. Returns
+  /// this, so a download keeps its post's date: `await file.touch(posted)`.
+  Future<File> touch([DateTime? time]) async {
+    final f = io.File(_path);
+    try {
+      await f.setLastModified(time ?? DateTime.now());
+    } on io.FileSystemException catch (e) {
+      if (e is! io.PathNotFoundException && !_missing(e)) rethrow;
+      await _ensureParent(_path);
+      await f.create();
+      await f.setLastModified(time ?? DateTime.now());
+    }
+    return this;
+  }
+
   /// Run [body] holding an exclusive OS lock on this file (created when
   /// missing), then release it, and return what [body] returned: one cron
   /// run at a time. Another holder fails at once with
@@ -384,15 +401,21 @@ final class File extends Entry with Reader, Writer {
         } catch (_) {}
         if (tmpMode != oldMode) await posix.chmod(tmp, oldMode);
       }
-      final sink = tmpFile.openWrite();
+      // Small chunks (a network body) are batched to 64 KiB per write, and
+      // the bytes are fsynced before the rename: a crash right after it
+      // must not leave the new name pointing at empty blocks. (The folder
+      // itself cannot be fsynced: `dart:io` cannot open one.)
+      final raf = await tmpFile.open(mode: io.FileMode.write);
       try {
-        await sink.addStream(input);
-        await sink.close();
-      } catch (_) {
-        try {
-          await sink.close();
-        } catch (_) {}
-        rethrow;
+        final pending = BytesBuilder(copy: false);
+        await for (final chunk in input) {
+          pending.add(chunk);
+          if (pending.length >= 65536) await raf.writeFrom(pending.takeBytes());
+        }
+        if (pending.isNotEmpty) await raf.writeFrom(pending.takeBytes());
+        await raf.flush();
+      } finally {
+        await raf.close();
       }
       await _renameOver(tmpFile, target);
     } catch (_) {
@@ -466,6 +489,39 @@ final class Dir extends Entry {
           .asyncExpand((path) async* {
             if (await io.FileSystemEntity.isFile(path)) yield File._(path);
           });
+
+  /// How many files are under this folder (recursively, links not
+  /// followed) and their bytes. In-flight toolkit files are left out:
+  /// download partials (`x.part`, `x.part.tag`), atomic-write temps
+  /// (`.x.tmp…`) and `Image`/`Video.compress` encodes (`.x.compress`), so a folder mid-download counts what is finished. [match]
+  /// keeps the files whose path relative to this folder matches a glob, as
+  /// in [list]. A missing folder is `(files: 0, bytes: 0)`.
+  Future<({int files, int bytes})> size({String? match}) async {
+    final pattern = match == null ? null : glob(match);
+    if (await io.FileSystemEntity.type(_path, followLinks: false) == io.FileSystemEntityType.notFound) {
+      return (files: 0, bytes: 0);
+    }
+    final cut = _path.endsWith('/') || _path.endsWith(r'\') ? _path.length : _path.length + 1;
+    final sizes = <Future<int?>>[];
+    await for (final e in io.Directory(_path).list(recursive: true, followLinks: false)) {
+      if (e is! io.File) continue;
+      final name = p.basename(e.path);
+      if (name.endsWith('.part') || name.endsWith('.part.tag') || posix.isTmpName(name) || _isCompressTemp(name)) continue;
+      if (pattern != null) {
+        final rel = (e.path.startsWith(_path) ? e.path.substring(cut) : p.relative(e.path, from: _path));
+        if (!pattern.hasMatch(rel.replaceAll(r'\', '/'))) continue;
+      }
+      // Lengths in parallel; a file gone since the listing is not counted.
+      sizes.add(e.length().then<int?>((n) => n, onError: (Object _) => null));
+    }
+    var files = 0, bytes = 0;
+    for (final n in await Future.wait(sizes)) {
+      if (n == null) continue;
+      files++;
+      bytes += n;
+    }
+    return (files: files, bytes: bytes);
+  }
 
   /// `mkdir -p`. A no-op when the folder exists. Returns this.
   Future<Dir> create() async {
@@ -650,6 +706,7 @@ extension FileFuture on Future<File> {
   Future<File> write(String text) async => (await this).write(text);
   Future<File> append(String text) async => (await this).append(text);
   Future<int> size() async => (await this).size();
+  Future<File> touch([DateTime? time]) async => (await this).touch(time);
 }
 
 /// Future mirrors for [Dir].
@@ -666,6 +723,7 @@ extension DirFuture on Future<Dir> {
   Future<Dir> dir(String name) async => (await this).dir(name);
   Future<List<Entry>> list({bool recursive = false, String? match}) async =>
       (await this).list(recursive: recursive, match: match);
+  Future<({int files, int bytes})> size({String? match}) async => (await this).size(match: match);
   Stream<File> watch() => Stream.fromFuture(this).asyncExpand((d) => d.watch());
   Future<Dir> create() async => (await this).create();
 }
@@ -845,3 +903,6 @@ String _strip(String path) {
   }
   return path;
 }
+
+/// An `Image`/`Video.compress` encode in flight (`.photo.jpg.compress`).
+bool _isCompressTemp(String name) => name.startsWith('.') && name.endsWith('.compress');

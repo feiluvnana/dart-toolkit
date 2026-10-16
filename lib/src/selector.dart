@@ -5,8 +5,10 @@
 /// `:last-of-type` `:only-of-type` `:nth-child(An+B [of S])`
 /// `:nth-last-child` `:nth-of-type` `:nth-last-of-type` `:not()` `:is()`
 /// `:where()` `:has()` `:empty` `:root` `:link` `:any-link` `:checked`
-/// `:disabled` `:enabled` `:lang()`. Pseudo-elements never match.
-/// A bad selector is a [FormatException].
+/// `:disabled` `:enabled` `:lang()` `:scope`, and a leading combinator
+/// relative to the scope (`> li`). Pseudo-elements never match.
+/// A bad selector is a [FormatException] whose message says what is wrong
+/// (the caller names the selector).
 library;
 
 import 'dom.dart';
@@ -19,23 +21,45 @@ final class Selector {
 
   static Selector parse(String source) {
     final p = _Parser(source);
-    final list = p.list();
+    final list = p.list(top: true);
     p.skipSpace();
     if (!p.done) throw p.error('unexpected "${p.peekChar}"');
     return Selector._(list);
   }
 
-  /// Whether [e] matches.
-  bool matches(Element e) {
+  /// Whether [e] matches. [scope] holds the elements `:scope` and a leading
+  /// combinator (`> li`) refer to; without one `:scope` is `:root` and a
+  /// leading combinator matches nothing.
+  bool matches(Element e, {Set<Element>? scope}) {
+    final saved = _scopes;
+    _scopes = scope;
+    try {
+      return _any(e);
+    } finally {
+      _scopes = saved;
+    }
+  }
+
+  bool _any(Element e) {
     for (final c in _list) {
-      if (c.matches(e, null)) return true;
+      if (c.matches(e, c.lead == null ? null : _inScope)) return true;
     }
     return false;
   }
 
   /// Every descendant of [root] (not [root] itself) that matches, in
-  /// document order.
-  void collect(Element root, List<Element> out) {
+  /// document order. [scope] as in [matches].
+  void collect(Element root, List<Element> out, {Set<Element>? scope}) {
+    final saved = _scopes;
+    _scopes = scope;
+    try {
+      _collect(root, out);
+    } finally {
+      _scopes = saved;
+    }
+  }
+
+  void _collect(Element root, List<Element> out) {
     // An explicit stack: a page nested 10,000 deep must not overflow.
     final stack = <Element>[];
     void push(Element e) {
@@ -49,11 +73,17 @@ final class Selector {
     push(root);
     while (stack.isNotEmpty) {
       final e = stack.removeLast();
-      if (matches(e)) out.add(e);
+      if (_any(e)) out.add(e);
       push(e);
     }
   }
 }
+
+/// The scope of the running query (`:scope`, a leading `>`): set by
+/// [Selector.matches] and [Selector.collect], which run synchronously.
+Set<Element>? _scopes;
+
+bool _inScope(Element e) => _scopes?.contains(e) ?? false;
 
 /// The parent element, or null at the top (the holder of top-level nodes
 /// is not an element of the document).
@@ -89,11 +119,13 @@ final class _Complex {
   final List<_Compound> parts;
   final List<_Comb> combs;
 
-  /// For a relative selector (`:has(> a)`): the combinator before the
-  /// first part, from the scope element.
+  /// For a relative selector (`:has(> a)`, a query's `> li`): the
+  /// combinator before the first part, from the anchor element.
   final _Comb? lead;
 
-  bool matches(Element e, Element? scope) => _at(parts.length - 1, e, scope) == _matched;
+  /// Whether [e] matches; [anchor] says which elements a [lead] is
+  /// relative to (ignored without one).
+  bool matches(Element e, bool Function(Element x)? anchor) => _at(parts.length - 1, e, anchor) == _matched;
 
   // How a failed match may resume (Servo's matching results): from the
   // closest later sibling, from the closest descendant combinator, or not
@@ -102,14 +134,14 @@ final class _Complex {
   // took 400 s.
   static const _matched = 0, _laterSibling = 1, _descendant = 2, _globally = 3;
 
-  int _at(int k, Element e, Element? scope) {
+  int _at(int k, Element e, bool Function(Element x)? anchor) {
     if (!parts[k].matches(e)) return _laterSibling;
     if (k == 0) {
       final l = lead;
-      if (l == null || scope == null) return _matched;
-      return _joined(l, e, (x) => identical(x, scope) ? _matched : _laterSibling);
+      if (l == null || anchor == null) return _matched;
+      return _joined(l, e, (x) => anchor(x) ? _matched : _laterSibling);
     }
-    return _joined(combs[k - 1], e, (x) => _at(k - 1, x, scope));
+    return _joined(combs[k - 1], e, (x) => _at(k - 1, x, anchor));
   }
 
   static int _joined(_Comb comb, Element e, int Function(Element x) left) {
@@ -164,7 +196,7 @@ final class _Parser {
 
   int get _c => s.codeUnitAt(i);
 
-  FormatException error(String what) => FormatException('invalid selector: $what', s, i);
+  FormatException error(String what) => FormatException(what, s, i);
 
   void skipSpace() {
     while (!done && _isSpace(_c)) {
@@ -172,13 +204,15 @@ final class _Parser {
     }
   }
 
-  List<_Complex> list({bool relative = false}) {
-    final out = <_Complex>[complex(relative: relative)];
+  /// [relative]: every complex has a lead (`:has`); [top]: a lead is
+  /// allowed (a query's `> li`).
+  List<_Complex> list({bool relative = false, bool top = false}) {
+    final out = <_Complex>[complex(relative: relative, top: top)];
     while (true) {
       skipSpace();
       if (done || _c != 0x2C) break;
       i++;
-      out.add(complex(relative: relative));
+      out.add(complex(relative: relative, top: top));
     }
     return out;
   }
@@ -193,15 +227,15 @@ final class _Parser {
     };
   }
 
-  _Complex complex({bool relative = false}) {
+  _Complex complex({bool relative = false, bool top = false}) {
     skipSpace();
     _Comb? lead;
-    if (relative) {
+    if (relative || top) {
       lead = _combinator();
       if (lead != null) {
         i++;
         skipSpace();
-      } else {
+      } else if (relative) {
         lead = _Comb.descendant;
       }
     }
@@ -422,6 +456,7 @@ final class _Parser {
       'only-of-type' => (e) => _index(e, false, true) == 1 && _index(e, true, true) == 1,
       'empty' => (e) => e.nodes.every((n) => n is Text && n.data.isEmpty),
       'root' => (e) => up(e) == null,
+      'scope' => (e) => _scopes?.contains(e) ?? up(e) == null,
       'link' || 'any-link' => (e) => const {'a', 'area'}.contains(e.localName) && e.attributes.containsKey('href'),
       'visited' || 'hover' || 'active' || 'focus' || 'focus-within' || 'focus-visible' || 'target' => (_) => false,
       'checked' =>
@@ -514,7 +549,7 @@ final class _Parser {
       return (a, m[2] == null ? 0 : int.parse(m[2]!));
     }
     final b = int.tryParse(text);
-    if (b == null) throw FormatException('invalid selector: bad An+B "$text"', s, start);
+    if (b == null) throw FormatException('bad An+B "$text"', s, start);
     return (0, b);
   }
 }
@@ -522,12 +557,13 @@ final class _Parser {
 /// Whether some element related to [scope] by [c]'s leading combinator
 /// matches [c] (`:has()`).
 bool _has(_Complex c, Element scope) {
+  bool anchor(Element x) => identical(x, scope);
   switch (c.lead!) {
     case _Comb.descendant || _Comb.child:
       final stack = [...scope.children];
       while (stack.isNotEmpty) {
         final e = stack.removeLast();
-        if (c.matches(e, scope)) return true;
+        if (c.matches(e, anchor)) return true;
         stack.addAll(e.children);
       }
       return false;
@@ -537,7 +573,7 @@ bool _has(_Complex c, Element scope) {
         final stack = [sib[k]];
         while (stack.isNotEmpty) {
           final e = stack.removeLast();
-          if (c.matches(e, scope)) return true;
+          if (c.matches(e, anchor)) return true;
           stack.addAll(e.children);
         }
       }
@@ -573,16 +609,53 @@ bool _hasWord(String? value, String word) {
 
 /// [e]'s 1-based position among its element siblings (from the end when
 /// [last]), counting only its type when [type], or only those matching [of].
+/// The counts are cached per parent like [_position], so `li:last-of-type`
+/// or `:nth-child(odd of .x)` over 20,000 items stays linear.
 int _index(Element e, bool last, bool type, [List<_Complex>? of]) {
   final (sib, at) = _position(e);
   if (!type && of == null) return last ? sib.length - at : at + 1;
-  var n = 0;
-  final range = last ? sib.reversed : sib;
-  for (final x in range) {
-    if (type && x.localName != e.localName) continue;
-    if (of != null && !of.any((c) => c.matches(x, null))) continue;
-    n++;
-    if (identical(x, e)) return n;
+  final p = e.parent;
+  if (p == null) return 1;
+  final _Counts counts;
+  if (of == null) {
+    var c = _typeCounts[p];
+    if (c == null || c.stamp != p.edits) {
+      c = _Counts(p.edits);
+      for (final x in sib) {
+        c.at[x] = c.total[x.localName] = (c.total[x.localName] ?? 0) + 1;
+      }
+      _typeCounts[p] = c;
+    }
+    counts = c;
+  } else {
+    // Whether a sibling matches [of] may depend on anything in the tree.
+    final byList = _ofCounts[p] ??= Map.identity();
+    var c = byList[of];
+    if (c == null || c.stamp != treeEdits) {
+      c = _Counts(treeEdits);
+      var n = 0;
+      for (final x in sib) {
+        if (of.any((k) => k.matches(x, null))) c.at[x] = ++n;
+      }
+      c.total[''] = n;
+      byList[of] = c;
+    }
+    counts = c;
   }
-  return n;
+  final n = counts.at[e];
+  if (n == null) return 0;
+  return last ? counts.total[of == null ? e.localName : '']! - n + 1 : n;
 }
+
+/// 1-based positions of the counted siblings and the totals (by type, or
+/// under `''` for an `of S` list), valid while [stamp] holds.
+final class _Counts {
+  _Counts(this.stamp);
+
+  final int stamp;
+  final at = Map<Element, int>.identity();
+  final total = <String, int>{};
+}
+
+final _typeCounts = Expando<_Counts>();
+final _ofCounts = Expando<Map<List<_Complex>, _Counts>>();

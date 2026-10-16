@@ -76,18 +76,3 @@ const _secretParams = {
   'credential', 'credentials', 'x_amz_signature', 'x_amz_credential', 'x_amz_security_token', //
   'x_goog_signature', 'x_goog_credential',
 };
-
-/// Base URL for `html()` from a typed [Origin]-like pair: the final URL when
-/// present, else the file path as a `file:` URI. Callers pass
-/// `reader.origin().url` / `.path` so this module never imports `http`/`fs`.
-String? baseUrlFor({String? url, String? path}) {
-  if (url != null && url.isNotEmpty) return url;
-  if (path != null) {
-    try {
-      return Uri.file(path).toString();
-    } catch (_) {
-      return null;
-    }
-  }
-  return null;
-}

@@ -674,6 +674,52 @@ Future<void> expectThrows(Future<void> f, String what) async {
       expect(await l.resolve(), isA<File>());
     });
   });
+
+  group('Dir.size, File.touch, durable writes', () {
+    test('size counts finished files and bytes, skipping partials and temps', () async {
+      final d = Fs.dir(p('media'));
+      await d.file('a.jpg').write('12345');
+      await d.file('posts/b.mp4').write('123');
+      await d.file('posts/c.txt').write('1');
+      // In-flight toolkit names: a download partial, its validator, an atomic-write temp.
+      await d.file('posts/d.mp4.part').write('xxxxxxxx');
+      await d.file('posts/d.mp4.part.tag').write('"etag"');
+      await d.file('.e.jpg.tmp123.456.789').write('xxxxxxxx');
+      // An Image/Video.compress encode in flight (regression: medialoader counted it).
+      await d.file('posts/.b.mp4.compress').write('xxxxxxxx');
+      await Fs.file(p('outside.bin')).write('x' * 100);
+      await Fs.link('${d.path()}/ln').create(p('outside.bin'));
+      expect(await d.size(), (files: 3, bytes: 9));
+      expect(await d.size(match: '**/*.{jpg,mp4}'), (files: 2, bytes: 8));
+      expect(await d.size(match: '*.jpg'), (files: 1, bytes: 5));
+      expect(await Future.value(d).size(), (files: 3, bytes: 9));
+    });
+
+    test('size of a missing folder is zero', () async {
+      expect(await Fs.dir(p('nope')).size(), (files: 0, bytes: 0));
+    });
+
+    test('touch sets the mtime, creates a missing file, and returns the file', () async {
+      final when = DateTime(2024, 5, 1, 12, 30);
+      final f = await Fs.file(p('post.jpg')).write('x').touch(when);
+      expect(await f.modified(), when);
+      expect(await f.text(), 'x', reason: 'touch never changes content');
+      final fresh = await Fs.file(p('new/empty.txt')).touch(when);
+      expect((await fresh.size(), await fresh.modified()), (0, when));
+      final before = DateTime.now().subtract(const Duration(seconds: 2));
+      expect((await Fs.file(p('post.jpg')).touch().modified()).isAfter(before), isTrue);
+    });
+
+    test('a streamed write of many small and large chunks lands byte for byte (regression: fsync path)', () async {
+      final chunks = [for (var i = 0; i < 3000; i++) List<int>.filled(i % 97 + 1, i & 0xff), List<int>.filled(200000, 7)];
+      final f = Fs.file(p('big.bin'));
+      await (Reader.of(chunks.expand((c) => c).toList()) > f);
+      await f.consume(Stream.fromIterable(chunks));
+      expect(await f.bytes(), chunks.expand((c) => c).toList());
+      final leftovers = await Directory(tmp.path).list().where((e) => e.path.contains('.tmp')).toList();
+      expect(leftovers, isEmpty);
+    });
+  });
 }
 
 final class _Mem with Reader {

@@ -5,12 +5,15 @@
 /// final h = Hash.sha256().addBytes(header).add(name);
 /// await (http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
 /// final digest = await Hash.sha256().of(Fs.file('disc.iso'));
+/// final sig = Hash.sha256(key: utf8.encode(secret)).add(body).hex();   // HMAC
 /// ```
 ///
 /// Public surface is exactly: [Hash], [Hasher].
-/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher].
+/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher]; `key:` makes it an
+///   HMAC.
 /// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
-///   (finish) `of` (digest a [Reader]); `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
+///   `base64` `bytes` (finish, as text or raw) `of` (digest a [Reader]);
+///   `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
 ///   unchanged and digests, so `reader | hasher > file` stores and checksums
 ///   in one pass.
 /// Everything else is private.
@@ -30,18 +33,23 @@ export 'core.dart';
 /// `http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
 /// never unpacks a bad download. It is checked when a run ends (`>`, `|`,
 /// `of`); `hex()` alone does not check.
+///
+/// With [key] the hasher is an HMAC (RFC 2104) over that secret:
+/// `Hash.sha256(key: utf8.encode(secret)).add(payload).hex()` checks a
+/// webhook signature, and a digest's [Hasher.bytes] keys the next step of a
+/// signing chain.
 abstract final class Hash {
   /// MD5 hasher.
-  static Hasher md5({String? expect}) => Hasher._(c.md5, 'md5', expect);
+  static Hasher md5({String? expect, List<int>? key}) => Hasher._(c.md5, 'md5', expect, key);
 
   /// SHA-1 hasher.
-  static Hasher sha1({String? expect}) => Hasher._(c.sha1, 'sha1', expect);
+  static Hasher sha1({String? expect, List<int>? key}) => Hasher._(c.sha1, 'sha1', expect, key);
 
   /// SHA-256 hasher.
-  static Hasher sha256({String? expect}) => Hasher._(c.sha256, 'sha256', expect);
+  static Hasher sha256({String? expect, List<int>? key}) => Hasher._(c.sha256, 'sha256', expect, key);
 
   /// SHA-512 hasher.
-  static Hasher sha512({String? expect}) => Hasher._(c.sha512, 'sha512', expect);
+  static Hasher sha512({String? expect, List<int>? key}) => Hasher._(c.sha512, 'sha512', expect, key);
 }
 
 /// The lifecycle of a [Hasher]. Three booleans could encode eight states, of
@@ -63,13 +71,13 @@ enum _State {
 
 /// A hash in progress: a [Writer] you feed, a [Pipe] that passes through.
 final class Hasher with Writer implements Pipe, PassThrough {
-  Hasher._(this._hash, this._name, String? expect)
-    : _expect = expect?.trim().toLowerCase(),
+  Hasher._(c.Hash hash, String name, String? expect, List<int>? key)
+    : _name = key == null ? name : 'hmac-$name',
+      _expect = expect?.trim().toLowerCase(),
       _capture = _DigestCapture() {
-    _in = _hash.startChunkedConversion(_capture);
+    _in = key == null ? hash.startChunkedConversion(_capture) : c.Hmac(hash, key).startChunkedConversion(_capture);
   }
 
-  final c.Hash _hash;
   final String _name;
   final String? _expect;
   final _DigestCapture _capture;
@@ -122,12 +130,22 @@ final class Hasher with Writer implements Pipe, PassThrough {
   /// Finish the hash. Calling it again returns the same digest. After a
   /// failed run through this hasher it throws instead of a partial digest,
   /// and an [add]/[addBytes] after it is a [StateError].
-  String hex() {
-    _guard('hex', reread: true);
-    if (_state == _State.done) return _capture.digest.toString();
-    _in.close();
-    _state = _State.done;
-    return _capture.digest.toString();
+  String hex() => _finish('hex').toString();
+
+  /// The digest as standard base64 (`Content-MD5`, `integrity=` hashes,
+  /// most signature headers). Finishes like [hex].
+  String base64() => base64Encode(_finish('base64').bytes);
+
+  /// The raw digest bytes. Finishes like [hex].
+  List<int> bytes() => List.of(_finish('bytes').bytes);
+
+  c.Digest _finish(String action) {
+    _guard(action, reread: true);
+    if (_state != _State.done) {
+      _in.close();
+      _state = _State.done;
+    }
+    return _capture.digest;
   }
 
   /// Read [source] to the end and return the digest (a [Reader] of a file,

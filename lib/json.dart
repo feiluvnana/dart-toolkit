@@ -5,10 +5,12 @@
 /// await Fs.file('names.json').write(Json.encode(names, pretty: true));
 /// ```
 ///
-/// Public surface is exactly: [Json].
+/// Public surface is exactly: [Json], [ReaderJson].
 /// - `Json.parse()` parses text, `Json.encode()` renders it, `Json.of()`
 ///   wraps a value you already hold.
-/// - [Json] supports `$` (dotted path, `a|b` alternatives) `[]` (index the
+/// - `reader.json()` reads one document (`or:` for a missing source),
+///   `reader.ndjson()` streams one [Json] per line.
+/// - [Json] supports `$` (dotted path, `a|b.c` alternatives) `[]` (index the
 ///   iteration) `value` (typed scalar read) `or` (read with a default) `text`
 ///   (any scalar as a string) `max`/`min` (the extreme item) `asList`/`asMap`
 ///   (flat collections).
@@ -58,24 +60,35 @@ final class Json extends Iterable<Json> {
   /// What `jsonEncode` calls: a [Json] inside any encoded value is its raw value.
   Object? toJson() => _v;
 
-  /// Dotted path (`users.0.name`); a numeric segment indexes an array. A `*`
+  /// Dotted path (`users.0.name`); a numeric segment indexes an array, and a
+  /// negative one counts from the end (`items.-1` is the last). A `*`
   /// segment maps over every item: `$('data.users.*.name')` is a [Json] of
   /// the list of names. `*` over an object maps over its values in iteration
   /// order. A `**` segment searches every depth: `$('**.pk')` is a [Json]
   /// list of each `pk` anywhere in the document (document order, nulls and
-  /// misses dropped). A missing path (or a missing key inside `*`) gives a
-  /// [Json] holding null, never a throw. A `|` in a segment tries
-  /// alternatives in order (`code|shortcode`, `pk|id`): the first that
-  /// leads to a value with the rest of the path wins. Use `\` to escape
-  /// (`\.` for a literal dot, `\*` a literal star, `\|` a literal bar, `\\`
-  /// a backslash).
+  /// misses dropped). A wildcard followed by another flattens: `x.*.a.*.b`
+  /// is one list of every `b`. A missing path (or a missing key inside `*`)
+  /// gives a [Json] holding null, never a throw. `|` separates whole paths
+  /// tried in order (`code|shortcode`, `rest_id|legacy.id_str`): the first
+  /// that leads to a value wins (a wildcard path that matches nothing is a
+  /// miss: `**.a|**.b` reads `b`s when there is no `a`). Use `\` to escape (`\.` for a literal dot,
+  /// `\*` a literal star, `\|` a literal bar, `\\` a backslash).
   Json $(String path) {
     if (path.isEmpty) return Json._(_v);
     // One plain key (`name`, `0`): no split, no segment list.
     if (!path.contains('.') && !path.contains(r'\') && !path.contains('|') && path != '*' && path != '**') {
       return Json._(_step(_v, path));
     }
-    return Json._(_walk(_v, _splitPath(path)));
+    Object? none; // a wildcard alternative that matched nothing: [] unless a later one hits
+    for (final alt in _splitPath(path)) {
+      final hit = _walk(_v, alt, 0);
+      if (hit is List && hit.isEmpty && alt.any((s) => s is _Wild)) {
+        none = hit;
+      } else if (hit != null) {
+        return Json._(hit);
+      }
+    }
+    return Json._(none);
   }
 
   /// Index the iteration (array items or object values), O(1) per item
@@ -97,8 +110,15 @@ final class Json extends Iterable<Json> {
   }
 
   /// The value when it is a `T`, else [fallback]: `$('port').or(8080)` is a
-  /// non-null `int`. See [value] for the coercions.
-  T or<T>(T fallback) => value<T>() ?? fallback;
+  /// non-null `int`. See [value] for the coercions. A `String` fallback
+  /// reads any scalar as [text]: `$('id').or('')` is `'787132'` for the
+  /// number 787132.
+  T or<T>(T fallback) {
+    final v = value<T>();
+    if (v != null) return v;
+    if (fallback is String) return (text() ?? fallback) as T;
+    return fallback;
+  }
 
   /// Any scalar as a `String` (`787132` → `'787132'`, `true` → `'true'`);
   /// null for null, a missing path or a collection. Not [toString], which
@@ -172,6 +192,7 @@ final class Json extends Iterable<Json> {
 
   /// The value as a `List<T>`; empty unless it is a list and every element
   /// converts to `T` (with the same integral-number coercion as [value]).
+  /// `asList<Json>()` wraps every item, whatever its shape.
   /// One pass, O(n). Flat cases only; nested data reads
   /// by iterating:
   ///
@@ -192,6 +213,8 @@ final class Json extends Iterable<Json> {
 
   /// The value as a `Map<String, T>`; empty unless it is an object with
   /// string keys and every value converts to `T`. One pass, O(n).
+  /// `asMap<Json>()` wraps every value, so nested data reads on:
+  /// `doc.$('posts').asMap<Json>()['p1']?.$('id')`.
   ///
   /// ```dart
   /// final counts = doc.$('stats').asMap<int>();
@@ -248,30 +271,43 @@ final class Json extends Iterable<Json> {
 
   /// Walk [segments] from [cur]; a `*` maps over items and collects a list,
   /// a `**` collects the rest's matches at every depth.
-  static Object? _walk(Object? cur, List<Object> segments) {
+  /// When a wildcard is followed by another, each item's hits (a list) are
+  /// spread into one list instead of nesting.
+  static Object? _walk(Object? cur, List<Object> segments, int from) {
     Object? c = cur;
-    for (var k = 0; k < segments.length; k++) {
+    for (var k = from; k < segments.length; k++) {
       if (c is Json) c = c._v;
       final seg = segments[k];
-      if (seg == _Wild.deep) {
-        final rest = segments.sublist(k + 1);
+      if (seg is _Wild) {
+        var flat = false;
+        for (var j = k + 1; j < segments.length && !flat; j++) {
+          flat = segments[j] is _Wild;
+        }
         final out = <Object?>[];
-        // An explicit stack in document order: a parsed document may nest
-        // deeper than the call stack.
-        final stack = <Object?>[c];
-        while (stack.isNotEmpty) {
-          var node = stack.removeLast();
-          if (node is Json) node = node._v;
-          final hit = rest.isEmpty ? node : _walk(node, rest);
-          if (hit != null) out.add(hit);
-          final kids = node is Map ? node.values.toList() : (node is List ? node : const <Object?>[]);
-          for (var i = kids.length - 1; i >= 0; i--) {
-            stack.add(kids[i]);
+        void hit(Object? h) {
+          if (!flat) {
+            out.add(h);
+          } else if (h is List) {
+            out.addAll(h);
           }
         }
-        return out;
-      }
-      if (seg == _Wild.any) {
+
+        if (seg == _Wild.deep) {
+          // An explicit stack in document order: a parsed document may nest
+          // deeper than the call stack.
+          final stack = <Object?>[c];
+          while (stack.isNotEmpty) {
+            var node = stack.removeLast();
+            if (node is Json) node = node._v;
+            final h = k + 1 == segments.length ? node : _walk(node, segments, k + 1);
+            if (h != null) hit(h);
+            final kids = node is Map ? node.values.toList() : (node is List ? node : const <Object?>[]);
+            for (var i = kids.length - 1; i >= 0; i--) {
+              stack.add(kids[i]);
+            }
+          }
+          return out;
+        }
         final Iterable<Object?> items;
         if (c is List) {
           items = c;
@@ -280,32 +316,30 @@ final class Json extends Iterable<Json> {
         } else {
           return null;
         }
-        final rest = segments.sublist(k + 1);
-        return [for (final item in items) _walk(item, rest)];
-      }
-      if (seg is _Alt) {
-        final rest = segments.sublist(k + 1);
-        for (final key in seg.keys) {
-          final hit = _walk(_step(c, key), rest);
-          if (hit != null) return hit;
+        for (final item in items) {
+          hit(_walk(item, segments, k + 1));
         }
-        return null;
+        return out;
       }
-      if (seg is! String) return null;
-      c = _step(c, seg);
+      c = _step(c, seg as String);
       if (c == null) return null;
     }
     return c;
   }
 
-  /// One key or index into [c]; null when it is not there.
+  /// One key or index into [c]; null when it is not there. A negative
+  /// index counts from the end.
   static Object? _step(Object? c, String seg) {
     if (c is Json) c = c._v;
     if (c is Map) return c[seg];
     if (c is List) {
-      if (!_isIndex(seg)) return null;
-      final i = int.tryParse(seg);
-      return i == null || i >= c.length ? null : c[i];
+      final neg = seg.startsWith('-');
+      final digits = neg ? seg.substring(1) : seg;
+      if (!_isIndex(digits) || (neg && digits == '0')) return null;
+      final n = int.tryParse(digits);
+      if (n == null) return null;
+      final i = neg ? c.length - n : n;
+      return i < 0 || i >= c.length ? null : c[i];
     }
     return null;
   }
@@ -372,27 +406,16 @@ bool _isIndex(String seg) {
 /// (every depth). Escaped stars (`\*`) stay literal keys.
 enum _Wild { any, deep }
 
-/// A segment with `|` alternatives: the first key that leads somewhere wins.
-final class _Alt {
-  _Alt(this.keys);
-
-  final List<String> keys;
-}
-
-/// Split a dotted path, honouring `\` escapes (`\.`, `\*`, `\|`, `\\`).
-List<Object> _splitPath(String path) {
-  final out = <Object>[];
+/// Split a path into its `|` alternatives, each a list of dotted segments,
+/// honouring `\` escapes (`\.`, `\*`, `\|`, `\\`).
+List<List<Object>> _splitPath(String path) {
+  final alts = <List<Object>>[];
+  var out = <Object>[];
   final buf = StringBuffer();
-  final alts = <String>[];
   var escaped = false;
   void end() {
     final seg = buf.toString();
-    if (alts.isNotEmpty) {
-      out.add(_Alt([...alts, seg]));
-      alts.clear();
-    } else {
-      out.add(escaped ? seg : (seg == '*' ? _Wild.any : (seg == '**' ? _Wild.deep : seg)));
-    }
+    out.add(escaped ? seg : (seg == '*' ? _Wild.any : (seg == '**' ? _Wild.deep : seg)));
     buf.clear();
     escaped = false;
   }
@@ -412,14 +435,12 @@ List<Object> _splitPath(String path) {
       i++;
       continue;
     }
-    if (c == 0x2E) {
+    if (c == 0x2E || c == 0x7C) {
       end();
-      i++;
-      continue;
-    }
-    if (c == 0x7C) {
-      alts.add(buf.toString());
-      buf.clear();
+      if (c == 0x7C) {
+        alts.add(out);
+        out = <Object>[];
+      }
       i++;
       continue;
     }
@@ -427,7 +448,8 @@ List<Object> _splitPath(String path) {
     i++;
   }
   end();
-  return out;
+  alts.add(out);
+  return alts;
 }
 
 /// An array's items, wrapped one at a time.
@@ -483,6 +505,7 @@ final Object _mismatch = Object();
 /// admits it (e.g. `Map<String, Object?>`), so `asList<Map<String, Object?>>`
 /// and `asMap` read the common REST shapes in one pass.
 Object? _scalar<E>(Object? e) {
+  if (<E>[] is List<Json?> && <Json>[] is List<E>) return Json._(e); // E is Json or Json?
   if (e is E) return e;
   if (e is int) {
     final d = e.toDouble();
@@ -507,29 +530,54 @@ Object? _scalar<E>(Object? e) {
 /// `PathNotFoundException`); every other failure still throws.
 extension ReaderJson on Reader {
   Future<Json> json({Json? or}) async {
-    final String text;
+    final List<int> bytes;
     try {
-      text = await this.text();
+      bytes = await this.bytes();
     } on PathNotFoundException {
       if (or != null) return or;
       rethrow;
     }
     try {
-      return Json._(jsonDecode(text));
+      // Decodes the bytes directly, without a String in between.
+      return Json._(_utf8Json.convert(bytes));
     } on FormatException catch (e) {
-      // Typed via [Origin]; no `dynamic` probe.
-      final o = origin();
-      final url = o.url(), path = o.path(), status = o.status();
-      final from = url != null ? ' from ${names.redact(url)}' : (path != null ? ' from $path' : '');
-      final http = status == null ? '' : ' (HTTP $status)';
-      throw ContentException('invalid JSON$from$http: ${e.message}', e.source, e.offset, e);
+      throw ContentException('invalid JSON${_from(origin())}: ${e.message}', e.source, e.offset, e);
     }
   }
+
+  /// NDJSON (JSON Lines): one [Json] per non-blank line, as the lines
+  /// arrive, so a large log reads in constant memory. A bad line is a
+  /// [ContentException] naming the source and the line number.
+  Stream<Json> ndjson() async* {
+    var n = 0;
+    await for (final line in lines()) {
+      n++;
+      if (line.trim().isEmpty) continue;
+      try {
+        yield Json._(jsonDecode(line));
+      } on FormatException catch (e) {
+        throw ContentException('invalid JSON${_from(origin())} at line $n: ${e.message}', e.source, e.offset, e);
+      }
+    }
+  }
+}
+
+/// UTF-8 straight into JSON: faster than `text()` + `jsonDecode` (A/B,
+/// 2026-10-16), malformed bytes replaced like `text()`.
+final _utf8Json = const Utf8Decoder(allowMalformed: true).fuse(const JsonDecoder());
+
+/// ` from <url|path> (HTTP <status>)` for an error message (URL
+/// credentials redacted), or `''` when the reader names no source.
+String _from(Origin o) {
+  final url = o.url(), path = o.path(), status = o.status();
+  final from = url != null ? ' from ${names.redact(url)}' : (path != null ? ' from $path' : '');
+  return status == null ? from : '$from (HTTP $status)';
 }
 
 /// Same, from an async reader.
 extension ReaderFutureJson on Future<Reader> {
   Future<Json> json({Json? or}) async => (await this).json(or: or);
+  Stream<Json> ndjson() => Stream.fromFuture(this).asyncExpand((r) => r.ndjson());
 }
 
 /// The Future mirror (rule 4). The extension name is import-only; never reference it.

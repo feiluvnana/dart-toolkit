@@ -3,11 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
-import 'package:dart_toolkit/image.dart';
+import 'package:dart_toolkit/src/pixels.dart';
 import 'package:dart_toolkit/src/terminal.dart' as term;
 import 'package:dart_toolkit/src/tui.dart' show TestSession, testSession;
 import 'package:dart_toolkit/tui.dart';
-import 'package:image/image.dart' as img;
 import 'package:test/test.dart';
 
 import 'support/term.dart';
@@ -359,7 +358,7 @@ void main() {
       t.bytes(const [0x1b]); // lone ESC, held first...
       await t.pump();
       expect(quit, isFalse);
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await Future<void>.delayed(const Duration(milliseconds: 70));
       await t.pump();
       expect(t.quitRequested, isTrue);
     });
@@ -1815,7 +1814,7 @@ void main() {
         height: 8,
       );
       await t.pump();
-      expect(t.row(0), contains('Thinking… (1m 15s)'));
+      expect(t.row(0), contains('Thinking… (1 min 15 s)'));
       expect(t.row(1), startsWith('┌──'));
       expect(t.row(2), contains('in'));
     });
@@ -2264,8 +2263,7 @@ void main() {
 
   group('picture (in-memory)', () {
     test('half blocks, scaled down with the aspect kept', () async {
-      final png = img.encodePng(img.Image(width: 8, height: 8)..clear(img.ColorRgb8(255, 0, 0)));
-      final picture = Image.decode(png);
+      final picture = _Solid(8, 8, (255, 0, 0));
       final t = testSession<int>(0, (s, app) => Screen((r) => r.picture(picture)), width: 4, height: 10);
       await t.pump();
       expect(t.row(0), '▀▀▀▀');
@@ -2633,7 +2631,7 @@ void main() {
       await t.pump();
       Console.notify('done');
       expect(t.output, contains('\x1b]9;done\x07'));
-      expect(t.output, contains('\x1b]777;notify;done\x07'));
+      expect(t.output, contains(RegExp('\x1b]777;notify;[^;\x07]+;done\x07')), reason: 'a title, then the body');
       t.close();
     });
 
@@ -2685,4 +2683,157 @@ void main() {
       t.close();
     });
   });
+
+  group('proposal 2026-10-16 (in-memory)', () {
+    test('a lone UTF-8 lead byte is held, never Escape, and joins its sequel', () async {
+      final seen = <String>[];
+      final field = Field();
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.input(field), keys: {'escape': ('', () => seen.add('escape'))}),
+        width: 20,
+        height: 4,
+      );
+      await t.pump();
+      t.bytes(const [0xc3]); // é split over a slow link
+      await t.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await t.pump();
+      expect(seen, isEmpty);
+      t.bytes(const [0xa9]);
+      await t.pump();
+      expect(field.text(), 'é');
+      expect(seen, isEmpty);
+      t.close();
+    });
+
+    test('resolveHeld: one rule for Tui and Console', () {
+      expect(term.resolveHeld(const [0x1b], const Duration(milliseconds: 10)), isNull);
+      expect(term.resolveHeld(const [0x1b], term.escapeWait), 'escape');
+      expect(term.resolveHeld(const [0xe6, 0x97], term.escapeWait), isNull);
+      expect(term.resolveHeld(const [0xe6, 0x97], term.heldWait), '');
+      expect(term.resolveHeld(const [0x1b, 0x5b], term.escapeWait), isNull);
+      expect(term.resolveHeld(utf8.encode('\x1b[200~abc'), const Duration(seconds: 5)), isNull);
+    });
+
+    test('write(inline: true) shares a row, by cells, then the next drawing starts below', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.write('[日本]', inline: true).write(' @ada ', inline: true, style: {Style.bold}).write('done');
+          r.write('next');
+          r.write('a', inline: true).spin('busy');
+          r.write('x', inline: true);
+          r.list(Pick(['item']), (i) => i);
+        }),
+        width: 30,
+        height: 6,
+      );
+      await t.pump();
+      expect(t.row(0), '[日本] @ada done');
+      expect(t.row(1), 'next');
+      expect(t.row(2), matches(RegExp(r'^a. busy$')));
+      expect(t.row(3), 'x');
+      expect(t.row(4), contains('item'));
+      t.close();
+    });
+
+    test('an inline span that reaches the edge wraps the rest', () async {
+      final t = testSession<int>(0, (s, app) => Screen((r) => r.write('abcd', inline: true).write('efg')), width: 5, height: 3);
+      await t.pump();
+      expect(t.row(0), 'abcde');
+      expect(t.row(1), 'fg');
+      t.close();
+    });
+
+    test('bar keeps to one row in a narrow region; since: shows the rate', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.bar(5, 10, label: 'a label far too long for the row');
+          r.write('below');
+          r.bar(2048, 4096, bytes: true, since: DateTime.now().subtract(const Duration(seconds: 2)));
+        }),
+        width: 30,
+        height: 4,
+      );
+      await t.pump();
+      expect(t.row(0).length, lessThanOrEqualTo(30));
+      expect(t.row(0), contains('…'));
+      expect(t.row(0), endsWith('5/10'));
+      expect(t.row(1), 'below');
+      expect(t.row(2), contains('KB/s'));
+      t.close();
+    });
+
+    test('the status row keeps combining marks; ✗ is x under LANG=C', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {}, keys: {'a': ('', () => app.status('Tie\u0302\u0301ng Vie\u0302\u0323t')), 'b': ('', () => throw Exception('hỏng'))}),
+        width: 30,
+        height: 3,
+        env: {'LANG': 'C'},
+      );
+      await t.pump();
+      t.bytes(utf8.encode('a'));
+      await t.pump();
+      expect(t.row(2), 'Tie\u0302\u0301ng Vie\u0302\u0323t');
+      t.bytes(utf8.encode('b'));
+      await t.pump();
+      expect(t.row(2), startsWith('x hỏng'));
+      t.close();
+    });
+
+    test('Console.ask(timeout:) in a popup gives or and closes the popup', () async {
+      String? answer = 'unset';
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.write('main'), keys: {
+          'a': ('', () async => answer = await Console.ask('name?', or: 'anon', timeout: const Duration(milliseconds: 50))),
+        }),
+        width: 30,
+        height: 8,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('a'));
+      await t.pump();
+      expect([for (var i = 0; i < 8; i++) t.row(i)].join(), contains('name?'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await t.pump();
+      expect(answer, 'anon');
+      expect([for (var i = 0; i < 8; i++) t.row(i)].join(), isNot(contains('name?')));
+      t.close();
+    });
+
+    test('fenced code renders plain: no keyword colours', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.markdown('```dart\nfinal a = 1; // c\n```')),
+        width: 30,
+        height: 3,
+        accent: Color.orange,
+      );
+      await t.pump();
+      expect(t.row(0), 'final a = 1; // c');
+      expect(t.output, isNot(contains('38;5;3m'))); // the old keyword yellow
+      t.close();
+    });
+  });
+}
+
+/// A one-colour picture: the smallest [Pixels].
+final class _Solid implements Pixels {
+  _Solid(this._w, this._h, this._rgb);
+
+  final int _w, _h;
+  final (int, int, int) _rgb;
+
+  @override
+  int width() => _w;
+
+  @override
+  int height() => _h;
+
+  @override
+  (int, int, int) pixel(int x, int y) => _rgb;
 }

@@ -6,24 +6,35 @@ library;
 import 'dart:convert';
 import 'dart:io' as io;
 
+import '../core.dart' show Reader;
+
 /// A cookie jar: domain, path, expiry and `secure` per cookie, which a
-/// `Cookie:` header string loses.
+/// `Cookie:` header string loses, plus the session's `User-Agent`.
 ///
 /// ```dart
 /// await file.write(cookies.encode());               // persist a session
-/// final jar = Cookies.parse(await file.text(or: ''));
-/// final client = Http.client(cookies: jar);
+/// final jar = await Cookies.load(Fs.file('.session'));
+/// final client = Http.client(cookies: jar);         // sends jar.agent() too
 /// ```
 final class Cookies {
-  Cookies();
+  /// An empty jar; [agent] is the `User-Agent` of the browser the session
+  /// belongs to.
+  // ignore: prefer_initializing_formals – the public argument name stays.
+  Cookies({String? agent}) : _agent = agent;
 
   /// A Netscape `cookies.txt`: what [encode] writes, and what browser
   /// cookie-export extensions, curl and yt-dlp use. Comments and lines that
-  /// do not parse are skipped (`#HttpOnly_` lines are cookies).
+  /// do not parse are skipped (`#HttpOnly_` lines are cookies). A
+  /// `user-agent: …` line (or `# user-agent: …`) sets [agent].
   static Cookies parse(String text) {
     final jar = Cookies();
     for (var line in const LineSplitter().convert(text)) {
       line = line.trim();
+      if (_agentLine.firstMatch(line) case final m?) {
+        final ua = m[1]!.trim();
+        if (ua.isNotEmpty) jar._agent = ua;
+        continue;
+      }
       if (line.startsWith('#HttpOnly_')) line = line.substring('#HttpOnly_'.length);
       if (line.isEmpty || line.startsWith('#')) continue;
       final f = line.split('\t');
@@ -46,15 +57,39 @@ final class Cookies {
     return jar;
   }
 
+  /// [parse] of a session file (a `cookies.txt` export, optionally with a
+  /// `user-agent: …` line). A missing file is an empty jar.
+  ///
+  /// ```dart
+  /// final jar = await Cookies.load(Fs.file('.ins.session'));
+  /// if (jar['sessionid'] == null) return null;      // not logged in
+  /// final ig = Http.client(cookies: jar);           // and its user-agent
+  /// ```
+  static Future<Cookies> load(Reader source) async {
+    try {
+      return parse(await source.text());
+    } on io.PathNotFoundException {
+      return Cookies();
+    }
+  }
+
+  String? _agent;
+
   final _cookies = <String, _Cookie>{};
 
-  /// A Netscape `cookies.txt` (expiry 0 for a session cookie). Expired
-  /// cookies are left out.
+  /// The `User-Agent` the session was exported with, or null. A client
+  /// with this jar sends it unless a `user-agent` header is given: a
+  /// session replayed under another browser's name is often logged out.
+  String? agent() => _agent;
+
+  /// A Netscape `cookies.txt` (expiry 0 for a session cookie), with the
+  /// [agent] as a `# user-agent:` comment. Expired cookies are left out.
   String encode() {
     _sweep();
     String flag(bool b) => b ? 'TRUE' : 'FALSE';
     return [
       '# Netscape HTTP Cookie File',
+      if (_agent case final ua?) '# user-agent: $ua',
       for (final c in _cookies.values)
         [
           c.hostOnly ? c.domain : '.${c.domain}',
@@ -113,6 +148,8 @@ final class Cookies {
   String toString() => 'Cookies(${_cookies.values.map((c) => c.name).join(', ')})';
 }
 
+final _agentLine = RegExp(r'^#?\s*user-agent\s*:(.*)$', caseSensitive: false);
+
 final class _Cookie {
   _Cookie(
     this.name,
@@ -154,35 +191,136 @@ void addCookie(
   );
 }
 
-/// A country-code registry like `co.uk`, `com.au` or `ac.jp`, which no
-/// site may set cookies for (a short stand-in for the public suffix list).
-bool _registry(String domain) {
+/// A public suffix no site may set cookies for: a country-code registry
+/// (`co.uk`, `com.au`, `ac.jp`), or a shared host where every subdomain is
+/// someone else's site (`github.io`, `vercel.app`). A short stand-in for
+/// the Public Suffix List.
+bool isPublicSuffix(String domain) {
+  if (_suffixes.contains(domain)) return true;
   final parts = domain.split('.');
-  return parts.length == 2 &&
-      parts[1].length == 2 &&
-      const {'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'ne', 'or', 'go'}.contains(parts[0]);
+  return parts.length == 2 && parts[1].length == 2 && _registries.contains(parts[0]);
 }
+
+const _registries = {
+  'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'ne', 'or', 'go', 'gob', 'mil', 'nic', 'ltd', 'plc', 'me', //
+  'sch', 'nom', 'gen', 'int', 'gr', 'lg', 'ed', 'ad', 'nhs', 'police', 'info', 'biz',
+};
+
+const _suffixes = {
+  'github.io', 'githubusercontent.com', 'gitlab.io', 'bitbucket.io', 'codeberg.page', 'readthedocs.io', //
+  'gitbook.io', 'blogspot.com', 'wordpress.com', 'tumblr.com', 'myshopify.com', 'herokuapp.com', //
+  'vercel.app', 'netlify.app', 'pages.dev', 'workers.dev', 'r2.dev', 'trycloudflare.com', 'appspot.com', //
+  'web.app', 'firebaseapp.com', 'cloudfront.net', 'azurewebsites.net', 'azureedge.net', 's3.amazonaws.com', //
+  'elasticbeanstalk.com', 'fly.dev', 'onrender.com', 'deno.dev', 'glitch.me', 'repl.co', 'ngrok.io', //
+  'ngrok-free.app', 'surge.sh', 'neocities.org', 'duckdns.org', 'dyndns.org', 'no-ip.org',
+};
+
+/// One `set-cookie` value, parsed leniently as browsers do (RFC 6265
+/// §5.2): any value without `;` (spaces, quotes, commas), an attribute
+/// that does not parse ignored. Null only without a `name=`.
+({String name, String value, String? domain, String? path, bool secure, DateTime? expires})? parseSetCookie(
+  String raw,
+) {
+  final parts = raw.split(';');
+  final pair = parts.first;
+  final eq = pair.indexOf('=');
+  if (eq <= 0) return null;
+  final name = pair.substring(0, eq).trim();
+  if (name.isEmpty || name.codeUnits.any((c) => c < 0x20 || c == 0x7F)) return null;
+  final value = pair.substring(eq + 1).trim();
+  String? domain, path;
+  var secure = false;
+  DateTime? expires;
+  int? maxAge;
+  for (final attr in parts.skip(1)) {
+    final i = attr.indexOf('=');
+    final key = (i < 0 ? attr : attr.substring(0, i)).trim().toLowerCase();
+    final v = i < 0 ? '' : attr.substring(i + 1).trim();
+    switch (key) {
+      case 'expires':
+        expires = cookieDate(v) ?? expires;
+      case 'max-age':
+        if (int.tryParse(v) case final n?) maxAge = n.clamp(-1, 999999999);
+      case 'domain':
+        if (v.isNotEmpty) domain = v;
+      case 'path':
+        path = v;
+      case 'secure':
+        secure = true;
+    }
+  }
+  if (maxAge != null) {
+    expires = maxAge <= 0 ? DateTime.fromMillisecondsSinceEpoch(0) : DateTime.now().add(Duration(seconds: maxAge));
+  }
+  return (name: name, value: value, domain: domain, path: path, secure: secure, expires: expires);
+}
+
+/// An `Expires` date by the RFC 6265 §5.1.1 algorithm: any order, any
+/// delimiters (`Wed, 21-Oct-2026 07:28:00 GMT`, `21 Oct 26 07:28:00`).
+DateTime? cookieDate(String text) {
+  int? hour, minute, second, day, month, year;
+  for (final token in text.split(_dateDelimiters)) {
+    if (token.isEmpty) continue;
+    if (hour == null) {
+      final m = _time.firstMatch(token);
+      if (m != null) {
+        hour = int.parse(m[1]!);
+        minute = int.parse(m[2]!);
+        second = int.parse(m[3]!);
+        continue;
+      }
+    }
+    if (day == null) {
+      final m = _day.firstMatch(token);
+      if (m != null) {
+        day = int.parse(m[1]!);
+        continue;
+      }
+    }
+    if (month == null && token.length >= 3) {
+      final i = _months.indexOf(token.substring(0, 3).toLowerCase());
+      if (i >= 0) {
+        month = i + 1;
+        continue;
+      }
+    }
+    if (year == null) {
+      final m = _year.firstMatch(token);
+      if (m != null) {
+        year = int.parse(m[1]!);
+        if (year >= 70 && year <= 99) year += 1900;
+        if (year <= 69) year += 2000;
+        continue;
+      }
+    }
+  }
+  if (hour == null || day == null || month == null || year == null) return null;
+  if (day < 1 || day > 31 || year < 1601 || hour > 23 || minute! > 59 || second! > 59) return null;
+  return DateTime.utc(year, month, day, hour, minute, second);
+}
+
+final _dateDelimiters = RegExp(r'[\x09\x20-\x2F\x3B-\x40\x5B-\x60\x7B-\x7E]+');
+final _time = RegExp(r'^(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\D.*)?$');
+final _day = RegExp(r'^(\d{1,2})(?:\D.*)?$');
+final _year = RegExp(r'^(\d{2,4})(?:\D.*)?$');
+const _months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /// Store the `set-cookie` [values] a response to [url] sent. A malformed
 /// value skips only itself; a `Domain=` must contain a dot, be the host or a
-/// parent of it (not a registry like `co.uk`), and is never honoured on an
-/// IP address; a `Secure` cookie needs https.
+/// parent of it (not a public suffix like `co.uk` or `github.io`), and is
+/// never honoured on an IP address; a `Secure` cookie needs https.
 void storeSetCookies(Cookies jar, Uri url, List<String> values) {
   final host = url.host.toLowerCase();
   final ip = io.InternetAddress.tryParse(host) != null;
   for (final raw in values) {
-    io.Cookie c;
-    try {
-      c = io.Cookie.fromSetCookieValue(raw);
-    } catch (_) {
-      continue;
-    }
+    final c = parseSetCookie(raw);
+    if (c == null) continue;
     var domain = (c.domain ?? '').toLowerCase();
     if (domain.startsWith('.')) domain = domain.substring(1);
     var hostOnly = domain.isEmpty || domain == host;
     if (hostOnly) {
       domain = host;
-    } else if (ip || !domain.contains('.') || !host.endsWith('.$domain') || _registry(domain)) {
+    } else if (ip || !domain.contains('.') || !host.endsWith('.$domain') || isPublicSuffix(domain)) {
       continue; // not this host's to set
     }
     // A Secure cookie from plain http could overwrite the https one.
@@ -194,9 +332,8 @@ void storeSetCookies(Cookies jar, Uri url, List<String> values) {
       final slash = p.lastIndexOf('/');
       path = slash <= 0 ? '/' : p.substring(0, slash);
     }
-    final expires = c.maxAge != null ? DateTime.now().add(Duration(seconds: c.maxAge!)) : c.expires;
     jar._put(
-      _Cookie(c.name, c.value, domain: domain, hostOnly: hostOnly, path: path, secure: c.secure, expires: expires),
+      _Cookie(c.name, c.value, domain: domain, hostOnly: hostOnly, path: path, secure: c.secure, expires: c.expires),
     );
   }
 }

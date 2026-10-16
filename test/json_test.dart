@@ -66,7 +66,7 @@ void main() {
       expect(doc.$('server.port').value<Object>(), 8080);
       expect(doc.$('missing').or(8080), 8080);
       expect(doc.$('server.port').or(1), 8080);
-      expect(doc.$('server.port').or('x'), 'x');
+      expect(doc.$('server.port').or('x'), '8080', reason: 'a String fallback reads numbers as text');
       expect(await Future.value(doc.$('missing')).or(7), 7);
       expect(doc.$('missing').asList<int>(), isEmpty);
       expect(doc.$('missing').asMap<int>(), isEmpty);
@@ -336,12 +336,56 @@ void valueTests() {
       '{"a":{"shortcode":"S","pk":787132},"v":[{"w":3,"u":"x"},{"config_width":9,"src":"y"},{"w":9,"u":"z"}],"t":true}',
     );
 
-    test('a | segment tries alternatives in order, with the rest of the path', () {
-      expect(doc.$('a.code|shortcode').text(), 'S');
-      expect(doc.$('a.pk|id').text(), '787132');
-      expect(doc.$('nope|a.shortcode').text(), 'S', reason: 'alternatives are keys of one segment');
+    test('| separates whole paths, tried in order (regression: bound tighter than .)', () {
+      expect(doc.$('a.code|a.shortcode').text(), 'S');
+      expect(doc.$('a').$('pk|id').text(), '787132');
+      expect(doc.$('nope|a.shortcode').text(), 'S');
       expect(doc.$('a.code|nope').text(), isNull);
       expect(Json.parse(r'{"a|b":1}').$(r'a\|b').value<int>(), 1);
+      // twitter's tweet id: rest_id first, then legacy.id_str (read 7, expected 9)
+      final tweet = Json.parse('{"rest_id":"9","legacy":{"id_str":"7"}}');
+      expect(tweet.$('rest_id|legacy.id_str').text(), '9');
+      expect(Json.parse('{"legacy":{"id_str":"7"}}').$('rest_id|legacy.id_str').text(), '7');
+    });
+
+    test('a wildcard alternative that matches nothing falls through (regression: [] won)', () {
+      final page = Json.parse('[{"x":{"profilePhoto":{"url":"p"}}}]');
+      expect(page.$('**.profilePicLarge.uri|**.profilePhoto.url').asList<String>(), ['p']);
+      expect(page.$('**.nope').length, 0, reason: 'a lone wildcard miss is still an empty list');
+      expect(page.$('**.nope|**.none').length, 0);
+    });
+
+    test('nested wildcards flatten (regression: [[1,2],[3]])', () {
+      final x = Json.parse('{"x":[{"a":[{"b":1},{"b":2}]},{"a":[{"b":3}]},{"c":0}]}');
+      expect(x.$('x.*.a.*.b').asList<int>(), [1, 2, 3]);
+      expect(x.$('**.a.*.b').asList<int>(), [1, 2, 3]);
+      expect(x.$('x.*.a').length, 3, reason: 'a single * still maps, missing keys stay null');
+    });
+
+    test('a negative index counts from the end', () {
+      final items = Json.parse('{"items":[1,2,3],"m":{"-1":"k"}}');
+      expect(items.$('items.-1').value<int>(), 3);
+      expect(items.$('items.-3').value<int>(), 1);
+      expect(items.$('items.-4').value<Object>(), isNull);
+      expect(items.$('items.-0').value<Object>(), isNull);
+      expect(items.$('items').$('-2').value<int>(), 2);
+      expect(items.$('m.-1').text(), 'k');
+    });
+
+    test('asList<Json>/asMap<Json> wrap their values', () {
+      final j = Json.parse('{"posts":{"p1":["a","b"],"p2":[]},"l":[{"k":1},2]}');
+      final posts = j.$('posts').asMap<Json>();
+      expect(posts.keys, ['p1', 'p2']);
+      expect(posts['p1']!.asList<String>(), ['a', 'b']);
+      expect(j.$('l').asList<Json>().map((e) => e.$('k').or(0)), [1, 0]);
+      expect(j.$('l').asList<Object>().first, isA<Map<String, dynamic>>());
+    });
+
+    test('or with a String fallback reads numbers as text, like text()', () {
+      expect(doc.$('a.pk').or(''), '787132');
+      expect(doc.$('t').or(''), 'true');
+      expect(doc.$('a').or('-'), '-');
+      expect(doc.$('a.pk').or(0), 787132);
     });
 
     test('text() reads any scalar, null for collections and misses', () {
@@ -356,6 +400,27 @@ void valueTests() {
       expect(doc.$('v').max((c) => c.$('w|config_width').or(0)).$('u|src').text(), 'y');
       expect(doc.$('v').min((c) => c.$('w|config_width').or(0)).$('u').text(), 'x');
       expect(Json.parse('[]').max((c) => 1).value<Object>(), isNull);
+    });
+
+    test('ndjson() streams one Json per non-blank line, naming a bad line', () async {
+      final rows = await _Page('{"a":1}\n\n{"a":2}\r\n', const Origin()).ndjson().toList();
+      expect(rows.map((r) => r.$('a').or(0)), [1, 2]);
+      await expectLater(
+        _Page('{"a":1}\n{oops', const Origin(path: 'log.ndjson')).ndjson().toList(),
+        throwsA(
+          isA<ContentException>().having(
+            (e) => e.message,
+            'message',
+            startsWith('invalid JSON from log.ndjson at line 2'),
+          ),
+        ),
+      );
+      expect(await Future<Reader>.value(_Page('1\n2', const Origin())).ndjson().length, 2);
+    });
+
+    test('json() decodes UTF-8 bytes straight to a value, malformed bytes replaced', () async {
+      expect((await Reader.of([0xEF, 0xBB, 0xBF, ...utf8.encode('{"a":"ü"}')]).json()).$('a').text(), 'ü');
+      expect((await Reader.of([0x22, 0xFF, 0x22]).json()).text(), '\uFFFD');
     });
 
     test('json(or:) answers a missing file, other failures still throw', () async {

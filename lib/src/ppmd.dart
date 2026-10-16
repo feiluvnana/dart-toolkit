@@ -73,8 +73,8 @@ final class RarPpmdCoder implements PpmdCoder {
 }
 
 /// 7z's coder (Ppmd7z_RangeDec).
-final class SevenZipPpmdCoder implements PpmdCoder {
-  SevenZipPpmdCoder(this._next) {
+final class SevenzipPpmdCoder implements PpmdCoder {
+  SevenzipPpmdCoder(this._next) {
     if (_next() != 0) _bad('range coder start');
     for (var i = 0; i < 4; i++) {
       _code = (_code << 8 | _next()) & 0xFFFFFFFF;
@@ -852,7 +852,7 @@ Uint8List ppmdDecode7z(Uint8List input, List<int> props, int size) {
   var i = 0;
   // A few zero bytes past the end are the coder's lookahead; more is a
   // stream that never ends.
-  final rc = SevenZipPpmdCoder(
+  final rc = SevenzipPpmdCoder(
     () => i < input.length ? input[i++] : (++i > input.length + 8 ? _bad('data ends early') : 0),
   );
   final model = Ppmd(mem, order);

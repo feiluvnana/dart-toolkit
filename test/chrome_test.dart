@@ -9,9 +9,7 @@ import 'dart:io';
 
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/json.dart';
-import 'package:dart_toolkit/src/cache.dart' as cache;
-import 'package:puppeteer/puppeteer.dart' as pp;
+import 'package:dart_toolkit/src/chrome_find.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -48,6 +46,7 @@ void main() {
         request.response.headers.add('set-cookie', 'tok=abc; Path=/');
         request.response.headers.add('set-cookie', 'b64=YQ==; Path=/');
         request.response.headers.add('set-cookie', 'rur="NHA\\05412"; Path=/');
+        request.response.headers.add('set-cookie', 'deep=1; Path=/deep');
         request.response.write('<title>C</title>');
       } else if (path == '/slow-img') {
         await Future<void>.delayed(const Duration(milliseconds: 1500));
@@ -76,6 +75,11 @@ void main() {
         request.response.headers.contentType = ContentType.json;
         request.response.headers.set('x-kind', 'data');
         request.response.write('{"user":{"pk":42}}');
+      } else if (path == '/framed') {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write(
+          '<iframe name="f" src="/echo-header"></iframe><a id="d" href="/file" target="f">get it</a>',
+        );
       } else if (path == '/hang') {
         await hang.future;
       } else if (path == '/longpoll') {
@@ -107,6 +111,38 @@ void main() {
 
   String dataUrl(String html) => Uri.dataFromString(html, mimeType: 'text/html').toString();
 
+  /// A headless browser this test owns, with its DevTools `ws://` URL.
+  Future<String> host() async {
+    final dir = await Directory.systemTemp.createTemp('chrome_host');
+    final proc = await Process.start(await chromeExecutable(headless: true), [
+      '--headless',
+      '--no-first-run',
+      '--remote-debugging-port=0',
+      '--user-data-dir=${dir.path}',
+      'about:blank',
+    ]);
+    addTearDown(() async {
+      proc.kill(ProcessSignal.sigkill);
+      await proc.exitCode;
+      await dir.delete(recursive: true);
+    });
+    final ws = Completer<String>();
+    proc.stdout.drain<void>();
+    proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+      final m = RegExp(r'ws://\S+').stringMatch(line);
+      if (m != null && !ws.isCompleted) ws.complete(m);
+    });
+    return ws.future;
+  }
+
+  Future<int> hostTabs(String ws) async {
+    final client = HttpClient();
+    final res = await (await client.getUrl(Uri.parse(ws).replace(scheme: 'http', path: '/json/list'))).close();
+    final list = jsonDecode(await res.transform(utf8.decoder).join()) as List<Object?>;
+    client.close();
+    return list.where((t) => (t! as Map)['type'] == 'page').length;
+  }
+
   const testHtml = '''
 <html><head><title>T</title></head>
 <body><p class="a">Hi <a href="/x">L</a></p></body></html>
@@ -121,7 +157,7 @@ void main() {
         return (r.stdout as String).split('\n').where((e) => e.isNotEmpty).toList();
       }
 
-      bool profiles() => tmp.listSync().any((e) => e.path.contains('puppeteer_dev_profile'));
+      bool profiles() => tmp.listSync().any((e) => e.path.contains('dart_toolkit_chrome'));
 
       final child = await Process.start(
         Platform.resolvedExecutable,
@@ -160,15 +196,50 @@ void main() {
     });
 
     test('closing a connected browser closes its own tabs, not the host\'s', () async {
-      final exe = (await pp.downloadChrome(cachePath: '${cache.userCacheDir()}/dart_toolkit/chrome')).executablePath;
-      final host = await pp.puppeteer.launch(executablePath: exe);
-      addTearDown(host.close);
-      final before = (await host.pages).length;
-      final b = await Chrome.connect(host.wsEndpoint);
+      final ws = await host();
+      final before = await hostTabs(ws);
+      final b = await Chrome.connect(ws);
       await b.open('data:text/html,<p>x</p>');
       await b.open('data:text/html,<p>y</p>');
+      expect(await hostTabs(ws), before + 2);
       await b.close();
-      expect((await host.pages).length, before);
+      expect(await hostTabs(ws), before);
+    });
+
+    test('connect by http URL finds the endpoint', () async {
+      final ws = await host();
+      final b = await Chrome.connect(Uri.parse(ws).replace(scheme: 'http', path: '/').toString());
+      expect(await b.open(dataUrl(testHtml)).text(), contains('Hi'));
+      await b.close();
+    });
+
+    test('a connected browser restores the host download behaviour on close (regression: left pointing at a deleted folder)', () async {
+      final ws = await host();
+      // A recording proxy between the client and the host.
+      final sent = <Map<String, Object?>>[];
+      final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => proxy.close(force: true));
+      proxy.listen((req) async {
+        final down = await WebSocketTransformer.upgrade(req);
+        final up = await WebSocket.connect(ws);
+        down.listen((m) {
+          sent.add(jsonDecode(m as String) as Map<String, Object?>);
+          up.add(m);
+        }, onDone: up.close);
+        up.listen(down.add, onDone: down.close);
+      });
+      final b = await Chrome.connect('ws://127.0.0.1:${proxy.port}/');
+      final page = await b.open(dataUrl('<a id="d" href="$base/file">get it</a>'));
+      final folder = Directory((await page.download('#d')).origin().path()!).parent;
+      await b.close();
+      expect(
+        [
+          for (final m in sent)
+            if (m['method'] == 'Browser.setDownloadBehavior') (m['params']! as Map)['behavior'],
+        ],
+        ['allowAndName', 'default'],
+      );
+      expect(folder.existsSync(), isFalse);
     });
 
     test('connect to a dead port throws', () async {
@@ -288,6 +359,26 @@ void main() {
       await page.close();
     });
 
+    test('cookies(all: true) is every cookie, not just the current URL\'s (regression)', () async {
+      final page = await browser.open('$base/cookie');
+      expect((await page.cookies())['deep'], isNull);
+      expect((await page.cookies(all: true))['deep'], '1');
+      expect((await browser.open('$base/').cookies(all: true))['tok'], 'abc');
+      await page.close();
+    });
+
+    test('run calls a function source; a script that throws is BrowserException', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      expect(await page.run<String>('() => document.title'), 'T');
+      expect(await page.run<int>('new Promise((r) => setTimeout(() => r(7), 10))'), 7);
+      expect(await page.run<double>('NaN'), isNaN);
+      await expectLater(
+        page.run<int>('null.x'),
+        throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('TypeError'))),
+      );
+      await page.close();
+    });
+
     test('cookie() waits until the page sets it; responses() captures XHR/fetch', () async {
       final page = await browser.open('about:blank');
       final captured = page.responses('*/graphql/query*').first;
@@ -366,6 +457,37 @@ void main() {
       await page.close();
     });
 
+    test('fill replaces a contenteditable\'s text (regression: did nothing)', () async {
+      final page = await browser.open(
+        dataUrl(
+          '<div id="e" contenteditable>old <b>text</b></div><script>window.n=0;'
+          'document.querySelector("#e").addEventListener("input",()=>window.n++);</script>',
+        ),
+      );
+      await page.fill('#e', 'new');
+      expect(await page.run<String>("document.querySelector('#e').innerText"), 'new');
+      expect(await page.run<int>('window.n'), greaterThan(0));
+      await page.fill('#e', '');
+      expect(
+        (await page.run<String>("document.querySelector('#e').innerText"))!.trim(),
+        '',
+      ); // as a user's delete leaves it
+      await page.close();
+    });
+
+    test('fill types non-ASCII text and fires keydown per ASCII key', () async {
+      final page = await browser.open(
+        dataUrl(
+          '<input id="q"><script>window.ks=0;'
+          'document.querySelector("#q").addEventListener("keydown",()=>window.ks++);</script>',
+        ),
+      );
+      await page.fill('#q', 'héllo 世界');
+      expect(await page.run<String>("document.querySelector('#q').value"), 'héllo 世界');
+      expect(await page.run<int>('window.ks'), 5); // h l l o and the space
+      await page.close();
+    });
+
     test('B5: fill with an empty value clears the field', () async {
       final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', '');
@@ -423,12 +545,18 @@ void main() {
     });
 
     test('upload sets a file input from a Reader', () async {
-      final page = await browser.open(dataUrl('<input type="file" id="f">'));
+      final page = await browser.open(
+        dataUrl(
+          '<input type="file" id="f"><script>window.seen=[];for (const t of ["input","change"])'
+          ' document.querySelector("#f").addEventListener(t,()=>window.seen.push(t));</script>',
+        ),
+      );
       final dir = await Directory.systemTemp.createTemp('chrome_up');
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
         await page.upload('#f', Fs.file('${dir.path}/note.txt'));
         expect(await page.run<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+        expect(await page.run<String>('window.seen.join()'), 'input,change');
       } finally {
         await dir.delete(recursive: true);
       }
@@ -452,13 +580,18 @@ void main() {
       final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
       await page.scroll();
       expect(await page.run<bool>('window.scrollY > 0'), isTrue);
-      await page.scroll('#bottom');
+      await page.scroll(to: '#bottom');
       await page.close();
     });
 
-    test('B6: scroll on a missing selector times out, not StateError', () async {
+    test('B6: scroll on a missing selector times out (named timeout, regression: positional)', () async {
       final page = await browser.open(dataUrl(testHtml));
-      await expectLater(page.scroll('#missing', const Duration(milliseconds: 500)), throwsA(isA<TimeoutException>()));
+      final sw = Stopwatch()..start();
+      await expectLater(
+        page.scroll(to: '#missing', timeout: const Duration(milliseconds: 500)),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
       await page.close();
     });
   });
@@ -561,6 +694,13 @@ void main() {
       } finally {
         await dir.delete(recursive: true);
       }
+      await page.close();
+    });
+
+    test('download credits one started in an iframe (regression: main frame only)', () async {
+      final page = await browser.open('$base/framed');
+      final download = await page.download('#d', timeout: const Duration(seconds: 10));
+      expect((download.name(), await download.text()), ('hello.txt', 'download-me'));
       await page.close();
     });
 

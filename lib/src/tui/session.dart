@@ -130,13 +130,13 @@ final class _WheelEv extends _Ev {
 
 /// A Console progress bar mirrored into the status row.
 final class _CBridge {
-  _CBridge(this.total, this.label) : start = DateTime.now();
+  _CBridge(this.total, this.label);
 
   int? total;
   final String? label;
   var done = 0;
   var bytes = false;
-  final DateTime start;
+  final meter = fmt.Meter();
 }
 
 final class _Session<S> implements term.TuiBridge {
@@ -327,7 +327,7 @@ final class _Session<S> implements term.TuiBridge {
       final wait = _dirty
           ? math.max(0, 16 - (_now() - _lastPaint))
           : _pending.isNotEmpty
-          ? 30
+          ? term.escapeWait.inMilliseconds
           : active
           ? 80
           : null;
@@ -382,7 +382,7 @@ final class _Session<S> implements term.TuiBridge {
   /// (the alternate screen would hide it now).
   void _failStatus(Exception e, [StackTrace? st]) {
     final text = e is ToolkitException ? e.message : '$e'.replaceFirst(_sdkPrefix, '');
-    _error = '✗ ${_firstLine(text)}';
+    _error = '$_failMark ${_firstLine(text)}';
     _sayMsg = null;
     if (st != null) {
       _errorLog.add((e, st));
@@ -390,6 +390,9 @@ final class _Session<S> implements term.TuiBridge {
     }
     _dirtyAndWake();
   }
+
+  /// `✗`, or `x` where the locale is not UTF-8 (as in Console).
+  String get _failMark => _caps.ascii ? 'x' : '✗';
 
   /// Handler failures shown in the status row, with their stacks, for
   /// stderr after [_leave] restores the terminal (the last 20).
@@ -459,7 +462,7 @@ final class _Session<S> implements term.TuiBridge {
   @override
   void spinEnded(Object id, bool ok) {
     final label = _cSpinners.remove(id);
-    if (!ok && label != null) _error = '✗ $label'.trimRight();
+    if (!ok && label != null) _error = '$_failMark $label'.trimRight();
     _dirtyAndWake();
   }
 
@@ -479,10 +482,11 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   @override
-  void barTick(Object id, int count) {
+  void barTick(Object id, int count, int fresh) {
     final bar = _cBars[id];
     if (bar == null || count <= 0) return;
     bar.done += count;
+    bar.meter.add(fresh);
     final total = bar.total;
     if (total != null && total > 0 && bar.done > total) bar.done = total;
     _dirtyAndWake();
@@ -502,17 +506,24 @@ final class _Session<S> implements term.TuiBridge {
   @override
   void barEnded(Object id, bool ok) {
     final bar = _cBars.remove(id);
-    if (!ok && bar != null) _error = '✗ ${bar.label ?? ''}'.trimRight();
+    if (!ok && bar != null) _error = '$_failMark ${bar.label ?? ''}'.trimRight();
     _dirtyAndWake();
   }
 
   @override
-  Future<String?> promptAsk(String question, {required bool secret}) {
+  Future<String?> promptAsk(String question, {required bool secret, Duration? timeout}) {
     final p = _Ask(question, secret: secret);
     if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
     _prompts.add(p);
     _dirtyAndWake();
-    return p.done.future;
+    if (timeout == null || p.done.isCompleted) return p.done.future;
+    final timer = Timer(timeout, () {
+      if (p.done.isCompleted) return;
+      _prompts.remove(p);
+      p.cancel();
+      _dirtyAndWake();
+    });
+    return p.done.future.whenComplete(timer.cancel);
   }
 
   @override
@@ -621,9 +632,9 @@ final class _Session<S> implements term.TuiBridge {
     return _pack(null, p.background, st);
   }
 
-  /// Markdown highlighting without an accent or colour: comments dim.
+  /// Markdown runs: fenced code in the accent, or dim without one.
   int _mdStyle(_MdSeg g, Color? color, Color? background, Set<Style> style) => accent != null || color != null
-      ? _pack(g.fg ?? color, g.bg ?? background, {...g.style, ...style})
+      ? _pack(g.fg == _mdCode ? (accent ?? color) : g.fg ?? color, g.bg ?? background, {...g.style, ...style})
       : _pack(null, background, g.fg == Color.gray ? {...g.style, ...style, Style.dim} : {...g.style, ...style});
 
   /// A selected row or tab: bold on [highlight], else the accent, else
@@ -677,40 +688,14 @@ final class _Session<S> implements term.TuiBridge {
       _heldLength = _pending.length;
       return;
     }
-    final waited = now - _heldSince!;
-    // An unterminated bracketed paste waits for its end however long a slow
-    // link takes: dropping its start would type the rest as keys, and a
-    // pasted newline would run enter.
-    if (_isPasteStart(_pending)) return;
-    final maybeCsi = _pending.length >= 2 && _pending[0] == 0x1b && (_pending[1] == 0x5b || _pending[1] == 0x4f);
-    if (maybeCsi) {
-      if (waited < 1000) return;
-      _pending.clear();
-      _heldSince = null;
-      return;
-    }
-    if (_pending.length <= 2 && waited >= 30) {
-      if (_pending.length == 1 || _pending[1] == 0x1b) {
-        _routeKey('escape');
-      } else if (_pending[1] < 0x80) {
-        _routeKey('alt+${String.fromCharCode(_pending[1])}');
-      }
-      _pending.clear();
-      _heldSince = null;
-      return;
-    }
-    if (waited < 1000) return;
+    // One resolver with the Console prompts: a lone ESC is Escape, a split
+    // UTF-8 character (Vietnamese, CJK over SSH) is never Escape, and an
+    // unterminated paste waits for its end.
+    final key = term.resolveHeld(_pending, Duration(milliseconds: now - _heldSince!));
+    if (key == null) return;
     _pending.clear();
     _heldSince = null;
-  }
-
-  static bool _isPasteStart(List<int> b) {
-    const start = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC [ 200 ~
-    if (b.length < start.length) return false;
-    for (var i = 0; i < start.length; i++) {
-      if (b[i] != start[i]) return false;
-    }
-    return true;
+    if (key.isNotEmpty) _routeKey(key);
   }
 
   void _decode() {
@@ -918,7 +903,7 @@ final class _Session<S> implements term.TuiBridge {
 
   bool _routeKey(String name) {
     if (name == 'ctrl+z' && _modes?.isigCleared == true && _lookup(_keys, name) == null) {
-      _suspend();
+      unawaited(_suspend());
       return true;
     }
     // 1. Open popup (suggest list, Console prompts).
@@ -1303,22 +1288,15 @@ final class _Session<S> implements term.TuiBridge {
     }
     for (final bar in _cBars.values) {
       final lab = bar.label == null ? '' : '${bar.label} ';
-      final secs = DateTime.now().difference(bar.start).inMilliseconds / 1000;
-      if (bar.bytes) {
-        final rate = secs > 0 ? bar.done / secs : 0.0;
-        final counts = bar.total != null && bar.total! > 0
-            ? '${fmt.fmtSize(bar.done)}/${fmt.fmtSize(bar.total!)}'
-            : fmt.fmtSize(bar.done);
-        parts.add('$lab${_barGlyphs(bar.done, bar.total)}$counts  ${fmt.fmtRate(rate)}');
-      } else {
-        final total = bar.total;
-        final counts = total != null && total > 0 ? '${bar.done}/$total' : '${bar.done}';
-        final rate = secs > 0 ? bar.done / secs : 0.0;
-        parts.add(
-          '$lab${_barGlyphs(bar.done, total)}$counts  '
-          '${fmt.fmtCount(rate)}/s',
-        );
-      }
+      final rate = bar.meter.rate();
+      final total = bar.total;
+      final counts = total == null || total <= 0
+          ? (bar.bytes ? fmt.fmtSize(bar.done) : '${bar.done}')
+          : bar.bytes
+          ? '${fmt.fmtSize(bar.done)}/${fmt.fmtSize(total)}'
+          : '${bar.done}/$total';
+      final rateText = bar.bytes ? fmt.fmtRate(rate) : '${fmt.fmtCount(rate)}/s';
+      parts.add('$lab${_barGlyphs(bar.done, total)}$counts  $rateText');
     }
     return parts.join(' · ');
   }
@@ -1333,16 +1311,20 @@ final class _Session<S> implements term.TuiBridge {
     if (row < 0 || row >= _grid.length) return;
     end = math.min(end, _w);
     var col = from;
-    for (final rune in text.runes) {
-      if (col >= end) break;
-      if (_isControl(rune)) continue;
-      final w = term.isZeroWidth(rune) ? 0 : term.cellWidth(rune);
+    // One grapheme cluster per cell, as in Region.write: combining marks
+    // (Vietnamese tones) stay on their letter.
+    final runes = [
+      for (final r in text.runes)
+        if (!_isControl(r)) r,
+    ];
+    for (var i = 0; i < runes.length && col < end;) {
+      final (w, next) = term.cluster(runes, i);
+      final ch = String.fromCharCodes(runes, i, next);
+      i = next;
       if (w == 0) continue;
       if (col + w > end) break;
-      _grid[row][col] = _Cell(String.fromCharCode(rune), style, w);
-      if (w == 2 && col + 1 < end) {
-        _grid[row][col + 1] = _Cell('', style, 0);
-      }
+      _grid[row][col] = _Cell(ch, style, w);
+      if (w == 2) _grid[row][col + 1] = _Cell('', style, 0);
       col += w;
     }
   }
@@ -1467,6 +1449,7 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   io.Process? _guard;
+  var _suspending = false;
 
   /// A watchdog shell that puts the terminal back if this process dies
   /// without leaving (`exit()` in a handler, a VM crash), when no Dart code
@@ -1511,14 +1494,27 @@ final class _Session<S> implements term.TuiBridge {
 
   /// Ctrl-Z (POSIX): give the terminal back, stop this process, and take the
   /// terminal again when the shell continues it.
-  void _suspend() {
+  Future<void> _suspend() async {
+    if (_suspending) return;
+    _suspending = true;
     final modes = _modes;
     out(_leaveCodes);
     if (modes != null) term.restoreModes(modes);
-    for (final sub in _subs) {
-      sub.cancel(); // the tty reader must not outlive the stop (EINTR kills it)
-    }
+    // The tty reader must be gone before the stop: a `cat` still reading
+    // the terminal would eat the shell's keystrokes (and EINTR kills it).
+    final subs = [..._subs];
     _subs.clear();
+    for (final sub in subs) {
+      try {
+        await sub.cancel();
+      } catch (_) {}
+    }
+    await term.inputStopped();
+    _suspending = false;
+    if (_done) return; // quit while the reader stopped
+    try {
+      await io.stdout.flush();
+    } catch (_) {}
     io.Process.killPid(io.pid, io.ProcessSignal.sigstop);
     term.setRawModes(modes, false);
     _listenStdin();

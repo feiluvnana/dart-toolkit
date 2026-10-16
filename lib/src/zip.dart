@@ -3,12 +3,12 @@
 /// unpack script ~0.3 s of startup for this one format.
 ///
 /// Reads stored and deflated members, zip64 sizes and offsets, UTF-8 or
-/// legacy names, unix modes, and WinZip AES or legacy ZipCrypto members.
-/// Writes fast deflate (or stored when smaller), UTF-8 names, unix modes and
-/// AES-256 with a password; an archive over 4 GiB or 65,535 members asks
-/// for tgz instead of writing zip64.
+/// legacy names, unix modes, mtimes, symlinks, and WinZip AES or legacy
+/// ZipCrypto members. Writes a stream: fast deflate, UTF-8 names, unix
+/// modes, mtimes, symlinks, zip64 where needed and AES-256 with a password.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math';
@@ -35,6 +35,7 @@ final class ZipEntry {
     required this._crc,
     required this._time,
     required this._flags,
+    required this.mtime,
     this._aes,
   });
 
@@ -53,6 +54,10 @@ final class ZipEntry {
   final int _crc;
   final int _time;
   final int _flags;
+
+  /// When it was last modified: the extended timestamp (UTC seconds) when
+  /// there is one, else the DOS time (local, 2-second steps); null for none.
+  final DateTime? mtime;
 
   /// WinZip AES: version (AE-1 keeps the CRC, AE-2 zeroes it), key
   /// strength (1-3) and the method under the encryption.
@@ -177,6 +182,7 @@ List<ZipEntry> readZip(Uint8List b) {
     final rawName = Uint8List.sublistView(b, at + 46, nameEnd);
     final name = flags & 0x800 != 0 ? utf8.decode(rawName, allowMalformed: true) : _legacyName(rawName);
     ({int version, int strength, int method})? aes;
+    DateTime? mtime;
     // Zip64 extra field (0x0001): the 64-bit values, in order, for each
     // field that holds 0xFFFFFFFF. WinZip AES (0x9901): version, "AE",
     // strength, method.
@@ -188,6 +194,9 @@ List<ZipEntry> readZip(Uint8List b) {
           _corrupt('bad AES extra field: $name');
         }
         aes = (version: version, strength: strength, method: _u16(b, e + 9));
+      }
+      if (id == 0x5455 && len >= 5 && b[e + 4] & 1 != 0) {
+        mtime = DateTime.fromMillisecondsSinceEpoch(_u32(b, e + 5) * 1000);
       }
       if (id == 1) {
         var f = e + 4;
@@ -224,6 +233,7 @@ List<ZipEntry> readZip(Uint8List b) {
         crc: _u32(b, at + 16),
         time: _u16(b, at + 12),
         flags: flags,
+        mtime: mtime ?? _fromDos(_u16(b, at + 12), _u16(b, at + 14)),
         aes: aes,
       ),
     );
@@ -238,117 +248,272 @@ List<ZipEntry> readZip(Uint8List b) {
   return out;
 }
 
-/// A zip of [entries] (name, unix permission bits, bytes, modified time); a
-/// name ending in `/` is a folder. With [password], files are WinZip
-/// AES-256 (AE-2).
-Uint8List writeZip(List<(String, int, List<int>, DateTime)> entries, {String? password}) {
+/// One member for [zipStream]: its name (a `/` at the end makes a folder),
+/// unix permission bits and modified time, then either a symlink [link]
+/// target or [size] bytes read from [open].
+typedef ZipSource = ({
+  String name,
+  int mode,
+  DateTime mtime,
+  int size,
+  Stream<List<int>> Function()? open,
+  String? link,
+});
+
+/// A zip of [members], streamed: each file is deflated (level 1, ~10x
+/// faster than 6 for ~15% more bytes) on its way through, its CRC and sizes
+/// in a data descriptor after it, so only the central directory is held.
+/// Zip64 records appear where a size, an offset or the member count needs
+/// them. With [password], files are WinZip AES-256 (AE-2). A file whose
+/// size changed since [ZipSource.size] was taken is an error.
+Stream<Uint8List> zipStream(Stream<ZipSource> members, {String? password}) async* {
   final pw = password == null ? null : utf8.encode(password);
-  final random = Random.secure();
-  final out = BytesBuilder(copy: false);
   final central = BytesBuilder(copy: false);
-  for (final (name, mode, data, mtime) in entries) {
-    final (time, date) = _dosTime(mtime);
-    final isDir = name.endsWith('/');
-    final nameBytes = utf8.encode(name);
-    var method = 0;
-    List<int> body = data;
-    var crc = 0;
-    // The SDK's one-shot deflate keeps only the low 32 bits of its input
-    // length: past 4 GiB it would write a short member without an error.
-    if (data.length > 0xFFFFFFFF) {
-      throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
-    }
-    if (!isDir && data.isNotEmpty) {
-      // One native pass gives the deflate stream and its CRC: a gzip member
-      // is a 10-byte header, raw deflate, then CRC-32 and size. Level 1 is
-      // ~10x faster than the default 6 for ~15% more bytes, the same trade
-      // package:archive made.
-      final gz = io.GZipCodec(level: 1).encode(data);
-      final g = gz is Uint8List ? gz : Uint8List.fromList(gz);
-      crc = _u32(g, g.length - 8);
-      if (g.length - 18 < data.length) {
-        method = 8;
-        body = Uint8List.sublistView(g, 10, g.length - 8);
+  var offset = 0, count = 0;
+  await for (final m in members) {
+    final open = m.open, link = m.link;
+    final streamed = open != null && link == null && m.size > 0 && !m.name.endsWith('/');
+    final zip64 = streamed && m.size >= 0xF0000000; // deflate never grows 256 MiB past that
+    final aes = pw != null && streamed;
+    final nameBytes = utf8.encode(m.name);
+    final (time, date) = _dosTime(m.mtime);
+    final secs = m.mtime.millisecondsSinceEpoch ~/ 1000;
+    // Extended timestamp (0x5455): the UTC mtime in whole seconds.
+    final stamp = [0x55, 0x54, 5, 0, 1, ..._le(secs.clamp(0, 0xFFFFFFFF), 4)];
+    final aesExtra = aes ? const [0x01, 0x99, 7, 0, 2, 0, 0x41, 0x45, 3, 8, 0] : const <int>[];
+    final flags = 0x800 | (streamed ? 8 : 0) | (aes ? 1 : 0); // UTF-8 names, data descriptor, encrypted
+    final method = aes ? 99 : (streamed ? 8 : 0);
+    final stored = link == null ? Uint8List(0) : utf8.encode(link);
+    var crc = crc32(stored);
+    var size = stored.length, packed = stored.length;
+    final local = BytesBuilder(copy: false)
+      ..add(_le(0x04034b50, 4))
+      ..add(_le(zip64 ? 45 : 20, 2))
+      ..add(_le(flags, 2))
+      ..add(_le(method, 2))
+      ..add(_le(time, 2))
+      ..add(_le(date, 2))
+      ..add(_le(streamed ? 0 : crc, 4))
+      ..add(_le(zip64 ? 0xFFFFFFFF : packed, 4))
+      ..add(_le(zip64 ? 0xFFFFFFFF : size, 4))
+      ..add(_le(nameBytes.length, 2))
+      ..add(_le((zip64 ? 20 : 0) + stamp.length + aesExtra.length, 2))
+      ..add(nameBytes);
+    if (zip64) local.add([1, 0, 16, 0, ...Uint8List(16)]);
+    local
+      ..add(aesExtra)
+      ..add(stamp)
+      ..add(stored);
+    final head = local.takeBytes();
+    final at = offset;
+    offset += head.length;
+    yield head;
+    if (streamed) {
+      final body = _Deflated(pw);
+      yield* Stream.fromIterable(body.start());
+      var sent = 0;
+      await for (final chunk in open()) {
+        sent += chunk.length;
+        if (sent > m.size) break;
+        if (chunk.isNotEmpty) yield* Stream.fromIterable(body.add(chunk));
       }
+      if (sent != m.size) throw io.FileSystemException('file changed while packing', m.name);
+      yield* Stream.fromIterable(body.close());
+      size = sent;
+      packed = body.length;
+      crc = aes ? 0 : body.crc; // AE-2: the HMAC authenticates instead
+      if (body.isize != size & 0xFFFFFFFF) throw io.FileSystemException('file changed while packing', m.name);
+      final descriptor = [
+        ..._le(0x08074b50, 4),
+        ..._le(crc, 4),
+        ..._le(packed, zip64 ? 8 : 4),
+        ..._le(size, zip64 ? 8 : 4),
+      ];
+      offset += packed + descriptor.length;
+      yield Uint8List.fromList(descriptor);
     }
-    // AES-256 (AE-2): the CRC is left 0 (the HMAC authenticates instead) and
-    // method 99 names the real method in the extra field.
-    var extra = const <int>[];
-    var flags = 0x800; // UTF-8 names
-    if (pw != null && !isDir) {
-      final salt = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
-      final keys = pbkdf2(pw, salt, 1000, 66);
-      final plain = body is Uint8List ? body : Uint8List.fromList(body);
-      final encrypted = Aes(Uint8List.sublistView(keys, 0, 32)).ctrLittleEndian(plain);
-      final mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, 32, 64)).convert(encrypted).bytes;
-      body = Uint8List(18 + encrypted.length + 10)
-        ..setRange(0, 16, salt)
-        ..setRange(16, 18, keys, 64)
-        ..setRange(18, 18 + encrypted.length, encrypted)
-        ..setRange(18 + encrypted.length, 28 + encrypted.length, mac);
-      extra = [0x01, 0x99, 7, 0, 2, 0, 0x41, 0x45, 3, method & 0xFF, method >> 8];
-      method = 99;
-      crc = 0;
-      flags |= 1;
-    }
-    final offset = out.length;
-    if (offset > 0xFFFFFFFF || body.length > 0xFFFFFFFF || entries.length > 0xFFFF) {
-      throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
-    }
-    final local = ByteData(30)
-      ..setUint32(0, 0x04034b50, Endian.little)
-      ..setUint16(4, 20, Endian.little)
-      ..setUint16(6, flags, Endian.little)
-      ..setUint16(8, method, Endian.little)
-      ..setUint16(10, time, Endian.little)
-      ..setUint16(12, date, Endian.little)
-      ..setUint32(14, crc, Endian.little)
-      ..setUint32(18, body.length, Endian.little)
-      ..setUint32(22, data.length, Endian.little)
-      ..setUint16(26, nameBytes.length, Endian.little)
-      ..setUint16(28, extra.length, Endian.little);
-    out
-      ..add(local.buffer.asUint8List())
-      ..add(nameBytes)
-      ..add(extra)
-      ..add(body);
-    final type = isDir ? 0x4000 : 0x8000;
-    final dirEntry = ByteData(46)
-      ..setUint32(0, 0x02014b50, Endian.little)
-      ..setUint16(4, 0x0314, Endian.little) // made by unix, version 2.0
-      ..setUint16(6, 20, Endian.little)
-      ..setUint16(8, flags, Endian.little)
-      ..setUint16(10, method, Endian.little)
-      ..setUint16(12, time, Endian.little)
-      ..setUint16(14, date, Endian.little)
-      ..setUint32(16, crc, Endian.little)
-      ..setUint32(20, body.length, Endian.little)
-      ..setUint32(24, data.length, Endian.little)
-      ..setUint16(28, nameBytes.length, Endian.little)
-      ..setUint16(30, extra.length, Endian.little)
-      ..setUint32(38, (type | (mode & 0xFFF)) << 16 | (isDir ? 0x10 : 0), Endian.little)
-      ..setUint32(42, offset, Endian.little);
+    // Zip64 extra: the 64-bit values, in order, of each field that holds
+    // 0xFFFFFFFF.
+    final big = [
+      if (size >= 0xFFFFFFFF) ..._le(size, 8),
+      if (packed >= 0xFFFFFFFF) ..._le(packed, 8),
+      if (at >= 0xFFFFFFFF) ..._le(at, 8),
+    ];
+    final extra = [if (big.isNotEmpty) ...[1, 0, big.length, 0, ...big], ...aesExtra, ...stamp];
+    final type = link != null ? 0xA000 : (m.name.endsWith('/') ? 0x4000 : 0x8000);
     central
-      ..add(dirEntry.buffer.asUint8List())
+      ..add(_le(0x02014b50, 4))
+      ..add(_le(0x0300 | (big.isEmpty ? 20 : 45), 2)) // made by unix
+      ..add(_le(big.isEmpty && !zip64 ? 20 : 45, 2))
+      ..add(_le(flags, 2))
+      ..add(_le(method, 2))
+      ..add(_le(time, 2))
+      ..add(_le(date, 2))
+      ..add(_le(crc, 4))
+      ..add(_le(packed >= 0xFFFFFFFF ? 0xFFFFFFFF : packed, 4))
+      ..add(_le(size >= 0xFFFFFFFF ? 0xFFFFFFFF : size, 4))
+      ..add(_le(nameBytes.length, 2))
+      ..add(_le(extra.length, 2))
+      ..add(_le(0, 6)) // comment length, disk, internal attributes
+      ..add(_le((type | (m.mode & 0xFFF)) << 16 | (type == 0x4000 ? 0x10 : 0), 4))
+      ..add(_le(at >= 0xFFFFFFFF ? 0xFFFFFFFF : at, 4))
       ..add(nameBytes)
       ..add(extra);
+    count++;
   }
-  final dirOffset = out.length;
-  final dirBytes = central.takeBytes();
-  if (dirOffset + dirBytes.length > 0xFFFFFFFF) {
-    throw const ContentException('zip over 4 GiB or 65,535 members: use ArchiveFormat.tgz');
+  final dirSize = central.length;
+  yield central.takeBytes();
+  final end = BytesBuilder(copy: false);
+  if (count >= 0xFFFF || offset >= 0xFFFFFFFF || dirSize >= 0xFFFFFFFF) {
+    end
+      ..add(_le(0x06064b50, 4))
+      ..add(_le(44, 8))
+      ..add(_le(0x032D, 2))
+      ..add(_le(45, 2))
+      ..add(_le(0, 8)) // this disk, the directory's disk
+      ..add(_le(count, 8))
+      ..add(_le(count, 8))
+      ..add(_le(dirSize, 8))
+      ..add(_le(offset, 8))
+      ..add(_le(0x07064b50, 4))
+      ..add(_le(0, 4))
+      ..add(_le(offset + dirSize, 8))
+      ..add(_le(1, 4));
   }
-  final end = ByteData(22)
-    ..setUint32(0, 0x06054b50, Endian.little)
-    ..setUint16(8, entries.length, Endian.little)
-    ..setUint16(10, entries.length, Endian.little)
-    ..setUint32(12, dirBytes.length, Endian.little)
-    ..setUint32(16, dirOffset, Endian.little);
-  out
-    ..add(dirBytes)
-    ..add(end.buffer.asUint8List());
-  return out.takeBytes();
+  end
+    ..add(_le(0x06054b50, 4))
+    ..add(_le(0, 4))
+    ..add(_le(count >= 0xFFFF ? 0xFFFF : count, 2))
+    ..add(_le(count >= 0xFFFF ? 0xFFFF : count, 2))
+    ..add(_le(dirSize >= 0xFFFFFFFF ? 0xFFFFFFFF : dirSize, 4))
+    ..add(_le(offset >= 0xFFFFFFFF ? 0xFFFFFFFF : offset, 4))
+    ..add(_le(0, 2));
+  yield end.takeBytes();
 }
+
+/// [v] as [n] little-endian bytes.
+Uint8List _le(int v, int n) {
+  final out = Uint8List(n);
+  for (var i = 0; i < n; i++) {
+    out[i] = v >> (8 * i) & 0xFF;
+  }
+  return out;
+}
+
+/// One member's body on its way out: native deflate through a gzip filter
+/// (its trailer gives the CRC-32 for free), then WinZip AES with a
+/// password.
+final class _Deflated {
+  _Deflated(List<int>? password) {
+    if (password == null) return;
+    final salt = Uint8List.fromList(List.generate(16, (_) => _random.nextInt(256)));
+    final keys = pbkdf2(password, salt, 1000, 66);
+    _aes = Aes(Uint8List.sublistView(keys, 0, 32));
+    _mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, 32, 64)).startChunkedConversion(_digest);
+    _prefix = Uint8List(18)
+      ..setRange(0, 16, salt)
+      ..setRange(16, 18, keys, 64);
+  }
+
+  final _z = io.RawZLibFilter.deflateFilter(gzip: true, level: 1);
+  Aes? _aes;
+  ByteConversionSink? _mac;
+  final _digest = _DigestSink();
+  Uint8List? _prefix;
+  var _skip = 10; // the gzip header
+  var _held = Uint8List(0); // the last 8 bytes so far: the trailer at the end
+  var _odd = Uint8List(0); // AES: bytes short of a whole block
+  var _blocks = 0;
+
+  /// Bytes written so far.
+  int length = 0;
+  int crc = 0, isize = 0;
+
+  Iterable<Uint8List> start() sync* {
+    final p = _prefix;
+    if (p != null) yield* _out(p);
+  }
+
+  Iterable<Uint8List> add(List<int> chunk) sync* {
+    _z.process(chunk, 0, chunk.length);
+    for (List<int>? piece; (piece = _z.processed(flush: false)) != null;) {
+      yield* _deflated(piece!);
+    }
+  }
+
+  Iterable<Uint8List> close() sync* {
+    for (List<int>? piece; (piece = _z.processed(end: true)) != null;) {
+      yield* _deflated(piece!);
+    }
+    crc = _u32(_held, 0);
+    isize = _u32(_held, 4);
+    final aes = _aes;
+    if (aes == null) return;
+    if (_odd.isNotEmpty) yield* _cipher(aes.ctrLittleEndian(_odd, from: _blocks));
+    _mac!.close();
+    yield* _out(Uint8List.fromList(_digest.value!.bytes.sublist(0, 10)));
+  }
+
+  /// Deflate output, less the gzip header and the 8 trailing bytes held.
+  Iterable<Uint8List> _deflated(List<int> piece) sync* {
+    var b = piece is Uint8List ? piece : Uint8List.fromList(piece);
+    if (_skip > 0) {
+      final n = _skip < b.length ? _skip : b.length;
+      b = Uint8List.sublistView(b, n);
+      _skip -= n;
+    }
+    if (b.isEmpty) return;
+    final all = Uint8List(_held.length + b.length)
+      ..setRange(0, _held.length, _held)
+      ..setRange(_held.length, _held.length + b.length, b);
+    if (all.length <= 8) {
+      _held = all;
+      return;
+    }
+    _held = Uint8List.fromList(Uint8List.sublistView(all, all.length - 8));
+    yield* _encrypted(Uint8List.sublistView(all, 0, all.length - 8));
+  }
+
+  Iterable<Uint8List> _encrypted(Uint8List b) sync* {
+    final aes = _aes;
+    if (aes == null) {
+      yield* _out(b);
+      return;
+    }
+    final all = _odd.isEmpty
+        ? b
+        : (Uint8List(_odd.length + b.length)
+            ..setRange(0, _odd.length, _odd)
+            ..setRange(_odd.length, _odd.length + b.length, b));
+    final whole = all.length & ~15;
+    _odd = Uint8List.fromList(Uint8List.sublistView(all, whole));
+    if (whole == 0) return;
+    yield* _cipher(aes.ctrLittleEndian(Uint8List.sublistView(all, 0, whole), from: _blocks));
+    _blocks += whole >> 4;
+  }
+
+  Iterable<Uint8List> _cipher(Uint8List c) sync* {
+    _mac!.add(c);
+    yield* _out(c);
+  }
+
+  Iterable<Uint8List> _out(Uint8List b) sync* {
+    length += b.length;
+    yield b;
+  }
+}
+
+final class _DigestSink implements Sink<crypto.Digest> {
+  crypto.Digest? value;
+
+  @override
+  void add(crypto.Digest data) => value = data;
+
+  @override
+  void close() {}
+}
+
+final _random = Random.secure();
 
 /// The ZipCrypto key state (PKWARE APPNOTE 6.1).
 final class _ZipCrypto {
@@ -394,6 +559,10 @@ String _legacyName(Uint8List raw) {
   if (t.year > 2107) return (23 << 11 | 59 << 5 | 29, 127 << 9 | 12 << 5 | 31);
   return (t.hour << 11 | t.minute << 5 | t.second ~/ 2, (t.year - 1980) << 9 | t.month << 5 | t.day);
 }
+
+/// A DOS [time] and [date] as a local time; null for none (a zero date).
+DateTime? _fromDos(int time, int date) =>
+    date == 0 ? null : DateTime(1980 + (date >> 9), date >> 5 & 15, date & 31, time >> 11, time >> 5 & 63, (time & 31) * 2);
 
 /// Inflates the raw deflate [input], stopping as soon as the output passes
 /// [size] (a bomb never gets past its declared size) and naming [what] in

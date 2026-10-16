@@ -49,7 +49,26 @@ final class Region {
   final Region? _parent;
   final _ScrollCtx? _scroll;
   final _Popup? _pop;
-  var _cursor = 0;
+  var _row = 0;
+
+  /// The column an inline span left off at, on row [_row]; 0 when the row
+  /// is finished.
+  var _col = 0;
+
+  /// The next free row. Reading it finishes a row an inline span left
+  /// open, so every drawing method but [write] starts on a fresh row.
+  int get _cursor {
+    if (_col > 0) {
+      _col = 0;
+      _row++;
+    }
+    return _row;
+  }
+
+  set _cursor(int row) {
+    _col = 0;
+    _row = row;
+  }
 
   /// Rows drawn so far, from the top of this region (open layout).
   var _extent = 0;
@@ -86,34 +105,56 @@ final class Region {
   /// Draw text, wrapping at the right edge (`\n` breaks, `\t` expands,
   /// controls show as `�`, rows past the bottom end with `…`). `link` makes an OSC 8 hyperlink.
   /// [on] binds events (as in [Region.on]) to the rows the text took.
+  /// With [inline], the row stays open: the next `write` (or `bar`,
+  /// `spin`) continues after this text's last cell, so differently styled
+  /// spans share a row without column maths
+  /// (`r.write('@ada ', inline: true, style: {.bold}).write('done')`).
+  /// Any other drawing starts on the next row.
   Region write(
     String text, {
     Color? color,
     Color? background,
     Set<Style> style = const {},
     String? link,
+    bool inline = false,
     Map<String, Binding>? on,
   }) {
-    final top = _cursor;
+    final top = _row;
+    var col = _col;
     final st = _s._pack(color, background, style);
     final parts = text.split('\n');
-    final lines = parts.isNotEmpty && parts.last.isEmpty ? parts.sublist(0, parts.length - 1) : parts;
+    final lines = parts.isNotEmpty && parts.last.isEmpty && !inline ? parts.sublist(0, parts.length - 1) : parts;
     var overflow = false;
-    for (final line in lines) {
+    var end = _gx;
+    for (final (li, line) in lines.indexed) {
       // One rune list per line and a moving index: each wrapped row costs
       // its own runes, not a re-split of the rest (linear, not quadratic).
       final runes = line.runes.toList();
       var at = 0;
       do {
-        if (_cursor >= _h) {
+        if (_row >= _h) {
           overflow = true;
-          _cursor++;
+          _row++;
           break;
         }
-        _writeRunes(_gy + _cursor++, _gx, _gx + _w, runes, at, st, link);
+        end = _writeRunes(_gy + _row, _gx + col, _gx + _w, runes, at, st, link);
+        final started = col > 0;
+        col = 0;
         if (_used >= runes.length) break;
-        at = math.max(_used, at + 1);
+        _row++;
+        // A row that took nothing after an inline span just wraps; one that
+        // took nothing from its start skips the rune that cannot fit.
+        at = started ? _used : math.max(_used, at + 1);
       } while (_w > 0);
+      if ((li < lines.length - 1 || !inline) && !overflow) _row++;
+    }
+    _col = 0;
+    if (inline && !overflow && _row < _h) {
+      _col = end - _gx;
+      if (_col <= 0 || _col >= _w) {
+        if (_col > 0) _row++;
+        _col = 0;
+      }
     }
     if (overflow && _h > 0 && _w > 0) {
       _put(_gy + _h - 1, _gx + _w - 1, '…', 1, st, link);
@@ -122,9 +163,10 @@ final class Region {
     return this;
   }
 
-  /// Bind [on] to the rows from [top] to the cursor (what a widget drew).
+  /// Bind [on] to the rows from [top] to the cursor (what a widget drew),
+  /// including a row an inline span left open.
   void _bindRows(Map<String, Binding>? on, int top) {
-    final rows = math.min(_cursor, _h) - top;
+    final rows = math.min(_row + (_col > 0 ? 1 : 0), _h) - top;
     if (on != null && rows > 0 && _w > 0) _reg(_s._bindId(on), _gx, _gy + top, _w, rows, _s._order++, null, onMap: on);
   }
 

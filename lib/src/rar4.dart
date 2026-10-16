@@ -87,6 +87,11 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
   _bad('archive ends without its end block (truncated)');
 }
 
+/// A DOS time (date in the high half) as a local time; null for none.
+DateTime? _fromDos4(int t) => t >> 16 == 0
+    ? null
+    : DateTime(1980 + (t >> 25), t >> 21 & 15, t >> 16 & 31, t >> 11 & 31, t >> 5 & 63, (t & 31) * 2);
+
 int _u32le(Uint8List b, int i) => b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
 
 RarEntry _file4(
@@ -122,7 +127,8 @@ RarEntry _file4(
   final isDir = flags & 0xE0 == 0xE0 || (host != 3 && attrs & 0x10 != 0);
   final mode = host == 3 ? attrs & 0xFFFF : 0;
   final isLink = mode & 0xF000 == 0xA000;
-  if (isDir) return RarEntry(name, true, mode, () => Uint8List(0));
+  final mtime = _fromDos4(_u32le(h, hp + 20));
+  if (isDir) return RarEntry(name, true, mode, mtime, () => Uint8List(0));
   final encrypted = flags & 0x04 != 0;
   if (encrypted && password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
   final packed = Uint8List.sublistView(b, dataStart, dataStart + packSize);
@@ -134,7 +140,7 @@ RarEntry _file4(
     }
     return (input, method, size, version, 0x10000 << (flags >> 5 & 7)); // 64 KiB << N dictionary
   });
-  return RarEntry(name, false, mode, () {
+  return RarEntry(name, false, mode, mtime, () {
     Uint8List data;
     try {
       data = run.data(index);

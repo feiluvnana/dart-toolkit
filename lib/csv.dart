@@ -10,9 +10,11 @@
 /// Public surface is exactly: [Csv], [ReaderCsv].
 /// - `Csv.parse()` reads rows, `Csv.records()` maps them by the header row,
 ///   `Csv.encode()` writes rows.
-/// - `reader.csv()` parses any [Reader].
+/// - `reader.csv()` parses any [Reader]; `reader.rows()` streams its rows.
 /// Everything else is private.
 library;
+
+import 'dart:convert';
 
 import 'core.dart';
 export 'core.dart';
@@ -20,61 +22,11 @@ export 'core.dart';
 /// Entry point: parse and encode.
 abstract final class Csv {
   /// The rows of [text]. A field is quoted when it holds [sep], a quote or
-  /// a newline; a lone trailing newline adds no empty row. Throws
-  /// [ContentException] on an unterminated quote.
+  /// a newline; a blank line is no row. Throws [ContentException] on an
+  /// unterminated quote.
   static List<List<String>> parse(String text, {String sep = ','}) {
-    if (sep.length != 1 || sep == '"' || sep == '\n' || sep == '\r') {
-      throw ArgumentError.value(sep, 'sep', 'must be one character other than a quote or a newline');
-    }
-    final s = sep.codeUnitAt(0);
     final rows = <List<String>>[];
-    var row = <String>[];
-    final field = StringBuffer();
-    var i = text.startsWith('﻿') ? 1 : 0;
-    var quoted = false, any = false;
-    void endField() {
-      row.add(field.toString());
-      field.clear();
-      any = false;
-    }
-
-    void endRow() {
-      endField();
-      rows.add(row);
-      row = <String>[];
-    }
-
-    while (i < text.length) {
-      final c = text.codeUnitAt(i);
-      if (quoted) {
-        if (c == 0x22) {
-          if (i + 1 < text.length && text.codeUnitAt(i + 1) == 0x22) {
-            field.writeCharCode(0x22);
-            i += 2;
-            continue;
-          }
-          quoted = false;
-        } else {
-          field.writeCharCode(c);
-        }
-        i++;
-        continue;
-      }
-      if (c == 0x22 && field.isEmpty && !any) {
-        quoted = any = true;
-      } else if (c == s) {
-        endField();
-      } else if (c == 0x0D || c == 0x0A) {
-        if (c == 0x0D && i + 1 < text.length && text.codeUnitAt(i + 1) == 0x0A) i++;
-        endRow();
-      } else {
-        field.writeCharCode(c);
-        any = true;
-      }
-      i++;
-    }
-    if (quoted) throw ContentException('unterminated quoted CSV field', text, i);
-    if (field.isNotEmpty || any || row.isNotEmpty) endRow();
+    (_Rows(sep, rows.add)..feed(text)).end();
     return rows;
   }
 
@@ -111,12 +63,117 @@ abstract final class Csv {
   }
 }
 
-/// `reader.csv()`: the rows of any [Reader] (`Fs.file`, an http response).
+/// `reader.csv()`: the rows of any [Reader] (`Fs.file`, an http response);
+/// `reader.rows()` streams them as they arrive, in constant memory.
 extension ReaderCsv on Reader {
   Future<List<List<String>>> csv({String sep = ','}) async => Csv.parse(await text(), sep: sep);
+
+  /// The CSV rows one at a time as the bytes arrive: a multi-gigabyte
+  /// export reads in constant memory. Same rules as [Csv.parse].
+  Stream<List<String>> rows({String sep = ','}) async* {
+    final ready = <List<String>>[];
+    final rows = _Rows(sep, ready.add);
+    await for (final chunk in stream().transform(const Utf8Decoder(allowMalformed: true))) {
+      rows.feed(chunk);
+      for (final row in ready) {
+        yield row;
+      }
+      ready.clear();
+    }
+    rows.end();
+    for (final row in ready) {
+      yield row;
+    }
+  }
 }
 
 /// The Future mirror (rule 4).
 extension ReaderFutureCsv on Future<Reader> {
   Future<List<List<String>>> csv({String sep = ','}) async => (await this).csv(sep: sep);
+  Stream<List<String>> rows({String sep = ','}) => Stream.fromFuture(this).asyncExpand((r) => r.rows(sep: sep));
+}
+
+/// The RFC 4180 state machine, fed text in pieces (a whole string or
+/// decoded chunks), emitting each row as it completes.
+final class _Rows {
+  _Rows(String sep, this._emit) : _sep = _check(sep);
+
+  static int _check(String sep) {
+    if (sep.length != 1 || sep == '"' || sep == '\n' || sep == '\r') {
+      throw ArgumentError.value(sep, 'sep', 'must be one character other than a quote or a newline');
+    }
+    return sep.codeUnitAt(0);
+  }
+
+  final int _sep;
+  final void Function(List<String> row) _emit;
+  var _row = <String>[];
+  final _field = StringBuffer();
+  var _quoted = false, _any = false, _start = true, _cr = false, _endQuote = false;
+  var _offset = 0;
+
+  void _endField() {
+    _row.add(_field.toString());
+    _field.clear();
+    _any = false;
+  }
+
+  void _endRow() {
+    // A blank line (one empty, unquoted field) is no record.
+    if (_row.isEmpty && _field.isEmpty && !_any) return;
+    _endField();
+    _emit(_row);
+    _row = <String>[];
+  }
+
+  void feed(String text) {
+    var i = 0;
+    if (_start) {
+      _start = false;
+      if (text.startsWith('\uFEFF')) i = 1;
+    }
+    final n = text.length;
+    while (i < n) {
+      final c = text.codeUnitAt(i++);
+      if (_cr) {
+        _cr = false;
+        if (c == 0x0A) continue; // the LF of a CRLF split across chunks
+      }
+      if (_endQuote) {
+        // The quote before this may close the field or start a `""`.
+        _endQuote = false;
+        if (c == 0x22) {
+          _field.writeCharCode(0x22);
+          _quoted = true;
+          continue;
+        }
+      }
+      if (_quoted) {
+        if (c == 0x22) {
+          _quoted = false;
+          _endQuote = true;
+        } else {
+          _field.writeCharCode(c);
+        }
+        continue;
+      }
+      if (c == 0x22 && _field.isEmpty && !_any) {
+        _quoted = _any = true;
+      } else if (c == _sep) {
+        _endField();
+      } else if (c == 0x0D || c == 0x0A) {
+        _cr = c == 0x0D;
+        _endRow();
+      } else {
+        _field.writeCharCode(c);
+        _any = true;
+      }
+    }
+    _offset += n;
+  }
+
+  void end() {
+    if (_quoted) throw ContentException('unterminated quoted CSV field', null, _offset);
+    if (_field.isNotEmpty || _any || _row.isNotEmpty) _endRow();
+  }
 }

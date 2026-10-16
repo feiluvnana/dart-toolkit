@@ -95,7 +95,10 @@ final class Flag extends Param<bool> {
 /// `Opt('port', …, or: 8080)` is an `Opt<int>`. A nullable `T`
 /// (`Opt<String?>`) can be absent; a non-nullable `T` without
 /// [or] or `required` is an [ArgumentError]. Yes/no is always a
-/// [Flag]: `Opt<bool>` is an [ArgumentError].
+/// [Flag]: `Opt<bool>` is an [ArgumentError]. [min] and [max] bound a
+/// value that orders (`int`, `double`, `Duration`, `DateTime`):
+/// `Opt<int?>('quality', …, min: 1, max: 100)` turns `--quality 150` into a
+/// usage error, and usage shows `[1-100]`.
 final class Opt<T> extends Param<T> {
   Opt(
     String name,
@@ -106,14 +109,18 @@ final class Opt<T> extends Param<T> {
     String? env,
     T Function(String)? parse,
     List<T>? values,
+    T? min,
+    T? max,
   }) : this._withReader(
          name,
          help,
-         _resolve<T>(name, parse, values),
+         _bounded<T>(name, _resolve<T>(name, parse, values), min, max, or),
          short: short,
          or: or,
          required: required,
          env: env,
+         min: min,
+         max: max,
        );
 
   Opt._withReader(
@@ -124,6 +131,8 @@ final class Opt<T> extends Param<T> {
     required T? or,
     required bool required,
     this._env,
+    this._min,
+    this._max,
   }) : _or = or,
        super._(
          name: name,
@@ -142,6 +151,7 @@ final class Opt<T> extends Param<T> {
   }
 
   final T? _or;
+  final T? _min, _max;
 
   /// The environment variable read when the option is not given (a token,
   /// an endpoint): the command line wins, then [_env], then `or`.
@@ -249,6 +259,7 @@ final class Command {
     FutureOr<void> Function(Context context)? handler,
     List<String> aliases = const [],
     this._dotenv,
+    this._version,
   }) : _name = name,
        _help = help,
        _params = params,
@@ -258,6 +269,9 @@ final class Command {
        _aliases = aliases {
     if (name.isEmpty) {
       throw ArgumentError.value(name, 'name', 'Invalid name: empty');
+    }
+    if (_version != null && params.any((p) => p._name == 'version')) {
+      throw ArgumentError.value('version', 'params', 'Invalid params: --version is reserved by version:');
     }
     _checkName(name);
     for (final alias in aliases) {
@@ -327,6 +341,10 @@ final class Command {
   /// A `KEY=VALUE` file loaded before parsing (see [run]).
   final String? _dotenv;
 
+  /// What `--version` prints after the name (`fetch 1.2.3`), for this
+  /// command and every command under it.
+  final String? _version;
+
   static void _checkSubtree(
     List<Command> commands,
     Set<Param<Object?>> seenParams,
@@ -360,16 +378,19 @@ final class Command {
   /// lines are read first (`#` comments, `export `, quotes allowed; a
   /// missing file is skipped) and an `Opt(env:)` sees them, never over the
   /// real environment.
+  ///
+  /// With `version:` (`Command('fetch', …, version: '1.2.3')`), `--version`
+  /// prints `fetch 1.2.3` to stdout and exits 0, here and in every
+  /// subcommand; usage lists it.
   Future<int> run(List<String> argv) async {
     final file = _dotenv;
-    _dotenvValues = file == null ? const {} : _readDotenv(file);
-    final code = await _run(argv);
+    final code = await _run(argv, file == null ? const {} : _readDotenv(file));
     if (code != 0) io.exitCode = code;
     return code;
   }
 
-  Future<int> _run(List<String> argv) async {
-    final deepest = _Deepest();
+  Future<int> _run(List<String> argv, Map<String, String> dotenv) async {
+    final deepest = _Deepest(dotenv);
     late final _Parsed parsed;
     try {
       parsed = _parseCommand(this, argv, const [], deepest);
@@ -380,6 +401,10 @@ final class Command {
     }
     if (parsed.help) {
       print(_commandUsage(parsed.target, parsed.chain));
+      return 0;
+    }
+    if (parsed.version case final version?) {
+      print(version);
       return 0;
     }
     final context = Context._(parsed.target, parsed.chain, parsed.params, {for (final c in parsed.chain) ...c._params});
@@ -606,6 +631,38 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse, List<T>? values) 
   );
 }
 
+/// [reader] refusing values outside [min]..[max] (either may be null).
+/// A bound on a type that does not order, or an [or] outside the bounds,
+/// is an [ArgumentError].
+_Reader<T> _bounded<T>(String name, _Reader<T> reader, T? min, T? max, T? or) {
+  if (min == null && max == null) return reader;
+  for (final b in [min, max]) {
+    if (b != null && b is! Comparable) {
+      throw ArgumentError.value(b, 'min/max', 'Invalid bound for "$name": $T does not order');
+    }
+  }
+  if (min != null && max != null && (min as Comparable).compareTo(max) > 0) {
+    throw ArgumentError.value(min, 'min', 'Invalid bounds for "$name": min is above max');
+  }
+  String? fault(Object v) {
+    final low = min != null && (v as Comparable).compareTo(min) < 0;
+    final high = max != null && (v as Comparable).compareTo(max) > 0;
+    if (!low && !high) return null;
+    if (min != null && max != null) return 'between ${_shown(min)} and ${_shown(max)}';
+    return low ? 'at least ${_shown(min)}' : 'at most ${_shown(max)}';
+  }
+
+  if (or != null && fault(or) != null) {
+    throw ArgumentError.value(or, 'or', 'Invalid default for "$name": must be ${fault(or)}');
+  }
+  return _Reader((raw, what) {
+    final v = reader.read(raw, what);
+    final f = v == null ? null : fault(v);
+    if (f != null) throw ContentException('Invalid value "$raw" for $what: must be $f');
+    return v;
+  }, reader.hint);
+}
+
 /// The longest Duration in milliseconds (2^63 microseconds, rounded down):
 /// past it the value wraps negative.
 const _maxMs = 9.2e15;
@@ -674,6 +731,11 @@ Command? _findSub(List<Command> commands, String token) {
 
 /// The deepest command reached so far, for the "Run … --help" hint.
 final class _Deepest {
+  _Deepest(this.dotenv);
+
+  /// What the running command's `dotenv:` file holds: per run, never
+  /// shared between runs.
+  final Map<String, String> dotenv;
   List<Command> chain = const [];
 
   void touch(List<Command> c) {
@@ -684,16 +746,22 @@ final class _Deepest {
 }
 
 final class _Parsed {
-  _Parsed(this.target, this.chain, this.params, this.help);
+  _Parsed(this.target, this.chain, this.params, this.help, [this.version]);
 
   final Command target;
   final List<Command> chain;
   final Map<Param<Object?>, Object?> params;
   final bool help;
 
+  /// `name version` when `--version` was given.
+  final String? version;
+
+  /// Help or a version: nothing runs, so nothing is required.
+  bool get shown => help || version != null;
+
   String get fullName => chain.map((c) => c._name).join(' ');
 
-  _Parsed withHelp(bool h) => _Parsed(target, chain, params, help || h);
+  _Parsed withHelp(bool h, String? v) => _Parsed(target, chain, params, help || h, version ?? v);
 }
 
 /// Usage for `help a b …`: the resolved command, or a 64 with a suggestion
@@ -723,6 +791,7 @@ _Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
 /// Arg fails here.
 _Parsed _mergeParent(
   Command root,
+  Map<String, String> dotenv,
   Map<Param<Object?>, Object?> singles,
   Map<Param<Object?>, List<String>> multiRaws,
   _Parsed child,
@@ -737,9 +806,9 @@ _Parsed _mergeParent(
     final what = s == null ? 'option "--${key._name}"' : 'option "--${key._name}"/"-$s"';
     merged[key] = key._mergeMany!(e.value, what, merged[key]);
   }
-  _fromEnv(root, merged);
+  _fromEnv(root, merged, dotenv);
   // Required checks run at every level, parent included (skipped for --help).
-  if (!child.help) {
+  if (!child.shown) {
     for (final v in root._params) {
       if (v._isRequired && !merged.containsKey(v)) {
         if (v._isArg) {
@@ -754,7 +823,7 @@ _Parsed _mergeParent(
       merged[v] = v._absent();
     }
   }
-  return _Parsed(child.target, child.chain, merged, child.help);
+  return _Parsed(child.target, child.chain, merged, child.help, child.version);
 }
 
 List<Param<Object?>> _argDefsOf(Command cmd) {
@@ -797,6 +866,7 @@ final class _Parse {
   final multiRaws = <Param<Object?>, List<String>>{};
   final extraArgs = <String>[];
   var help = false;
+  String? version;
   var i = 0;
 
   _Parsed run() {
@@ -833,7 +903,7 @@ final class _Parse {
         // Carry parsed-so-far params into the child; the parent's
         // definitions bind and validate first.
         final child = _parseCommand(sub, argv.sublist(i + 1), chain, deepest);
-        return _mergeParent(root, params, multiRaws, child.withHelp(help));
+        return _mergeParent(root, deepest.dotenv, params, multiRaws, child.withHelp(help, version));
       }
       // No subcommand named and no Arg defs: unknown command.
       if (argDefs.isEmpty) {
@@ -859,6 +929,14 @@ final class _Parse {
     if (key == 'help') {
       help = true;
       return;
+    }
+    if (key == 'version' && inline == null) {
+      for (final c in chain.reversed) {
+        if (c._version case final v?) {
+          version = '${c._name} $v';
+          return;
+        }
+      }
     }
     final param = byLong[key];
     if (param == null || param._isArg) {
@@ -964,7 +1042,8 @@ final class _Parse {
     // Bind positionals to Arg defs (skipped for --help: help wins over
     // missing/unexpected).
     final args = _argDefsOf(root);
-    if (!help) {
+    final shown = help || version != null;
+    if (!shown) {
       var at = 0;
       for (final param in args) {
         if (param._isRest) {
@@ -985,9 +1064,9 @@ final class _Parse {
       if (at < extraArgs.length) throw ContentException('Unexpected argument "${extraArgs[at]}"');
       extraArgs.clear();
     }
-    _fromEnv(root, params);
+    _fromEnv(root, params, deepest.dotenv);
     // Required valued checks (before the handler runs; skipped for --help).
-    if (!help) {
+    if (!shown) {
       for (final v in root._params) {
         if (!v._isArg && v._isRequired && !params.containsKey(v)) {
           throw ContentException('Missing option --${v._name}');
@@ -998,12 +1077,9 @@ final class _Parse {
     for (final v in root._params) {
       if (v._isMulti && !params.containsKey(v)) params[v] = v._absent();
     }
-    return _Parsed(root, chain, params, help);
+    return _Parsed(root, chain, params, help, version);
   }
 }
-
-/// What the running command's `dotenv:` file holds.
-var _dotenvValues = const <String, String>{};
 
 /// `KEY=VALUE` lines of [path]; empty when it does not exist.
 Map<String, String> _readDotenv(String path) {
@@ -1050,11 +1126,11 @@ Map<String, String> _readDotenv(String path) {
 }
 
 /// Options not given fall back to their environment variable.
-void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
+void _fromEnv(Command root, Map<Param<Object?>, Object?> params, Map<String, String> dotenv) {
   for (final v in root._params) {
     if (v is Opt<Object?> && !params.containsKey(v)) {
       final name = v._env;
-      final raw = name == null ? null : io.Platform.environment[name] ?? _dotenvValues[name];
+      final raw = name == null ? null : io.Platform.environment[name] ?? dotenv[name];
       if (raw == null || raw.isEmpty) continue;
       try {
         params[v] = v._readOne!(raw, 'environment variable \$$name');
@@ -1118,6 +1194,7 @@ String _commandUsage(Command target, List<Command> chain) {
   ]);
   final optionRows = _optionRows(target);
   optionRows.add(_helpRow(target, chain));
+  if (chain.any((c) => c._version != null)) optionRows.add(('    --version', 'Show the version and exit.'));
   section('Options:', optionRows);
   final grows = <(String, String)>[];
   for (final a in chain.sublist(0, max(chain.length - 1, 0)).reversed) {
@@ -1190,6 +1267,14 @@ List<(String, String)> _optionRows(Command cmd) {
       case Opt<Object?>():
         final left = '${v._short != null ? '-${v._short}, ' : '    '}--${v._name} ${v._hint}';
         var right = v._help;
+        if (v._min != null || v._max != null) {
+          final range = v._min == null
+              ? '<= ${_shown(v._max)}'
+              : v._max == null
+              ? '>= ${_shown(v._min)}'
+              : '${_shown(v._min)}-${_shown(v._max)}';
+          right = '${right.isEmpty ? '' : '$right '}[$range]';
+        }
         if (v._env != null) right = '${right.isEmpty ? '' : '$right '}[env: ${v._env}]';
         if (v._or != null) {
           right = '${right.isEmpty ? '' : '$right '}[default: ${_shown(v._or)}]';

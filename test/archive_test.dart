@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' hide File;
-import 'dart:io' as io show File;
+import 'dart:io' as io show File, Link;
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show Hmac, sha1;
@@ -18,6 +19,7 @@ import 'package:dart_toolkit/src/zip.dart' as zip;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/sevenzip_writer.dart';
 
 List<int> _tarBlock(String name, int size, int typeflag, {String mode = '0000644'}) {
   final b = List<int>.filled(512, 0);
@@ -30,6 +32,14 @@ List<int> _tarBlock(String name, int size, int typeflag, {String mode = '0000644
   final sum = b.fold<int>(0, (a, c) => a + c);
   b.setRange(148, 155, sum.toRadixString(8).padLeft(6, '0').codeUnits + [0]);
   b[155] = 0x20;
+  return b;
+}
+
+/// A tar link header: [typeflag] '2' (symlink) or '1' (hardlink) to [target].
+List<int> _tarLink(String name, String target, {int typeflag = 0x32}) {
+  final b = _tarBlock(name, 0, typeflag);
+  b.setRange(157, 157 + target.length, target.codeUnits);
+  _resum(b, 0);
   return b;
 }
 
@@ -114,7 +124,7 @@ List<int> _rar5(
 }
 
 /// A 7z: [packed] streams at offset 32, then the raw [header].
-List<int> _sevenZip(List<int> packed, List<int> header) {
+List<int> _sevenzip(List<int> packed, List<int> header) {
   final start = [..._le32(packed.length), 0, 0, 0, 0, ..._le32(header.length), 0, 0, 0, 0, ..._le32(crc32(header))];
   return [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 4, ..._le32(crc32(start)), ...start, ...packed, ...header];
 }
@@ -127,9 +137,26 @@ int _central(List<int> z) {
   throw StateError('no central directory');
 }
 
-/// A one-member zip as [zip.writeZip] makes it.
-Uint8List _zip(List<int> data, {String? password}) =>
-    zip.writeZip([('f.txt', 0x1A4, data, DateTime(2020))], password: password);
+/// A one-member zip as [zip.zipStream] makes it.
+Future<Uint8List> _zip(List<int> data, {String? password}) async {
+  final out = BytesBuilder(copy: false);
+  final source = (
+    name: 'f.txt',
+    mode: 0x1A4,
+    mtime: DateTime(2020),
+    size: data.length,
+    open: () => Stream.value(data),
+    link: null,
+  );
+  await for (final chunk in zip.zipStream(Stream.value(source), password: password)) {
+    out.add(chunk);
+  }
+  return out.takeBytes();
+}
+
+/// A file member for [writeSevenzip] (test/support).
+({String name, int mode, List<int> data, DateTime mtime, bool link}) _sevenFile(String name, List<int> data) =>
+    (name: name, mode: 0x1A4, data: data, mtime: DateTime(2020), link: false);
 
 /// Legacy ZipCrypto encryption (PKWARE APPNOTE 6.1), for crafting old zips.
 List<int> _zipCrypto(List<int> plain, String password, int crc) {
@@ -328,7 +355,7 @@ void main() {
       await Process.run('chmod', ['755', p('src/d/run.sh')]);
       await Fs.file(p('src/d/empty.txt')).write('');
       await Fs.dir(p('src/e')).create();
-      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenZip) > Fs.file(p('ours.7z')));
+      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip) > Fs.file(p('ours.7z')));
       await (Fs.file(p('ours.7z')) > Archive.unarchive(p('o1')));
       expect(await Fs.file(p('o1/a.txt')).text(), 'seven ' * 4000);
       expect(await Fs.file(p('o1/d/empty.txt')).text(), '');
@@ -340,7 +367,7 @@ void main() {
         expect(r.exitCode, 0, reason: '${r.stderr}');
         expect(await Fs.file(p('o2/a.txt')).text(), 'seven ' * 4000);
       }
-      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenZip, password: 'pw') >
+      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip, password: 'pw') >
           Fs.file(p('enc.7z')));
       final raw = String.fromCharCodes(await Fs.file(p('enc.7z')).bytes());
       expect(raw.contains('a\u0000.\u0000t\u0000x\u0000t'), isFalse); // names are encrypted too
@@ -397,7 +424,7 @@ void main() {
       expect(await Fs.entry(p('mixed/a.txt')), isNull);
     });
 
-    test('RAR4: the E8 filter, AES-128 with encrypted names and solid, links refused', () async {
+    test('RAR4: the E8 filter, AES-128 with encrypted names and solid, a link kept', () async {
       final fx = 'test/fixtures/archives';
       await (Fs.file('$fx/rar4_filter.rar') > Archive.unarchive(p('exe')));
       expect(await Fs.file(p('exe/bsdcat.exe')).size(), 204288);
@@ -418,10 +445,10 @@ void main() {
         Fs.file('$fx/rar4_encrypted.rar') > Archive.unarchive(p('mixed'), password: 'password'),
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('d.txt'))),
       );
-      await expectLater(
-        Fs.file('$fx/rar4_links.rar') > Archive.unarchive(p('links')),
-        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('link'))),
-      );
+      await (Fs.file('$fx/rar4_links.rar') > Archive.unarchive(p('links')));
+      expect(await io.Link(p('links/testlink')).target(), 'LibarchiveAddingTest.html');
+      expect((await Fs.file(p('links/testlink')).text()).length, 20111);
+      expect(await Fs.dir(p('links/testemptydir')).exists(), isTrue);
     });
 
     test('.tar.xz unarchives, with CRC32, CRC64 and SHA-256 checks', () async {
@@ -529,7 +556,7 @@ void main() {
         Reader.of(bytes.sublist(0, bytes.length - 30)) > Archive.unarchive(p('o2')),
         throwsFormatException,
       );
-    });
+    }, timeout: const Timeout(Duration(minutes: 3))); // ~20 s alone, far more beside the whole suite
   });
 
   group('Archive.archive', () {
@@ -1073,7 +1100,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     test('a 7z encoded header pointing at itself fails instead of looping', () async {
       // 0x17, pack info (stream at 0, 18 bytes), one Copy coder, unpack size 18.
       final header = [0x17, 0x06, 0, 1, 0x09, 18, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 18, 0, 0];
-      await expectLater(unpack(_sevenZip(const [], header)), throwsA(content('nest too deep')));
+      await expectLater(unpack(_sevenzip(const [], header)), throwsA(content('nest too deep')));
     }, timeout: const Timeout(Duration(seconds: 10)));
 
     test('a 7z encoded header is checked against its CRC', () async {
@@ -1082,19 +1109,18 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         ...[0x17, 0x06, 0, 1, 0x09, 2, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 2],
         ...[0x0A, 1, ..._le32(crc), 0, 0],
       ];
-      expect(sevenzip.readSevenZip(Uint8List.fromList(_sevenZip(real, encoded(crc32(real))))), isEmpty);
-      await expectLater(unpack(_sevenZip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
+      expect(sevenzip.readSevenzip(Uint8List.fromList(_sevenzip(real, encoded(crc32(real))))), isEmpty);
+      await expectLater(unpack(_sevenzip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
     });
 
-    test('zip and 7z refuse data over 4 GiB instead of writing it short', () {
+    test('7z refuses data over 4 GiB instead of writing it short', () {
       final huge = Uint8List((1 << 32) + 10); // untouched pages: costs no memory
       final tooBig = isA<ContentException>().having((e) => e.message, 'message', contains('4 GiB'));
-      expect(() => zip.writeZip([('f', 0x1A4, huge, DateTime(2020))]), throwsA(tooBig));
-      expect(() => sevenzip.writeSevenZip([('f', 0x1A4, huge)]), throwsA(tooBig));
+      expect(() => writeSevenzip([_sevenFile('f', huge)]), throwsA(tooBig));
     });
 
     test('zip members that share bytes are refused (an overlap bomb)', () async {
-      final z = _zip(List.filled(5000, 0));
+      final z = await _zip(List.filled(5000, 0));
       final cd = _central(z), end = z.length - 22;
       final again = Uint8List.fromList(z.sublist(cd, end))..[46] = 0x67; // a second name for the same data
       final eocd = ByteData.sublistView(Uint8List.fromList(z.sublist(end)))
@@ -1107,8 +1133,8 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('a 7z asking for more than 2^24 key rounds is refused, not spun on', () {
-      final b = sevenzip.writeSevenZip([
-        ('a.txt', 0x1A4, [1, 2, 3]),
+      final b = writeSevenzip([
+        _sevenFile('a.txt', [1, 2, 3]),
       ], password: 'pw');
       final bd = ByteData.sublistView(b);
       final hs = 32 + bd.getUint64(12, Endian.little), hl = bd.getUint64(20, Endian.little);
@@ -1116,13 +1142,13 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       bd.setUint32(28, crc32(b, start: hs, end: hs + hl), Endian.little);
       bd.setUint32(8, crc32(b, start: 12, end: 32), Endian.little);
       final sw = Stopwatch()..start();
-      expect(() => sevenzip.readSevenZip(b, password: 'pw').first.data(), throwsA(isContent));
+      expect(() => sevenzip.readSevenzip(b, password: 'pw').first.data(), throwsA(isContent));
       expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
     });
 
     test('7z data is checked against its file, folder and start-header CRCs', () async {
       // One Copy folder holding "aa" and "bb"; CRCs per file, or one for the folder.
-      List<int> twoFiles({required bool perFile}) => _sevenZip('aabb'.codeUnits, [
+      List<int> twoFiles({required bool perFile}) => _sevenzip('aabb'.codeUnits, [
         ...[0x01, 0x04, 0x06, 0, 1, 0x09, 4, 0, 0x07, 0x0B, 1, 0, 1, 0x01, 0x00, 0x0C, 4],
         if (!perFile) ...[0x0A, 1, ..._le32(crc32('aabb'.codeUnits))],
         ...[0, 0x08, 0x0D, 2, 0x09, 2],
@@ -1143,16 +1169,16 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
 
     test('7z counts and sizes past the header are damage, not a RangeError or an allocation', () async {
       // A names property of size 0, then 2^40 files.
-      await expectLater(unpack(_sevenZip(const [], [0x01, 0x05, 1, 0x11, 0, 0, 0, 0])), throwsA(isContent));
+      await expectLater(unpack(_sevenzip(const [], [0x01, 0x05, 1, 0x11, 0, 0, 0, 0])), throwsA(isContent));
       await expectLater(
-        unpack(_sevenZip(const [], [0x01, 0x05, 0xFC, 0, 0, 0, 0, 0, 1, 0, 0])),
+        unpack(_sevenzip(const [], [0x01, 0x05, 0xFC, 0, 0, 0, 0, 0, 1, 0, 0])),
         throwsA(content('files in a')),
       );
     });
 
     test('a 7z folder is freed after its last member and decodes again when asked', () async {
-      final z = sevenzip.writeSevenZip([('a', 0x1A4, 'aaa'.codeUnits), ('b', 0x1A4, 'bbbb'.codeUnits)]);
-      final entries = sevenzip.readSevenZip(z);
+      final z = writeSevenzip([_sevenFile('a', 'aaa'.codeUnits), _sevenFile('b', 'bbbb'.codeUnits)]);
+      final entries = sevenzip.readSevenzip(z);
       expect([for (final e in entries) utf8.decode(e.data())], ['aaa', 'bbbb']);
       expect(utf8.decode(entries.first.data()), 'aaa');
     });
@@ -1224,7 +1250,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
 
     test('zip CRCs are checked (stored and deflated)', () async {
       for (final data in ['ab'.codeUnits, List.filled(1000, 0x78)]) {
-        final z = _zip(data);
+        final z = await _zip(data);
         final cd = _central(z);
         expect(zip.readZip(z).single.data(), data);
         z[cd + 16] ^= 1;
@@ -1249,14 +1275,14 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('a deflate member stops at its declared size', () async {
-      final z = _zip(Uint8List(1 << 20));
+      final z = await _zip(Uint8List(1 << 20));
       final cd = _central(z);
       z.setRange(cd + 24, cd + 28, _le32(1000));
       await expectLater(unpack(z), throwsA(content('past its declared 1000 bytes')));
     });
 
     test('a bad WinZip AES extra field is damage', () async {
-      final z = _zip('x'.codeUnits, password: 'pw');
+      final z = await _zip('x'.codeUnits, password: 'pw');
       final cd = _central(z);
       z[cd + 46 + 5 + 8] = 7; // strength
       await expectLater(unpack(z, password: 'pw'), throwsA(content('bad AES extra field')));
@@ -1264,7 +1290,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('a zip64 offset that wraps negative is damage, not a RangeError', () async {
-      final z = _zip('ab'.codeUnits);
+      final z = await _zip('ab'.codeUnits);
       final cd = _central(z);
       final zip64 = [1, 0, 8, 0, ...List.filled(8, 0xFF)];
       final bad = [...z.sublist(0, cd + 46 + 5), ...zip64, ...z.sublist(cd + 46 + 5)];
@@ -1384,5 +1410,360 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         throwsFormatException,
       );
     });
+  });
+
+  group('links, times, formats and streams', () {
+    Future<bool> has(String tool) async {
+      try {
+        return (await Process.run('which', [tool])).exitCode == 0;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    List<int> tarOf(List<List<int>> members) => [for (final m in members) ...m, ...List.filled(1024, 0)];
+    List<int> file(String name, String body) => [..._tarBlock(name, body.length, 0x30), ..._tarBody(body.codeUnits)];
+    Matcher refused(String text) =>
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', contains(text)));
+
+    test(
+      '.tar.xz with x86, ARM64 and delta filters (regression: only LZMA2 was read, so 7-Zip could not bootstrap)',
+      () async {
+        if (!await has('xz')) return markTestSkipped('needs xz');
+        // Code-like bytes so the branch filters change something.
+        final body = [for (var i = 0; i < 200000; i++) i % 7 == 0 ? 0xE8 : (i * 31) & 0xFF];
+        await (Reader.of(body) > Fs.file(p('src/code.bin')));
+        for (final f in ['x86', 'arm64', 'delta']) {
+          final tar = await Process.run('tar', ['cf', p('t-$f.tar'), '-C', p('src'), 'code.bin']);
+          expect(tar.exitCode, 0);
+          expect((await Process.run('xz', ['-f', '--$f', '--lzma2', p('t-$f.tar')])).exitCode, 0);
+          await (Fs.file(p('t-$f.tar.xz')) > Archive.unarchive(p('out-$f')));
+          expect(await Fs.file(p('out-$f/code.bin')).bytes(), body, reason: f);
+        }
+      },
+    );
+
+    test('a symlink inside the folder unpacks as a link; a hardlink as a copy', () async {
+      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      final tar = tarOf([
+        file('pkg/bin/tool.js', 'run'),
+        _tarLink('pkg/.bin/tool', '../bin/tool.js'),
+        _tarLink('pkg/same.js', 'pkg/bin/tool.js', typeflag: 0x31),
+        _tarLink('pkg/self', '.'),
+      ]);
+      await Archive.unarchive(p('out')).consume(Stream.value(tar));
+      expect(await io.Link(p('out/pkg/.bin/tool')).target(), '../bin/tool.js');
+      expect(await Fs.file(p('out/pkg/.bin/tool')).text(), 'run');
+      expect(await FileSystemEntity.isLink(p('out/pkg/same.js')), isFalse);
+      expect(await Fs.file(p('out/pkg/same.js')).text(), 'run');
+      expect(await io.Link(p('out/pkg/self')).target(), '.');
+    });
+
+    test('links that leave the folder are refused by name before anything lands', () async {
+      final cases = {
+        'up': [_tarLink('a/up', '../../etc')],
+        'abs': [_tarLink('abs', '/etc/passwd')],
+        'chain': [_tarLink('dot', '.'), _tarLink('esc', 'dot/..')], // dot/.. is the parent of the root
+        'loop': [_tarLink('l1', 'l2/x'), _tarLink('l2', 'l1/x')],
+        'hard': [_tarLink('h', '../x', typeflag: 0x31)],
+        'hardToDir': [_tarLink('h', 'real', typeflag: 0x31)],
+        'through': [_tarLink('d', 'real'), _tarLink('d/x', 'y')],
+      };
+      for (final MapEntry(key: name, value: members) in cases.entries) {
+        final tar = tarOf([file('real/y', 'y'), file('x', 'x'), ...members]);
+        await expectLater(Archive.unarchive(p(name)).consume(Stream.value(tar)), throwsFormatException, reason: name);
+        expect(await Fs.entry(p(name)), isNull, reason: name);
+      }
+      await expectLater(
+        Archive.unarchive(p('named')).consume(Stream.value(tarOf([_tarLink('evil', '../../x')]))),
+        refused('evil -> ../../x'),
+      );
+    });
+
+    test('our tar, zip and 7z store links inside dir and refuse ones outside', () async {
+      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      await Fs.file(p('src/lib/a.txt')).write('a');
+      await io.Link(p('src/link')).create('lib/a.txt');
+      for (final format in ArchiveFormat.values) {
+        await (Archive.archive(['.'], dir: p('src'), format: format) > Archive.unarchive(p('out_${format.name}')));
+        expect(await io.Link(p('out_${format.name}/link')).target(), 'lib/a.txt', reason: format.name);
+        expect(await Fs.file(p('out_${format.name}/link')).text(), 'a', reason: format.name);
+      }
+      if (await has('unzip')) {
+        await (Archive.archive(['.'], dir: p('src')) > Fs.file(p('l.zip')));
+        expect((await Process.run('unzip', ['-tq', p('l.zip')])).exitCode, 0);
+      }
+      await io.Link(p('src/out')).create('../../elsewhere');
+      await expectLater(
+        Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tar).bytes(),
+        refused('outside dir'),
+      );
+    });
+
+    test('zips with symlinks (zip -y) unpack the link', () async {
+      if (!await has('zip')) markTestSkipped('needs zip');
+      await Fs.file(p('src/real.txt')).write('r');
+      await io.Link(p('src/ln')).create('real.txt');
+      await Process.run('zip', ['-qry', p('y.zip'), '.'], workingDirectory: p('src'));
+      await (Fs.file(p('y.zip')) > Archive.unarchive(p('out')));
+      expect(await io.Link(p('out/ln')).target(), 'real.txt');
+    });
+
+    test('mtimes survive in every format, ours and others\'', () async {
+      final when = DateTime(2001, 2, 3, 4, 5, 6);
+      await Fs.file(p('src/a.txt')).write('a' * 3000);
+      await Fs.file(p('src/d/b.txt')).write('b');
+      await io.File(p('src/a.txt')).setLastModified(when);
+      await io.File(p('src/d/b.txt')).setLastModified(when);
+      for (final format in ArchiveFormat.values) {
+        await (Archive.archive(['.'], dir: p('src'), format: format) > Archive.unarchive(p('o_${format.name}')));
+        for (final f in ['a.txt', 'd/b.txt']) {
+          expect(await io.File(p('o_${format.name}/$f')).lastModified(), when, reason: '${format.name} $f');
+        }
+      }
+      // RAR5 stores unix seconds; this fixture's members are from 2018-09-27.
+      await (Fs.file('test/fixtures/archives/rar5_multiple_files.rar') > Archive.unarchive(p('rar')));
+      final t = await io.File(p('rar/test1.bin')).lastModified();
+      expect([t.year, t.month], [2018, 9]);
+      if (await has('bsdtar')) {
+        await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip) > Fs.file(p('t.7z')));
+        final listing = await Process.run('bsdtar', ['-tvf', p('t.7z')]);
+        expect('${listing.stdout}', contains('2001'));
+      }
+    });
+
+    test('7-Zip reads .tar.bz2, .tar.zst and ar for us', () async {
+      if (Platform.isWindows) return markTestSkipped("Windows' 7zr reads 7z only");
+      await Fs.file(p('src/a.txt')).write('hello');
+      for (final (tool, ext) in [('bzip2', 'bz2'), ('zstd', 'zst')]) {
+        if (!await has(tool)) continue;
+        expect((await Process.run('tar', ['cf', p('t.tar'), '-C', p('src'), 'a.txt'])).exitCode, 0);
+        expect((await Process.run(tool, ['-f', '-q', p('t.tar')])).exitCode, 0);
+        await (Fs.file(p('t.tar.$ext')) > Archive.unarchive(p('out-$ext')));
+        expect(await Fs.file(p('out-$ext/a.txt')).text(), 'hello', reason: ext);
+      }
+      // A GNU ar (a .deb's container), built by hand.
+      String pad(String v, int n) => v.padRight(n);
+      final header =
+          '${pad('a.txt/', 16)}${pad('0', 12)}${pad('0', 6)}${pad('0', 6)}${pad('100644', 8)}${pad('5', 10)}`\n';
+      await (Reader.of(ascii.encode('!<arch>\n${header}hello\n')) > Archive.unarchive(p('out-ar')));
+      expect(await Fs.file(p('out-ar/a.txt')).text(), 'hello');
+    });
+
+    test('7z bigger than the in-memory limit goes through 7-Zip; a 7z write is LZMA2', () async {
+      // Incompressible, so the archive itself passes 32 MiB.
+      final big = Uint8List(33 << 20);
+      final rnd = Random(7);
+      for (var i = 0; i < big.length; i++) {
+        big[i] = rnd.nextInt(256);
+      }
+      await (Reader.of(big) > Fs.file(p('src/big.bin')));
+      await Fs.file(p('src/small.txt')).write('aaaa' * 1000);
+      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip) > Fs.file(p('big.7z')));
+      expect(await io.File(p('big.7z')).length(), greaterThan(32 << 20));
+      await (Fs.file(p('big.7z')) > Archive.unarchive(p('out')));
+      expect((await Fs.file(p('out/big.bin')).bytes()).length, big.length);
+      expect(await Fs.file(p('out/small.txt')).text(), 'aaaa' * 1000);
+      if (await has('7zz')) {
+        final listing = await Process.run('7zz', ['l', '-slt', p('big.7z')]);
+        expect('${listing.stdout}', contains('LZMA2'));
+      }
+    });
+
+    test('unsupported formats are named, and xz holding no tar says so', () async {
+      // bzip2 and zstd go to 7-Zip, which names the broken stream.
+      final named = {
+        'bzip2': [0x42, 0x5A, 0x68, 0x39, ...List.filled(600, 1)],
+        'zstd': [0x28, 0xB5, 0x2F, 0xFD, ...List.filled(600, 1)],
+        'lz4': [0x04, 0x22, 0x4D, 0x18, ...List.filled(600, 1)],
+        'lzip': [0x4C, 0x5A, 0x49, 0x50, ...List.filled(600, 1)],
+      };
+      for (final MapEntry(key: name, value: bytes) in named.entries) {
+        await expectLater(Reader.of(bytes) > Archive.unarchive(p(name)), refused(name), reason: name);
+      }
+      await expectLater(
+        Reader.of(List.filled(600, 7)) > Archive.unarchive(p('junk')),
+        refused('unknown archive format'),
+      );
+      final xzBytes = await Process.start('xz', ['-zc'])
+          .then((proc) async {
+            proc.stdin.add(utf8.encode('just text, not a tar ' * 100));
+            await proc.stdin.close();
+            return (await proc.stdout.expand((c) => c).toList());
+          })
+          .catchError((_) => <int>[]);
+      if (xzBytes.isEmpty) markTestSkipped('needs xz');
+      await expectLater(Reader.of(xzBytes) > Archive.unarchive(p('x')), refused('xz data is not a tar'));
+    });
+
+    test('an AppleDouble member is dropped however its first bytes are chunked', () async {
+      final ad = [0, 5, 0x16, 7, 0, 2, 0, 0];
+      final tar = tarOf([
+        [..._tarBlock('._a.txt', ad.length, 0x30), ..._tarBody(ad)],
+        file('a.txt', 'a'),
+        file('._b', 'hi'),
+      ]);
+      Stream<List<int>> bytes() async* {
+        for (final b in tar) {
+          yield [b];
+        }
+      }
+
+      await Archive.unarchive(p('out')).consume(bytes());
+      expect((await Fs.dir(p('out')).list()).map((e) => e.name()), ['._b', 'a.txt']);
+    });
+
+    test('a tgz padded with zeros after the gzip member unpacks; a cut one still fails', () async {
+      await Fs.file(p('src/a.txt')).write('a' * 1000);
+      final tgz = await Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tgz).bytes();
+      await (Reader.of([...tgz, ...List.filled(10240, 0)]) > Archive.unarchive(p('padded')));
+      expect(await Fs.file(p('padded/a.txt')).text(), 'a' * 1000);
+      await expectLater(
+        Reader.of([...tgz.sublist(0, tgz.length - 8), ...List.filled(512, 0)]) > Archive.unarchive(p('cut')),
+        throwsFormatException,
+      );
+      // A plain gunzip has no tar to vouch for the data: padding stays an error.
+      await expectLater(
+        Archive.gunzip().transform(Stream.value([...tgz, 0, 0, 0, 0])).drain<void>(),
+        throwsFormatException,
+      );
+    });
+
+    test('dir: can be a link to a folder', () async {
+      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      await Fs.file(p('real/a.txt')).write('a');
+      await io.Link(p('alias')).create(p('real'));
+      await (Archive.archive(['.'], dir: p('alias'), format: ArchiveFormat.tar) > Archive.unarchive(p('out')));
+      expect(await Fs.file(p('out/a.txt')).text(), 'a');
+    });
+
+    test('a .tar.xz streams: the first member lands before the input ends', () async {
+      final made = await Process.run('python3', [
+        '-I',
+        '-c',
+        'import tarfile,lzma,io,sys,os\n'
+            'buf=io.BytesIO()\n'
+            'with tarfile.open(fileobj=buf,mode="w") as t:\n'
+            '  for n in ["a.bin","b.bin"]:\n'
+            '    d=os.urandom(1<<20); i=tarfile.TarInfo(n); i.size=len(d); t.addfile(i, io.BytesIO(d))\n'
+            'open(sys.argv[1],"wb").write(lzma.compress(buf.getvalue(),preset=0))',
+        p('two.tar.xz'),
+      ]);
+      if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+      final bytes = await Fs.file(p('two.tar.xz')).bytes();
+      final feed = StreamController<List<int>>();
+      final done = Archive.unarchive(p('out')).consume(feed.stream);
+      feed.add(bytes.sublist(0, bytes.length * 3 ~/ 4));
+      FileSystemEntity? staging() =>
+          Directory(tmp.path).listSync().where((e) => e.path.contains('.out.tmp')).firstOrNull;
+      for (var i = 0; i < 100 && (staging() == null || !io.File('${staging()!.path}/b.bin').existsSync()); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(io.File('${staging()!.path}/a.bin').lengthSync(), 1 << 20);
+      feed.add(bytes.sublist(bytes.length * 3 ~/ 4));
+      await feed.close();
+      await done;
+      expect(await Fs.file(p('out/b.bin')).size(), 1 << 20);
+    });
+
+    test('in-memory formats decode off the main isolate: timers keep running', () async {
+      if (!await has('bsdtar')) markTestSkipped('needs bsdtar');
+      final text = [for (var i = 0; i < 1500000; i++) 'w${i * 7919 % 50021} '].join();
+      await Fs.file(p('src/t.txt')).write(text);
+      final made = await Process.run('bsdtar', [
+        '--format',
+        '7zip',
+        '--options',
+        '7zip:compression=lzma2',
+        '-cf',
+        p('t.7z'),
+        't.txt',
+      ], workingDirectory: p('src'));
+      expect(made.exitCode, 0, reason: '${made.stderr}');
+      var worst = Duration.zero;
+      var last = DateTime.now();
+      final timer = Timer.periodic(const Duration(milliseconds: 5), (_) {
+        final now = DateTime.now();
+        if (now.difference(last) > worst) worst = now.difference(last);
+        last = now;
+      });
+      final sw = Stopwatch()..start();
+      await (Fs.file(p('t.7z')) > Archive.unarchive(p('out')));
+      timer.cancel();
+      expect(await Fs.file(p('out/t.txt')).text(), text);
+      expect(worst, lessThan(sw.elapsed ~/ 2), reason: 'decode ${sw.elapsed}, longest stall $worst');
+
+      // Ctrl-C while the isolate decodes: it is stopped, the staging goes.
+      if (Platform.isWindows) return;
+      final proc = await Process.start(Platform.resolvedExecutable, [
+        'test/fixtures/archive_probe.dart',
+        p('t.7z'),
+        p('int/out'),
+      ]);
+      final lines = proc.stdout.transform(const SystemEncoding().decoder).transform(const LineSplitter());
+      await lines.firstWhere((l) => l.trim() == 'ready').timeout(const Duration(seconds: 60));
+      proc.kill(ProcessSignal.sigint);
+      expect(await proc.exitCode.timeout(const Duration(seconds: 20)), 130);
+      expect(Directory(p('int')).listSync(), isEmpty); // the staging made `int`, then went
+    });
+
+    test('zip64: 70,000 members get a zip64 end record that unzip reads', () async {
+      final members = Stream.fromIterable([
+        for (var i = 0; i < 70000; i++)
+          (name: 'd/$i', mode: 0x1A4, mtime: DateTime(2020), size: 0, open: null, link: null),
+      ]);
+      final out = BytesBuilder(copy: false);
+      await for (final c in zip.zipStream(members)) {
+        out.add(c);
+      }
+      final z = out.takeBytes();
+      expect(zip.readZip(z).length, 70000);
+      if (await has('unzip')) {
+        await (Reader.of(z) > Fs.file(p('many.zip')));
+        final r = await Process.run('unzip', ['-l', p('many.zip')]);
+        expect('${r.stdout}', contains('70000 files'));
+      }
+    });
+
+    test(
+      'zip64: a file past 4 GiB streams through in constant memory and unzip checks it',
+      () async {
+        if (!await has('unzip')) markTestSkipped('needs unzip');
+        final big = io.File(p('src/big.bin'));
+        await Fs.dir(p('src')).create();
+        (await big.open(mode: FileMode.write))
+          ..setPositionSync((1 << 32) + 4096)
+          ..writeFromSync([1])
+          ..closeSync(); // sparse: costs no disk
+        final rss = ProcessInfo.currentRss;
+        await (Archive.archive(['.'], dir: p('src')) > Fs.file(p('big.zip')));
+        expect(ProcessInfo.currentRss - rss, lessThan(256 << 20));
+        final r = await Process.run('unzip', ['-tq', p('big.zip')]);
+        expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
+        final l = await Process.run('unzip', ['-l', p('big.zip')]);
+        expect('${l.stdout}', contains('${(1 << 32) + 4097}'));
+      },
+      tags: 'slow',
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+
+    test('LZMA2 with a dictionary past the slack slides its window exactly', () async {
+      final made = await Process.run('python3', [
+        '-I',
+        '-c',
+        'import tarfile,lzma,io,sys,random,hashlib\n'
+            'r=random.Random(3); words=[bytes(r.choice(b"abcdefgh") for _ in range(r.randint(2,9))) for _ in range(3000)]\n'
+            'data=b" ".join(r.choice(words) for _ in range(9000000))\n'
+            'buf=io.BytesIO(); i=tarfile.TarInfo("big.txt"); i.size=len(data)\n'
+            'with tarfile.open(fileobj=buf,mode="w") as t: t.addfile(i, io.BytesIO(data))\n'
+            'f=[{"id": lzma.FILTER_LZMA2, "preset": 1, "dict_size": 12<<20}]\n'
+            'open(sys.argv[1],"wb").write(lzma.compress(buf.getvalue(),filters=f))\n'
+            'print(hashlib.sha256(data).hexdigest())',
+        p('big.tar.xz'),
+      ]);
+      if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+      await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
+      expect(await Hash.sha256().of(Fs.file(p('big/big.txt'))), '${made.stdout}'.trim());
+    }, tags: 'slow');
   });
 }

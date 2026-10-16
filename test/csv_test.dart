@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:dart_toolkit/csv.dart';
 import 'package:test/test.dart';
 
 void main() {
+  streaming();
   test('parse: quotes, "" escapes, CRLF and LF, embedded newlines, BOM', () {
     expect(Csv.parse('﻿a,b\r\n"x, y","say ""hi"""\n"two\nlines",\n'), [
       ['a', 'b'],
@@ -44,4 +47,43 @@ void main() {
       ['1', '2'],
     ]);
   });
+}
+
+void streaming() {
+  test('a blank line is no record (regression: became [""])', () {
+    expect(Csv.parse('a,b\n\n1,2\r\n\r\n'), [
+      ['a', 'b'],
+      ['1', '2'],
+    ]);
+    expect(Csv.records('k\n\nv\n'), [
+      {'k': 'v'},
+    ]);
+    expect(Csv.parse('a\n""\n'), [
+      ['a'],
+      [''],
+    ]);
+    expect(() => Csv.parse('a', sep: ''), throwsArgumentError);
+  });
+
+  test('reader.rows() streams rows across chunk boundaries', () async {
+    const text = '﻿a,"b ""q"""\r\n"multi\nline",2\r\n\r\nx,y';
+    final whole = Csv.parse(text);
+    final bytes = utf8.encode(text);
+    // Every split point: quotes, CRLF and the BOM may straddle chunks.
+    for (var cut = 0; cut <= bytes.length; cut++) {
+      final r = _Chunks([bytes.sublist(0, cut), bytes.sublist(cut)]);
+      expect(await r.rows().toList(), whole, reason: 'cut at $cut');
+    }
+    expect(await Future<Reader>.value(Reader.of(utf8.encode('1;2'))).rows(sep: ';').toList(), [
+      ['1', '2'],
+    ]);
+    await expectLater(_Chunks([utf8.encode('"open')]).rows().toList(), throwsA(isA<ContentException>()));
+  });
+}
+
+final class _Chunks with Reader {
+  _Chunks(this._parts);
+  final List<List<int>> _parts;
+  @override
+  Stream<List<int>> stream() => Stream.fromIterable(_parts);
 }

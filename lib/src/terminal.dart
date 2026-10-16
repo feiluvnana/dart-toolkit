@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:isolate';
 
+import 'format.dart';
 import 'winconsole.dart' as win;
 
 import 'sanitize.dart';
@@ -37,7 +38,15 @@ Stream<List<int>> sharedStdin() {
 }
 
 StreamController<List<int>> _makeInput() =>
-    StreamController<List<int>>.broadcast(onListen: _startInput, onCancel: _stopInput);
+    StreamController<List<int>>.broadcast(onListen: _startInput, onCancel: () => _stopping = _stopInput());
+
+/// The last stop of the tty child, so a suspend can wait until nothing
+/// reads the terminal any more.
+Future<void>? _stopping;
+
+/// Completes once the input the last listener cancelled has stopped: the
+/// tty child has exited, so it reads no keystroke meant for the shell.
+Future<void> inputStopped() => _stopping ?? Future<void>.value();
 
 var _input = _makeInput();
 io.Process? _tty;
@@ -66,7 +75,43 @@ final bool stdinTty = () {
   }
 }();
 
-Future<String?> pipedLine() => Isolate.run(_readLineSync);
+Future<String?> pipedLine({Duration? timeout}) {
+  if (timeout == null || io.Platform.isWindows) {
+    final line = Isolate.run(_readLineSync);
+    return timeout == null ? line : line.timeout(timeout, onTimeout: () => throw TimeoutException('no answer', timeout));
+  }
+  return _pipedLineChild(timeout);
+}
+
+/// A piped line that can be given up on: an isolate blocked in
+/// `readLineSync` cannot be stopped and keeps the VM alive until a line
+/// arrives, but a child shell's `read` (which, on a pipe, takes nothing
+/// past the newline) can be killed. Its answer comes back through a temp
+/// file, since the child shares our stdin and so all three streams.
+Future<String?> _pipedLineChild(Duration timeout) async {
+  final dir = await io.Directory.systemTemp.createTemp('dart_toolkit_ask');
+  final out = '${dir.path}/line';
+  try {
+    final p = await io.Process.start('/bin/sh', [
+      '-c',
+      r'IFS= read -r l; r=$?; printf %s "$l" > "$0"; exit $r',
+      out,
+    ], mode: io.ProcessStartMode.inheritStdio);
+    final code = await p.exitCode.timeout(
+      timeout,
+      onTimeout: () {
+        p.kill(); // only this child: its `read` is ours to stop
+        throw TimeoutException('no answer', timeout);
+      },
+    );
+    final file = io.File(out);
+    final bytes = await file.exists() ? await file.readAsBytes() : const <int>[];
+    if (code != 0 && bytes.isEmpty) return null; // EOF
+    return utf8.decode(bytes, allowMalformed: true);
+  } finally {
+    unawaited(dir.delete(recursive: true).then((_) {}, onError: (_) {}));
+  }
+}
 
 String? _readLineSync() => io.stdin.readLineSync(encoding: const Utf8Codec(allowMalformed: true));
 var _session = 0;
@@ -135,7 +180,11 @@ Future<void> _stopInput() async {
   } catch (_) {
     // Give up waiting: the stdin pipe below still lets the child exit.
   }
-  if (tty != null) _endTty(tty);
+  if (tty == null) return;
+  _endTty(tty);
+  try {
+    await tty.exitCode.timeout(const Duration(seconds: 1));
+  } catch (_) {}
 }
 
 /// A decoded input event.
@@ -214,17 +263,41 @@ abstract class TuiBridge {
   void spinEnded(Object id, bool ok);
   Object barStarted(int? total, String? label);
   void barMode(Object id, bool bytes);
-  void barTick(Object id, int count);
+  void barTick(Object id, int count, int fresh); // fresh: what counts towards the rate
   void barEnded(Object id, bool ok);
   void barTotal(Object id, int? total);
   void log(String line);
   void notify(String message);
   void copy(String text);
 
-  /// Prompts resolve null when the popup is cancelled (Escape, Ctrl-C).
-  Future<String?> promptAsk(String question, {required bool secret});
+  /// Prompts resolve null when the popup is cancelled (Escape, Ctrl-C) or
+  /// [timeout] passes with no answer.
+  Future<String?> promptAsk(String question, {required bool secret, Duration? timeout});
   Future<bool?> promptConfirm(String question, bool or);
   Future<String?> promptChoose(String question, List<String> choices, int initial);
+}
+
+/// How long a lone ESC waits for the rest of a sequence before it counts
+/// as Escape. One value for the Tui and the Console prompts.
+const escapeWait = Duration(milliseconds: 50);
+
+/// How long any other held run (a split sequence or character) waits for
+/// its sequel before it is dropped.
+const heldWait = Duration(seconds: 1);
+
+/// What [held] (the bytes [decodeKeys] left unconsumed) means after
+/// [waited] with no new byte: null keeps holding, `''` drops it, anything
+/// else is the key it was. A lone ESC is Escape after [escapeWait]; a
+/// split character (a UTF-8 lead byte over a slow link, never Escape) or
+/// sequence (`ESC [` …) waits [heldWait] and is dropped; an
+/// unterminated paste waits for its end however long it takes.
+String? resolveHeld(List<int> held, Duration waited) {
+  if (held.isEmpty) return '';
+  if (held.length >= 2 && held[0] == 0x1b && held[1] == 0x5b && _isPasteStart(held, 0, held.indexOf(0x7e))) {
+    return null;
+  }
+  if (held.length == 1 && held[0] == 0x1b && waited >= escapeWait) return 'escape';
+  return waited >= heldWait ? '' : null;
 }
 
 /// Decode raw stdin [bytes] into events. Returns the events plus how many
@@ -319,8 +392,9 @@ abstract class TuiBridge {
           final btn = bytes[j + 1] - 32;
           final valid = bytes[j + 1] >= 32 && bytes[j + 2] > 32 && bytes[j + 3] > 32;
           if (valid && btn & 3 != 3) _mouse(out, btn, bytes[j + 2] - 33, bytes[j + 3] - 33);
-          if (valid && btn & 3 == 3 && btn & 96 == 0)
+          if (valid && btn & 3 == 3 && btn & 96 == 0) {
             out.add(TermRelease(bytes[j + 2] - 33, bytes[j + 3] - 33)); // 3 is a release
+          }
           i = j + 4;
           continue;
         }
@@ -1669,6 +1743,38 @@ int displayWidth(String text) {
   return (cells, j);
 }
 
+/// One progress line, `label bar counts rate`, fitted to [cols] cells, as
+/// `Console.bar` and `Region.bar` draw it. The bar takes what the rest
+/// leaves (at most 20 cells); when that is nothing, the label is cut with
+/// `…`, then dropped, then the line is cut. An unknown [total] draws no
+/// bar. With [bytes] the counts and [rate] are sizes; a null [rate] shows
+/// none.
+String barLine(
+  int cols, {
+  String? label,
+  required int done,
+  int? total,
+  bool bytes = false,
+  double? rate,
+  required bool ascii,
+}) {
+  if (cols <= 0) return '';
+  final known = total != null && total > 0;
+  String n(int v) => bytes ? fmtSize(v) : '$v';
+  final counts = known ? '${n(done)}/${n(total)}' : n(done);
+  final tail = rate == null ? counts : '$counts  ${bytes ? fmtRate(rate) : '${fmtCount(rate)}/s'}';
+  final lab = label ?? '';
+  final labW = lab.isEmpty ? 0 : displayWidth(lab) + 1;
+  final tailW = displayWidth(tail);
+  final barW = known ? (cols - labW - tailW - 2).clamp(0, 20) : 0;
+  final body = barW > 0 ? '${barGlyphs(done, total, barW, ascii: ascii)}  $tail' : tail;
+  final bodyW = barW > 0 ? barW + 2 + tailW : tailW;
+  if (lab.isEmpty) return truncateWidth(body, cols);
+  if (labW + bodyW <= cols) return '$lab $body';
+  final room = cols - bodyW - 1;
+  return room >= 2 ? '${truncateWidth(lab, room)} $body' : truncateWidth(body, cols);
+}
+
 /// Cut [text] to at most [width] cells, ending with `…` when cut. Wide
 /// chars and emoji sequences that don't fit are dropped whole.
 String truncateWidth(String text, int width) {
@@ -1871,7 +1977,18 @@ int rgbTo256(int r, int g, int b) {
 /// rest. Controls in [message] are dropped (an OSC payload cannot show `�`).
 String notifyCodes(String message) {
   final m = plainLabel(message).replaceAll('\uFFFD', '');
-  return '\x1b]9;$m\x07\x1b]777;notify;$m\x07\x07';
+  // OSC 777 takes a title and a body; `;` would end the title early.
+  final title = _scriptName().replaceAll(';', ' ');
+  return '\x1b]9;$m\x07\x1b]777;notify;$title;$m\x07\x07';
+}
+
+/// The running script's name (`medialoader` for `medialoader.dart`), the
+/// notification title.
+String _scriptName() {
+  final path = io.Platform.script.pathSegments.lastOrNull ?? '';
+  final dot = path.indexOf('.');
+  final name = dot < 0 ? path : path.substring(0, dot); // `x.dart`, a snapshot's `x.dart_2.dill`
+  return name.isEmpty ? 'dart' : plainLabel(name);
 }
 
 /// Clipboard copy as OSC 52 (base64, so [text] cannot break out).

@@ -960,34 +960,39 @@ extension RegionWidgets on Region {
   }
 
   /// A static progress snapshot laid out like `Console.bar`; with [bytes],
-  /// the counts are sizes (`1.2 MB/4.0 MB`). [color], [background], [style]
-  /// and [on] as in `write`.
+  /// the counts are sizes (`1.2 MB/4.0 MB`). With [since] (when the work
+  /// started), the rate follows (`1.2 MB/s`, or `3.1/s` for items). It
+  /// keeps to one row: the bar shrinks, then the label is cut with `…`.
+  /// [color], [background], [style] and [on] as in `write`.
   Region bar(
     int done,
     int? total, {
     String? label,
     bool bytes = false,
+    DateTime? since,
     Color? color,
     Color? background,
     Set<Style> style = const {},
     Map<String, Binding>? on,
   }) {
-    final lab = label == null ? '' : '$label ';
-    String n(int v) => bytes ? fmt.fmtSize(v) : '$v';
-    final counts = total != null && total > 0 ? '${n(done)}/${n(total)}' : n(done);
-    var width = 20;
-    while (width > 10) {
-      if (term.displayWidth('$lab${'_' * width}  $counts') <= _w) break;
-      width--;
-    }
-    final glyphs = fmt.barGlyphs(done, total, width, ascii: _s._caps.ascii);
-    write('$lab$glyphs  $counts', color: color, background: background, style: style, on: on);
+    final ms = since == null ? 0 : DateTime.now().difference(since).inMilliseconds;
+    final line = term.barLine(
+      _w - _col,
+      label: label,
+      done: done,
+      total: total,
+      bytes: bytes,
+      rate: since == null ? null : (ms > 0 ? done * 1000 / ms : 0.0),
+      ascii: _s._caps.ascii,
+    );
+    write(line, color: color, background: background, style: style, on: on);
     return this;
   }
 
   /// A static spinner snapshot; the frame advances while visible. With
-  /// [since], the elapsed time follows the label (`Thinking… (12s)`).
-  /// [color], [background], [style] and [on] as in `write`.
+  /// [since], the elapsed time follows the label (`Thinking… (12 s)`, as
+  /// `Duration.human()` says it). [color], [background], [style] and [on]
+  /// as in `write`.
   Region spin(
     String label, {
     DateTime? since,
@@ -998,8 +1003,7 @@ extension RegionWidgets on Region {
   }) {
     _s._spinVisible = true;
     final frames = fmt.spinFrames(ascii: _s._caps.ascii);
-    final secs = since == null ? null : DateTime.now().difference(since).inSeconds;
-    final time = secs == null ? '' : ' (${secs >= 60 ? '${secs ~/ 60}m ${secs % 60}s' : '${secs}s'})';
+    final time = since == null ? '' : ' (${DateTime.now().difference(since).human()})';
     write(
       '${frames[_s._spinTick % frames.length]} $label$time',
       color: color,

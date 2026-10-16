@@ -12,21 +12,31 @@ import 'dart:math';
 /// server's `Retry-After`, if longer) before its retry, instead of a backoff
 /// that only extends a ban. [onWait] hears every wait of a second or more,
 /// so a script can say why it went quiet. Keep one per API for the whole
-/// run: the window is its memory.
+/// run: the window is its memory. With [perHost], http keeps one window
+/// per host (a crawler that is polite to each site); `wait()` and `pool`
+/// use one shared window.
 ///
 /// ```dart
 /// final api = Rate(75, 11.minutes, pause: 3.seconds);
 /// final ig = Http.client(rate: api);
+/// final crawl = Http.client(rate: Rate(1, 1.seconds, perHost: true));
 /// await Pool.map(paths, convert, rate: Rate(2, 1.seconds));
 /// ```
 final class Rate {
-  Rate(int count, Duration per, {Duration pause = Duration.zero, void Function(Duration wait)? onWait})
-    : _count = count,
-      _per = per,
-      // ignore: prefer_initializing_formals – the public argument names stay.
-      _pause = pause,
-      // ignore: prefer_initializing_formals
-      _onWait = onWait {
+  Rate(
+    int count,
+    Duration per, {
+    Duration pause = Duration.zero,
+    void Function(Duration wait)? onWait,
+    bool perHost = false,
+  }) : _count = count,
+       _per = per,
+       // ignore: prefer_initializing_formals – the public argument names stay.
+       _pause = pause,
+       // ignore: prefer_initializing_formals
+       _onWait = onWait,
+       // ignore: prefer_initializing_formals
+       _perHost = perHost {
     if (count < 1) throw ArgumentError.value(count, 'count', 'must be at least 1');
   }
 
@@ -34,17 +44,27 @@ final class Rate {
   final Duration _per; // the window
   final Duration _pause; // upper bound of the random pause before each start
   final void Function(Duration wait)? _onWait; // hears every wait of a second or more
+  final bool _perHost;
 
-  final _sent = ListQueue<DateTime>();
+  final _shared = _Window();
+  final _hosts = <String, _Window>{};
   final _random = Random();
-  Future<void> _tail = Future.value();
 
   /// Wait for a free slot and take it: the same pacing for any work.
   Future<void> wait() => take(this, null);
 
-  void _trim(DateTime now) {
-    while (_sent.isNotEmpty && now.difference(_sent.first) >= _per) {
-      _sent.removeFirst();
+  _Window _window(String? host) =>
+      _perHost && host != null ? _hosts.putIfAbsent(host.toLowerCase(), _Window.new) : _shared;
+}
+
+/// One sliding window: the recent starts, and the queue of waiting ones.
+final class _Window {
+  final sent = ListQueue<DateTime>();
+  Future<void> tail = Future.value();
+
+  void trim(DateTime now, Duration per) {
+    while (sent.isNotEmpty && now.difference(sent.first) >= per) {
+      sent.removeFirst();
     }
   }
 }
@@ -93,38 +113,42 @@ Future<void> sleep(Duration d, Halt? halt) {
   return done.future;
 }
 
-/// Take a slot of [rate], in call order (concurrent starts queue).
-Future<void> take(Rate rate, Halt? halt) {
-  final next = rate._tail.then((_) => _slot(rate, halt));
-  rate._tail = next.then((_) {}, onError: (_) {});
+/// Take a slot of [rate] (the window of [host] for a `perHost` rate), in
+/// call order (concurrent starts queue).
+Future<void> take(Rate rate, Halt? halt, {String? host}) {
+  final w = rate._window(host);
+  final next = w.tail.then((_) => _slot(rate, w, halt));
+  w.tail = next.then((_) {}, onError: (_) {});
   return next;
 }
 
-Future<void> _slot(Rate rate, Halt? halt) async {
+Future<void> _slot(Rate rate, _Window w, Halt? halt) async {
   if (rate._pause > Duration.zero) await sleep(rate._pause * rate._random.nextDouble(), halt);
   final now = DateTime.now();
-  rate._trim(now);
-  if (rate._sent.length >= rate._count) {
-    final wait = rate._sent.first.add(rate._per).difference(now);
+  w.trim(now, rate._per);
+  if (w.sent.length >= rate._count) {
+    final wait = w.sent.first.add(rate._per).difference(now);
     if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
     await sleep(wait, halt);
-    if (rate._sent.isNotEmpty) rate._sent.removeFirst();
+    if (w.sent.isNotEmpty) w.sent.removeFirst();
   }
-  rate._sent.addLast(DateTime.now());
+  w.sent.addLast(DateTime.now());
 }
 
-/// Whether [rate] would start now without waiting for the window.
-bool free(Rate rate) {
-  rate._trim(DateTime.now());
-  return rate._sent.length < rate._count;
+/// Whether [rate] would start now (for [host]) without waiting.
+bool free(Rate rate, {String? host}) {
+  final w = rate._window(host);
+  w.trim(DateTime.now(), rate._per);
+  return w.sent.length < rate._count;
 }
 
 /// The wait after a 429: until the oldest start leaves the window, or the
 /// server's `Retry-After` when longer. The window is our own memory and is
 /// never capped; the server's value is capped at 5 minutes, as in
 /// `retry.backoff`, so a hostile header cannot park a script for years.
-Duration ban(Rate rate, Duration? server) {
-  var wait = rate._sent.isEmpty ? rate._per : rate._sent.first.add(rate._per).difference(DateTime.now());
+Duration ban(Rate rate, Duration? server, {String? host}) {
+  final sent = rate._window(host).sent;
+  var wait = sent.isEmpty ? rate._per : sent.first.add(rate._per).difference(DateTime.now());
   const cap = Duration(minutes: 5);
   if (server != null && server > cap) server = cap;
   if (server != null && server > wait) wait = server;

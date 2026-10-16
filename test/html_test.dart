@@ -180,7 +180,6 @@ void main() {
       final doc = Html.parse('${'<div>' * 20000}<a>x</a>${'</div>' * 20000}');
       expect(doc.$('div a').text(), 'x');
       expect(doc.not('a').$('a'), isEmpty);
-      expect(doc[0].not('a').$('a'), isEmpty);
       expect(doc.text(), 'x');
     });
 
@@ -222,7 +221,6 @@ void main() {
       expect(sw.elapsedMilliseconds, lessThan(1000)); // was 8 s
       expect(kept.$('br'), isEmpty);
       expect(kept.$('i'), hasLength(50000));
-      expect(doc[0].not('i').$('i'), isEmpty);
     });
 
     test('nested roots are walked once (regression: one walk per root)', () {
@@ -365,7 +363,7 @@ void main() {
 
     test('without copies without the parts', () {
       final doc = Html.parse('<div><p>a</p><script>var x = 1;</script></div>');
-      final clean = doc.$('div')[0].not('script');
+      final clean = doc.$('div').not('script');
       expect(clean.$('script'), isEmpty);
       expect(clean.$('p').text(), 'a');
       expect(doc.$('script').length, 1);
@@ -401,7 +399,7 @@ void main() {
       final doc = Html.parse('<div><p><a href="/x">t</a></p></div>');
       final f = Future.value(doc.$('div')[0]);
       expect((await f.$('a')).length, 1);
-      expect((await f.not('p')).$('a'), isEmpty);
+      expect(await f.html(), '<div><p><a href="/x">t</a></p></div>');
       expect(await f.text(), contains('t'));
       expect(await f.$('a').attr('href'), '/x');
       expect(await f.parent(), isNull);
@@ -566,9 +564,146 @@ void main() {
       final f = doc.form()!;
       expect(f.action, 'https://site.test/login');
       expect(f.method, 'POST');
-      expect(f.fields, {'csrf': 'T', 'user': '', 'keep': 'on', 'lang': 'ja', 'note': 'hi'});
+      expect(f.fields, {
+        'csrf': ['T'],
+        'user': [''],
+        'keep': ['on'],
+        'lang': ['ja'],
+        'note': ['hi'],
+      });
       expect(Html.parse('<form></form>', base: 'https://a.test/x').form()!.action, 'https://a.test/x');
       expect(Html.parse('<p></p>').form(), isNull);
+    });
+
+    test('form() keeps repeated names and select multiple (regression: last value won)', () {
+      final f = Html.parse('''<form>
+<input type="checkbox" name="tag" value="a" checked><input type="checkbox" name="tag" value="b" checked>
+<select name="pick" multiple><option selected>x</option><option>y</option><option value="z" selected>Z</option></select>
+<select name="one"><option selected>p</option><option selected>q</option></select>
+</form>''').form()!;
+      expect(f.fields, {
+        'tag': ['a', 'b'],
+        'pick': ['x', 'z'],
+        'one': ['q'],
+      });
+    });
+
+    test('form() without an action posts to the document URL, not <base href> (regression)', () {
+      const page =
+          '<html><head><base href="https://cdn.test/assets/"></head><body><form><input name="a"></form>'
+          '<form action="go"></form></body></html>';
+      final doc = Html.parse(page, base: 'https://site.test/page?id=1');
+      expect(doc.form()!.action, 'https://site.test/page?id=1');
+      expect(doc.$('form')[1].$(':scope').form()!.action, 'https://cdn.test/assets/go');
+    });
+
+    test('table() carries rowspan down (regression: ignored)', () {
+      final doc = Html.parse('''<table>
+<tr><th>Group</th><th>Item</th><th>Note</th></tr>
+<tr><td rowspan="2">g1</td><td>a</td><td rowspan="3">n</td></tr>
+<tr><td>b</td></tr>
+<tr><td>g2</td><td>c</td></tr>
+</table>''');
+      expect(doc.table(), [
+        {'Group': 'g1', 'Item': 'a', 'Note': 'n'},
+        {'Group': 'g1', 'Item': 'b', 'Note': 'n'},
+        {'Group': 'g2', 'Item': 'c', 'Note': 'n'},
+      ]);
+    });
+
+    test('json() reads ld+json with parameters (regression: "; charset" skipped)', () {
+      final doc = Html.parse(
+        '<script type="application/ld+json; charset=utf-8">{"@type":"X"}</script>'
+        '<script type=" Application/JSON ">[1]</script>',
+      );
+      expect(doc.json().length, 2);
+      expect(doc.json().$('0.@type').text(), 'X');
+    });
+  });
+
+  group('selectors: scope, errors, speed', () {
+    test(':scope and a leading combinator are relative to the receiver', () {
+      final doc = Html.parse('<ul id="o"><li>a<ul><li>b</li></ul></li><li>c</li></ul><p>x</p><p>y</p>');
+      final outer = doc.$('#o')[0];
+      expect(outer.$('> li').length, 2);
+      expect(outer.$('li').length, 3);
+      expect(outer.$(':scope > li > ul > li').text(), 'b');
+      expect(outer.$(':scope').length, 1);
+      expect(doc.$('ul').$('> li').texts(), ['a\nb', 'b', 'c']);
+      expect(doc.$('p')[0].$('+ p'), isEmpty, reason: 'only the receiver and its descendants are candidates');
+      expect(doc.$('p').$('+ p').text(), 'y', reason: 'a root itself may match relative to another root');
+      expect(doc.$('#o').not('> li > ul').$('li').length, 2);
+      expect(doc.$(':scope'), hasLength(3), reason: 'the top-level elements are the scope');
+    });
+
+    test('a bad selector names itself once (regression: prefix doubled)', () {
+      for (final bad in ['p[', 'a:nope', ':nth-child(x)', '> ', 'a,']) {
+        expect(
+          () => Html.parse('<p>x</p>').$(bad),
+          throwsA(
+            isA<ContentException>().having((e) => 'invalid selector'.allMatches(e.message).length, 'prefix count', 1),
+          ),
+          reason: bad,
+        );
+      }
+      expect(
+        () => Html.parse('<p>x</p>').$('p['),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', "invalid selector 'p[': expected a name")),
+      );
+      expect(() => Html.parse('<p>x</p>').not('p['), throwsA(isA<ContentException>()));
+    });
+
+    test('*-of-type and nth-child(of S) stay linear on a long list (regression: O(n²))', () {
+      final doc = Html.parse('<ul>${'<li>x</li><li class="k">y</li>' * 10000}</ul>');
+      final sw = Stopwatch()..start();
+      expect(doc.$('li:last-of-type'), hasLength(1));
+      expect(doc.$('li:nth-of-type(2n)'), hasLength(10000));
+      expect(doc.$('li:only-of-type'), isEmpty);
+      expect(doc.$('li:nth-child(odd of .k)'), hasLength(5000));
+      expect(doc.$('li:nth-last-child(1 of .k)'), hasLength(1));
+      expect(sw.elapsedMilliseconds, lessThan(1000)); // was 1-3.5 s per query
+      final mixed = Html.parse('<div><b>1</b><i>2</i><b>3</b><i>4</i></div>');
+      expect(mixed.$('b:last-of-type').text(), '3');
+      expect(mixed.$('i:first-of-type').text(), '2');
+      expect(mixed.$('i:nth-last-of-type(2)').text(), '2');
+      expect(mixed.$(':nth-child(2 of b)').text(), '3');
+    });
+  });
+
+  group('links and markup', () {
+    test('srcset candidates and a meta content path resolve against the base', () {
+      final doc = Html.parse(
+        '<img srcset="a.jpg 1x, /b.jpg 2x,c.jpg" data-srcset="  d.webp 640w  ">'
+        '<meta property="og:image" content="/og.jpg"><meta property="og:title" content="Hello / world">'
+        '<meta name="u" content="https://abs.test/x.jpg">',
+        base: 'https://s.test/p/',
+      );
+      expect(doc.$('img').attr('srcset'), 'https://s.test/p/a.jpg 1x, https://s.test/b.jpg 2x, https://s.test/p/c.jpg');
+      expect(doc.$('img').attr('data-srcset'), 'https://s.test/p/d.webp 640w');
+      expect(doc.$('meta[property="og:image"]').attr('content'), 'https://s.test/og.jpg');
+      expect(doc.$('meta[property="og:title"]').attr('content'), 'Hello / world');
+      expect(doc.$('meta[name=u]').attr('content'), 'https://abs.test/x.jpg');
+      expect(Html.parse('<img srcset="a.jpg 1x">').$('img').attr('srcset'), 'a.jpg 1x');
+    });
+
+    test('html() is the outer markup: escaped text, raw scripts, void elements', () {
+      final doc = Html.parse(
+        '<div class="a&quot;b" id=x>1 &lt; 2 &amp; 3 <br><script>if (a < b) {}</script><img src=i.png></div>',
+      );
+      expect(
+        doc.$('div')[0].html(),
+        '<div class="a&quot;b" id="x">1 &lt; 2 &amp; 3&nbsp;<br><script>if (a < b) {}</script><img src="i.png"></div>',
+      );
+      expect(doc.$('br').html(), '<br>');
+      expect(doc.$('nope').html(), '');
+      expect(Html.parse('loose <b>t</b>').html(), 'loose <b>t</b>');
+      final deep = Html.parse('${'<i>' * 20000}x');
+      expect(deep.$('i')[0].html(), hasLength(20000 * 7 + 1));
+    });
+
+    test('html exports json: chains reach Json with one import', () async {
+      final j = await _Mem('<script type="application/json">{"a":{"b":5}}</script>').html().json().$('**.b');
+      expect(j.asList<int>(), [5]);
     });
   });
 }

@@ -1,6 +1,7 @@
 @Tags(['pty'])
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +9,86 @@ import 'package:test/test.dart';
 
 void main() {
   group('pty (K1, K6, K10)', () {
+    // Regression: the 80 ms repaint of a live spinner landed on the prompt
+    // and the typed answer.
+    test('a prompt parks the live block: no spinner frame while it waits', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      final log = File('${Directory.systemTemp.path}/probe-park-$pid.log');
+      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final res = await Process.run(
+        'python3',
+        [
+          '${root.path}/test/console_pty/drive.py',
+          '--size', '24', '80', //
+          '--ready', 'Name?',
+          '--feed', '0.6', 'ada',
+          '--feed', '0.9', r'\x0d',
+          '--',
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          log.path,
+          'park',
+        ],
+        workingDirectory: root.path,
+        stdoutEncoding: null,
+        environment: {'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color'},
+      );
+      if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
+      final out = utf8.decode(res.stdout as List<int>, allowMalformed: true);
+      final asked = out.indexOf('Name?');
+      final answered = out.indexOf('ada', asked);
+      expect(asked, isNot(-1));
+      expect(answered, isNot(-1));
+      expect(out.substring(asked, answered), isNot(matches(RegExp('[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'))));
+      expect(out.substring(answered), matches(RegExp('[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]')), reason: 'the spinner comes back');
+      expect(await log.readAsString(), 'answer=ada\n');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    // Regression (ARCHITECTURE A6): an unanswered piped prompt kept the VM
+    // alive until a line arrived.
+    test('ask(timeout:) on an open pipe gives or and lets the script exit', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX: the reader is a child shell');
+      final root = Directory.current;
+      final log = File('${Directory.systemTemp.path}/probe-asktimeout-$pid.log');
+      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final proc = await Process.start(Platform.resolvedExecutable, [
+        '${root.path}/test/console_pty/probe.dart',
+        log.path,
+        'asktimeout',
+      ], workingDirectory: root.path);
+      unawaited(proc.stdout.drain<void>());
+      unawaited(proc.stderr.drain<void>());
+      // stdin stays open and silent.
+      final code = await proc.exitCode.timeout(const Duration(seconds: 20), onTimeout: () {
+        proc.kill();
+        return -1;
+      });
+      expect(code, 0, reason: 'exits on its own');
+      expect(await log.readAsString(), 'answer=anon\n');
+      await proc.stdin.close();
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('ask(timeout:) on a terminal gives or and stops the reader', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      final log = File('${Directory.systemTemp.path}/probe-ttytimeout-$pid.log');
+      addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
+      final res = await Process.run('python3', [
+        '${root.path}/test/console_pty/drive.py',
+        '--size', '24', '80', //
+        '--ready', 'Name?',
+        '--',
+        Platform.resolvedExecutable,
+        '${root.path}/test/console_pty/probe.dart',
+        log.path,
+        'asktimeout',
+      ], workingDirectory: root.path);
+      expect('${res.stderr}', contains('exit=0'));
+      expect('${res.stderr}', isNot(contains('did not exit')));
+      expect(await log.readAsString(), 'answer=anon\n');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
     test('K1: the live line fits the width and clears to end of line', () async {
       final term = await _ptyBar(cols: 40);
       // Every redraw ends with erase-to-end-of-line.

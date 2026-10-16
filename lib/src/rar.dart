@@ -33,14 +33,19 @@ bool isRar(List<int> b) =>
 
 /// One member as read.
 final class RarEntry {
-  RarEntry(this.name, this.isDir, this.mode, this._data, {this.isLink = false});
+  RarEntry(this.name, this.isDir, this.mode, this.mtime, this._data, {this.isLink = false, this.isHardLink = false});
 
   /// `/`-separated.
   final String name;
   final bool isDir;
 
-  /// A symlink or hardlink: `archive` refuses these, as for every format.
+  /// A symlink, or with [isHardLink] a hardlink (or RAR5 file copy): [data]
+  /// is its target.
   final bool isLink;
+  final bool isHardLink;
+
+  /// When it was last modified, when the archive says.
+  final DateTime? mtime;
 
   /// Unix `st_mode` when made on unix, else 0.
   final int mode;
@@ -99,16 +104,17 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   final flags = h.vint();
   final size = h.vint();
   final attrs = h.vint();
-  if (flags & 0x2 != 0) h.skip(4); // mtime
+  var mtime = flags & 0x2 != 0 ? DateTime.fromMillisecondsSinceEpoch(h.u32() * 1000) : null;
   final crc = flags & 0x4 != 0 ? h.u32() : null;
   final info = h.vint();
   final host = h.vint();
   final name = utf8.decode(h.bytes(h.vint()), allowMalformed: true).replaceAll('\\', '/');
   final isDir = flags & 0x1 != 0;
   if (h.flags & 0x18 != 0) throw const ContentException('multi-volume RAR archives are not supported');
-  // Extra records: encryption, hash, redirection (links are refused).
+  // Extra records: encryption, hash, redirection (a link and its target).
   _Key? key;
-  var isLink = false;
+  String? target;
+  var hard = false;
   var iv = Uint8List(0);
   var tweaked = false;
   Uint8List? blake2;
@@ -131,15 +137,33 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
       key = _Key.derive(password, salt, kdf);
       if (f & 1 != 0) key.check(x.bytes(12), member: name);
       tweaked = f & 2 != 0;
+    } else if (type == 3) {
+      // File times: unix seconds (flag 1) or a FILETIME; mtime first (flag 2).
+      final f = x.vint();
+      if (f & 2 != 0) {
+        if (f & 1 != 0) {
+          mtime = DateTime.fromMillisecondsSinceEpoch(_u32le(x.bytes(4), 0) * 1000);
+        } else {
+          final t = x.bytes(8);
+          final us = (_u32le(t, 0) + _u32le(t, 4) * 0x100000000 - 116444736000000000) ~/ 10;
+          if (us.abs() < 8640000000000000000) mtime = DateTime.fromMicrosecondsSinceEpoch(us);
+        }
+      }
     } else if (type == 2) {
       if (x.vint() == 0) blake2 = x.bytes(32); // BLAKE2sp; other hashes are unknown
     } else if (type == 5) {
-      isLink = true;
+      // 1 unix symlink, 2 Windows symlink, 3 junction, 4 hardlink, 5 a copy
+      // of an earlier member.
+      final kind = x.vint();
+      x.vint(); // flags
+      target = utf8.decode(x.bytes(x.vint()), allowMalformed: true);
+      if (kind != 1) target = target.replaceAll('\\', '/');
+      hard = kind >= 4;
     }
     e = recEnd;
   }
   final mode = host == 1 ? attrs & 0xFFFF : 0;
-  if (isDir) return RarEntry(name, true, mode, () => Uint8List(0));
+  if (isDir) return RarEntry(name, true, mode, mtime, () => Uint8List(0));
   final version = info & 0x3F;
   final isSolid = info & 0x40 != 0;
   final method = info >> 7 & 7;
@@ -156,9 +180,10 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
     final plain = k == null ? packed : Aes(k.key).cbcDecrypt(packed, iv);
     return (plain, method, size, version, dict);
   });
-  if (isLink) return RarEntry(name, false, mode, () => Uint8List(0), isLink: true);
+  final link = target;
+  if (link != null) return RarEntry(name, false, mode, mtime, () => utf8.encode(link), isLink: true, isHardLink: hard);
   final hash = blake2;
-  return RarEntry(name, false, mode, () {
+  return RarEntry(name, false, mode, mtime, () {
     final data = run.data(index);
     var ok = true;
     if (crc != null) {

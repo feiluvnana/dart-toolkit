@@ -23,3 +23,9 @@ abstract interface class PassThrough {}
 /// (a bar created without a total shows `done/total` from then on): the
 /// pipe registers a callback here instead of growing a public method.
 final sizers = Expando<void Function(int bytes)>();
+
+/// Pass-through pipes that count speed register here how many bytes the
+/// next stream replays from disk (a resumed download's `.part`, a skipped
+/// complete file), so the rate leaves them out. The resume path calls it
+/// right before it starts the pipes.
+final replays = Expando<void Function(int bytes)>();

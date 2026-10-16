@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/tui.dart';
 
 const _watched = [
@@ -138,6 +139,36 @@ Future<void> main(List<String> args) async {
           },
         ),
       );
+    case 'after':
+      // The medialoader shape: work started on show (timers, a spinner,
+      // notify, log), a confirm popup to quit, the job awaited after run.
+      // main then returns: nothing may keep the VM alive, no exit() needed.
+      late final Future<void> job;
+      var n = 0;
+      await Tui.run<int>(
+        0,
+        (s, app) => Screen(
+          (r) => r.write('n=$n').spin('busy'),
+          keys: {
+            'show': (
+              '',
+              () => job = () async {
+                for (var i = 0; i < 3; i++) {
+                  await Future<void>.delayed(const Duration(milliseconds: 50));
+                  n++;
+                }
+                Console.notify('done');
+                Console.log('logged');
+              }(),
+            ),
+            'q': ('', () async {
+              if (await Console.confirm('Stop?')) app.quit();
+            }),
+          },
+        ),
+      );
+      await job;
+      seen.add('after n=$n');
     case 'ascii':
       await Tui.run<int>(
         0,

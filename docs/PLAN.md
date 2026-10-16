@@ -55,6 +55,9 @@ In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <t
 ### W10. Tui restore after `exit()` on Windows
 `lib/src/tui/session.dart` `_startGuard` (a `sh` watchdog that restores the terminal when the process dies inside `Tui.run`) is POSIX only. On Windows check what `exit(3)` from a binding leaves in Windows Terminal and conhost: alternate screen, mouse reporting, VT input mode. If it is broken, add a `cmd` guard: start `cmd /c "findstr "^" >nul & <write the leave codes>"` with stdin from us, the same way as W2's watchdog, and write the leave codes with `powershell -c [Console]::Write(...)`. Record the result here.
 
+### W11. Native tools on Windows (ffmpeg, ffprobe, 7zr)
+`lib/src/tool.dart` pins Gyan's ffmpeg 9.0.2 essentials zip (`bin/ffmpeg.exe`, `bin/ffprobe.exe`) and 7-Zip's `7zr.exe` (7z only). With no ffmpeg/7z on PATH run `dart test test/image_test.dart test/video_test.dart test/archive_test.dart`. Check: the first run downloads into `%LOCALAPPDATA%\dart_toolkit\` once; the essentials build has every encoder the tests use (`libwebp`, `libaom-av1`, `libsvtav1`, `libx265`, `libvpx-vp9`, `libopus`, `libmp3lame`: run `ffmpeg -hide_banner -encoders`); if one is missing, switch the Windows entry to the full build (its sha256 is on the GitHub release) and record it here. RAR, bz2/zst, cab, ar and xar stay Dart-only or unsupported on Windows (7zr reads 7z only): the archive tests that need them skip there.
+
 ## §2 Linux
 
 ### L1. M11: `Shell.open` with a foreground launcher keeps the script alive
@@ -63,11 +66,19 @@ The launcher's stdio is now released (fixed on POSIX), but `xdg-open` in generic
 ### L3. `Shell.open`: the opened app dies of EPIPE after the launcher returns
 `open` in `lib/shell.dart` cancels its stdout/stderr subscriptions after the launcher exits (or after 10 s), but the app `xdg-open` starts inherits those pipes; its next write to stderr (Firefox and Chromium log there) gets `EPIPE`/`SIGPIPE` and the app can die. Never hand the app our pipes: on Linux start `['/bin/sh', '-c', 'xdg-open "\$1" </dev/null >/dev/null 2>"\$2"', '_', target, errFile]` where `errFile` is a fresh file in `Directory.systemTemp.createTemp('dart_toolkit_open')`; after the exit (same 10 s timeout) read its first 4 KB for the non-zero-exit `ProcessException`, then delete the temp folder. Merge with L1 if done together (L1 already sends stdout to `/dev/null`). Check on Linux: `Shell.open('https://example.com')` in a script that exits at once; the browser stays open, and `strace -f -e trace=write -p <browser pid>` shows no `EPIPE`.
 
-### L2. `Chrome.launch()` on linux-arm64 and windows-arm64
-puppeteer's downloader throws `FormatException: Unknown 'linux_arm64' from Platform.version` (Docker on Apple Silicon, Raspberry Pi). In `lib/chrome.dart` `_cachedExecutable`, read the arch from `io.Platform.version` (`linux_arm64`/`windows_arm64`). On `linux_arm64` use the first of `chromium`, `chromium-browser`, `google-chrome-stable` found on PATH, else throw `UnsupportedError('no Chromium download for linux_arm64: apt install chromium, or pass path:')`. On `windows_arm64` throw the same error naming the platform (x64 emulation would need puppeteer's `src/` enum). Check on an arm64 box: `dart test test/chrome_test.dart` launches the system Chromium or fails with that message.
+### L2. `Chrome.launch()` on linux-arm64 (check only)
+puppeteer is gone; `lib/src/chrome_find.dart` uses `path:`, the cached Chrome for Testing, then an installed Chrome/Chromium, and on an ABI with no Chrome for Testing build (linux-arm64, windows-arm64) throws `BrowserException('no Chrome found and no Chrome for Testing build for …')`. On an arm64 box (Docker on Apple Silicon, a Raspberry Pi) with `chromium` installed run `dart test test/chrome_test.dart`: it launches the system Chromium. Record the result here.
 
 ### L4. Process-tree kill with BusyBox `ps`
 `_killTree` in `lib/shell.dart` runs `ps -A -o pid=,ppid=`. BusyBox (Alpine, many Docker images) has no `-A` and may reject `-o pid=,ppid=`, so the tree is empty and only the direct child dies. In an `alpine` container run `dart test test/shell_test.dart -n grandchildren`. If it fails, fall back to reading `/proc/*/stat` (field 4 is the ppid) when `ps` exits non-zero: list `/proc`, keep numeric names, parse `stat` after the last `)`.
 
 ### L5. `Dir.watch()` on Linux
 `lib/fs.dart` `watch()` passes `recursive: !io.Platform.isLinux` because the SDK's inotify watcher is documented as not recursive there. On Linux run `dart test test/fs_test.dart -n "watch reports"`, then check by hand: a file written in a subfolder of the watched one is not reported. If the SDK does recurse on your version, drop the platform check and update the doc comment ("Linux watches this folder only").
+
+### L6. Native tools on Linux (ffmpeg, ffprobe, 7zzs)
+On x64 and arm64 Linux with no ffmpeg/7zz on PATH run `dart test test/image_test.dart test/video_test.dart test/archive_test.dart`: Martin Riedl's static ffmpeg and 7-Zip's `7zzs` download once into `$XDG_CACHE_HOME/dart_toolkit/` (or `~/.cache`). Record the result here.
+
+## §3 Open
+
+### O1. `Console.ask(timeout:)` on piped stdin keeps the VM alive
+An ask abandoned by a timeout leaves an isolate blocked in `readLineSync`, and the VM waits for it even after `kill()`. Fixing it needs stdin read as a stream with pushback, which gives up "never reads past its line" for children sharing stdin. Decide whether that trade is worth it before coding.

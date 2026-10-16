@@ -172,11 +172,13 @@ final class Aes {
 
   /// WinZip AES CTR: a little-endian counter from 1, XORed over [data].
   /// The same call encrypts and decrypts.
-  Uint8List ctrLittleEndian(Uint8List data) {
+  /// A stream goes through in pieces of whole blocks: [from] is the
+  /// number of blocks already done.
+  Uint8List ctrLittleEndian(Uint8List data, {int from = 0}) {
     final out = Uint8List(data.length);
     final counter = Uint8List(16);
     final pad = Uint8List(16);
-    var n = 0;
+    var n = from;
     for (var o = 0; o < data.length; o += 16) {
       n++;
       var v = n;

@@ -20,8 +20,10 @@
 ///   into a file skips a complete file and resumes a partial one.
 /// - [Response] supports `status` `ok` `check` `header` `url` `size` `name`
 ///   (plus [Reader]/[Closeable]).
+/// - [Client] `sent` counts the requests put on the wire.
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
-///   `.stream`. A [Body.stream] is sent once and never retried.
+///   `.multipart` `.stream`. A [Body.stream] (or a multipart with a
+///   [Reader]) is sent once and never retried.
 /// - [HttpStatusException] is what `check` and piping a non-2xx body throw;
 ///   [HttpRequestException] is a request that was aborted or could not
 ///   follow a redirect.
@@ -35,6 +37,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'core.dart';
@@ -50,6 +53,7 @@ import 'src/retry.dart' as retry;
 import 'src/timeout.dart';
 
 part 'src/http/cache.dart';
+part 'src/http/proxy.dart';
 part 'src/http/response.dart';
 part 'src/http/server.dart';
 
@@ -79,6 +83,18 @@ sealed class Body {
 
   /// Streamed from [reader]: sent once, never retried.
   const factory Body.stream(Reader reader) = _StreamBody;
+
+  /// `multipart/form-data`: a `String` value is a field, a [Reader] a file
+  /// (its `origin().name()` is the filename, the type comes from it),
+  /// streamed. With a [Reader] the body is sent once, like [Body.stream].
+  ///
+  /// ```dart
+  /// await api.post('upload', body: .multipart({'title': 'Cat', 'file': Fs.file('cat.jpg')}));
+  /// ```
+  const factory Body.multipart(Map<String, Object> parts) = _MultipartBody;
+
+  /// Whether the bytes can be produced again (a retry, a 307/308 resend).
+  bool get _resendable => true;
 }
 
 final class _TextBody extends Body {
@@ -111,6 +127,62 @@ final class _StreamBody extends Body {
   const _StreamBody(this._reader) : super._();
 
   final Reader _reader;
+
+  @override
+  bool get _resendable => false;
+}
+
+final class _MultipartBody extends Body {
+  const _MultipartBody(this._parts) : super._();
+
+  final Map<String, Object> _parts;
+
+  @override
+  bool get _resendable => !_parts.values.any((v) => v is Reader);
+
+  /// The body as byte chunks and [Reader]s, in order.
+  List<Object> _pieces(String boundary) {
+    String quote(String s) => s.replaceAll('"', '%22').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    final out = <Object>[];
+    for (final MapEntry(:key, :value) in _parts.entries) {
+      final head = StringBuffer('--$boundary\r\nContent-Disposition: form-data; name="${quote(key)}"');
+      switch (value) {
+        case String():
+          head.write('\r\n\r\n');
+          out.add(utf8.encode('$head$value\r\n'));
+        case Reader():
+          final origin = value.origin();
+          final file = origin.name() ?? origin.path()?.split(RegExp(r'[\\/]')).last ?? key;
+          head.write(
+            '; filename="${quote(file)}"\r\nContent-Type: ${_typeFor(file) ?? 'application/octet-stream'}\r\n\r\n',
+          );
+          out
+            ..add(utf8.encode('$head'))
+            ..add(value)
+            ..add(const [13, 10]);
+        default:
+          throw ArgumentError.value(value, key, 'a multipart value must be a String or a Reader');
+      }
+    }
+    out.add(utf8.encode('--$boundary--\r\n'));
+    return out;
+  }
+}
+
+/// A multipart boundary: random, so no part contains it.
+String _boundary() {
+  final r = Random.secure();
+  return 'dart-toolkit-${List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
+}
+
+Stream<List<int>> _streamPieces(List<Object> pieces) async* {
+  for (final p in pieces) {
+    if (p is Reader) {
+      yield* p.stream();
+    } else {
+      yield p as List<int>;
+    }
+  }
 }
 
 /// What `check` and piping a non-2xx body throw: the status, the
@@ -182,7 +254,8 @@ abstract final class Http {
   ///
   /// - [base]: relative URLs resolve against it (`Uri.resolve`).
   /// - [headers]: sent on every request; a per-call header of the same name
-  ///   wins for that call.
+  ///   wins for that call. Without a `user-agent` one, requests send the
+  ///   jar's `agent()`, else a current desktop Chrome's.
   /// - [timeout]: the connect, the wait for the headers, then any stall
   ///   streaming.
   /// - [retries]: re-sends only when the request provably was not
@@ -191,15 +264,18 @@ abstract final class Http {
   ///   network errors and 502/504. Backoff doubles from 1 s with ±25%
   ///   jitter; `Retry-After` is honoured (capped at 5 min unless [rate] is
   ///   set, then a 429 waits the window out). TLS failures never retry.
-  /// - [rate] paces every send; [check] throws [HttpStatusException] on a
-  ///   non-2xx status.
+  /// - [rate] paces every send (each host apart with `perHost: true`);
+  ///   [check] throws [HttpStatusException] on a non-2xx status.
   /// - [cookies]: the jar (a fresh one when null): `set-cookie` (redirect
   ///   hops too) updates it, and a per-call `cookie` header merges by name.
   /// - [csrf] copies a cookie into a header on every send.
-  /// - [proxy]: `http://host:port` (credentials allowed); null reads
-  ///   `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` like curl.
-  /// - [cache]: a folder; a GET within [ttl] of a stored 2xx answer uses no
-  ///   network and no [rate] slot (for development).
+  /// - [proxy]: `http://host:port` or `socks5://host:port` (credentials
+  ///   allowed, port 1080 by default, names resolved by a SOCKS proxy); null
+  ///   reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` like curl.
+  /// - [cache]: a folder; a GET within [ttl] of a stored 200 uses no
+  ///   network and no [rate] slot (for development). Past [ttl], an answer
+  ///   with an `ETag` or `Last-Modified` is revalidated: a 304 keeps it.
+  ///   Bodies stream to disk, never whole in memory.
   /// - [insecure] lists hosts whose bad certificate is accepted (each with
   ///   its subdomains), on every redirect hop.
   /// - [idle]: an idle client releases its sockets after this, so a
@@ -276,12 +352,15 @@ abstract final class Http {
   /// For a CLI OAuth login (the loopback redirect), a webhook, a folder
   /// preview. A handler error is a 500 with no detail sent, and is logged to
   /// stderr. No routing table: `switch (request.path())` is the router.
+  /// A request body over [limit] bytes is a 413.
   static Future<Server> serve(
     FutureOr<Reply> Function(Request request) handler, {
     int port = 0,
     String host = '127.0.0.1',
+    int limit = 64 << 20,
   }) async {
-    final server = Server._(await HttpServer.bind(host, port));
+    if (limit < 0) throw ArgumentError.value(limit, 'limit', 'must not be negative');
+    final server = Server._(await HttpServer.bind(host, port), limit);
     server.url(); // fix the address while bound
     server._server.listen((req) {
       final done = server._answer(req, handler);
@@ -302,7 +381,8 @@ abstract final class Http {
 ///
 /// Redirects are followed for every verb, up to 10 hops: 301/302/303 after
 /// a POST become a GET (the body is dropped); 307/308 keep the method and
-/// resend an in-memory body. A cross-origin hop drops credential headers.
+/// resend an in-memory body. A cross-origin hop drops credential headers;
+/// an https → http hop is followed with a warning on stderr.
 /// [query] values may be `String`, `num`, `bool`, null (drops the key) or an
 /// `Iterable` of those (repeats the key).
 sealed class Client implements Closeable {
@@ -330,6 +410,10 @@ sealed class Client implements Closeable {
 
   /// The cookie jar: persist it with `cookies().encode()`.
   Cookies cookies();
+
+  /// How many requests this client has put on the wire: every attempt and
+  /// redirect hop, not cache hits. A pool counts its members.
+  int sent();
 
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});
 
@@ -392,7 +476,8 @@ final class _Conn {
     required this.idle,
     required this.connections,
     required this.timeout,
-  }) : _trusted = [for (final h in insecure) h.toLowerCase()];
+  }) : _trusted = [for (final h in insecure) h.toLowerCase()],
+       _proxy = proxy == null ? null : _Proxy.parse(proxy);
 
   final List<String> insecure;
   final String? proxy;
@@ -400,6 +485,12 @@ final class _Conn {
   final int connections;
   final Duration timeout;
   final List<String> _trusted;
+  final _Proxy? _proxy;
+
+  bool _trusts(String host) {
+    final h = host.toLowerCase();
+    return _trusted.any((t) => h == t || h.endsWith('.$t'));
+  }
 
   HttpClient? _client;
   var _active = 0;
@@ -446,28 +537,18 @@ final class _Conn {
     final c = HttpClient()
       ..maxConnectionsPerHost = connections
       ..connectionTimeout = timeout;
-    if (_trusted.isNotEmpty) {
-      c.badCertificateCallback = (cert, host, port) {
-        final h = host.toLowerCase();
-        return _trusted.any((t) => h == t || h.endsWith('.$t'));
-      };
-    }
-    final p = proxy;
+    if (_trusted.isNotEmpty) c.badCertificateCallback = (cert, host, port) => _trusts(host);
+    final p = _proxy;
     if (p == null) {
       c.findProxy = HttpClient.findProxyFromEnvironment;
     } else {
-      final u = Uri.parse(p.contains('://') ? p : 'http://$p');
-      final port = u.hasPort ? u.port : 80;
-      c.findProxy = (_) => 'PROXY ${u.host}:$port';
-      if (u.userInfo.isNotEmpty) {
-        final [user, ...pass] = Uri.decodeComponent(u.userInfo).split(':');
-        c.addProxyCredentials(u.host, port, '', HttpClientBasicCredentials(user, pass.join(':')));
-      }
+      p.apply(c, _trusts);
     }
     return c;
   }
 
-  bool sameAs({List<String>? insecure, String? proxy, Duration? idle, int? connections}) =>
+  bool sameAs({List<String>? insecure, String? proxy, Duration? idle, int? connections, Duration? timeout}) =>
+      (timeout == null || timeout == this.timeout) &&
       (insecure == null || _sameList(insecure, this.insecure)) &&
       (proxy == null || proxy == this.proxy) &&
       (idle == null || idle == this.idle) &&
@@ -493,6 +574,11 @@ final class _Client extends Client {
   /// Requests in flight, for [_Pool]'s choice.
   var _inFlight = 0;
 
+  var _sent = 0;
+
+  @override
+  int sent() => _sent;
+
   /// Until when [_Pool] skips this member after a 429.
   DateTime? _benched;
 
@@ -516,7 +602,7 @@ final class _Client extends Client {
     int? limit,
   }) {
     final s = _s;
-    final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections)
+    final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections, timeout: timeout)
         ? _conn
         : _Conn(
             insecure: insecure ?? _conn.insecure,
@@ -551,7 +637,10 @@ final class _Client extends Client {
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers}) {
     if (!_s.resume) return _send('GET', url, query: query, headers: headers);
     _resolve(url, query); // a bad URL throws now, as for any verb
-    return _Lazy(this, url, query, headers);
+    return _Lazy(
+      () => _send('GET', url, query: query, headers: headers),
+      (extra) => _send('GET', url, query: query, headers: {...?headers, ...extra}, check: false),
+    );
   }
 
   @override
@@ -573,111 +662,6 @@ final class _Client extends Client {
   @override
   Future<Response> patch(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers}) =>
       _send('PATCH', url, body: body, query: query, headers: headers);
-
-  /// `resume: true` delivery of a GET to [path] through pass-through [pipes].
-  Future<void> _resume(
-    String url,
-    Map<String, Object?>? query,
-    Map<String, String>? headers,
-    String path,
-    List<Pipe> pipes,
-  ) async {
-    Stream<List<int>> through(Stream<List<int>> input) {
-      var out = input;
-      for (final p in pipes) {
-        out = p.transform(out);
-      }
-      return out;
-    }
-
-    Future<Response> fetch(int from, {String? tag}) => _send(
-      'GET',
-      url,
-      query: query,
-      headers: from > 0 ? {...?headers, 'range': 'bytes=$from-', 'if-range': ?tag} : headers,
-      check: false,
-    );
-
-    void sized(int bytes) {
-      for (final p in pipes) {
-        sizers[p]?.call(bytes);
-      }
-    }
-
-    // The .part's validator (a strong ETag, else Last-Modified) sits in
-    // .part.tag, written before any byte: sent back as If-Range, a file
-    // that changed answers 200 and restarts instead of being spliced.
-    final file = File(path), part = File('$path.part'), tagFile = File('$path.part.tag');
-    if (await file.exists()) {
-      final res = await fetch(0);
-      final size = res.size();
-      if (res.ok() && (size == null || size == await file.length())) {
-        await res.close();
-        sized(await file.length());
-        if (pipes.isNotEmpty) await through(file.openRead()).drain<void>(); // bars finish, hashes verify
-        return;
-      }
-      await res.close(); // changed (or an error page, which the fresh GET reports)
-      if (await part.exists()) await part.delete();
-      if (await tagFile.exists()) await tagFile.delete();
-    }
-    var have = await part.exists() ? await part.length() : 0;
-    final kept = have > 0 && await tagFile.exists() ? (await tagFile.readAsString()).trim() : '';
-    var res = await fetch(have, tag: kept.isEmpty ? null : kept);
-    if (have > 0 && res.status() != 206) {
-      // No range support: a 200 is the whole body, so use it from 0.
-      if (res.status() == 200) {
-        have = 0;
-      } else {
-        await res.close();
-        have = 0;
-        res = await fetch(0);
-      }
-    } else if (have > 0 && !(res.header('content-range') ?? '').startsWith('bytes $have-')) {
-      // A 206 for some other range would splice the wrong bytes on.
-      await res.close();
-      have = 0;
-      res = await fetch(0);
-    }
-    await res.check();
-    if (res.size() case final size?) sized(have + size);
-    if (have == 0) {
-      final etag = res.header('etag');
-      final tag = etag != null && !etag.startsWith('W/') ? etag : res.header('last-modified');
-      await tagFile.parent.create(recursive: true);
-      if (tag != null) {
-        await tagFile.writeAsString(tag);
-      } else if (await tagFile.exists()) {
-        await tagFile.delete();
-      }
-    }
-    await part.parent.create(recursive: true);
-    final sink = part.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
-    try {
-      // Replayed bytes are already on disk: the pipes see them, the file
-      // does not get them twice (pass-through pipes change nothing).
-      var skip = pipes.isEmpty ? 0 : have;
-      final body = res.stream();
-      final input = skip == 0 ? body : _concat(part.openRead(0, have), body);
-      await for (final chunk in through(input)) {
-        if (skip >= chunk.length) {
-          skip -= chunk.length;
-          continue;
-        }
-        sink.add(skip == 0 ? chunk : chunk.sublist(skip));
-        skip = 0;
-      }
-      await sink.close();
-    } catch (e) {
-      await sink.close().catchError((_) {});
-      final transport = e is IOException || e is TimeoutException || e is HttpRequestException;
-      if (!transport && await part.exists()) await part.delete();
-      if (!transport && await tagFile.exists()) await tagFile.delete();
-      rethrow;
-    }
-    await part.rename(path);
-    if (await tagFile.exists()) await tagFile.delete();
-  }
 
   @override
   Future<void> close() async {
@@ -750,12 +734,25 @@ final class _Client extends Client {
     if (_closed) throw _aborted(method, uri);
     final sent = _merge(_s.headers, headers ?? const {});
     // A Range answer is a slice: neither served from nor stored under the URL.
-    final cache = method == 'GET' && !sent.keys.any((k) => k.toLowerCase() == 'range') ? _s.cache : null;
+    final dir = method == 'GET' && !sent.keys.any((k) => k.toLowerCase() == 'range') ? _s.cache : null;
+    // Keyed before sending: a set-cookie in the answer must not move the key.
+    final cache = dir == null ? null : _Cache(dir, uri, sent, this);
+    var wire = sent;
+    _Entry? stale;
     if (cache != null) {
-      final hit = await _Cache(cache).read(uri, sent, _s.ttl, this, method);
-      if (hit != null) return _checked(hit, check);
+      final entry = await cache.read();
+      if (entry != null && entry.fresh(_s.ttl)) return _checked(entry.response(this, method), check);
+      // Past ttl but validated: ask whether it changed (304 = no body).
+      if (entry != null &&
+          !sent.keys.any((k) => const {'if-none-match', 'if-modified-since'}.contains(k.toLowerCase()))) {
+        final etag = entry.headers['etag'], modified = entry.headers['last-modified'];
+        if (etag != null || modified != null) {
+          stale = entry;
+          wire = {...sent, 'if-none-match': ?etag, 'if-modified-since': ?modified};
+        }
+      }
     }
-    final resendable = body is! _StreamBody;
+    final resendable = body?._resendable ?? true;
     final idempotent = method == 'GET' || method == 'HEAD' || method == 'PUT' || method == 'DELETE';
     final pace = _s.rate;
     var attempt = 0;
@@ -764,18 +761,20 @@ final class _Client extends Client {
     while (true) {
       if (attempt > 0) {
         final server = retryAfter;
-        final wait = banned && pace != null ? rate.ban(pace, server) : retry.backoff(attempt - 1, server);
+        final wait = banned && pace != null
+            ? rate.ban(pace, server, host: uri.host)
+            : retry.backoff(attempt - 1, server);
         await rate.sleep(wait, _halt);
         if (_closed) throw _aborted(method, uri);
       }
       if (pace != null) {
-        await rate.take(pace, _halt);
+        await rate.take(pace, _halt, host: uri.host);
         if (_closed) throw _aborted(method, uri);
       }
       retryAfter = null;
       banned = false;
       try {
-        final res = await _attempt(method, uri, body, sent);
+        final res = await _attempt(method, uri, body, wire);
         final code = res.status();
         final again = code == 429 && retry429 || code == 503 || (idempotent && (code == 502 || code == 504));
         if (resendable && again && attempt < _s.retries) {
@@ -785,7 +784,12 @@ final class _Client extends Client {
           attempt++;
           continue;
         }
-        if (cache != null && code == 200) return await _checked(await _Cache(cache).write(uri, sent, res, this), check);
+        if (stale != null && code == 304) {
+          final entry = await cache!.refresh(stale, res);
+          await res.close();
+          return await _checked(entry.response(this, method), check);
+        }
+        if (cache != null && code == 200) return await _checked(await cache.write(res, this), check);
         res._prefetch();
         return await _checked(res, check);
       } on _Failed catch (f) {
@@ -845,7 +849,7 @@ final class _Client extends Client {
           currentMethod = 'GET';
           currentBody = null;
           currentHeaders = _without(currentHeaders, (k) => k == 'content-type' || k == 'content-length');
-        } else if (currentBody is _StreamBody) {
+        } else if (currentBody != null && !currentBody._resendable) {
           throw HttpRequestException(
             currentMethod,
             names.redact(uri),
@@ -855,6 +859,9 @@ final class _Client extends Client {
         }
         if (uri.scheme != next.scheme || uri.host != next.host || uri.port != next.port) {
           currentHeaders = _without(currentHeaders, names.isSecretHeader);
+        }
+        if (uri.scheme == 'https' && next.scheme == 'http') {
+          stderr.writeln('warning: $currentMethod ${names.redact(uri)} redirected from https to ${names.redact(next)}');
         }
         uri = next;
       }
@@ -885,6 +892,7 @@ final class _Client extends Client {
       throw _aborted(method, uri);
     }
     _requests.add(req);
+    _sent++;
     try {
       req.followRedirects = false;
       String? length;
@@ -895,6 +903,9 @@ final class _Client extends Client {
           req.headers.set(key, value);
         }
       }
+      if (!headers.keys.any((k) => k.toLowerCase() == 'user-agent')) {
+        req.headers.set('user-agent', _s.cookies.agent() ?? _userAgent);
+      }
       final cookie = _cookieHeader(uri, headers);
       if (cookie != null) req.headers.set('cookie', cookie);
       final csrf = _s.csrf;
@@ -902,20 +913,38 @@ final class _Client extends Client {
         final token = jar.valueFor(_s.cookies, uri, csrf.cookie);
         if (token != null) req.headers.set(csrf.header, token);
       }
+      void streamed() {
+        if (length != null) {
+          final n = int.tryParse(length.trim());
+          if (n == null || n < 0) {
+            throw ArgumentError.value(length, 'headers[content-length]', 'must be a non-negative integer');
+          }
+          req.contentLength = n;
+        } else {
+          req.contentLength = -1;
+        }
+        req.bufferOutput = false;
+      }
+
       Stream<List<int>> upload;
       switch (body) {
         case _StreamBody(:final _reader):
-          if (length != null) {
-            final n = int.tryParse(length.trim());
-            if (n == null || n < 0) {
-              throw ArgumentError.value(length, 'headers[content-length]', 'must be a non-negative integer');
-            }
-            req.contentLength = n;
-          } else {
-            req.contentLength = -1;
-          }
-          req.bufferOutput = false;
+          streamed();
           upload = _reader.stream();
+        case _MultipartBody():
+          final boundary = _boundary();
+          final pieces = body._pieces(boundary);
+          if (req.headers.value('content-type') == null) {
+            req.headers.set('content-type', 'multipart/form-data; boundary=$boundary');
+          }
+          if (pieces.any((p) => p is Reader)) {
+            streamed();
+            upload = _streamPieces(pieces);
+          } else {
+            final bytes = [for (final p in pieces) ...p as List<int>];
+            req.contentLength = bytes.length;
+            upload = _slices(bytes);
+          }
         case null:
           req.contentLength = 0;
           upload = const Stream.empty();
@@ -965,6 +994,12 @@ final class _Client extends Client {
 
 const _maxRedirects = 10;
 
+/// The `user-agent` every request sends unless a header or the jar's
+/// `agent()` names one: a current desktop Chrome, since many sites refuse
+/// or degrade a `Dart/…` client.
+const _userAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
+
 /// A transport failure inside [_Client._run]; [sent] says whether the
 /// request may have reached the server.
 final class _Failed {
@@ -1000,34 +1035,41 @@ final class _Pool extends Client {
     int? connections,
     bool? resume,
     int? limit,
-  }) => _Pool([
-    for (final m in _members)
-      m.copy(
-        base: base,
-        headers: headers,
-        timeout: timeout,
-        retries: retries,
-        rate: rate,
-        check: check,
-        cookies: cookies,
-        csrf: csrf,
-        proxy: proxy,
-        cache: cache,
-        ttl: ttl,
-        insecure: insecure,
-        idle: idle,
-        connections: connections,
-        resume: resume,
-        limit: limit,
-      ) as _Client,
-  ]);
+  }) {
+    if (proxy != null) {
+      throw ArgumentError.value(proxy, 'proxy', 'a pool keeps each member\'s proxy: copy the members, then pool them');
+    }
+    return _Pool([
+      for (final m in _members)
+        m.copy(
+          base: base,
+          headers: headers,
+          timeout: timeout,
+          retries: retries,
+          rate: rate,
+          check: check,
+          cookies: cookies,
+          csrf: csrf,
+          cache: cache,
+          ttl: ttl,
+          insecure: insecure,
+          idle: idle,
+          connections: connections,
+          resume: resume,
+          limit: limit,
+        ) as _Client,
+    ]);
+  }
 
   @override
   Cookies cookies() => (_last ?? _members.first).cookies();
 
+  @override
+  int sent() => _members.fold(0, (n, m) => n + m._sent);
+
   /// The member with the fewest requests in flight whose [Rate] has a free
   /// slot and which is not benched; ties round-robin.
-  _Client _pick() {
+  _Client _pick(String host) {
     final now = DateTime.now();
     _Client? best;
     var score = 0;
@@ -1035,7 +1077,7 @@ final class _Pool extends Client {
       final m = _members[(_next + k) % _members.length];
       final benched = m._benched != null && m._benched!.isAfter(now);
       final pace = m._s.rate;
-      final s = m._inFlight + (benched ? 1 << 20 : 0) + (pace != null && !rate.free(pace) ? 1 << 10 : 0);
+      final s = m._inFlight + (benched ? 1 << 20 : 0) + (pace != null && !rate.free(pace, host: host) ? 1 << 10 : 0);
       if (best == null || s < score) {
         best = m;
         score = s;
@@ -1051,31 +1093,41 @@ final class _Pool extends Client {
     Body? body,
     Map<String, Object?>? query,
     Map<String, String>? headers,
+    bool check = true,
   }) async {
+    final uri = _members.first._resolve(url, query);
     for (var attempt = 0; ; attempt++) {
-      final m = _pick();
+      final m = _pick(uri.host);
       // Every member benched: wait for the first to come back instead of
       // sending into its ban at once.
       final bench = m._benched?.difference(DateTime.now());
       if (bench != null && bench > Duration.zero) {
         await rate.sleep(bench, m._halt);
-        if (m._closed) throw m._aborted(method, Uri.parse(url));
+        if (m._closed) throw m._aborted(method, m._resolve(url, query));
       }
       final res = await m._send(method, url, body: body, query: query, headers: headers, check: false, retry429: false);
-      if (res.status() == 429 && attempt < m._s.retries && body is! _StreamBody) {
+      if (res.status() == 429 && attempt < m._s.retries && (body?._resendable ?? true)) {
         final server = retry.parseRetryAfter(res.header('retry-after'));
         final pace = m._s.rate;
-        m._benched = DateTime.now().add(pace != null ? rate.ban(pace, server) : server ?? retry.backoff(attempt, null));
+        m._benched = DateTime.now().add(
+          pace != null ? rate.ban(pace, server, host: uri.host) : server ?? retry.backoff(attempt, null),
+        );
         await res._abandon();
         continue;
       }
-      return m._checked(res, true);
+      return m._checked(res, check);
     }
   }
 
   @override
-  Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers}) =>
-      _send('GET', url, query: query, headers: headers);
+  Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers}) {
+    if (!_members.any((m) => m._s.resume)) return _send('GET', url, query: query, headers: headers);
+    _members.first._resolve(url, query); // a bad URL throws now, as for any verb
+    return _Lazy(
+      () => _send('GET', url, query: query, headers: headers),
+      (extra) => _send('GET', url, query: query, headers: {...?headers, ...extra}, check: false),
+    );
+  }
 
   @override
   Future<Response> head(String url, {Map<String, Object?>? query, Map<String, String>? headers}) =>
@@ -1113,20 +1165,20 @@ Stream<List<int>> _concat(Stream<List<int>> first, Stream<List<int>> rest) async
 /// synchronous block, unless a pipeline into a file claims it first
 /// (`Reader.to` asks before awaiting anything) and delivers it itself.
 final class _Lazy implements Future<Response>, Resumable {
-  _Lazy(this._client, this._url, this._query, this._headers) {
+  _Lazy(this._send, this._fetch) {
     scheduleMicrotask(() {
       if (!_claimed) _start();
     });
   }
 
-  final _Client _client;
-  final String _url;
-  final Map<String, Object?>? _query;
-  final Map<String, String>? _headers;
+  final Future<Response> Function() _send;
+
+  /// The GET with extra headers (a `Range`), never `check:`ed.
+  final Future<Response> Function(Map<String, String> extra) _fetch;
   Future<Response>? _sent;
   var _claimed = false;
 
-  Future<Response> _start() => _sent ??= _client._send('GET', _url, query: _query, headers: _headers);
+  Future<Response> _start() => _sent ??= _send();
 
   @override
   bool claim() {
@@ -1135,7 +1187,7 @@ final class _Lazy implements Future<Response>, Resumable {
   }
 
   @override
-  Future<void> resume(String path, List<Pipe> pipes) => _client._resume(_url, _query, _headers, path, pipes);
+  Future<void> resume(String path, List<Pipe> pipes) => _deliver(_fetch, path, pipes);
 
   @override
   Stream<Response> asStream() => _start().asStream();
@@ -1155,6 +1207,124 @@ final class _Lazy implements Future<Response>, Resumable {
   @override
   Future<Response> whenComplete(FutureOr<void> Function() action) => _start().whenComplete(action);
 }
+
+/// `resume: true` delivery of a GET to [path] through pass-through [pipes]:
+/// skip a complete file, resume a `.part`, rename into place.
+Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch, String path, List<Pipe> pipes) async {
+  Stream<List<int>> through(Stream<List<int>> input) {
+    var out = input;
+    for (final p in pipes) {
+      out = p.transform(out);
+    }
+    return out;
+  }
+
+  void sized(int bytes) {
+    for (final p in pipes) {
+      sizers[p]?.call(bytes);
+    }
+  }
+
+  // Bytes about to come back from disk: rate meters leave them out. Called
+  // right before [through] starts the pipes, which read the count then.
+  void replayed(int bytes) {
+    for (final p in pipes) {
+      replays[p]?.call(bytes);
+    }
+  }
+
+  // Stored bytes go through the pipes, so bars finish and hashes verify.
+  Future<void> replay(File f) async {
+    final length = await f.length();
+    sized(length);
+    replayed(length);
+    if (pipes.isNotEmpty) await through(f.openRead()).drain<void>();
+  }
+
+  // The .part's validator (a strong ETag, else Last-Modified) sits in
+  // .part.tag, written before any byte: sent back as If-Range, a file
+  // that changed answers 200 and restarts instead of being spliced.
+  final file = File(path), part = File('$path.part'), tagFile = File('$path.part.tag');
+  Response? res;
+  var have = 0;
+  if (await file.exists()) {
+    final first = await fetch(const {});
+    final size = first.size();
+    if (first.ok() && (size == null || size == await file.length())) {
+      await first.close();
+      return replay(file);
+    }
+    await first.check(); // an error page throws what check() throws
+    if (await part.exists()) await part.delete();
+    if (await tagFile.exists()) await tagFile.delete();
+    res = first; // the file changed: this full answer is the new one
+  } else {
+    have = await part.exists() ? await part.length() : 0;
+    final kept = have > 0 && await tagFile.exists() ? (await tagFile.readAsString()).trim() : '';
+    res = await fetch(have > 0 ? {'range': 'bytes=$have-', if (kept.isNotEmpty) 'if-range': kept} : const {});
+    if (have > 0) {
+      final range = (res.header('content-range') ?? '').trim();
+      if (res.status() == 416 && _unsatisfied.firstMatch(range)?[1] == '$have') {
+        // The .part already holds every byte: finish it, no download.
+        await res.close();
+        await replay(part);
+        await part.rename(path);
+        if (await tagFile.exists()) await tagFile.delete();
+        return;
+      }
+      if (res.status() == 200) {
+        have = 0; // no range support: a 200 is the whole body, so use it from 0
+      } else if (res.status() != 206 || !range.startsWith('bytes $have-')) {
+        // Any other answer, or a 206 for some other range, would splice the wrong bytes on.
+        await res.close();
+        have = 0;
+        res = await fetch(const {});
+      }
+    }
+  }
+  await res.check();
+  if (res.size() case final size?) sized(have + size);
+  if (have == 0) {
+    final etag = res.header('etag');
+    final tag = etag != null && !etag.startsWith('W/') ? etag : res.header('last-modified');
+    await tagFile.parent.create(recursive: true);
+    if (tag != null) {
+      await tagFile.writeAsString(tag);
+    } else if (await tagFile.exists()) {
+      await tagFile.delete();
+    }
+  }
+  await part.parent.create(recursive: true);
+  final sink = part.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
+  try {
+    // Replayed bytes are already on disk: the pipes see them, the file
+    // does not get them twice (pass-through pipes change nothing).
+    var skip = pipes.isEmpty ? 0 : have;
+    final body = res.stream();
+    final input = skip == 0 ? body : _concat(part.openRead(0, have), body);
+    replayed(skip);
+    await for (final chunk in through(input)) {
+      if (skip >= chunk.length) {
+        skip -= chunk.length;
+        continue;
+      }
+      sink.add(skip == 0 ? chunk : chunk.sublist(skip));
+      skip = 0;
+    }
+    await sink.close();
+  } catch (e) {
+    await sink.close().catchError((_) {});
+    final transport = e is IOException || e is TimeoutException || e is HttpRequestException;
+    if (!transport && await part.exists()) await part.delete();
+    if (!transport && await tagFile.exists()) await tagFile.delete();
+    rethrow;
+  }
+  await part.rename(path);
+  if (await tagFile.exists()) await tagFile.delete();
+}
+
+/// `content-range: bytes */<length>` of a 416.
+final _unsatisfied = RegExp(r'^bytes\s+\*/(\d+)$', caseSensitive: false);
 
 /// The query string for [values]: `num`/`bool` as text, null drops the key,
 /// an `Iterable` repeats it.
@@ -1199,7 +1369,7 @@ Uri _withQuery(Uri url, Map<String, Object?>? query) {
   _BytesBody(:final _bytes) => (bytes: _bytes, type: null),
   _FormBody(:final _fields) => (bytes: utf8.encode(_encodePairs(_fields)), type: 'application/x-www-form-urlencoded'),
   _JsonBody(:final _value) => (bytes: utf8.encode(jsonEncode(_value)), type: 'application/json'),
-  _StreamBody() => throw StateError('streamed body is not in memory'),
+  _StreamBody() || _MultipartBody() => throw StateError('body is not encoded in memory'),
 };
 
 /// [base] with [extra] laid over it, names compared case-insensitively.

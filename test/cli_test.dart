@@ -595,6 +595,60 @@ Future<void> main(List<String> a) async {
     expect((await runDart(script, cwd: dir.path)).stdout, '[abc123][C:\\new\\dir][say "hi"\tok][it]\n');
   });
 
+  // Regression: the dotenv values were one global, so a second Command run
+  // in the same process saw the first one's file.
+  test('dotenv: values belong to their run, not to the process', () async {
+    final dir = await Directory.systemTemp.createTemp('dotenv3');
+    addTearDown(() => dir.delete(recursive: true));
+    await File('${dir.path}/.env').writeAsString('APP_T=from-file\n');
+    const script = '''
+import 'package:dart_toolkit/cli.dart';
+Future<void> main(List<String> a) async {
+  final t = Opt<String?>('t', 'T.', env: 'APP_T');
+  await Command('one', 'X.', params: [t], dotenv: '.env', handler: (c) => print(c(t))).run(a);
+  await Command('two', 'X.', params: [t], handler: (c) => print(c(t))).run(a);
+}
+''';
+    expect((await runDart(script, cwd: dir.path)).stdout, 'from-file\nnull\n');
+  });
+
+  group('Opt(min:, max:)', () {
+    test('bounds a value, in usage and in errors', () async {
+      final q = Opt<int?>('quality', 'Quality.', min: 1, max: 100);
+      int? seen;
+      final cli = Command('app', 'X.', params: [q], handler: (c) => seen = c(q));
+      expect(await cli.run(['--quality', '85']), 0);
+      expect(seen, 85);
+      expect(await fails(cli, ['--quality', '150']), contains('must be between 1 and 100'));
+      expect(await fails(cli, ['--quality', '0']), contains('must be between 1 and 100'));
+      expect(await helps(cli, ['--help']), contains('[1-100]'));
+      final wait = Opt('wait', 'W.', or: const Duration(seconds: 1), min: Duration.zero);
+      expect(await fails(Command('w', 'X.', params: [wait], handler: (_) {}), ['--wait', '-5s']), contains('at least 0s'));
+    });
+
+    test('a default outside the bounds, or a type that does not order, is an ArgumentError', () {
+      expect(() => Opt('n', 'N.', or: 0, min: 1), throwsArgumentError);
+      expect(() => Opt<Uri?>('u', 'U.', min: Uri.parse('a:b')), throwsArgumentError);
+    });
+  });
+
+  group('version:', () {
+    test('--version prints name and version at any depth, skipping required checks', () async {
+      final need = Opt<String>('need', 'N.', required: true);
+      final cli = Command('tool', 'X.', version: '1.2.3', commands: [
+        Command('sub', 'S.', params: [need], handler: (_) => fail('handler ran')),
+      ]);
+      expect(await helps(cli, ['--version']), 'tool 1.2.3\n');
+      expect(await helps(cli, ['sub', '--version']), 'tool 1.2.3\n');
+      expect(await helps(cli, ['--help']), contains('--version'));
+    });
+
+    test('without version: it is an unknown option; with it, a --version param is reserved', () async {
+      expect(await fails(Command('t', 'X.', handler: (_) {}), ['--version']), contains('Unknown option --version'));
+      expect(() => Command('t', 'X.', version: '1', params: [Opt<String?>('version', 'V.')]), throwsArgumentError);
+    });
+  });
+
   group('suggestions', () {
     test('L1: short options suggest only the case-swapped letter', () async {
       const script = '''

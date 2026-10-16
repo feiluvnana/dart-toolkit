@@ -16,6 +16,8 @@
 //   secret: reads one secret line; writes the answer.
 //   eof:    every prompt on an empty stdin; writes what each gave back.
 //   empty:  prompts answered by empty lines (stdin is \n per prompt).
+//   park:   a spinner runs while ask waits (pty); writes the answer.
+//   asktimeout: ask(timeout:) with nobody answering; writes what it gave.
 import 'dart:async';
 import 'dart:io';
 
@@ -100,7 +102,7 @@ Future<void> main(List<String> args) async {
       stdout.writeln('ready-leak');
     case 'total':
       final bar = Console.bar(null, label: 'T');
-      bar.tick(2).setTotal(4);
+      bar.update(2, 4);
       Console.log('logged above');
       await bar.close();
     case 'over':
@@ -132,6 +134,15 @@ Future<void> main(List<String> args) async {
       final b = await Console.ask('B?');
       final c = await Console.confirm('C?', or: true);
       await log.writeAsString('empty=$a|$b|$c\n');
+    case 'park':
+      final work = Console.spin('working', Future<void>.delayed(const Duration(seconds: 3)));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final answer = await Console.ask('Name?');
+      await log.writeAsString('answer=$answer\n');
+      await work;
+    case 'asktimeout':
+      final answer = await Console.ask('Name?', or: 'anon', timeout: const Duration(milliseconds: 300));
+      await log.writeAsString('answer=$answer\n');
     case 'secret':
       final answer = await Console.ask('Password?', secret: true);
       await log.writeAsString('secret=$answer\n');

@@ -46,7 +46,7 @@ at its call sites than it adds to the surface.
 | 11  | **Types over runtime checks.** Generics carry the value type (`Opt<int>`, `value<T>()`, `Pool.map<T, R>`), sealed types make `switch` exhaustive (`Entry`), and `Object` parameters are kept to data and `body:`.                                                                                                                                                                                                                                                                           |
 | 12  | **`close()` releases a resource and is idempotent.** Whatever holds a process, socket, terminal or isolate cleans up on `close()`, on an error, and on Ctrl-C. Nothing keeps a finished script alive.                                                                                                                                                                                                                                                                                       |
 | 13  | **Engines stay private and swappable.** An engine type never appears in a public signature, and engine exceptions are rethrown as Dart's own (§5). Tests use real servers, files, browsers and pseudo-terminals, never the engine, so a swap is proven by the same suite.                                                                                                                                                                                                                   |
-| 14  | **No code generation, no native code.** Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`).                                                                                                                                                                                                                                                                                                                                                                        |
+| 14  | **No code generation, no linked native code.** Native tools (ffmpeg) are downloaded on first use, pinned by sha256, and run as processes. Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`). |
 
 ## 2. Core: Reader, Writer, Pipe, Closeable
 
@@ -65,10 +65,11 @@ abstract mixin class Reader {                     // bytes you can read; impleme
 }
 abstract mixin class Writer { Future<void> consume(Stream<List<int>> input);  Origin origin(); }   // origin: a File's path
 final class Cookies {                             // the jar chrome produces and http consumes
-  Cookies();  static Cookies parse(String text);  String encode();   // Netscape cookies.txt
-  String? operator [](String name);  String? header(String url);  Cookies set(String name, String value, {required String url});
+  Cookies({String? agent});  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line)
+  static Future<Cookies> load(Reader source);     // a session file; missing = empty jar
+  String? operator [](String name);  String? header(String url);  String? agent();  Cookies set(String name, String value, {required String url});
 }
-final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait});  Future<void> wait(); }
+final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait, bool perHost = false});  Future<void> wait(); }
 extension Durations on num { Duration get milliseconds, seconds, minutes, hours, days; }   // 3.seconds, 1.5.minutes
 abstract mixin class Pipe { Stream<List<int>> transform(Stream<List<int>> input);  void abort(Object error) {}
   static Pipe tap(void Function(int done, int? total) onProgress); }   // pass-through progress probe; resumable
@@ -147,26 +148,27 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Closeable` `Origin` · `Cookies` `parse` `encode` `[]` `header` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException`                                                                                                                                                                                     | in-house                            |
-| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `attr` `attrs` `json` `table` `form` · `Element` `$` `not` `text` `attr` `parent`                                                                                                                                                                                                                                                     | in-house HTML5 parser and selectors |
-| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`                           |
-| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header`                                                                                                                                                                                                                                                                                 | `package:puppeteer`                 |
-| `json`    | `Json.parse` `of` `encode` · `Reader.json` · `Json` `$` `[]` `value` `or` `text` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                                 | `dart:convert`                      |
-| `csv`     | `Csv.parse` `records` `encode` · `Reader.csv`                                                                                                                                                                                                                                                                                                                                                                 | in-house                            |
-| `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | `package:yaml`                      |
+| `core`    | `Reader` `Writer` `Pipe` `Closeable` `Origin` · `Cookies` `parse` `load` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException`                                                                                                                                                                                     | in-house                            |
+| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `html` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `html` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
+| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`                           |
+| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
+| `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
+| `csv`     | `Csv.parse` `records` `encode` · `Reader.csv` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
+| `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `temp` `home` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `which` `filter` `open` · `Output` `code` `ok` `err`                                                                                                                                                                                                                                                                                                                                              | `dart:io`                           |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
-| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`) · `Hasher` `add` `addBytes` `hex` `of`                                                                                                                                                                                                                                                                                                                        | `package:crypto`                    |
+| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `base64` `bytes` `of`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
 | `pool`    | `Pool.map` `settle` · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
 | `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` `clear` `accent` · `Bar` `tick` `update` `setTotal`                                                                                                                                                                                                                                                                         | in-house                            |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style`                                                                                                                                                                                                                                                       | in-house                            |
-| `image`   | `Image.decode` `sniff` · `Reader.image` · `Image` `width` `height` `pixel` `resize` `crop` `encode` · `ImageFormat`                                                                                                                                                                                                                                                                                           | `package:image`                     |
+| `image`   | `Image.decode` `sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
+| `video`   | `Video.decode` `open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
 
-A module imports only core and its engine. The exceptions are `chrome`, which imports `html`
+A module imports only core and its engine. The exceptions are `video`, which imports `image` for `frame()`, `chrome`, which imports `html`
 for `Elements` and `json` for the `run<T>` coercion rules, and `html`, which imports `json` for
-`Elements.json()` (embedded data), and `yaml`, which imports and re-exports `json` (its `parse`
+`Elements.json()` (embedded data) and re-exports it, and `yaml`, which imports and re-exports `json` (its `parse`
 returns a `Json`). `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
 
@@ -177,14 +179,13 @@ abstract final class Html { static Elements parse(String html, {String? base}); 
 extension on Reader { Future<Elements> html(); }     // base = the response's final URL or the file's URI
 final class Elements extends Iterable<Element> {
   Elements $(String selector);  Element operator [](int i);  Elements not(String selector);
-  String text();  List<String> texts();  String? attr(String name);  List<String> attrs(String name);
+  String text();  List<String> texts();  String html();  String? attr(String name);  List<String> attrs(String name);
   Json json();                                      // <script type=application/json|ld+json>, __NEXT_DATA__
   List<Map<String, String>> table();                // the first table: header → cell text
-  ({String action, String method, Map<String, String> fields})? form();   // the first form, hidden fields included
+  ({String action, String method, Map<String, List<String>> fields})? form();   // the first form, hidden fields included
 }
 final class Element {
-  Elements $(String selector);  Element not(String selector);
-  String text();  String? attr(String name);  Element? parent();
+  Elements $(String selector);  String text();  String html();  String? attr(String name);  Element? parent();
 }
 ```
 
@@ -196,12 +197,16 @@ final class Element {
   starts with `<!doctype` or `<html` is a whole document (so `$('body')` works); anything else is
   a fragment. A fragment with loose text is returned as its root, which holds the text and the
   elements and matches no selector itself.
-- With a base, URL attributes (`href`, `src`, `data-src`, `poster`, `action`) are trimmed and
-  made absolute.
+- With a base, links come back absolute: URL attributes (`href`, `src`, `data-src`, `poster`,
+  `action`) are trimmed and resolved, every `srcset`/`data-srcset` candidate is resolved, and a
+  `<meta content>` that is a path (`/`, `./`, `../`) is resolved, so
+  `$('meta[property="og:image"]').attr('content')` is a URL to fetch.
 - Selectors: type, `*`, `#id`, `.class`, attributes (`= ~= |= ^= $= *=`, `i`), the four
   combinators, `:first-child` … `:only-of-type`, `:nth-child(An+B of S)` and friends, `:not`
-  `:is` `:where` `:has`, `:empty` `:root` `:link` `:checked` `:disabled` `:enabled` `:lang`.
-  Pseudo-elements never match. A selector it rejects is a `ContentException` naming it.
+  `:is` `:where` `:has`, `:empty` `:root` `:link` `:checked` `:disabled` `:enabled` `:lang`
+  `:scope`. A leading combinator is relative to the receiver: `ul.$('> li')` is its direct items
+  (`:scope` is the receiver, or each of an `Elements`). Pseudo-elements never match. A selector it
+  rejects is a `ContentException` naming it once.
 - `$` returns matches in document order without duplicates. On `Elements`, `text()` and `attr()`
   both read the **first** match (`''`/`null` when there is none); for every match use
   `texts()` or `attrs()`. `attrs()` skips missing values.
@@ -209,11 +214,14 @@ final class Element {
   one space, and a run that holds a newline becomes one newline. The result is trimmed, and
   `<pre>` keeps its whitespace.
 - `not` returns a new tree (one O(n) clone, table parts included); the receiver is
-  unchanged.
+  unchanged. `html()` is the outer markup (`outerHTML`; on `Elements`, the first match's).
 - `json()` parses every embedded-data script into one `Json` list (invalid ones skipped), so
-  `page.json().$('**.user')` searches them all. `table()` keys rows by the first row (`colspan`
-  repeats). `form()` gives what a login without a browser posts:
-  `client.post(f.action, body: .form({...f.fields, 'user': u}))`.
+  `page.json().$('**.user')` searches them all (`; charset=…` types too). `table()` keys rows by
+  the first row (`colspan` repeats across, `rowspan` down). `form()` gives what a login without a
+  browser posts: `client.post(f.action, body: .form({...f.fields, 'user': u}))`. Each field holds
+  every value (repeated names, `select multiple`); an empty `action` is the document URL, not
+  `<base href>`.
+- `html` re-exports `json`, so `get(u).html().json().$('x')` needs one import.
 
 ```dart
 final doc = await http.get(url).html();
@@ -236,13 +244,15 @@ abstract final class Http {
 sealed class Client implements Closeable {
   Client copy({…every setting, null keeps it; headers merge…});   // shares jar, Rate and connections
   Cookies cookies();
+  int sent();                                     // requests on the wire (attempts, hops; not cache hits)
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});   // head, delete: the same
   Future<Response> post(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers}); // put, patch
   Future<void> close();                           // cancels this client's requests and waits; idempotent
 }
-sealed class Body {                              // stream: sent once, never retried
+sealed class Body {                              // stream (or multipart with a Reader): sent once, never retried
   const factory Body.text(String text);  const factory Body.bytes(List<int> bytes);
   const factory Body.form(Map<String, Object?> fields);  const factory Body.json(Object? value);
+  const factory Body.multipart(Map<String, Object> parts);   // String = field, Reader = file (streamed)
   const factory Body.stream(Reader reader);
 }
 final class Response with Reader implements Closeable {
@@ -263,36 +273,44 @@ final class Response with Reader implements Closeable {
   `HttpStatusException('HTTP 404 GET <url>: <snippet>')`.
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
   and 307/308 keep the method and resend an in-memory body. `url()` is the final URL. A
-  cross-origin hop drops credential headers.
+  cross-origin hop drops credential headers; an https → http hop warns on stderr.
+- **User-Agent**: a current desktop Chrome unless a `user-agent` header is given or the jar has
+  an `agent()` (`Cookies.load` reads it from the session file's `user-agent:` line).
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws what `check()` throws, so an
   error page is never saved. The readings (`text()`, `lines()`, `json()`, `html()`) work on any
   status.
 - **Cookies** live in the client's `Cookies` jar (core; `page.cookies()` produces one).
-  `set-cookie` (redirect hops too) updates it; a malformed one skips only itself; `Domain=` needs
-  a dot and is never an IP; cookies go out longest path first. A per-call `cookie` header merges
+  `set-cookie` (redirect hops too) updates it, parsed leniently like a browser (spaces, quotes, any
+  date form); one without `name=` skips only itself; `Domain=` needs a dot, is never an IP or a
+  public suffix (`co.uk`, `github.io`); cookies go out longest path first. A per-call `cookie` header merges
   by name (the caller wins). `csrf: (cookie: 'csrftoken', header: 'x-csrftoken')` copies a cookie
   into a header on every send.
 - **Retries** apply only when the request provably was not processed: any in-memory body on
   connect/DNS failures, 429 and 503; GET/HEAD/PUT/DELETE also on timeouts, network errors and
   502/504; never 500/501/505 or TLS. Backoff doubles from 1 s with ±25% jitter; `Retry-After` is
   honoured (capped at 5 min unless the client has a `Rate`, whose 429 waits the window out).
-- `rate: Rate(75, 11.minutes, pause: 3.seconds)` paces every send of the clients that share it.
+- `rate: Rate(75, 11.minutes, pause: 3.seconds)` paces every send of the clients that share it;
+  `Rate(1, 1.seconds, perHost: true)` keeps one window per host.
 - **Downloads respect the pipe.** With `resume: true`, a GET piped into a file
   (`cdn.get(u) | Console.bar(null) | Hash.sha256(expect: s) > Fs.file(f)`):
   - skips a complete file (same `content-length`, or any file when the server sends none);
-  - resumes a `.part` with `Range` when the server answers 206 (anything else restarts);
+  - resumes a `.part` with `Range` when the server answers 206 (anything else restarts), and
+    finishes a complete one on a 416; a changed file reuses the first GET;
   - renames the finished file into place.
     Stored bytes replay through the pipes, so a bar counts the whole file and a hash verifies it.
     A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
     keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
     synchronous block unless such a pipeline claims it, so awaiting it works as always.
-- **`Http.serve(handler, port:, host:)`** answers loopback requests until `close()`: `Request` (`method`
+- **`Http.serve(handler, port:, host:, limit:)`** answers loopback requests until `close()`: `Request` (`method`
   `path` `query(name)` `header`, a `Reader` of the body) → `Reply.text` `.json` `.stream`
-  (content-type from a file's name, or `type:`) `.redirect` `.status`. A handler error is a 500, logged.
+  (content-type from a file's name, or `type:`) `.redirect` `.status`. A handler error is a 500, logged;
+  a body over `limit` (64 MB) is a 413.
   It is meant for a CLI OAuth login, a webhook, or a preview; `switch (r.path())` is the router.
 - `cache: '.cache'` answers a GET within `ttl` from disk (no network, no `Rate` slot), keyed by
-  URL and the request headers the answer `Vary`s on: for developing a scraper.
-- `proxy:` is `http://[user:pass@]host:port`; null reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`.
+  URL, credentials and the request headers the answer `Vary`s on: for developing a scraper. Bodies
+  stream to disk; past `ttl` an `ETag`/`Last-Modified` is revalidated (a 304 keeps the copy).
+- `proxy:` is `http://` or `socks5://[user:pass@]host[:port]` (port 1080 by default; SOCKS resolves
+  names); null reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`. A pool's `copy(proxy:)` throws.
 - **`Http.pool([a, b])`** sends each request to the member with the fewest in flight whose
   `Rate` is free (ties round-robin); a 429 benches that member and retries on another. For
   several accounts, mirrors or proxies.
@@ -332,14 +350,14 @@ final class Page implements Closeable {
   Future<Page> go(String url, {Duration? timeout});                                  // wait for load
   Future<Page> back({Duration? timeout});  Future<Page> reload({Duration? timeout});
   Future<String> url();  Future<Elements> html();  Future<String> text();
-  Future<T?> run<T>(String js);  Future<Cookies> cookies();                            // the current URL's jar
+  Future<T?> run<T>(String js);  Future<Cookies> cookies({bool all = false});          // the current URL's jar
   Future<String> cookie(String name, {Duration? timeout});                              // waits until set
   Stream<Capture> responses(String pattern);                                            // XHR/fetch matching a glob
   Future<Page> click(String selector, {Duration? timeout});                             // auto-wait
   Future<Page> fill(String selector, String value, {Duration? timeout});
   Future<Page> select(String selector, String value, {Duration? timeout});
   Future<Page> upload(String selector, Reader file, {Duration? timeout});
-  Future<Page> press(String key);  Future<Page> scroll([String? selector, Duration? timeout]);  // auto-waits too; positional: Dart has no optional + named mix
+  Future<Page> press(String key);  Future<Page> scroll({String? to, Duration? timeout});   // to the bottom, or to a selector
   Future<Page> wait(String selector, {Duration? timeout});  Future<Page> idle({Duration? timeout});
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
   Future<Download> download(String selector, {Duration? timeout});
@@ -348,22 +366,30 @@ final class Download with Reader { String name(); }
 final class Capture with Reader { int status();  String url();  String? header(String name); }
 ```
 
-- `launch` fetches Chromium into the user cache (once per machine) unless `path` is given. `profile` keeps logins
-  between runs; without it, a temp profile is deleted on `close`. `connect` attaches, and its
-  `close` only disconnects.
+- `chrome` speaks the DevTools protocol itself over a `dart:io` WebSocket (no engine package).
+  `launch` takes `path`, else Chrome for Testing already in the user cache, else an installed
+  Chrome/Chromium, else downloads Chrome for Testing once per machine; a headless run without a
+  profile uses `chrome-headless-shell` (starts ~4x faster). `profile` keeps logins (session cookies
+  too) between runs, never tabs; without it, a temp profile is deleted on `close`. `connect`
+  attaches (`http://host:9222` or `ws://…`), and its `close` closes the tabs it opened, restores
+  the download behaviour and disconnects.
 - Tab setup happens at `open`: `headers` (including `user-agent`), `block` by resource type
   (`'image'`, `'font'`, `'media'`, `'stylesheet'`), and the viewport. Dialogs are always
   dismissed.
 - Actions wait until the first match is attached, visible and enabled (`upload`: attached only,
   since file inputs are usually hidden). They time out (30 s) with a `TimeoutException` naming the
-  selector. `fill` clears the field, types the value, and fires `input`/`change`.
-- `idle` waits for 500 ms with no request in flight. Downloads share one folder per browser, told apart by their DevTools guid, so
-  concurrent downloads don't clash.
-- `run<T>` awaits promises and reads the result with the `Json.value<T>()` rules (use
+  selector. `fill` clears the field (an input, a textarea or a `contenteditable`), types the value,
+  and fires `input`/`change`.
+- `idle` waits for 500 ms with no request in flight. `download` credits a download started in the
+  tab or any of its frames; downloads share one folder per browser, told apart by their DevTools
+  guid, so concurrent downloads don't clash.
+- `run<T>` takes an expression or a function source (called), awaits promises, throws
+  `BrowserException` when the script throws, and reads the result with the `Json.value<T>()` rules (use
   `List<Object?>`/`Map<String, Object?>` for collections). `press` takes the key names of §4.12;
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
-- **The session is a value:** `cookies()` is a core `Cookies` jar (domain, path, expiry kept), so
+- **The session is a value:** `cookies()` is a core `Cookies` jar (domain, path, expiry kept;
+  `all: true` for every cookie the browser holds), so
   `Http.client(cookies: await page.cookies())` continues the browser session, and
   `file.write(jar.encode())` / `Cookies.parse(...)` persists it. `cookie(name)` waits for a login
   to set it. Closing the window during `cookie()` or `wait()` throws `BrowserException('browser closed')`.
@@ -395,25 +421,30 @@ final class Json extends Iterable<Json> {
   Json max(num Function(Json item) by);  Json min(num Function(Json item) by);   // a null Json when empty
   List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
-extension on Reader { Future<Json> json({Json? or}); }   // or: when the source does not exist
+extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }   // or: when the source does not exist
 ```
 
-- `$('a.b.0')` walks dotted paths, and a numeric segment indexes an array. A `*` segment maps
-  over every item: `$('data.users.*.name').asList<String>()`. A `**` segment searches every
-  depth: `$('**.pk')` lists each `pk` in the document (misses dropped). A `|` in a segment tries
-  alternatives in order with the rest of the path: `$('code|shortcode')`, `$('pk|id')`. `\*`, `\|`
-  and `\.` are literal. A missing path is a `Json` of `null`, never a throw.
+- `$('a.b.0')` walks dotted paths, and a numeric segment indexes an array (`items.-1` is the
+  last). A `*` segment maps over every item: `$('data.users.*.name').asList<String>()`. A `**`
+  segment searches every depth: `$('**.pk')` lists each `pk` in the document (misses dropped). A
+  wildcard after a wildcard flattens: `x.*.a.*.b` is one list. `|` separates whole paths tried in
+  order: `$('code|shortcode')`, `$('rest_id|legacy.id_str')`. `\*`, `\|` and `\.` are literal. A
+  missing path is a `Json` of `null`, never a throw.
 - `value<T>()` returns `null` when the value is absent or not a `T`. Integral numbers read as both
   `int` and `double`, so `3`, `3.0`, `value<int>()` and `value<double>()` all agree.
   `$('port').or(8080)` is a non-null `int`. `text()` reads `787132` as `'787132'` (not
-  `toString`, which renders JSON). `asList<T>()` and `asMap<T>()` check each element and give
-  `[]` / `{}` when missing or mistyped; `value<List<T>>()` throws and points to them.
+  `toString`, which renders JSON), and so does a `String` fallback: `$('id').or('')`.
+  `asList<T>()` and `asMap<T>()` check each element and give `[]` / `{}` when missing or
+  mistyped; `asList<Json>()`/`asMap<Json>()` wrap every value; `value<List<T>>()` throws and
+  points to them.
 - `max`/`min` return the extreme item (the first on a tie):
   `v.$('display_resources').max((c) => c.$('width|config_width').or(0)).$('url|src').text()`.
 - A `Json` iterates an array's items or an object's values; `toString` is the JSON text and `==`
   is deep.
 - `encode` accepts what `dart:convert` accepts (string keys) and throws what it throws.
-  Invalid JSON is a `ContentException` naming the source.
+  Invalid JSON is a `ContentException` naming the source. `json()` decodes the bytes straight
+  to a value (no `String` in between); `ndjson()` streams one `Json` per non-blank line and
+  names a bad line's number.
 
 ### 4.5 fs
 
@@ -422,8 +453,8 @@ abstract final class Fs {
   static Future<Entry?> entry(String path);   // what is on disk, links not followed
   static File file(String path);  static Dir dir(String path);  static Link link(String path);  // no I/O
   static String sanitize(String name);   // an untrusted title as one portable file name; never leaves its folder
-  static Future<T> temp<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'});   // deleted after body
-  static Dir home();
+  static Future<T> tempDir<T>(Future<T> Function(Dir dir) body, {String prefix = 'tmp'});   // deleted after body
+  static Dir homeDir();  static Dir scriptDir();   // HOME/USERPROFILE; the running script's folder
 }
 sealed class Entry {
   Future<DateTime> modified();
@@ -433,12 +464,14 @@ sealed class Entry {
 }
 final class File extends Entry with Reader, Writer {
   Future<File> write(String text);  Future<File> append(String text);  Future<int> size();
+  Future<File> touch([DateTime? time]);   // set the mtime (now by default); creates an empty file, as touch does
   Future<T> lock<T>(Future<T> Function() body, {Duration? wait});   // exclusive OS lock for the body
   Future<String> text({String? or});  Future<List<int>> bytes({List<int>? or});   // or: when it does not exist
 }
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
   Future<List<Entry>> list({bool recursive = false, String? match});  Stream<File> watch();  Future<Dir> create();
+  Future<({int files, int bytes})> size({String? match});   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
   Future<String> target();  Future<Entry?> resolve();  Future<Link> create(String target);
@@ -446,7 +479,8 @@ final class Link extends Entry {
 ```
 
 - `switch (await Fs.entry(p))` is exhaustive over `File`/`Dir`/`Link`/`null`.
-- **Writes are atomic.** Content goes to a temp sibling, which is renamed over the target. Writes
+- **Writes are atomic.** Content goes to a temp sibling, fsynced, then renamed over the target
+  (the folder is not fsynced: `dart:io` cannot open one). Writes
   go through symlinks to their target, keep the old file's mode, and create missing parents. A
   failed run leaves the old content. `append` uses OS append mode (`O_APPEND`) with an exclusive
   file lock, guaranteeing concurrent appends never lose data or replace open inodes.
@@ -470,14 +504,16 @@ final class Link extends Entry {
   too); `file.lock(() async {…}, wait:)` holds an exclusive OS lock for the body, so a second
   cron run fails at once with `locked by another process`. Both are scopes, not handles: nothing
   to forget, nothing keeps the script alive. `Fs.homeDir()` is `HOME`/`USERPROFILE`;
-  `modified()` is the mtime. A script that also
+  `Fs.scriptDir()` is the running script's folder; `modified()` is the mtime and `touch(t)` sets it.
+  `dir.size()` is `(files:, bytes:)` of finished files: download partials (`x.part`, `x.part.tag`)
+  and atomic-write temps are left out, so a folder mid-download counts what has landed. A script that also
   imports `dart:io` adds `hide File, Directory, Link`.
 
 ### 4.6 shell
 
 ```dart
 abstract final class Shell {
-  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false, Duration? timeout, void Function(String line)? onLine}); // onLine: stdout and stderr lines as they arrive
+  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false, Duration? timeout, Future<void>? cancel, void Function(String line)? onLine}); // onLine: stdout and stderr lines as they arrive
   static Future<String?> which(String program);   // where PATH (+ PATHEXT) resolves it, or null; starts nothing
   static Pipe filter(List<String> command, {String? dir, Map<String, String?>? env});
   static Future<void> open(String target);    // URL or path, in the default app
@@ -485,8 +521,11 @@ abstract final class Shell {
 final class Output with Reader { int code();  bool ok();  String err(); }   // Reader = stdout
 ```
 
-- `timeout:` kills a run that takes longer (only the child it started) and throws a
-  `TimeoutException` naming the command.
+- `timeout:` kills a run that takes longer, with everything it started, and throws a
+  `TimeoutException` naming the command. `cancel:` kills the same tree when its future completes
+  and returns the captured `Output` (code `-9`). Ctrl-C, `SIGTERM` and `SIGHUP` end the child
+  tree of every `run` and `filter` in flight, and so does cancelling a filter's reader (Windows
+  has no `ps`: only the child itself).
 - `command[0]` is the program, looked up on `PATH`, and there is no shell, so arguments are safe.
   Use `['sh', '-c', …]` for shell syntax.
 - `run` closes stdin and waits for the exit. `text()` drops one trailing newline, as `$(…)` does
@@ -494,7 +533,7 @@ final class Output with Reader { int code();  bool ok();  String err(); }   // R
   can't start throws `ProcessException`, with the OS error code. An `Output` is in memory, so it
   can be read many times.
 - `filter`: the stream goes to stdin and stdout comes out. A non-zero exit fails the run with the
-  full stderr. A child that stops reading early (`head`, `grep -m`) is not an error.
+  last 64 KB of stderr (`check:` keeps the same). A child that stops reading early (`head`, `grep -m`) is not an error.
 - `open` uses `open`/`xdg-open`/`rundll32 url.dll,FileProtocolHandler` (no shell parsing) and returns once the program has launched.
 
 ```dart
@@ -505,7 +544,7 @@ await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.lo
 ### 4.7 archive
 
 ```dart
-enum ArchiveFormat { zip, tar, tgz, sevenZip }   // what archive writes; unarchive also reads RAR4/RAR5 and .tar.xz
+enum ArchiveFormat { zip, tar, tgz, sevenzip }   // what archive writes; unarchive also reads RAR, .tar.xz/.bz2/.zst/.Z, cab, ar, xar
 abstract final class Archive {
   static Reader archive(List<String> paths, {ArchiveFormat format = .zip, String dir = '.', String? password}); // files and folders, named relative to dir
   static Writer unarchive(String dir, {String? password}); // format from the magic bytes
@@ -513,19 +552,27 @@ abstract final class Archive {
 }
 ```
 
-- `unarchive` checks every member first: absolute paths, `..` escapes and links are a
+- `unarchive` checks every member first: absolute paths and `..` escapes are a
   `FormatException`. It then extracts into a temp sibling and moves the members into `dir`,
   **merging with what is already there and never replacing it** (an existing file keeps its
-  content and mode; that member is dropped). File modes are kept, so executables still run.
-  Damaged archives, bad checksums (zip CRC, RAR5 BLAKE2sp, 7z header CRC) and truncated RAR
-  are a `ContentException` naming the member, with the engine error as `cause`.
-- `archive` takes files and folders like `zip -r` (`['.']` with `dir:` is a folder's contents),
-  refuses links the same as `unarchive`, and an empty folder round-trips in every format.
+  content and mode; that member is dropped). File modes and mtimes are kept, so executables
+  still run. A symlink is kept when it resolves inside `dir` (through the archive's own links);
+  a hardlink lands as a copy of its member; any other link fails by name. Damaged archives, bad
+  checksums (zip CRC, RAR5 BLAKE2sp, 7z header CRC) and truncated RAR are a `ContentException`
+  naming the member, with the engine error as `cause`; a format it cannot read (lz4, lzip) is
+  named.
+- `archive` takes files and folders like `zip -r` (`['.']` with `dir:` is a folder's contents;
+  `dir:` may be a link), stores links that point inside `dir` and refuses others, and an empty
+  folder round-trips in every format.
 - `gunzip` checks the gzip trailer. Truncated or corrupt data fails the run with a
-  `FormatException`.
-- `zip`, 7z and RAR are held in memory (their directory or solid stream needs it all); tar and
-  tgz stream member by member. Everything is pure Dart: zip/7z/RAR, LZMA/LZMA2, PPMd and AES are
-  in-house; RAR is read-only (its compressor is proprietary).
+  `FormatException`; `unarchive` drops zero padding after a `.tar.gz` whose tar is whole.
+- Writing streams for zip (zip64 when needed), tar and tgz. **7-Zip** (see [Native tools](#native-tools))
+  writes 7z: LZMA2 on every core, into a temp file. Reading streams tar, tgz and `.tar.xz` (x86,
+  ARM64 and delta filters included) member by member in Dart; zip, and 7z/RAR up to 32 MiB, decode
+  in memory on their own isolate, so Ctrl-C and redraws stay live. A bigger 7z/RAR, one using a
+  method Dart lacks (BCJ2, RAR 1.5, VM filters), `.tar.bz2`/`.zst`/`.Z`/`.lzma`, cab, ar and xar
+  go to 7-Zip; its output is sandbox-checked and merged exactly as Dart's (Windows' 7zr reads 7z
+  only, so RAR and the rest stay Dart-only or unsupported there). RAR is read-only.
 - `password:` encrypts zip as WinZip AES-256 and 7z as AES-256 with the names hidden; unarchive
   opens zip AES and ZipCrypto, 7z AES and RAR4/RAR5 encryption. A missing or wrong password is a
   `FormatException` before anything lands in `dir`; tar with a password is an `ArgumentError`.
@@ -538,20 +585,25 @@ await http.put(uploadUrl, body: .stream(Archive.archive(['.'], dir: 'site', form
 ### 4.8 hash
 
 ```dart
-abstract final class Hash { static Hasher md5({String? expect}); static Hasher sha1({String? expect}); static Hasher sha256({String? expect}); static Hasher sha512({String? expect}); }
-final class Hasher with Writer implements Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  Future<String> of(Reader source); }
+abstract final class Hash { static Hasher md5({String? expect, List<int>? key}); /* sha1, sha256, sha512 alike */ }   // key: = HMAC
+final class Hasher with Writer implements Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  String base64();  List<int> bytes();  Future<String> of(Reader source); }
 // expect: (hex) fails the run at its end, before the writer commits: http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')
 ```
 
 - One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a
   tee: `r | h > file`, one pass that both stores and checksums.
-- `hex()` is final, and an `add` after it is a `StateError`. A hasher that saw part of a failed
-  run throws `StateError` from `hex()` instead of returning a wrong digest.
+- `hex()`, `base64()` and `bytes()` finish the hash (each re-reads the same digest), and an `add`
+  after them is a `StateError`. A hasher that saw part of a failed run throws `StateError`
+  instead of returning a wrong digest.
+- `key:` makes an HMAC: `Hash.sha256(key: utf8.encode(secret)).add(body).hex()` checks a webhook
+  signature, and `bytes()` keys the next step of a signing chain.
 
 ### 4.9 pool
 
 ```dart
-abstract final class Pool {
+final class Pool {
+  Pool({int limit = 4});   // held lanes, shared by every run() on this pool
+  Future<R> run<R>(FutureOr<R> Function() job);   // waits for a free lane, first come first served
   static Future<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
       {int? limit, int retries = 0, Rate? rate, bool isolates = false, void Function()? onDone});   // fail fast
   static Future<List<Outcome<T, R>>> settle<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
@@ -573,7 +625,11 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
 - `retries:` re-runs a failing job with the shared jittered backoff; `rate:` paces job starts.
   Together they replace hand-written retry loops around shells, browsers and flaky I/O.
 - `onDone` runs after every job, success or failure: `onDone: bar.tick`.
-- Nothing stays running between calls, so there is nothing to close.
+- A held `Pool(limit: 8)` is one limit across calls that start at different times (a download
+  queue fed by several crawlers): `lanes.run(() => save(f))` waits for a lane and frees it on
+  success or failure. Inside `Pool.settle(files, (f) => lanes.run(…), limit: files.length)` the
+  outcomes still come per item.
+- Nothing stays running between calls, and an idle pool holds nothing, so there is nothing to close.
 
 ```dart
 final done = await Pool.settle(files, (f) => cdn.get(f.url) > f.to, onDone: bar.tick);
@@ -586,13 +642,13 @@ final thumbs = await Pool.map(paths, makeThumb, isolates: true);
 ```dart
 sealed class Param<T> {}                                   // read back with context(param) as a T
 final class Flag extends Param<bool> { Flag(String name, String help, {String? short, bool or = false}); }
-final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse, List<T>? values}); } // env: the variable read when the flag is absent
+final class Opt<T> extends Param<T> { Opt(String name, String help, {String? short, T? or, bool required = false, String? env, T Function(String)? parse, List<T>? values, T? min, T? max}); } // env: the variable read when the flag is absent
 final class Multi<T> extends Param<List<T>> { Multi(String name, String help, {String? short, List<T> or = const [], T Function(String)? parse, List<T>? values}); }
 final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse, List<T>? values}); }
 final class Rest<T> extends Param<List<T>> { Rest(String name, String help, {bool required = false, T Function(String)? parse, List<T>? values}); } // the positionals after the Args, declared last
 final class Command {
   Command(String name, String help, {List<Param<Object?>> params = const [], List<Command> commands = const [],
-      FutureOr<void> Function(Context context)? handler, List<String> aliases = const [], String? dotenv});
+      FutureOr<void> Function(Context context)? handler, List<String> aliases = const [], String? dotenv, String? version});
   Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure (also returned)
 }
 final class Context { T call<T>(Param<T> param);  String usage(); }
@@ -604,9 +660,11 @@ final class UsageException extends ToolkitException { const UsageException(Strin
   `ArgumentError`. Built-in `T`s are `String`, `int`, `double`, `num`, `Duration`, `DateTime` and
   `Uri`; anything else needs `parse:`. `values: Section.values` takes one of a fixed set, by
   (enum) name, case-insensitive; usage shows `<photos|reels>` and a typo suggests the closest.
-  Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`; with `values:` one occurrence may list several, comma-separated.
+  `min:`/`max:` bound a value that orders (`Opt<int?>('quality', …, min: 1, max: 100)`; usage shows
+  `[1-100]`, `150` is a usage error). Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`; with `values:` one occurrence may list several, comma-separated.
   The positionals after the `Arg`s go to a `Rest<T>` (`<file>...` in usage, `List<T>`); one that
   nothing takes is an error.
+- `version: '1.2.3'` makes `--version` print `name 1.2.3` and exit 0, in every subcommand too.
 - `dotenv: '.env'` loads `KEY=VALUE` lines (`#` comments, `export `, quotes) before parsing, so an
   `Opt(env:)` sees them; the real environment always wins, and a missing file is skipped.
 - **Syntax:**
@@ -643,7 +701,7 @@ await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
 ```dart
 abstract final class Console {
   static Color? accent;  // null (default) = no colour; e.g. Color.orange for live lines and the choose row
-  static Future<String?> ask(String question, {bool secret = false, String? or});
+  static Future<String?> ask(String question, {bool secret = false, String? or, Duration? timeout}); // timeout: gives or
   static Future<bool> confirm(String question, {bool or = false});
   static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
   static Future<String> key({String? prompt});
@@ -655,13 +713,15 @@ abstract final class Console {
   static void copy(String text);                   // OSC 52; through the app inside Tui.run
   static void clear();
 }
-final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total);  Bar setTotal(int? total); }
+final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total); }
+final class Speed implements Pipe { Speed();  Speed add(int count);  double rate(); }   // per second over the last 5 s
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
   prompt restores the terminal and exits with 130.
-- **A closed stdin is not an error.** `ask` and `choose` give their `or` (null without one),
+- **A closed stdin is not an error.** `ask` and `choose` give their `or` (null without one), and so
+  does an `ask` whose `timeout:` passes (its reader is stopped, so the script can still exit);
   `confirm` gives its `or` (false by default); the same goes for Escape in a Tui popup. An empty
   line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.
 - `confirm` takes y/yes/n/no, and Enter gives `or`. On a terminal, `choose` uses the arrow keys,
@@ -671,7 +731,9 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar upd
   - It always fits the terminal width, which is re-read on resize. The label is cut with `…`, the
     bar shrinks, and every redraw clears to the end of the line.
   - It redraws at most every 80 ms.
-- **A bar as a `Pipe`** counts bytes and shows sizes and a rate (`12.1/40 MB  1.2 MB/s`). Used with
+- A prompt or `table` erases the live lines while it writes, and they come back after it.
+- **A bar as a `Pipe`** counts bytes and shows sizes and a rate over the last 5 s (`12.1/40 MB  1.2 MB/s`);
+  bytes a resumed download replays from its `.part` fill the bar but not the rate. Used with
   `tick()`, it counts items (`12/40  3.1/s`). A `null` total shows a count and a rate, with no
   bar, so `Console.bar(res.size())` just works. The bar renders as a clean line track (`━━╸──`),
   matching the `tui` aesthetic. `close()` prints the final line.
@@ -679,6 +741,9 @@ final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar upd
   fails at any point.
 - Without a terminal, or with `NO_COLOR` set, there is no animation: each bar or spinner prints
   one final line.
+- **`Speed`** is that rate on its own, for progress drawn by hand: `get(u) | speed | Pipe.tap(t.update) > file`,
+  then `'${speed.rate().size()}/s'`. One meter may serve many pipelines; negative `add`s and replayed
+  resume bytes are left out.
 
 ### 4.12 tui
 
@@ -710,7 +775,7 @@ final class Scroll { Scroll({bool follow = true}); }
 // {Map<String, Binding>? on}, bound to what they drew (a box: its header row).
 final class Region {
   int width();  int height();  bool hovered();  bool focused();
-  Region write(String text, {String? link});
+  Region write(String text, {String? link, bool inline = false});   // inline: the next write continues the row
   Region markdown(String source);  Region diff(String before, String after, {Color? removed, Color? added});
   Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
   Region lines(int count, void Function(Region row, int i) line);  // in a scroll: only the lines in view draw
@@ -721,7 +786,7 @@ final class Region {
   Region table<T>(Pick<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = '', Color? highlight});
   Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
-  Region bar(int done, int? total, {String? label, bool bytes = false});
+  Region bar(int done, int? total, {String? label, bool bytes = false, DateTime? since});   // since: adds the rate
   Region spin(String label, {DateTime? since});
 }
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
@@ -730,7 +795,7 @@ final class Color {                            // black red green yellow blue ma
 enum Style { bold, dim, italic, underline, strike, reverse }
 ```
 
-`Region.picture(image)` draws any `Image` (half-block cells); `tui` and `image` never load each other (Image implements a private pixel interface).
+`r.picture(await image.pixels(width: 80))` draws an image in half-block cells; `tui` and `image` never load each other (they share a private pixel interface).
 
 - **Events on what was drawn.** `on:` on `write`, `markdown`, `diff`, `bar`, `spin` and `box` (its
   header row) binds a `Binding` map, as `Region.on` does for the rest of a region; interactive
@@ -793,15 +858,18 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 - **Drawing.**
   - `write` wraps at the edge, `\n` breaks, `\t` expands, controls show as `�`, and text past the
     last row ends with `…`. Widths follow grapheme clusters: CJK and emoji take 2 cells, combining
-    marks and ZWJ 0. `link` makes an OSC 8 hyperlink.
+    marks and ZWJ 0. `link` makes an OSC 8 hyperlink. `inline: true` leaves the row open, so the
+    next `write`/`bar`/`spin` continues after its last cell (spans in different styles, no column
+    maths); any other drawing starts below.
   - `markdown`: headings, nested and numbered lists, quotes, box-drawn tables, `---`; bold,
-    italic, strike, `code`, links; fenced code highlighted by one in-house lexer (Dart, JS/TS,
-    Python, shell, JSON, YAML, Rust, Go, C-likes). Safe to stream: an unclosed fence or emphasis
+    italic, strike, `code`, links; fenced code plain, in the accent (dim without one). Safe to stream: an unclosed fence or emphasis
     renders as closed. Layout is cached by `(source, width)`.
   - `diff`: a Myers line diff in unified hunks with 3 context lines, gutter line numbers, and
     `-`/`+` rows on red/green with the changed words of paired lines brighter.
   - `rows`/`cols`: a size above 0 is fixed, 0 shares what is left. `box(title)` borders the rest
     and returns the inside. `popup` is drawn last, centered. `bar` lays out like `Console.bar`.
+    `bar` keeps to one row (the bar shrinks, then the label is cut) and with `since:` shows the rate;
+    `spin(since:)` says the time as `Duration.human()` does.
     `scroll` lays out its content once per redraw and paints only the viewport.
   - Colours are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR` drops them
     and keeps styles. `LANG=C`/no UTF-8 switches boxes, bars and spinners to ASCII.
@@ -810,7 +878,9 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   - `'enter'` `'tab'` `'shift+tab'` `'backspace'` `'escape'` `'insert'` `'delete'`;
   - `'up'` `'down'` `'left'` `'right'` `'home'` `'end'` `'pageup'` `'pagedown'`, `'f1'`…`'f12'`;
   - `ctrl+`/`alt+`/`shift+` prefixes (`'ctrl+c'`, `'alt+x'`, `'ctrl+up'`).
-  - Unknown sequences are ignored, never reported as `escape`; a split sequence is held up to 1 s.
+  - Unknown sequences are ignored, never reported as `escape`; a lone ESC is `escape` after 50 ms, and a
+    split sequence or character (a UTF-8 lead byte over SSH) is held up to 1 s, never `escape`.
+    `Console.key`/`choose` read keys by the same rule.
 - **Terminal life:**
   - `run` enters raw mode, the alternate screen and mouse reporting, turns
     autowrap, bracketed paste and focus reports on and off, and restores the terminal when the
@@ -851,42 +921,68 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 ### 4.13 image
 
 ```dart
-enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp }
+enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
 final class Image {
-  static Image decode(List<int> bytes);
-  static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension; webp decodes, never encodes
-  int width();  int height();  (int, int, int) pixel(int x, int y);
+  static Future<Image> decode(List<int> bytes);
+  static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension
+  static Future<(int, int)?> compress(String path, {int quality = 80});
+  int width();  int height();  ImageFormat format();
   Image resize({int? width, int? height});  Image crop(int x, int y, int width, int height);
   Reader encode(ImageFormat format, {int quality = 90});
+  Future<Pixels> pixels({int? width, int? height});
 }
 extension on Reader { Future<Image> image(); }
 ```
 
-- `decode` reads PNG, JPEG, GIF (first frame only), BMP, WebP, TIFF and ICO, with the EXIF
-  orientation applied. An unknown format is a `FormatException`.
-- `resize` keeps the aspect ratio when one side is given. A missing or non-positive size is an
-  `ArgumentError`. `crop` outside the image is a `RangeError`.
-- `encode` is a lazy `Reader`. `quality` (1–100) applies to JPEG; `.webp` and `.ico` above 256 px are an
-  `ArgumentError`. The work is CPU-bound, so batches go through `Pool.map(isolates: true)`.
+- Engine: ffmpeg (see [Native tools](#native-tools)). `image()` on a file reads it in place; any
+  other reader is written to a temp file once. Nothing is held in memory.
+- `decode`/`image()` read the header only (Dart for JPEG/PNG/GIF/WebP/BMP, ffprobe for the rest, HEIC
+  tile grids included), with the EXIF orientation applied. Unknown bytes, or a declared size over
+  16384², are a `ContentException`.
+- `resize`/`crop` record a step; `encode` (a lazy `Reader`) runs them all in one ffmpeg call. `resize`
+  keeps the aspect ratio when one side is given; a missing or non-positive size is an `ArgumentError`,
+  `crop` outside the image a `RangeError`. `quality` (1–100) applies to JPEG, WebP and AVIF. `.heic`
+  (read only) and `.ico` above 256 px are an `ArgumentError`.
+- `compress` re-encodes a file in its own format and replaces it atomically only when ≥ 5% smaller,
+  returning (before, after); null leaves it alone: not an image, animated, CMYK, HEIC, or no gain. JPEG
+  EXIF and ICC survive (orientation reset), a lossless WebP stays lossless.
+- `pixels` decodes RGB for `Region.picture`: `r.picture(await img.pixels(width: 80))`.
 
 ### 4.14 video
 
 ```dart
-enum VideoFormat { mp4, webm, mkv, mov, avi }
+enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }   // avi read only; m4a/mp3/opus audio only
+enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
   static Future<Video> decode(List<int> bytes);
-  static VideoFormat? sniff(List<int> bytes);
-  int width();  int height();  Duration duration();  double fps();
-  Reader encode(VideoFormat format, {int quality = 80, int? width, int? height});
+  static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // path or URL, HLS/DASH
+  static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
+  static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec});
+  int? width();  int? height();  Duration duration();  double fps();
+  String? codec();  String? audio();  int? bitrate();
+  Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,
+      Duration? start, Duration? end, void Function(int done, int? total)? onProgress});
+  Future<Image> frame({Duration at = Duration.zero});
 }
 extension on Reader { Future<Video> video(); }
 ```
 
-- `decode` reads MP4, WebM, MKV, MOV, and AVI, probing metadata via FFmpeg. An unknown format or
-  corrupted stream is a `ContentException`.
-- `encode` is a lazy `Reader`. `quality` (1–100) maps inversely to CRF / quantizer scale across
-  codecs (H.264, VP9, MPEG-4). A bad quality or non-positive dimension is an `ArgumentError`.
-- FFmpeg is discovered from the system `PATH` or automatically downloaded into the user cache on first use.
+- Probing is ffprobe's JSON: size as displayed (rotation applied), codecs, bitrate. A file is read in
+  place; other readers go to a temp file once.
+- `encode` with no `quality`/`width`/`height`/`codec` **copies** the streams into the new container
+  when it holds them (seconds, lossless; `start`/`end` cut at keyframes); otherwise it encodes (default
+  h264, VP9 for WebM; `quality` 1–100 maps to the codec's CRF). Audio is copied when the container takes
+  it, else AAC (Opus for WebM). `onProgress` hears microseconds written of the total.
+- `compress` follows `Image.compress`: own container, audio copied, replaced only when ≥ 5% smaller.
+- `open(url, audio:, headers:)` reads HLS/DASH manifests and joins a separate audio source.
+
+### Native tools
+
+`image` and `video` run ffmpeg/ffprobe 9.0.2, `archive` runs 7-Zip 26.04, all through `shell`
+(Ctrl-C ends them). A copy on PATH is used when it has the encoders a call needs; otherwise a static
+build pinned by sha256 is downloaded once into the user cache (ffmpeg: Martin Riedl's builds for macOS
+and Linux, Gyan's for Windows; 7-Zip: its own release, `7zr.exe` on Windows), one process at a time.
+At most half the cores' worth of encodes run at once.
 
 ### 4.15 csv
 
@@ -896,22 +992,26 @@ abstract final class Csv {
   static List<Map<String, String>> records(String text, {String sep = ','});   // header row → keys
   static String encode(List<List<Object?>> rows, {String sep = ','});
 }
-extension on Reader { Future<List<List<String>>> csv({String sep = ','}); }
+extension on Reader { Future<List<List<String>>> csv({String sep = ','});  Stream<List<String>> rows({String sep = ','}); }
 ```
 
-- RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM. An
-  unterminated quote is a `ContentException`. `encode` writes CRLF and quotes only what needs it.
+- RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM; a blank
+  line is no row. An unterminated quote is a `ContentException`. `encode` writes CRLF and quotes
+  only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory.
 
 ### 4.16 yaml
 
 ```dart
-abstract final class Yaml { static Json parse(String text, {String? from}); }
+abstract final class Yaml { static Json parse(String text); }
 extension on Reader { Future<Json> yaml({Json? or}); }
 ```
 
-- The first document becomes the same `Json` value (`$`, `or`, `text`), with anchors and aliases
-  resolved; `<<` merge keys are not YAML 1.2. A parse error is a `ContentException` naming the
-  source and line. Read only: edits to `pubspec.yaml` are text replacements that keep comments.
+- The reader is in-house: block and flow collections, plain, quoted and block scalars, anchors
+  and aliases, scalar tags (`!!str`, `!!int`, …) and the YAML 1.2 core schema (`~`/`null`,
+  `true`/`false`, `0x`/`0o` ints, `.inf`/`.nan`). The first document of a stream becomes the
+  same `Json` value (`$`, `or`, `text`), with aliases shared; `<<` merge keys are not YAML 1.2.
+- A parse error is a `ContentException` naming the source (a URL redacted) and line. Read only:
+  edits to `pubspec.yaml` are text replacements that keep comments.
 
 ## 5. Errors
 
@@ -957,4 +1057,4 @@ writers; an option-object for http settings (named parameters plus `copy()`); st
 scheduler or job queue; browser interception beyond `block` and `responses`, frames
 and `hover`; colours outside the TUI; a TUI widget tree (widget state lives in
 `Pick`/`Field`/`Scroll`); terminal images beyond half-blocks (Sixel, kitty), `ctrl+r` history search
-and vim mode in `input`; HMAC; torrents. Each comes back only when a real script needs it.
+and vim mode in `input`; torrents. Each comes back only when a real script needs it.

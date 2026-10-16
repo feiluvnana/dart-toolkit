@@ -2,6 +2,17 @@
 /// and doctypes are dropped while parsing). Private to the toolkit.
 library;
 
+/// Bumped by every edit anywhere ([Element.append], [Element.insertBefore],
+/// [Node.remove], [touch]), so caches that depend on more than one parent's
+/// children (`:nth-child(of S)`) know when they are stale.
+int treeEdits = 0;
+
+/// Record an edit made to [e]'s children directly (a bulk removal).
+void touch(Element e) {
+  e.edits++;
+  treeEdits++;
+}
+
 /// A node in the tree.
 sealed class Node {
   /// The element holding this node; null at the top.
@@ -12,7 +23,7 @@ sealed class Node {
     final p = parent;
     if (p == null) return;
     p.nodes.remove(this);
-    p.edits++;
+    touch(p);
     parent = null;
   }
 
@@ -97,12 +108,14 @@ final class Element extends Node {
     child.parent = this;
     nodes.add(child);
     edits++;
+    treeEdits++;
   }
 
   void insertBefore(Node child, Node ref) {
     child.parent = this;
     nodes.insert(nodes.lastIndexOf(ref), child); // the insertion point is usually near the end
     edits++;
+    treeEdits++;
   }
 
   @override

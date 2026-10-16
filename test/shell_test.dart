@@ -332,4 +332,71 @@ Future<void> main() async {
       expect(await Shell.which('/etc/hosts'), isNull, reason: 'not executable');
     });
   });
+
+  group('cancel and the child tree', () {
+    Future<bool> alive(String pid) async =>
+        '${(await Process.run('ps', ['-p', pid.trim(), '-o', 'pid='])).stdout}'.trim().isNotEmpty;
+
+    test('cancel kills the run and its grandchildren and returns what was captured', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      final stop = Completer<void>();
+      String? pid;
+      final sw = Stopwatch()..start();
+      final run = Shell.run(
+        ['sh', '-c', r'sleep 20 & echo $!; wait'],
+        cancel: stop.future,
+        onLine: (line) {
+          pid = line;
+          stop.complete();
+        },
+      );
+      final out = await run.timeout(const Duration(seconds: 5));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+      expect(out.code(), -9);
+      expect(await out.text(), pid);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(await alive(pid!), isFalse, reason: 'sleep $pid outlived the cancel');
+    });
+
+    test('a cancel after the run ended changes nothing', () async {
+      final stop = Completer<void>();
+      final out = await Shell.run(['echo', 'hi'], cancel: stop.future);
+      stop.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect((out.code(), await out.text()), (0, 'hi'));
+      final failed = Completer<void>()..completeError(StateError('stop'));
+      expect((await Shell.run(['sleep', '5'], cancel: failed.future)).ok(), isFalse);
+    });
+
+    test('a filter whose reader is cancelled kills its grandchildren', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      final lines = (Reader.of(const []) | Shell.filter(['sh', '-c', r'sleep 20 & echo $!; wait'])).lines();
+      final pid = await lines.first.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(await alive(pid), isFalse, reason: 'sleep $pid outlived the filter');
+    });
+
+    test('a SIGTERM that ends the script ends a running filter and its grandchildren', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX signals');
+      final dir = await Directory.systemTemp.createTemp('shell_filter_orphan');
+      addTearDown(() => dir.delete(recursive: true));
+      await Fs.file('${dir.path}/main.dart').write('''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  await for (final line in (Reader.of(const []) | Shell.filter(['sh', '-c', r'sleep 20 & echo \$!; wait'])).lines()) {
+    print(line);
+  }
+}
+''');
+      final p = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        '${dir.path}/main.dart',
+      ]);
+      final child = (await p.stdout.transform(const SystemEncoding().decoder).first).trim();
+      p.kill(); // SIGTERM to the script we spawned
+      expect(await p.exitCode.timeout(const Duration(seconds: 10)), 143);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(await alive(child), isFalse, reason: 'sleep $child outlived the script');
+    });
+  });
 }

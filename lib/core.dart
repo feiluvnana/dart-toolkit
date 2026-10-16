@@ -8,13 +8,14 @@
 /// ```
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin],
-/// [Cookies], [Rate], [Durations], [Times], [Spans], [ToolkitException],
+/// [Cookies], [Rate], [Durations], [Sizes], [Times], [Spans], [ToolkitException],
 /// [ContentException].
 /// - [Reader]: `stream` `bytes` `text` `lines` `pipe` `|` `to` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
-/// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `encode` `[]` `header` `set`.
-/// - [Rate]: paces the work that shares it (`wait`).
+/// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `load` `encode` `[]` `header` `set` `agent`.
+/// - [Rate]: paces the work that shares it (`wait`; `perHost:` paces each host apart).
 /// - [Durations]: `3.seconds`, `11.minutes`: unit literals for every timeout.
+/// - [Sizes]: `bytes.size()` (`12.1 MB`).
 /// - [Times] / [Spans]: `now.format('yyyy-MM-dd')`, `wait.human()` (`11 min 5 s`).
 /// - [Pipe]: `transform` `abort` (+ `tap`, a progress probe).
 /// - [Closeable]: `close`.
@@ -24,6 +25,7 @@
 /// Everything else is private.
 ///
 /// {@canonicalFor cookies.Cookies}
+/// {@canonicalFor format.Sizes}
 /// {@canonicalFor rate.Rate}
 /// {@canonicalFor time.Spans}
 /// {@canonicalFor time.Times}
@@ -39,6 +41,7 @@ import 'dart:typed_data';
 import 'src/resume.dart';
 
 export 'src/cookies.dart' show Cookies;
+export 'src/format.dart' show Sizes;
 export 'src/rate.dart' show Rate;
 export 'src/time.dart' show Spans, Times;
 
@@ -315,8 +318,14 @@ final class _PipedReader with Reader {
   final Reader _source;
   final Pipe _pipe;
 
+  /// The source's URL, status and name, but no path: the piped bytes are
+  /// not that file's, so a reader of paths (an ffmpeg input, an upload)
+  /// must stream them instead.
   @override
-  Origin origin() => _source.origin();
+  Origin origin() {
+    final o = _source.origin();
+    return Origin(url: o.url(), status: o.status(), name: o.name());
+  }
 
   @override
   // async* defers `_source.stream()` until listened: building the stream

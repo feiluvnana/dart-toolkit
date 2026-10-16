@@ -1,13 +1,15 @@
-/// xz (the `.tar.xz` container) decoding in pure Dart for `archive`:
-/// streams, blocks with the LZMA2 filter, CRC32/CRC64/SHA-256 checks, the
+/// xz (the `.tar.xz` container) decoding in pure Dart for `archive`,
+/// streamed: blocks with the LZMA2 filter, CRC32/CRC64/SHA-256 checks, the
 /// index and footer, concatenated streams and stream padding.
 library;
 
+import 'dart:async';
 import 'dart:convert' show ByteConversionSink;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'bcj.dart';
 import 'crc32.dart';
 import 'lzma.dart';
 
@@ -19,117 +21,226 @@ bool isXz(List<int> b) =>
 
 Never _bad(String why) => throw ContentException('corrupt archive: xz $why');
 
-/// The decompressed bytes of the xz data in [b].
-Uint8List xzDecode(Uint8List b) {
-  final out = BytesBuilder(copy: false);
-  xzChunks(b).forEach(out.add);
-  return out.takeBytes();
-}
-
-/// The decompressed bytes of the xz data in [b], a piece at a time: memory
-/// stays at one LZMA2 dictionary, however large the output. A block's check
-/// is verified at its end, after its bytes went out (an unpack discards
-/// its staging on the error).
-Iterable<Uint8List> xzChunks(Uint8List b) sync* {
-  var i = 0;
-  while (i < b.length) {
-    // Stream padding: zero bytes in fours between streams.
-    if (b[i] == 0) {
-      i++;
-      continue;
-    }
-    if (!isXz(Uint8List.sublistView(b, i))) _bad('stream header');
-    if (i + 12 > b.length) _bad('stream header');
-    final check = b[i + 7] & 0x0F;
-    if (crc32(b, start: i + 6, end: i + 8) != _u32(b, i + 8)) _bad('stream header CRC');
-    i += 12;
-    final checkSize = switch (check) {
-      0 => 0,
-      1 => 4,
-      4 => 8,
-      10 => 32,
-      _ => _bad('unknown check $check'),
-    };
-    // Blocks until the index (its first byte is 0).
+/// The decompressed bytes of the xz data in [input], streamed as it
+/// arrives: memory stays at about 1.25 LZMA2 dictionaries, however large the
+/// output. A block's check is verified at its end, after its bytes went out
+/// (an unpack discards its staging on the error); the index and footer are
+/// checked against the blocks.
+Stream<Uint8List> xzStream(Stream<List<int>> input) async* {
+  final r = _Input(input);
+  try {
+    var streams = 0;
     while (true) {
-      if (i >= b.length) _bad('stream ends early');
-      if (b[i] == 0) break;
-      final blockStart = i;
-      final headerSize = (b[i] + 1) * 4;
-      if (i + headerSize > b.length) _bad('block header past the end');
-      if (crc32(b, start: i, end: i + headerSize - 4) != _u32(b, i + headerSize - 4)) _bad('block header CRC');
-      final flags = b[i + 1];
-      var p = i + 2;
-      int vli() {
+      // Stream padding: zero bytes in fours between and after streams.
+      if (!await r.fill(1)) {
+        if (streams == 0) _bad('stream header');
+        return;
+      }
+      if (r.peek() == 0) {
+        if (!await r.fill(4) || r.take(4).any((b) => b != 0)) _bad('stream padding');
+        continue;
+      }
+      if (!await r.fill(12)) _bad('stream header');
+      final head = r.take(12);
+      if (!isXz(head) || head[6] != 0 || head[7] & 0xF0 != 0) _bad('stream header');
+      if (crc32(head, start: 6, end: 8) != _u32(head, 8)) _bad('stream header CRC');
+      final check = head[7] & 0x0F;
+      final checkSize = switch (check) {
+        0 => 0,
+        1 => 4,
+        4 => 8,
+        10 => 32,
+        _ => _bad('unknown check $check'),
+      };
+      // Blocks until the index (its first byte is 0).
+      final blocks = <(int, int)>[]; // unpadded size, uncompressed size
+      while (true) {
+        if (!await r.fill(1)) _bad('stream ends early');
+        if (r.peek() == 0) break;
+        final headerSize = (r.peek() + 1) * 4;
+        if (!await r.fill(headerSize)) _bad('block header past the end');
+        final h = r.take(headerSize);
+        if (crc32(h, end: headerSize - 4) != _u32(h, headerSize - 4)) _bad('block header CRC');
+        final (packedSize, unpackedSize, dict, pre) = _blockHeader(h);
+        // A branch filter needs its whole block: held, then undone at once.
+        final held = pre.isEmpty ? null : BytesBuilder(copy: false);
+        final d = Lzma2(unpackedSize ?? 1 << 62, window: dict);
+        final sum = _Check(check);
+        var packed = 0;
+        while (true) {
+          if (!await r.fill(1)) _bad('stream ends early');
+          final control = r.take(1)[0];
+          packed++;
+          if (control == 0) break;
+          final hs = Lzma2.headerSize(control);
+          if (!await r.fill(hs)) _bad('stream ends early');
+          final header = r.take(hs);
+          final n = Lzma2.payloadSize(control, header);
+          if (!await r.fill(n)) _bad('stream ends early');
+          d.chunk(control, header, r.take(n));
+          packed += hs + n;
+          final out = d.take();
+          if (held != null) {
+            held.add(out);
+            continue;
+          }
+          sum.add(out);
+          yield out;
+        }
+        if (held != null) {
+          final out = _unfilter(held.takeBytes(), pre);
+          sum.add(out);
+          yield out;
+        }
+        if (packedSize != null && packedSize != packed || unpackedSize != null && unpackedSize != d.total) {
+          _bad('block sizes');
+        }
+        final pad = (4 - (headerSize + packed) % 4) % 4;
+        if (!await r.fill(pad + checkSize)) _bad('block check past the end');
+        if (r.take(pad).any((b) => b != 0)) _bad('block padding');
+        sum.verify(r.take(checkSize));
+        blocks.add((headerSize + packed + checkSize, d.total));
+      }
+      // The index: records, padding, CRC32; then the 12-byte footer.
+      final index = BytesBuilder(copy: false);
+      Future<int> byte() async {
+        if (!await r.fill(1)) _bad('index');
+        final b = r.take(1);
+        index.add(b);
+        return b[0];
+      }
+
+      Future<int> vli() async {
         var v = 0;
         for (var shift = 0; shift < 63; shift += 7) {
-          if (p >= i + headerSize) _bad('block header');
-          final c = b[p++];
+          final c = await byte();
           v |= (c & 0x7F) << shift;
           if (c & 0x80 == 0) return v;
         }
         _bad('number too long');
       }
 
-      if (flags & 0x40 != 0) vli(); // compressed size
-      if (flags & 0x80 != 0) vli(); // uncompressed size
-      final filters = (flags & 3) + 1;
-      var dict = 1 << 32;
-      for (var f = 0; f < filters; f++) {
-        final id = vli();
-        final propsSize = vli();
-        if (f < filters - 1 || id != 0x21) {
-          throw ContentException('unsupported xz filter 0x${id.toRadixString(16)} (only LZMA2)');
-        }
-        if (propsSize == 1 && p < i + headerSize) {
-          final d = b[p] & 0x3F; // LZMA2's dictionary size byte
-          dict = d >= 40 ? 0xFFFFFFFF : (2 | (d & 1)) << (d ~/ 2 + 11);
-        }
-        p += propsSize;
+      await byte(); // the index indicator
+      if (await vli() != blocks.length) _bad('index');
+      for (final (unpadded, size) in blocks) {
+        if (await vli() != unpadded || await vli() != size) _bad('index');
       }
-      i += headerSize;
-      final (size, end) = lzma2Extent(b, i);
-      final sum = _Check(check);
-      for (final piece in lzma2Chunks(Uint8List.sublistView(b, i, end), size, window: dict)) {
-        sum.add(piece);
-        yield piece;
+      while (index.length % 4 != 0) {
+        if (await byte() != 0) _bad('index');
       }
-      i = end;
-      while ((i - blockStart) % 4 != 0) {
-        if (i >= b.length || b[i] != 0) _bad('block padding');
-        i++;
+      final indexSize = index.length;
+      if (!await r.fill(16)) _bad('index CRC');
+      if (crc32(index.takeBytes()) != _u32(r.take(4), 0)) _bad('index CRC');
+      final foot = r.take(12);
+      if (crc32(foot, start: 4, end: 10) != _u32(foot, 0) ||
+          (_u32(foot, 4) + 1) * 4 != indexSize + 4 ||
+          foot[8] != head[6] ||
+          foot[9] != head[7] ||
+          foot[10] != 0x59 ||
+          foot[11] != 0x5A) {
+        _bad('stream footer');
       }
-      if (i + checkSize > b.length) _bad('block check past the end');
-      sum.verify(Uint8List.sublistView(b, i, i + checkSize));
-      i += checkSize;
+      streams++;
     }
-    // The index: records, padding, CRC32; then the 12-byte footer.
-    final indexStart = i;
-    i++;
-    var p = i;
-    int vli() {
-      var v = 0;
-      for (var shift = 0; shift < 63; shift += 7) {
-        if (p >= b.length) _bad('index');
-        final c = b[p++];
-        v |= (c & 0x7F) << shift;
-        if (c & 0x80 == 0) return v;
-      }
-      _bad('number too long');
-    }
-
-    final records = vli();
-    for (var r = 0; r < records; r++) {
-      vli();
-      vli();
-    }
-    while ((p - indexStart) % 4 != 0) {
-      p++;
-    }
-    if (p + 4 > b.length || crc32(b, start: indexStart, end: p) != _u32(b, p)) _bad('index CRC');
-    i = p + 4 + 12; // the footer
-    if (i > b.length || b[i - 2] != 0x59 || b[i - 1] != 0x5A) _bad('stream footer');
+  } finally {
+    await r.cancel();
   }
+}
+
+/// A block header's compressed and uncompressed sizes (when stored) and its
+/// LZMA2 dictionary size; any other filter is unsupported.
+/// A block's sizes, its LZMA2 dictionary, and the filters before LZMA2 in
+/// encoding order (id, props): x86 and ARM64 branch filters and delta, as
+/// `xz --x86`/`--arm64`/`--delta` and 7-Zip's own release write them.
+(int?, int?, int, List<(int, Uint8List)>) _blockHeader(Uint8List h) {
+  final flags = h[1];
+  var p = 2;
+  int vli() {
+    var v = 0;
+    for (var shift = 0; shift < 63; shift += 7) {
+      if (p >= h.length - 4) _bad('block header');
+      final c = h[p++];
+      v |= (c & 0x7F) << shift;
+      if (c & 0x80 == 0) return v;
+    }
+    _bad('number too long');
+  }
+
+  final packed = flags & 0x40 != 0 ? vli() : null;
+  final unpacked = flags & 0x80 != 0 ? vli() : null;
+  final filters = (flags & 3) + 1;
+  var dict = 1 << 32;
+  final pre = <(int, Uint8List)>[];
+  for (var f = 0; f < filters; f++) {
+    final id = vli();
+    final propsSize = vli();
+    if (f < filters - 1) {
+      // A start offset other than 0 (BCJ props) is never written by xz.
+      final ok = switch (id) {
+        0x04 || 0x0A => propsSize == 0 || propsSize == 4 && h[p] | h[p + 1] | h[p + 2] | h[p + 3] == 0,
+        0x03 => propsSize == 1,
+        _ => false,
+      };
+      if (!ok || p + propsSize > h.length - 4) {
+        throw ContentException('unsupported xz filter 0x${id.toRadixString(16)} (LZMA2 with x86, ARM64 or delta)');
+      }
+      pre.add((id, Uint8List.sublistView(h, p, p + propsSize)));
+      p += propsSize;
+      continue;
+    }
+    if (id != 0x21) throw ContentException('unsupported xz filter 0x${id.toRadixString(16)} (LZMA2 last)');
+    if (propsSize != 1 || p >= h.length - 4) _bad('LZMA2 properties');
+    final d = h[p] & 0x3F; // LZMA2's dictionary size byte
+    if (d > 40) _bad('LZMA2 dictionary size');
+    dict = d == 40 ? 0xFFFFFFFF : (2 | (d & 1)) << (d ~/ 2 + 11);
+    p += propsSize;
+  }
+  return (packed, unpacked, dict, pre);
+}
+
+/// Undo [pre] (encoding order) on a whole block.
+Uint8List _unfilter(Uint8List b, List<(int, Uint8List)> pre) {
+  for (final (id, props) in pre.reversed) {
+    b = switch (id) {
+      0x04 => bcjX86(b),
+      0x0A => bcjArm64(b),
+      _ => delta(b, props[0] + 1),
+    };
+  }
+  return b;
+}
+
+/// Input read exactly: [fill] buffers at least n bytes (false at the end
+/// with fewer), [take] hands them out as views.
+final class _Input {
+  _Input(Stream<List<int>> s) : _it = StreamIterator(s);
+
+  final StreamIterator<List<int>> _it;
+  var _buf = Uint8List(0);
+  var _at = 0;
+
+  Future<bool> fill(int n) async {
+    while (_buf.length - _at < n) {
+      if (!await _it.moveNext()) return false;
+      final c = _it.current;
+      final rest = _buf.length - _at;
+      if (rest == 0) {
+        _buf = c is Uint8List ? c : Uint8List.fromList(c);
+      } else {
+        _buf = Uint8List(rest + c.length)
+          ..setRange(0, rest, _buf, _at)
+          ..setRange(rest, rest + c.length, c);
+      }
+      _at = 0;
+    }
+    return true;
+  }
+
+  int peek() => _buf[_at];
+
+  Uint8List take(int n) => Uint8List.sublistView(_buf, _at, _at += n);
+
+  Future<void> cancel() => _it.cancel();
 }
 
 /// A block's check, computed as its bytes go by.

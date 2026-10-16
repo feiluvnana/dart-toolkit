@@ -250,4 +250,38 @@ Future<void> main() async => print(await Pool.map([1, 2, 3], sq, isolates: true)
       expect('${r.stdout}'.trim(), '[1, 4, 9]');
     });
   });
+
+  group('Pool(limit:) lanes', () {
+    test('one limit holds across calls that start at different times, first come first served', () async {
+      final lanes = Pool(limit: 2);
+      var running = 0, peak = 0;
+      final order = <int>[];
+      Future<int> job(int i) => lanes.run(() async {
+        running++;
+        peak = running > peak ? running : peak;
+        order.add(i);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        running--;
+        return i * 10;
+      });
+      final first = Pool.settle([1, 2, 3], job, limit: 3);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final second = Pool.map([4, 5], job, limit: 2);
+      expect((await first).values(), [10, 20, 30]);
+      expect(await second, [40, 50]);
+      expect(peak, 2);
+      expect(order, [1, 2, 3, 4, 5]);
+    });
+
+    test('a failing job frees its lane and rethrows', () async {
+      final lanes = Pool(limit: 1);
+      await expectLater(lanes.run(() => throw StateError('x')), throwsStateError);
+      expect(await lanes.run(() => 'next'), 'next');
+      expect(await lanes.run(() async => 1), 1);
+    });
+
+    test('limit below 1 is an ArgumentError', () {
+      expect(() => Pool(limit: 0), throwsArgumentError);
+    });
+  });
 }
