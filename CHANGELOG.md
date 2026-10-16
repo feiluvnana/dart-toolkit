@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+
+- `http`: `Feed(page, cursor:)` walks a newest-first listing page by page: `run((page) {…}, all:)` hands each page as a `FeedPage` (`items()`, `add(work)`, `stop()`), fetches the next page while a page's work runs, and keeps a cursor file that moves only past finished work, so an interrupted run lists what is new, then continues where it stopped.
+
 ## 0.0.6
 
 **Added**

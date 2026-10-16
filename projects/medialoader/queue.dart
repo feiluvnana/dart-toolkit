@@ -20,14 +20,9 @@ final class Queue {
   final Options o;
   final _lanes = Pool(limit: 8);
 
-  // Queues [files] for [j]; completes when the whole batch is done.
-  Future<Results> add(Job j, List<Download> files) async {
-    final missing = await Future.wait([for (final f in files) f.to.exists().then((e) => !e)]);
-    for (final (i, f) in files.indexed) {
-      if (missing[i]) _part(j, f).queued++;
-    }
-    return Pool.settle(files, (f) => _get(j, f), limit: files.length);
-  }
+  // Queues [files] for [j] (each waits for one of the lanes); completes
+  // when the whole batch is done.
+  Future<Results> add(Job j, List<Download> files) => Pool.settle(files, (f) => _get(j, f), limit: files.length);
 
   // The folder a file lands in is its part: posts/2024-05/x.jpg → posts.
   Part _part(Job j, Download f) {
@@ -35,8 +30,12 @@ final class Queue {
     return j.u.parts.putIfAbsent(key, () => Part(key));
   }
 
+  // One file unless it is there (counted as had when the job opened);
+  // true when new.
   Future<bool> _get(Job j, Download f) async {
+    if (await f.to.exists()) return false;
     final part = _part(j, f), t = Transfer(j.u, part, f.to.path(from: j.dir));
+    part.queued++;
     try {
       final isNew = await save(j, f, t);
       if (isNew) part.added++;
@@ -55,9 +54,8 @@ final class Queue {
     }
   }
 
-  // Fetches (or writes) one file unless it is there; true when new.
+  // Fetches (or writes) one file.
   Future<bool> save(Job j, Download f, Transfer t) async {
-    if (await f.to.exists()) return false;
     if (o.dry) {
       board.note('@${j.u.name} would save ${t.path}', platform: j.code);
       return true;

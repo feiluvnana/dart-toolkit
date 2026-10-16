@@ -88,21 +88,12 @@ final class Twitter extends Platform {
     final p = await profile(j.api, j.target.user);
     await j.open(p.name, id: p.id);
     late final mediaApi = j.client(mediaRate);
+    if (j.wants(Kind.profiles)) {
+      j.profile(p.avatar, 'new profile avatar');
+      final size = Uri.parse(p.banner ?? '').pathSegments.reversed.skip(1).firstOrNull ?? '';
+      j.profile(p.banner, 'new profile banner', id: 'banner_${Fs.sanitize(size)}', ext: '.jpg');
+    }
     await Future.wait([
-      if (j.wants(Kind.profiles))
-        Future(
-          () => j.profiles([
-            if (p.avatar case final url?)
-              (url: url, id: Fs.sanitize(Uri.parse(url).pathSegments.last), change: 'new profile avatar', ext: ''),
-            if (p.banner case final url?)
-              (
-                url: url,
-                id: 'banner_${Fs.sanitize(Uri.parse(url).pathSegments.reversed.skip(1).firstOrNull ?? '')}',
-                change: 'new profile banner',
-                ext: '.jpg',
-              ),
-          ]),
-        ),
       if (j.wants(Kind.posts))
         feed(
           j,

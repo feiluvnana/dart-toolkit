@@ -180,7 +180,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
-| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`                           |
+| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `csv`     | `Csv.parse` `records` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
@@ -285,6 +285,11 @@ sealed class Body {                              // stream (or multipart with fi
   const factory Body.multipart(Map<String, String> fields, {Map<String, Reader> files});   // files stream
   const factory Body.stream(Reader reader);
 }
+final class Feed<T> {                            // a newest-first listing, one page at a time
+  Feed(Future<({List<T> items, String? next})> Function(String? cursor) page, {String? cursor});   // cursor: a file that survives a run
+  Future<bool> run(FutureOr<void> Function(FeedPage<T> page) onPage, {bool all = false});   // true: the end was reached
+}
+final class FeedPage<T> { List<T> items();  FeedPage<T> add(Future<bool> work);  void stop(); }
 final class Response with Reader implements Closeable {
   int status();  bool ok();  Future<Response> check();  String? header(String name);  String url();
   int? size();                                   // content-length, null when unknown or decoded on the fly
@@ -307,6 +312,11 @@ final class Response with Reader implements Closeable {
   cross-origin hop drops credential headers; an https → http hop warns on stderr.
 - **User-Agent**: a current desktop Chrome unless a `user-agent` header is given or the jar has
   an `agent()` (`reader.cookies()` reads it from the session file's `user-agent:` line).
+- **`Feed`** walks a listing API newest first with one callback per page: `page.stop()` ends the walk
+  where the rest is known (or older than wanted), `page.add(work)` hands over what the page starts
+  while the next page is fetched, and the cursor file moves past a page only once its work (and
+  every earlier page's) succeeded, so an interrupted run continues: it lists the top up to what is
+  known, then resumes. `all: true` re-lists from the top.
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws what `check()` throws, so an
   error page is never saved. The readings (`text()`, `lines()`, `json()`, `html()`) work on any
   status.

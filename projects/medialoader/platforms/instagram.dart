@@ -89,14 +89,8 @@ final class Instagram extends Platform {
     final (profile: p, :first) = await profile(j.api, j.target.user);
     await j.open(p.name, id: p.id);
     late final feedApi = j.client(feedRate);
+    if (j.wants(Kind.profiles)) j.profile(p.picture, 'new profile picture');
     await Future.wait([
-      if (j.wants(Kind.profiles))
-        Future(
-          () => j.profiles([
-            if (p.picture case final url?)
-              (url: url, id: Fs.sanitize(Uri.parse(url).pathSegments.last), change: 'new profile picture', ext: ''),
-          ]),
-        ),
       if (j.wants(Kind.posts))
         feed(
           j,

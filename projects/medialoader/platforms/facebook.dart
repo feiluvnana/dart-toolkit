@@ -286,12 +286,14 @@ final class Facebook extends Platform {
         if (r.failures().isEmpty) j.index.posts[key] = items;
       });
 
-  void _profile(Job j, Profile p) => j.profiles([
-    if (p.avatar case final url?)
-      (url: url, id: Fs.sanitize(Uri.parse(url).pathSegments.last), change: 'new profile avatar', ext: ''),
-    if (p.cover case final url?)
-      (url: url, id: 'cover_${Fs.sanitize(Uri.parse(url).pathSegments.last)}', change: 'new cover photo', ext: ''),
-  ]);
+  void _profile(Job j, Profile p) {
+    j.profile(p.avatar, 'new profile avatar');
+    j.profile(
+      p.cover,
+      'new cover photo',
+      id: 'cover_${Fs.sanitize(Uri.parse(p.cover ?? '').pathSegments.lastOrNull ?? '')}',
+    );
+  }
 
   // The posts the profile page embeds: each photo or video at full size from its page.
   Future<void> _posts(Job j, Profile p) async {

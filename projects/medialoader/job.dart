@@ -126,15 +126,19 @@ final class Job {
     return DateTime.now().format('yyyy-MM-dd');
   }();
 
-  // Profile pictures, banners and covers: each into profiles/ as
-  // `<first seen>_<id><ext>`, its change noted when it is new.
-  void profiles(List<({String url, String id, String change, String ext})> assets) {
-    add([
-      for (final a in assets)
-        Download(folder(Kind.profiles).file('${seen(a.id, a.change)}_${a.id}${a.ext}'), url: a.url),
-    ]);
-    phase(Kind.profiles, '${assets.length} profile ${assets.length == 1 ? 'asset' : 'assets'}', done: true);
+  // A profile picture, banner or cover (null: none) into profiles/ as
+  // `<first seen>_<id><ext>`, [id] its file name unless given; its change
+  // noted when it is new.
+  void profile(String? url, String change, {String? id, String ext = ''}) {
+    if (url != null) {
+      id ??= Fs.sanitize(Uri.parse(url).pathSegments.last);
+      add([Download(folder(Kind.profiles).file('${seen(id, change)}_$id$ext'), url: url)]);
+      _profiles++;
+    }
+    phase(Kind.profiles, '$_profiles profile ${_profiles == 1 ? 'asset' : 'assets'}', done: true);
   }
+
+  var _profiles = 0;
 
   Future<Results> add(List<Download> files) {
     final batch = queue.add(this, files);

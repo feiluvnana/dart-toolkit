@@ -10,7 +10,7 @@
 ///
 /// Public surface is exactly: [Http], [Client], [Response], [Body],
 /// [HttpStatusException], [HttpRequestException], [RequestFailure],
-/// [Server], [Request], [Reply].
+/// [Server], [Request], [Reply], [Feed], [FeedPage].
 /// - `Http.client(...)` holds the settings a script states once (base,
 ///   headers, cookies, retries, pacing); `client.copy(...)` is a variant
 ///   that stays one session. `Http.pool([...])` spreads requests over
@@ -21,6 +21,9 @@
 /// - [Response] supports `status` `ok` `check` `header` `url` `size` `name`
 ///   (plus [Reader]/[Closeable]).
 /// - [Client] `sent` counts the requests put on the wire.
+/// - [Feed] walks a newest-first listing page by page (`run((page) {…})`,
+///   a [FeedPage] with `items` `add` `stop`): up to what is known, with a
+///   cursor file that survives an interrupted run.
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
 ///   `.multipart` `.stream`. A [Body.stream] (or a multipart with
 ///   `files:`) is sent once and never retried.
@@ -53,6 +56,7 @@ import 'src/retry.dart' as retry;
 import 'src/timeout.dart';
 
 part 'src/http/cache.dart';
+part 'src/http/feed.dart';
 part 'src/http/proxy.dart';
 part 'src/http/response.dart';
 part 'src/http/server.dart';
