@@ -26,6 +26,7 @@
 - `core`: `Cookies.parse` (and `reader.cookies()`) of text that has lines but no `cookies.txt` line (a space-separated paste, a JSON export) is a `ContentException` instead of a silently empty jar.
 - `json`: `value<DateTime>()` reads microsecond and nanosecond epochs (they read as milliseconds: the year 57742).
 - `cli`: a duration that repeats a unit (`--wait=1m1m`) is a usage error instead of adding up to 2 minutes.
+- `html`: `:nth-child(odd of S)` takes any whitespace around `of` (a tab or newline threw), and `option:checked` follows the option `form()` posts: a single-choice select's last `selected` option, else its first enabled one.
 
 **Performance**
 

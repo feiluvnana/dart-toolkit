@@ -89,6 +89,26 @@ Set<Element>? _scopes;
 
 bool _inScope(Element e) => _scopes?.contains(e) ?? false;
 
+/// Whether [option] is selected, by the rule `form()` posts: in a
+/// single-choice `<select>`, the last enabled `selected` option, else the
+/// first enabled one; elsewhere, its `selected` attribute.
+bool _chosen(Element option) {
+  var select = up(option);
+  if (select?.localName == 'optgroup') select = up(select!);
+  if (select == null || select.localName != 'select' || select.attributes.containsKey('multiple')) {
+    return option.attributes.containsKey('selected');
+  }
+  Element? first, last;
+  for (final n in select.children) {
+    for (final o in n.localName == 'optgroup' ? n.children : [n]) {
+      if (o.localName != 'option' || o.attributes.containsKey('disabled')) continue;
+      first ??= o;
+      if (o.attributes.containsKey('selected')) last = o;
+    }
+  }
+  return identical(last ?? first, option);
+}
+
 /// The parent element, or null at the top (the holder of top-level nodes
 /// is not an element of the document).
 Element? up(Element e) {
@@ -466,7 +486,7 @@ final class _Parser {
       'checked' =>
         (e) =>
             (e.localName == 'input' && e.attributes.containsKey('checked')) ||
-            (e.localName == 'option' && e.attributes.containsKey('selected')),
+            (e.localName == 'option' && _chosen(e)),
       'disabled' => _disabled,
       'enabled' => (e) => _formControls.contains(e.localName) && !_disabled(e),
       'before' || 'after' || 'first-line' || 'first-letter' => (_) => false,
@@ -534,10 +554,20 @@ final class _Parser {
     }
   }
 
+  /// Whether blanks, `of` and a blank start at [i] (`2n+1 of .x`).
+  bool _ofAhead() {
+    if (!_isSpace(_c)) return false;
+    var j = i;
+    while (j < s.length && _isSpace(s.codeUnitAt(j))) {
+      j++;
+    }
+    return s.startsWith('of', j) && j + 2 < s.length && _isSpace(s.codeUnitAt(j + 2));
+  }
+
   /// `An+B`, `odd`, `even`.
   (int, int) _nth() {
     final start = i;
-    while (!done && _c != 0x29 && !(s.startsWith(' of ', i))) {
+    while (!done && _c != 0x29 && !_ofAhead()) {
       i++;
     }
     final text = s.substring(start, i).replaceAll(RegExp(r'\s+'), '').toLowerCase();

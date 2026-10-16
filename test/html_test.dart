@@ -175,6 +175,19 @@ void main() {
         expect(() => doc.$(bad), throwsFormatException, reason: bad);
       }
     });
+
+    test('B26: any whitespace around "of"; a select\'s implied option is :checked', () {
+      final doc = Html.parse('<li>1<li class=e>2<li class=e>3<li class=e>4');
+      for (final sel in ['li:nth-child(odd\tof .e)', 'li:nth-child(odd\nof\n.e)', 'li:nth-child( odd  of  .e )']) {
+        expect(doc.$(sel).texts(), ['2', '4'], reason: sel);
+      }
+      final form = Html.parse('''
+<select><option id=a disabled>x<option id=b>y<option id=c>z</select>
+<select><option id=d selected>x<option id=e selected>y</select>
+<select multiple><option id=f>x<option id=g selected>y<option id=h selected>z</select>
+<datalist><option id=i>x</datalist>''');
+      expect(form.$('option:checked').attrs('id'), ['b', 'e', 'g', 'h']);
+    });
   });
 
   group('deep documents', () {
