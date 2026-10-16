@@ -41,12 +41,12 @@ export 'core.dart';
 
 import 'shell.dart' show Shell;
 import 'src/exit.dart' as exit;
-import 'src/names.dart' as naming;
 import 'src/posix.dart' as posix;
 import 'src/rar.dart' as rarlib;
 import 'src/sevenzip.dart' as sevenzip;
 import 'src/tool.dart';
 import 'src/tree.dart' as tree;
+import 'src/unpack.dart' as un;
 import 'src/xz.dart' as xz;
 import 'src/zip.dart' as zip;
 
@@ -121,38 +121,11 @@ abstract final class Archive {
 /// a folder, and a link's target.
 typedef _Member = ({String name, String path, bool dir, String? link});
 
-/// What a member is.
-enum _Kind { file, dir, symlink, hardlink }
-
-/// One member of an in-memory archive as read: its bytes (a link's target)
-/// decode on demand.
-typedef _Entry = ({String name, int mode, _Kind kind, DateTime? mtime, Uint8List Function() data});
-
-/// A link member, placed once every other member is in: links go in last,
-/// so no member is ever written through one.
-typedef _Link = ({String name, String target, bool hard});
-
 /// Archives bigger than this (7z, RAR) go to 7-Zip instead of memory.
 const _inMemoryMax = 32 << 20;
 
 /// 7-Zip's staging folder inside the temp tree; removed before the merge.
 const _stageName = '.dart_toolkit_7z~';
-
-/// Every path whose mode is set after the merge: path, mode, folder.
-typedef _Modes = List<(String, int, bool)>;
-
-/// Runs one step of an in-memory reader. A [ContentException] passes; any
-/// other failure (a RangeError from a damaged header, an OutOfMemoryError
-/// from a hostile size) is damage too, rethrown naming [what].
-T _guard<T>(String what, T Function() body) {
-  try {
-    return body();
-  } on ContentException {
-    rethrow;
-  } catch (e) {
-    throw ContentException('corrupt archive: $what: $e', null, null, e);
-  }
-}
 
 final class _Packed with Reader {
   _Packed(this._paths, this._from, this._format, this._password);
@@ -196,7 +169,7 @@ final class _Packed with Reader {
       if (t == io.FileSystemEntityType.link) {
         final target = (await io.Link(path).target()).replaceAll('\\', '/');
         final to = p.normalize(p.join(p.dirname(path), target));
-        if (_absolute(target) || to != base && !p.isWithin(base, to)) {
+        if (un.absolute(target) || to != base && !p.isWithin(base, to)) {
           throw ContentException('archive refuses a link that points outside dir: $path -> $target');
         }
         out[rel] = (name: rel, path: path, dir: false, link: target);
@@ -350,7 +323,7 @@ final class _Extraction {
   // member), chunked under ARG_MAX inside `chmodBatched`.
   final _modes = <(String, int, bool)>[];
   final _folded = <String, String>{};
-  final _links = <_Link>[];
+  final _links = <un.Link>[];
 
   // Every file this unpack wrote: an existing file under a path not in
   // here means the filesystem folded two member names into one (macOS
@@ -377,8 +350,8 @@ final class _Extraction {
   /// Sandbox-checks [name] and returns its path in the temp folder, with
   /// parents created; null for a bare root entry.
   Future<String?> _prepare(String name, {bool file = false}) async {
-    _checkMember(name, _folded);
-    final dest = _dest(tmp.path, name);
+    un.checkMember(name, _folded);
+    final dest = un.destIn(tmp.path, name);
     if (dest == null) return null;
     await io.Directory(p.dirname(dest)).create(recursive: true);
     if (file && _written.add(dest) && await io.File(dest).exists()) {
@@ -531,7 +504,7 @@ final class _Extraction {
       for (final e in await io.Directory(out).list(recursive: true, followLinks: false).toList()) {
         final name = p.relative(e.path, from: out).replaceAll('\\', '/');
         if (e is io.Link) {
-          _checkMember(name, _folded);
+          un.checkMember(name, _folded);
           _links.add((name: name, target: (await e.target()).replaceAll('\\', '/'), hard: false));
         } else if (e is io.Directory) {
           final d = await _prepare(name);
@@ -545,7 +518,7 @@ final class _Extraction {
       _cancel = null;
       if (await stage.exists()) await stage.delete(recursive: true);
     }
-    _modes.addAll(_placeLinks(tmp.path, _links, _modes));
+    _modes.addAll(un.placeLinks(tmp.path, _links, _modes));
   }
 
   /// Completes to stop a running 7-Zip.
@@ -579,15 +552,15 @@ final class _Extraction {
 
     await for (final ev in events) {
       switch (ev) {
-        case _TarHeader(kind: _Kind.symlink || _Kind.hardlink):
-          _checkMember(ev.name, _folded);
-          _links.add((name: ev.name, target: ev.link, hard: ev.kind == _Kind.hardlink));
+        case _TarHeader(kind: un.Kind.symlink || un.Kind.hardlink):
+          un.checkMember(ev.name, _folded);
+          _links.add((name: ev.name, target: ev.link, hard: ev.kind == un.Kind.hardlink));
         case _TarHeader():
           mode = ev.mode;
           mtime = ev.mtime;
           skipping = false;
           dest = null;
-          if (ev.kind == _Kind.dir) {
+          if (ev.kind == un.Kind.dir) {
             final d = await _prepare(ev.name);
             if (d == null) break;
             await io.Directory(d).create(recursive: true);
@@ -633,7 +606,7 @@ final class _Extraction {
           dest = null;
       }
     }
-    _modes.addAll(_placeLinks(tmp.path, _links, _modes));
+    _modes.addAll(un.placeLinks(tmp.path, _links, _modes));
   }
 
   /// Never delete the target: create it and merge each top-level
@@ -782,58 +755,17 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
 }
 
 /// A job for [_Extraction._isolated] capturing only what it needs.
-_Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp) =>
-    () => _unpackBytes(bytes, format, password, tmp);
-
-/// Unpacks the zip, 7z or RAR in [bytes] into [tmp] (runs on the worker
-/// isolate): every name and link is checked first, then each member is
-/// decoded and written in turn (any damage it hits named after it), links
-/// last. Returns the modes to set.
-_Modes _unpackBytes(Uint8List bytes, _Format format, String? password, String tmp) {
-  final entries = _entries(bytes, format, password);
-  final folded = <String, String>{};
-  final links = <_Link>[];
-  for (final e in entries) {
-    _checkMember(e.name, folded);
-    if (e.kind == _Kind.symlink || e.kind == _Kind.hardlink) {
-      final target = utf8.decode(_guard(e.name, e.data), allowMalformed: true);
-      links.add((name: e.name, target: target, hard: e.kind == _Kind.hardlink));
-    }
-  }
-  final modes = <(String, int, bool)>[];
-  final written = <String>{};
-  final made = <String>{tmp};
-  for (final e in entries) {
-    if (e.kind == _Kind.symlink || e.kind == _Kind.hardlink) continue;
-    final dest = _dest(tmp, e.name);
-    if (dest == null) continue;
-    final parent = p.dirname(dest);
-    if (made.add(parent)) io.Directory(parent).createSync(recursive: true);
-    if (e.kind == _Kind.dir) {
-      if (made.add(dest)) io.Directory(dest).createSync(recursive: true);
-      modes.add((dest, e.mode, true));
-      continue;
-    }
-    if (written.add(dest) && io.File(dest).existsSync()) {
-      throw ContentException('archive members collide on this filesystem: ${e.name}');
-    }
-    io.File(dest).writeAsBytesSync(_guard(e.name, e.data));
-    final t = e.mtime;
-    if (t != null) io.File(dest).setLastModifiedSync(t);
-    modes.add((dest, e.mode, false));
-  }
-  modes.addAll(_placeLinks(tmp, links, modes));
-  return modes;
-}
+un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp) =>
+    () => un.unpackEntries(_entries(bytes, format, password), tmp);
 
 /// The members of the [format] archive in [b]; damage in the directory
 /// names the archive.
-List<_Entry> _entries(Uint8List b, _Format format, String? pw) {
-  _Kind kind({required bool dir, bool link = false, bool hard = false}) =>
-      dir ? _Kind.dir : (link ? (hard ? _Kind.hardlink : _Kind.symlink) : _Kind.file);
+List<un.Entry> _entries(Uint8List b, _Format format, String? pw) {
+  un.Kind kind({required bool dir, bool link = false, bool hard = false}) =>
+      dir ? un.Kind.dir : (link ? (hard ? un.Kind.hardlink : un.Kind.symlink) : un.Kind.file);
   switch (format) {
     case _Format.zip:
-      return _guard(
+      return un.guard(
         'zip',
         () => [
           for (final f in zip.readZip(b))
@@ -847,7 +779,7 @@ List<_Entry> _entries(Uint8List b, _Format format, String? pw) {
         ],
       );
     case _Format.sevenzip:
-      return _guard(
+      return un.guard(
         '7z',
         () => [
           for (final e in sevenzip.readSevenzip(b, password: pw))
@@ -855,7 +787,7 @@ List<_Entry> _entries(Uint8List b, _Format format, String? pw) {
         ],
       );
     case _Format.rar:
-      return _guard(
+      return un.guard(
         'RAR',
         () => [
           for (final e in rarlib.readRar(b, password: pw))
@@ -870,142 +802,6 @@ List<_Entry> _entries(Uint8List b, _Format format, String? pw) {
       );
     default:
       throw StateError('$format is streamed');
-  }
-}
-
-/// [name]'s path inside [tmp]; null for a bare root entry. Split on both
-/// separators so member names work on every platform; '.' segments name
-/// nothing (a '.' member is the target itself, whose mode an archive never
-/// sets).
-String? _dest(String tmp, String name) {
-  final parts = _parts(name);
-  return parts.isEmpty ? null : p.joinAll([tmp, ...parts]);
-}
-
-/// A member path's segments, without empty and '.' ones.
-List<String> _parts(String path) => [
-  for (final s in path.replaceAll('\\', '/').split('/'))
-    if (s.isNotEmpty && s != '.') s,
-];
-
-/// An absolute path on any OS: `/x`, `\x`, `C:`.
-bool _absolute(String path) => path.startsWith('/') || path.startsWith('\\') || RegExp(r'^[A-Za-z]:').hasMatch(path);
-
-/// The member path [parts] lead to from the root, following every symlink
-/// of the archive ([symlinks], name to target) on the way, as the OS would
-/// once they exist; null when the walk leaves the root or loops.
-List<String>? _resolve(List<String> parts, Map<String, String> symlinks, [int depth = 0]) {
-  final at = <String>[];
-  for (final s in parts) {
-    if (s == '..') {
-      if (at.isEmpty) return null;
-      at.removeLast();
-      continue;
-    }
-    at.add(s);
-    final target = symlinks[at.join('/')];
-    if (target == null) continue;
-    if (depth >= 32 || _absolute(target)) return null;
-    at.removeLast();
-    final to = _resolve([...at, ..._parts(target)], symlinks, depth + 1);
-    if (to == null) return null;
-    at
-      ..clear()
-      ..addAll(to);
-  }
-  return at;
-}
-
-/// Puts [links] into [tmp], where every other member already is. A
-/// symlink must resolve inside the root through the archive's own links
-/// (its target is kept as written); a hardlink must name a file of the
-/// archive and lands as a copy of it, with its mode ([modes]) and mtime.
-/// Anything else fails by name before the first link is made. A link never
-/// replaces a member, and nothing is placed through a link. Returns the
-/// modes of the copies. Shared by every format, and by any extractor that
-/// fills [tmp] itself.
-_Modes _placeLinks(String tmp, List<_Link> links, _Modes modes) {
-  if (links.isEmpty) return const [];
-  final symlinks = {
-    for (final l in links)
-      if (!l.hard) _parts(l.name).join('/'): l.target,
-  };
-  final out = <(String, int, bool)>[];
-  final planned = <(_Link, String, List<String>)>[];
-  for (final l in links) {
-    final at = _parts(l.name);
-    if (at.isEmpty) throw ContentException('archive link has no name: ${l.name}');
-    final to = _absolute(l.target)
-        ? null
-        : _resolve(l.hard ? _parts(l.target) : [...at.sublist(0, at.length - 1), ..._parts(l.target)], symlinks);
-    if (to == null) throw ContentException('archive link points outside the folder: ${l.name} -> ${l.target}');
-    planned.add((l, p.joinAll([tmp, ...at]), to));
-  }
-  final modeOf = {
-    for (final (path, mode, isDir) in modes)
-      if (!isDir) path: mode,
-  };
-  bool throughLink(String dest) {
-    for (var d = p.dirname(dest); d.length > tmp.length; d = p.dirname(d)) {
-      if (io.FileSystemEntity.typeSync(d, followLinks: false) == io.FileSystemEntityType.link) return true;
-    }
-    return false;
-  }
-
-  // Copies first (their sources are plain files), then the symlinks.
-  for (final hard in [true, false]) {
-    for (final (l, dest, to) in planned) {
-      if (l.hard != hard) continue;
-      final type = io.FileSystemEntity.typeSync(dest, followLinks: false);
-      if (type == io.FileSystemEntityType.link && !hard) {
-        io.Link(dest).deleteSync(); // a repeated link member: the last one wins
-      } else if (type != io.FileSystemEntityType.notFound || throughLink(dest)) {
-        throw ContentException('archive link collides with a member: ${l.name}');
-      }
-      io.Directory(p.dirname(dest)).createSync(recursive: true);
-      if (!hard) {
-        io.Link(dest).createSync(l.target);
-        continue;
-      }
-      final src = p.joinAll([tmp, ...to]);
-      if (io.FileSystemEntity.typeSync(src, followLinks: false) != io.FileSystemEntityType.file) {
-        throw ContentException('archive hardlink target is not a file of the archive: ${l.name} -> ${l.target}');
-      }
-      io.File(src).copySync(dest);
-      io.File(dest).setLastModifiedSync(io.File(src).lastModifiedSync());
-      out.add((dest, modeOf[src] ?? 0, false));
-    }
-  }
-  return out;
-}
-
-final _badPart = RegExp(r'[<>:"|?*\x00-\x1f]');
-
-/// Rejects, on every OS, any name that would not extract the same way on
-/// Linux, macOS and Windows: escapes, device names, characters and
-/// trailing dots/spaces Windows rewrites, and members (or folders) that
-/// differ only in case. [folded] remembers each path seen, case-folded.
-void _checkMember(String name, Map<String, String> folded) {
-  if (name.isEmpty) {
-    throw const ContentException('archive member has an empty name');
-  }
-  if (_absolute(name)) {
-    throw ContentException('archive member escapes: $name');
-  }
-  var path = '';
-  for (final part in name.replaceAll('\\', '/').split('/')) {
-    if (part == '..' ||
-        part.endsWith('.') && part != '.' ||
-        part.endsWith(' ') ||
-        _badPart.hasMatch(part) ||
-        naming.isReserved(part)) {
-      throw ContentException('archive member escapes: $name');
-    }
-    if (part.isEmpty || part == '.') continue;
-    path = path.isEmpty ? part : '$path/$part';
-    if ((folded[path.toLowerCase()] ??= path) != path) {
-      throw ContentException('archive members differ only in case: $name');
-    }
   }
 }
 
@@ -1279,7 +1075,7 @@ Future<void> _offloadMain((Stream<Uint8List> Function(Stream<List<int>>), SendPo
 // EOF there counts too). Pax extended headers (`x`, and global `g`) and GNU
 // long names and link names (`L`, `K`) override the header's; pax `mtime`
 // overrides its seconds. Symlinks and hardlinks come out as headers for
-// [_placeLinks].
+// [un.placeLinks].
 // ---------------------------------------------------------------------------
 
 /// AppleDouble magic: `00 05 16 07`.
@@ -1299,7 +1095,7 @@ final class _TarHeader extends _TarEvent {
   final String name;
   final int mode;
   final DateTime? mtime;
-  final _Kind kind;
+  final un.Kind kind;
 
   /// A link's target.
   final String link;
@@ -1616,17 +1412,17 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async*
       if (typeflag == 0x35 || regular && name.endsWith('/')) {
         seen++;
         emit = false;
-        yield _TarHeader(name, _tarMode(h), mtime, _Kind.dir);
+        yield _TarHeader(name, _tarMode(h), mtime, un.Kind.dir);
       } else if (regular) {
         seen++;
         emit = true;
-        yield _TarHeader(name, _tarMode(h), mtime, _Kind.file);
+        yield _TarHeader(name, _tarMode(h), mtime, un.Kind.file);
         if (size == 0) yield _TarEnd();
       } else if (typeflag == 0x31 || typeflag == 0x32) {
         // A link's data, if any, is skipped.
         seen++;
         emit = false;
-        yield _TarHeader(name, _tarMode(h), mtime, typeflag == 0x31 ? _Kind.hardlink : _Kind.symlink, link);
+        yield _TarHeader(name, _tarMode(h), mtime, typeflag == 0x31 ? un.Kind.hardlink : un.Kind.symlink, link);
       } else {
         fail(
           'corrupt archive: unsupported tar entry '
