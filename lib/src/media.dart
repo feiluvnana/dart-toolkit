@@ -44,7 +44,7 @@ Future<List<int>> ffmpeg(
   return encode(() async {
     if (onProgress == null) {
       final out = await Shell.run([...command, ...args]);
-      if (!out.ok()) throw ContentException('ffmpeg failed: ${toolTail(out.err())}');
+      if (!out.ok()) throw failure('ffmpeg failed', out.err());
       return out.bytes();
     }
     // Progress lines on stdout as ffmpeg writes them; its stderr is kept
@@ -61,11 +61,24 @@ Future<List<int>> ffmpeg(
         }
       }
     } on ExitException catch (e) {
-      throw ContentException('ffmpeg failed: ${toolTail(e.message.replaceFirst(RegExp(r'^exit -?\d+: '), ''))}');
+      throw failure('ffmpeg failed', e.message.replaceFirst(RegExp(r'^exit -?\d+: '), ''));
     }
     return const <int>[];
   });
 }
+
+/// Why ffmpeg or ffprobe failed, from its [stderr]: a network failure
+/// reading a URL is a [io.SocketException] (transient: `pool` retries it),
+/// anything else a [ContentException].
+Exception failure(String what, String stderr) {
+  final message = '$what: ${toolTail(stderr)}';
+  return _network.hasMatch(stderr) ? io.SocketException(message) : ContentException(message);
+}
+
+final _network = RegExp(
+  r'Connection (refused|reset|timed out)|Failed to resolve hostname|Network is unreachable|No route to host|'
+  r'Operation timed out|Server returned (5XX|429)|Broken pipe',
+);
 
 /// ffprobe's JSON for [input] (a path or URL). Unreadable input is a
 /// [ContentException].
@@ -82,7 +95,7 @@ Future<Map<String, Object?>> ffprobe(String input) async {
     'json',
     input,
   ]);
-  if (!out.ok()) throw ContentException('not a readable media file: ${toolTail(out.err())}');
+  if (!out.ok()) throw failure('not a readable media file', out.err());
   try {
     return (jsonDecode(await out.text()) as Map).cast<String, Object?>();
   } on FormatException catch (e) {

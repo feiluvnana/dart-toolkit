@@ -75,18 +75,21 @@ final class _Proxy {
       final auth = user != null;
       s.add([5, auth ? 2 : 1, 0, if (auth) 2]);
       final [version, method] = await input.read(2);
-      if (version != 5) throw const SocketException('SOCKS proxy: not a SOCKS5 server');
+      // Refusals another attempt gets again are marked final (no retry).
+      if (version != 5) throw retry.permanent(const SocketException('SOCKS proxy: not a SOCKS5 server'));
       if (method == 2 && auth) {
         final u = utf8.encode(user!), p = utf8.encode(pass!);
         s.add([1, u.length, ...u, p.length, ...p]);
-        if ((await input.read(2))[1] != 0) throw const SocketException('SOCKS proxy: login refused');
+        if ((await input.read(2))[1] != 0) throw retry.permanent(const SocketException('SOCKS proxy: login refused'));
       } else if (method != 0) {
-        throw const SocketException('SOCKS proxy: no acceptable login method');
+        throw retry.permanent(const SocketException('SOCKS proxy: no acceptable login method'));
       }
       final ip = InternetAddress.tryParse(url.host);
       final name = utf8.encode(url.host);
       // One length byte: a longer name would make the proxy read another host.
-      if (ip == null && name.length > 255) throw SocketException('SOCKS proxy: host name over 255 bytes: ${url.host}');
+      if (ip == null && name.length > 255) {
+        throw retry.permanent(SocketException('SOCKS proxy: host name over 255 bytes: ${url.host}'));
+      }
       s.add([
         5, 1, 0, //
         ...switch (ip?.type) {
@@ -98,7 +101,9 @@ final class _Proxy {
       ]);
       final [_, reply, _, type] = await input.read(4);
       if (reply != 0) {
-        throw SocketException('SOCKS proxy: ${_socksReplies[reply] ?? 'error $reply'} for ${url.host}:${url.port}');
+        final e = SocketException('SOCKS proxy: ${_socksReplies[reply] ?? 'error $reply'} for ${url.host}:${url.port}');
+        // Not allowed, unsupported command or address type: the proxy's rules.
+        throw const {2, 7, 8}.contains(reply) ? retry.permanent(e) : e;
       }
       await input.read(switch (type) {
         1 => 4 + 2,

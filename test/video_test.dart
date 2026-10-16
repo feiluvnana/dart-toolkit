@@ -112,6 +112,18 @@ void main() {
     });
   });
 
+  test('a network failure is an IOException (retried by pool), a bad file a ContentException (B13)', () async {
+    final closed = await io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, 0);
+    final port = closed.port;
+    await closed.close();
+    await expectLater(Video.open('http://127.0.0.1:$port/x.mp4'), throwsA(isA<io.IOException>()));
+    final (_, base) = await serve((r) => r.response
+      ..statusCode = 503
+      ..close());
+    await expectLater(Video.open('$base/x.mp4'), throwsA(isA<io.IOException>()));
+    await expectLater(Video.open('$base/x.mp4'.replaceFirst('http', 'file')), throwsA(isA<ContentException>()));
+  });
+
   group('probe', () {
     test('a file is probed in place', () async {
       final v = await Fs.file(clip).video();

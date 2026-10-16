@@ -186,7 +186,11 @@ Stream<List<int>> _streamPieces(List<Object> pieces) async* {
 /// so an existing `on HttpException` keeps catching it.
 final class HttpStatusException extends HttpException implements ToolkitException {
   HttpStatusException(super.message, {required this.status, required this.method, required this.url, this.snippet = ''})
-    : super(uri: Uri.tryParse(url));
+    : super(uri: Uri.tryParse(url)) {
+    // A 4xx is the server's answer to this request: `pool` never retries
+    // it (408 and 429 say "later", so they are retried).
+    if (status >= 400 && status < 500 && status != 408 && status != 429) retry.permanent(this);
+  }
 
   /// HTTP status.
   final int status;
@@ -255,7 +259,9 @@ Map<String, String> _browserHeaders(Browser b) => switch (b) {
 /// the client's `login:` paths (a redirect to the sign-in page) instead of
 /// what it asked for. [url] is where it landed.
 final class SessionException extends ToolkitException {
-  SessionException(this.url) : super('logged out: the request landed on $url; log in again and refresh the session');
+  SessionException(this.url) : super('logged out: the request landed on $url; log in again and refresh the session') {
+    retry.permanent(this);
+  }
 
   /// Where the request landed (credentials redacted).
   final String url;
@@ -268,7 +274,9 @@ final class SessionException extends ToolkitException {
 /// [HttpException], so an existing `on HttpException` keeps catching it.
 final class HttpRequestException extends HttpException implements ToolkitException {
   HttpRequestException(this.method, this.url, this.reason, [String? detail])
-    : super('${detail ?? reason.name}: $method $url', uri: Uri.tryParse(url));
+    : super('${detail ?? reason.name}: $method $url', uri: Uri.tryParse(url)) {
+    retry.permanent(this);
+  }
 
   /// The method (`GET`, `POST` …).
   final String method;
@@ -1334,7 +1342,7 @@ Map<String, String> _without(Map<String, String> headers, bool Function(String l
 /// [e] with the request in its message (`METHOD url`); types are kept.
 Object _naming(Object e, String method, Uri url) {
   final what = '$method ${names.redact(url)}';
-  return switch (e) {
+  return retry.carry(e, switch (e) {
     SocketException() => SocketException('${e.message}: $what', osError: e.osError, address: e.address, port: e.port),
     HandshakeException() => HandshakeException('${e.message}: $what', e.osError),
     CertificateException() => CertificateException('${e.message}: $what', e.osError),
@@ -1342,7 +1350,7 @@ Object _naming(Object e, String method, Uri url) {
     TimeoutException() => Timeout('${e.message}: $what', e.duration),
     HttpException() => HttpException('${e.message}: $what', uri: Uri.tryParse(names.redact(e.uri ?? url))),
     _ => e,
-  };
+  });
 }
 
 bool _isRedirect(int status) => status == 301 || status == 302 || status == 303 || status == 307 || status == 308;

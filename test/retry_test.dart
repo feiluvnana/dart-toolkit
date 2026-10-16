@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dart_toolkit/core.dart' show ContentException;
+import 'package:dart_toolkit/http.dart' show HttpRequestException, HttpStatusException, RequestFailure, SessionException;
+import 'package:dart_toolkit/shell.dart' show ExitException;
+import 'package:dart_toolkit/src/cdp.dart' show BrowserException;
 import 'package:dart_toolkit/src/rate.dart' as rate;
 import 'package:dart_toolkit/src/retry.dart';
 import 'package:test/test.dart';
@@ -58,6 +62,37 @@ void main() {
   test('a server Retry-After is capped at 5 minutes; the own window is not', () {
     expect(rate.ban(rate.Rate(1, const Duration(seconds: 1)), const Duration(days: 365)), const Duration(minutes: 5));
     expect(rate.ban(rate.Rate(1, const Duration(hours: 1)), const Duration(seconds: 1)), const Duration(hours: 1));
+  });
+
+  test('pool retries: transient failures are retried, verdicts on the data or the request are not (B13)', () {
+    HttpStatusException status(int code) => HttpStatusException('HTTP $code', status: code, method: 'GET', url: 'u');
+    final retried = <Object>[
+      ExitException('false', const [], 'exit 1: boom', 1),
+      status(503),
+      status(500),
+      BrowserException('tab crashed'),
+      const SocketException('reset'),
+      TimeoutException('slow'),
+      const HttpException('connection closed'),
+      const FileSystemException('busy'),
+    ];
+    final permanent = <Object>[
+      status(404),
+      status(403),
+      const ContentException('bad json'),
+      const FormatException('bad'),
+      ArgumentError('bad'),
+      StateError('bug'),
+      const HandshakeException('bad cert'),
+      SessionException('https://x/login'),
+      HttpRequestException('GET', 'u', RequestFailure.redirects),
+    ];
+    for (final e in retried) {
+      expect(isPermanent(e), isFalse, reason: '$e');
+    }
+    for (final e in permanent) {
+      expect(isPermanent(e), isTrue, reason: '$e');
+    }
   });
 
   test('free() polled during a wait never lets the window take more than its count (B5)', () async {

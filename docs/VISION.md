@@ -684,6 +684,10 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
   pull items: the job and items must be sendable; an unsendable one is an `ArgumentError` naming
   the item, while an `ArgumentError` from the job itself stays as it is.
 - `retries:` re-runs a failing job with the shared jittered backoff; `rate:` paces job starts.
+  A shell's exit, a 5xx, a browser or network failure is retried; a bug (`Error`), bad data
+  (`ContentException`), TLS, an HTTP 4xx (but 408/429), a logged-out session or a refused proxy
+  login fails at once. An exception says whose fault: data → `ContentException`, the network or
+  the disk → an `IOException`.
   Together they replace hand-written retry loops around shells, browsers and flaky I/O.
 - Both are `Task`s counting the jobs done, success or failure: `Pool.map(urls, fetch) &
   Console.bar('pages')`. Probes nest: a bar per file inside the job, one over the pool outside.

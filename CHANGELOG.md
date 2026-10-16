@@ -17,6 +17,9 @@
 
 **Changed**
 
+- `pool`: `retries:` retries every exception except a bug (`Error`), bad data (`ContentException`/`FormatException`), TLS, an HTTP 4xx other than 408/429, a `SessionException`, an `HttpRequestException` and a refused SOCKS login or ruleset: a shell's `ExitException`, a 5xx `HttpStatusException` and a `BrowserException` were never retried. The http client no longer retries a refused SOCKS login either.
+- `video`/`image`: an ffmpeg/ffprobe failure reading a URL over the network (refused, reset, unresolved, a 5xx) is a `SocketException` instead of a `ContentException`; a pinned tool download that fails for lack of network is an `HttpException`; a 7-Zip failure from a full disk or a permission is a `FileSystemException` instead of "corrupt archive".
+
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
 
 **Removed**

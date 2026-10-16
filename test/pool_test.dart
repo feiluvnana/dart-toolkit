@@ -6,6 +6,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/shell.dart' show ExitException, Shell;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -195,6 +196,16 @@ void main() {
       await expectLater(
         Pool.map([1], (x) => ++calls > 0 ? throw const HandshakeException('bad cert') : x, retries: 3),
         throwsA(isA<HandshakeException>()),
+      );
+      expect(calls, 2);
+      // A shell's exit is retried: the toolkit's own exceptions are not all final.
+      calls = 0;
+      await expectLater(
+        Pool.map([1], (x) async {
+          calls++;
+          (await Shell.run(['false'])).check();
+        }, retries: 1),
+        throwsA(isA<ExitException>()),
       );
       expect(calls, 2);
       final starts = <DateTime>[];

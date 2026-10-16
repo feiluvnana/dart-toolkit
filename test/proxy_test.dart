@@ -90,6 +90,31 @@ void main() {
     await expectLater(c.get('http://example.test/').text(), throwsA(predicate((e) => '$e'.contains('login refused'))));
   });
 
+  test('a refused SOCKS login or a ruleset refusal fails at once, never retried (B13)', () async {
+    var logins = 0;
+    final p = await socks((greeting, s, rest) async {
+      logins++;
+      s.add([5, 2]);
+      await rest.first;
+      s.add([1, 1]);
+      return false;
+    });
+    addTearDown(p.close);
+    final sw = Stopwatch()..start();
+    final c = Http.client(proxy: 'socks5://u:p@127.0.0.1:${p.port}', retries: 3);
+    await expectLater(c.get('http://example.test/').text(), throwsA(isA<SocketException>()));
+    expect((logins, sw.elapsed < const Duration(milliseconds: 900)), (1, true));
+    var asked = 0;
+    final rules = await socks((greeting, s, rest) {
+      asked++;
+      return answer(2)(greeting, s, rest);
+    });
+    addTearDown(rules.close);
+    final r = Http.client(proxy: 'socks5://127.0.0.1:${rules.port}', retries: 3);
+    await expectLater(r.get('http://example.test/').text(), throwsA(isA<SocketException>()));
+    expect(asked, 1);
+  });
+
   test('S11: SOCKS fields over 255 bytes are refused, not truncated into another host', () async {
     expect(() => Http.client(proxy: 'socks5://${'u' * 256}:p@127.0.0.1:1'), throwsArgumentError);
     final p = await socks(answer(0));

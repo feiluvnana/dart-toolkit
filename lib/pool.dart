@@ -39,9 +39,10 @@ import 'src/retry.dart' as retry;
 /// - [limit] caps the jobs in flight: 4 lanes by default (I/O: the core
 ///   count says nothing), or the core count with `isolates: true`.
 /// - [retries] re-runs a job that threw an Exception with the shared
-///   jittered backoff (1 s, 2 s … ±25%). An Error (a bug), bad data
-///   (`ContentException`), TLS and HTTP status errors fail at once: give the
-///   client its own `retries:` for 429 and 503.
+///   jittered backoff (1 s, 2 s … ±25%): a shell's exit, a 5xx, a browser
+///   or network failure. An Error (a bug, an `ArgumentError`), bad data
+///   (`ContentException`), TLS, an HTTP 4xx (but 408 and 429), a logged-out
+///   session and a refused proxy login fail at once.
 ///   [rate] paces job starts (each attempt takes a slot).
 /// - `isolates: true` runs the jobs on `limit` long-lived worker isolates
 ///   that pull items: the job and every item must be sendable (a top-level

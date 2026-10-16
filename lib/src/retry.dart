@@ -8,8 +8,6 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math';
 
-import '../core.dart' show ToolkitException;
-
 final _random = Random();
 
 /// Doubling backoff from 1 s (`attempt` 0 → 1 s, 1 → 2 s, … capped at 2^10 s)
@@ -42,13 +40,29 @@ Duration? parseRetryAfter(String? value) {
   return null;
 }
 
+/// Failures marked final where they are made, whatever their type (an
+/// HTTP 4xx, a logged-out session, a refused proxy login): no retry layer
+/// tries them again.
+final _final = Expando<bool>('final');
+
+/// Mark [e] final (see [isPermanent]) and return it.
+T permanent<T extends Object>(T e) {
+  _final[e] = true;
+  return e;
+}
+
+/// [to], marked final when [from] was: for a failure re-made with more
+/// context.
+T carry<T extends Object>(Object from, T to) => _final[from] == true ? permanent(to) : to;
+
 /// True for transient failures worth resending an in-memory body for:
 /// network errors, timeouts, `http.ClientException`s (as [io.HttpException]).
 /// TLS failures ([io.HandshakeException], [io.TlsException],
 /// [io.CertificateException]) are permanent: retrying a bad certificate with
 /// backoff only waits. Anything else (programmer errors, [FormatException],
-/// [ArgumentError]) is not retryable.
+/// [ArgumentError], a failure marked [permanent]) is not retryable.
 bool isRetryable(Object e) {
+  if (_final[e] == true) return false;
   if (e is io.HandshakeException) return false;
   if (e is io.TlsException) return false;
   if (e is io.CertificateException) return false;
@@ -67,13 +81,15 @@ bool isRetryable(Object e) {
 }
 
 /// True for failures another attempt of a `pool` job cannot fix: an
-/// [Error] (a bug), bad data ([FormatException], so `ContentException`),
-/// TLS, and the toolkit's own verdicts (a status error: the client's own
-/// `retries:` already resent 429 and 503). Any other exception is retried.
+/// [Error] (a bug, an [ArgumentError]), bad data ([FormatException], so
+/// `ContentException`), TLS, and failures marked [permanent] (an HTTP 4xx
+/// after the client's own retries, a logged-out session, a refused proxy
+/// login). Any other exception is retried: a shell's exit, a 5xx, a
+/// browser or network failure.
 bool isPermanent(Object e) =>
     e is Error ||
     e is FormatException ||
-    e is ToolkitException ||
+    _final[e] == true ||
     e is io.HandshakeException ||
     e is io.TlsException ||
     e is io.CertificateException;

@@ -530,10 +530,7 @@ final class _Extraction {
       try {
         await done.future;
       } on ExitException catch (e) {
-        final why = toolTail(e.message);
-        throw why.contains('Wrong password')
-            ? const PasswordException('wrong password or corrupt archive')
-            : ContentException('corrupt archive: $why');
+        throw sevenZipFailure(e.message);
       } finally {
         _cancel = null;
       }

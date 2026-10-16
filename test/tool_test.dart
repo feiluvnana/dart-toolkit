@@ -8,6 +8,7 @@ import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/cache.dart' as cache;
 import 'package:dart_toolkit/src/chrome_fetch.dart' as chrome;
 import 'package:dart_toolkit/src/media.dart' as media;
+import 'package:dart_toolkit/src/tool.dart' as tool;
 import 'package:dart_toolkit/src/tool_fetch.dart' as fetch;
 import 'package:test/test.dart';
 
@@ -83,6 +84,13 @@ void main() {
     });
   });
 
+  test('a 7-Zip failure says whose fault: a password, the disk (retried by pool) or the archive (B13)', () {
+    expect(tool.sevenZipFailure('exit 2: ERROR: Wrong password : a.txt'), isA<PasswordException>());
+    expect(tool.sevenZipFailure('exit 2: ERROR: Data Error : a.txt'), isA<ContentException>());
+    final full = tool.sevenZipFailure('exit 2: ERROR: No space left on device : a.txt');
+    expect((full is IOException, full is ContentException), (true, false));
+  });
+
   test('S13: a Chrome zip unpacks only when it matches its pinned sha256', () async {
     final bad = '${tmp.path}/cft/bad';
     await expectLater(chrome.fetch('$url/tool.zip', '0' * 64, bad), throwsA(isA<ContentException>()));
@@ -142,14 +150,14 @@ Future<void> main(List<String> args) async {
     await tool(Tool.sevenzip);
     print('no failure');
   } on Exception catch (e) {
-    print('failed: \${'\$e'.contains('download failed')}');
+    print('failed: \${e is IOException} \${'\$e'.contains('download failed')}');
   }
   print('temps: \${File(args[0]).parent.listSync().where((e) => e.path.contains('.dl-')).length}');
   File(args[0]).writeAsStringSync('placed');
   print('then \${await tool(Tool.sevenzip)}');
 }
 ''', args: [pinned], env: env, timeout: const Duration(seconds: 60));
-      expect(r.stdout, 'failed: true\ntemps: 0\nthen $pinned\n', reason: '${r.stderr}');
+      expect(r.stdout, 'failed: true true\ntemps: 0\nthen $pinned\n', reason: '${r.stderr}');
     }, testOn: '!windows', tags: 'slow');
   });
 

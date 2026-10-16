@@ -210,8 +210,30 @@ Future<void> _fetch(_Build build, String dir, String name) async {
   } on UnsupportedError catch (e) {
     throw UnsupportedError('$name is not on PATH and can only be downloaded from a `dart run` script: install it (${e.message})');
   }
-  if (failed != null) throw ContentException('download failed: ${build.url}: $failed');
+  if (failed == null) return;
+  // A hash mismatch is the file's fault; anything else (no network, a
+  // refusing server) is transient I/O, which `pool` retries.
+  final message = 'download failed: ${build.url}: $failed';
+  throw failed.startsWith('ContentException') || failed.startsWith('FormatException')
+      ? ContentException(message)
+      : io.HttpException(message, uri: Uri.parse(build.url));
 }
+
+/// Why 7-Zip failed, from its exit [message]: a wrong password, the
+/// environment (a full disk, no permission: an [io.FileSystemException],
+/// which `pool` retries), else a corrupt archive.
+Exception sevenZipFailure(String message) {
+  final why = toolTail(message);
+  if (why.contains('Wrong password')) return const PasswordException('wrong password or corrupt archive');
+  if (_environment.hasMatch(why)) return io.FileSystemException('7-Zip failed: $why');
+  return ContentException('corrupt archive: $why');
+}
+
+final _environment = RegExp(
+  r'No space left|Disk full|Permission denied|Access is denied|Read-only file system|Cannot allocate memory|'
+  r'Not enough memory|Can ?not open output file',
+  caseSensitive: false,
+);
 
 /// The last lines of a tool's stderr: enough to say why, never a dump.
 /// URLs in it are redacted (a signed URL's token stays out of errors).
