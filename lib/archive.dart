@@ -45,6 +45,7 @@ export 'core.dart';
 import 'shell.dart' show ExitException, Shell;
 import 'src/exit.dart' as exit;
 import 'src/format.dart' show Unit;
+import 'src/glob.dart';
 import 'src/posix.dart' as posix;
 import 'src/progress.dart' show Run, working, writing;
 import 'src/rar.dart' as rarlib;
@@ -106,8 +107,10 @@ abstract final class Archive {
   }
 
   /// A [Writer] extracting what it is given into [dir], creating it and
-  /// merging into what is there (a file already there is kept, never
-  /// replaced). The format comes from the magic bytes; one this module
+  /// merging into what is there: a member replaces a file (or link) at its
+  /// path, like `unzip -o`, and other files stay. With [match] only the
+  /// members whose path matches the glob land, read as `Dir.list(match:)`
+  /// reads it (`'bin/*'`, `'**/*.so'`), with the folders above them. The format comes from the magic bytes; one this module
   /// cannot read (lz4, lzip, …) is named in the [ContentException].
   /// Symlinks and hardlinks are kept when they resolve inside [dir] (a
   /// hardlink lands as a copy); one that points outside fails by name.
@@ -117,9 +120,9 @@ abstract final class Archive {
   /// the bytes written (hardlink copies included): past it the unpack fails
   /// with a [ContentException] and nothing lands; a 7-Zip extraction (big
   /// 7z/RAR, cab, ar, xar) is counted as its output moves in.
-  static Writer unarchive(String dir, {String? password, int? max}) {
+  static Writer unarchive(String dir, {String? password, int? max, String? match}) {
     if (max != null && max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
-    return _Unpacker(dir, password, max);
+    return _Unpacker(dir, password, max, match == null ? null : glob(match));
   }
 
   /// Streaming gzip compression.
@@ -355,9 +358,12 @@ final class _Packed with Reader {
 /// One unpack's temp tree: members land here sandbox-checked, then merge
 /// into the target. Holds the modes to apply after the merge.
 final class _Extraction {
-  _Extraction(this.tmp, int? max) : budget = un.Budget(max);
+  _Extraction(this.tmp, int? max, this.match) : budget = un.Budget(max);
 
   final io.Directory tmp;
+
+  /// The members to land (`match:`); null for all.
+  final RegExp? match;
 
   /// What may still be written (`max:`).
   final un.Budget budget;
@@ -429,7 +435,7 @@ final class _Extraction {
         }
 
         await posix.writeAll(spool, all());
-        _modes.addAll(await _isolated(_unzipFileJob(spool.path, password, tmp.path, budget.max)));
+        _modes.addAll(await _isolated(_unzipFileJob(spool.path, password, tmp.path, budget.max, match)));
       } finally {
         if (await stage.exists()) await stage.delete(recursive: true);
       }
@@ -437,7 +443,7 @@ final class _Extraction {
     }
     final acc = BytesBuilder(copy: false);
     head.forEach(acc.add);
-    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), _Format.zip, password, tmp.path, budget.max)));
+    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), _Format.zip, password, tmp.path, budget.max, match)));
   }
 
   /// [work]'s result, computed on its own isolate (registered, so an
@@ -506,7 +512,7 @@ final class _Extraction {
     }
     final bytes = acc.takeBytes();
     try {
-      _modes.addAll(await _isolated(_unpackJob(bytes, format, password, tmp.path, budget.max)));
+      _modes.addAll(await _isolated(_unpackJob(bytes, format, password, tmp.path, budget.max, match)));
     } on ContentException catch (e) {
       if (!native || !e.message.startsWith('unsupported')) rethrow;
       // Start over clean: the Dart decoder may have landed some members.
@@ -691,10 +697,12 @@ final class _Extraction {
   }
 
   /// Never delete the target: create it and merge each top-level
-  /// member in (rename, copy fallback). Existing files are kept: a member
-  /// at the same path is dropped. Every file/folder collision fails before
-  /// the first rename, so a failed unpack leaves the target as it was.
+  /// member in (rename, copy fallback). A member replaces a file or link
+  /// at its path (renamed over it, never written through it). Every
+  /// file/folder collision fails before the first rename, so a failed
+  /// unpack leaves the target as it was.
   Future<void> merge(String d) async {
+    if (match != null) await _prune();
     // A target that is a link to a folder merges into that folder: checked
     // through the link, the collisions (and the files kept) went unseen.
     if (await io.FileSystemEntity.isLink(d) && await io.FileSystemEntity.isDirectory(d)) {
@@ -732,6 +740,33 @@ final class _Extraction {
     await posix.chmodBatched(posix.groupByMode(dirs, dirModes));
   }
 
+  /// Drop from the temp tree what [match] leaves out: files and links that
+  /// do not match, then folders that neither match nor hold a member.
+  Future<void> _prune() async {
+    final pattern = match!;
+    final dirs = <String>[];
+    final gone = <String>{};
+    for (final e in await tmp.list(recursive: true, followLinks: false).toList()) {
+      final rel = p.relative(e.path, from: tmp.path).replaceAll('\\', '/');
+      if (pattern.hasMatch(rel)) continue;
+      if (e is io.Directory) {
+        dirs.add(e.path);
+      } else {
+        await e.delete();
+        gone.add(e.path);
+      }
+    }
+    // Deepest first, so a folder emptied by its children goes too.
+    dirs.sort((a, b) => b.length.compareTo(a.length));
+    for (final dir in dirs) {
+      if (await io.Directory(dir).list().isEmpty) {
+        await io.Directory(dir).delete();
+        gone.add(dir);
+      }
+    }
+    _modes.removeWhere((m) => gone.contains(m.$1));
+  }
+
   Future<void> dispose() async {
     try {
       await _out?.close();
@@ -743,7 +778,7 @@ final class _Extraction {
 
   /// Throw when a member would put a file where the target has a folder, or
   /// a folder where it has a file (a link counts as a file). Returns the
-  /// target paths that already exist (kept, modes and all).
+  /// target paths that already exist (folders there keep their modes).
   static Future<Set<String>> _checkCollisions(String tmp, String target) async {
     final existing = <String>{};
     if (await io.FileSystemEntity.type(target, followLinks: false) != io.FileSystemEntityType.directory) {
@@ -763,8 +798,7 @@ final class _Extraction {
   }
 
   /// Move [src] (inside the temp dir) into [dest] (inside the target),
-  /// merging folders; an existing file stays and the member is dropped
-  /// (the temp tree goes when the unpack ends).
+  /// merging folders; a file or link member replaces a file or link there.
   static Future<void> _moveInto(String src, String dest) async {
     final srcType = await io.FileSystemEntity.type(src, followLinks: false);
     final destType = await io.FileSystemEntity.type(dest, followLinks: false);
@@ -782,7 +816,6 @@ final class _Extraction {
         // dir (or vice versa) throws instead of rm -rf.
         throw io.FileSystemException('archive member collides with existing ${destIsDir ? 'directory' : 'file'}', dest);
       }
-      return;
     }
     try {
       switch (srcType) {
@@ -797,6 +830,8 @@ final class _Extraction {
       // Only a rename across devices copies then deletes; anything else
       // (permissions) is the caller's error, not a reason to copy.
       if (!posix.isCrossDevice(e)) rethrow;
+      // The copy must not go through a link being replaced.
+      if (destType == io.FileSystemEntityType.link) await io.Link(dest).delete();
       switch (srcType) {
         case io.FileSystemEntityType.directory:
           await tree.copyTree(src, dest);
@@ -836,11 +871,11 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
 }
 
 /// A job for [_Extraction._isolated] capturing only what it needs.
-un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp, int? max) =>
-    () => un.unpackEntries(_entries(bytes, format, password), tmp, un.Budget(max));
+un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp, int? max, RegExp? match) =>
+    () => un.unpackEntries(_entries(bytes, format, password), tmp, un.Budget(max), match);
 
 /// A job unpacking the zip spooled at [path], read by offset.
-un.Modes Function() _unzipFileJob(String path, String? password, String tmp, int? max) => () {
+un.Modes Function() _unzipFileJob(String path, String? password, String tmp, int? max, RegExp? match) => () {
   final f = io.File(path).openSync();
   try {
     Uint8List read(int at, int n) {
@@ -853,7 +888,12 @@ un.Modes Function() _unzipFileJob(String path, String? password, String tmp, int
       return got == n ? out : Uint8List.sublistView(out, 0, got);
     }
 
-    return un.unpackEntries(_zipEntries(() => zip.readZipAt(f.lengthSync(), read), password), tmp, un.Budget(max));
+    return un.unpackEntries(
+      _zipEntries(() => zip.readZipAt(f.lengthSync(), read), password),
+      tmp,
+      un.Budget(max),
+      match,
+    );
   } finally {
     f.closeSync();
   }
@@ -988,13 +1028,14 @@ _Format _sniff(List<int> head) {
 }
 
 final class _Unpacker with Writer {
-  _Unpacker(this._dir, this._password, this._max) {
+  _Unpacker(this._dir, this._password, this._max, this._match) {
     writing[this] = _consume;
   }
 
   final String _dir;
   final String? _password;
   final int? _max;
+  final RegExp? _match;
 
   @override
   Future<void> consume(Stream<List<int>> input) => _consume(input, null);
@@ -1026,7 +1067,7 @@ final class _Unpacker with Writer {
       // never inside it. Use the absolute path so '.' (whose dirname is
       // '.') still gets a sibling outside itself.
       final d = p.normalize(_dir);
-      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))), _max)..run = run;
+      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))), _max, _match)..run = run;
       // An interrupt skips `finally`: the exit hook stops the decoder, then
       // removes the temp folder.
       final token = exit.onExit(() async {

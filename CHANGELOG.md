@@ -5,6 +5,7 @@
 **Added**
 
 - `shell`: `Shell.run(cmd, terminal: true)` runs the child on our terminal (`git commit` opening `$EDITOR`, `ssh`, `dart test` in colour) and keeps `timeout:`, `cancel:` and the kill of its tree on Ctrl-C; the `Output` has the exit code and no text.
+- `archive`: `Archive.unarchive(dir, match: 'bin/*')` lands only the members whose path matches the glob (as `Dir.list(match:)` reads it), with the folders above them; zip and in-Dart 7z/RAR members left out are never decoded.
 
 **Fixed**
 
@@ -64,6 +65,7 @@
 
 **Changed**
 
+- `archive`: `Archive.unarchive` replaces a file or link already at a member's path, like `unzip -o` and `tar -x` (it kept the old file and dropped the member); a link there is replaced, never written through.
 - `pool`: `retries:` retries every exception except a bug (`Error`), bad data (`ContentException`/`FormatException`), TLS, an HTTP 4xx other than 408/429, a `SessionException`, an `HttpRequestException` and a refused SOCKS login or ruleset: a shell's `ExitException`, a 5xx `HttpStatusException` and a `BrowserException` were never retried. The http client no longer retries a refused SOCKS login either.
 - `video`/`image`: an ffmpeg/ffprobe failure reading a URL over the network (refused, reset, unresolved, a 5xx) is a `SocketException` instead of a `ContentException`; a pinned tool download that fails for lack of network is an `HttpException`; a 7-Zip failure from a full disk or a permission is a `FileSystemException` instead of "corrupt archive".
 

@@ -657,15 +657,17 @@ await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.lo
 enum ArchiveFormat { zip, tar, tgz, sevenzip }   // what archive writes; unarchive also reads RAR, .tar.xz/.bz2/.zst/.Z, cab, ar, xar
 abstract final class Archive {
   static Reader archive(List<String> paths, {ArchiveFormat format = .zip, String dir = '.', String? password}); // files and folders, named relative to dir
-  static Writer unarchive(String dir, {String? password, int? max}); // format from the magic bytes; max: bytes written
+  static Writer unarchive(String dir, {String? password, int? max, String? match}); // format from the magic bytes; max: bytes written; match: a glob of members
   static Pipe gzip();  static Pipe gunzip();
 }
 ```
 
 - `unarchive` checks every member first: absolute paths and `..` escapes are a
   `FormatException`. It then extracts into a temp sibling and moves the members into `dir`,
-  **merging with what is already there and never replacing it** (an existing file keeps its
-  content and mode; that member is dropped). File modes and mtimes are kept, so executables
+  merging with what is already there: a member replaces a file or link at its path (like
+  `unzip -o`; renamed over it, never written through a link), other files stay. `match:` lands
+  only the members whose path matches the glob, read as `Dir.list(match:)` reads it (`'bin/*'`,
+  `'**/*.so'`), with the folders above them. File modes and mtimes are kept, so executables
   still run. A symlink is kept when it resolves inside `dir` (through the archive's own links);
   a hardlink lands as a copy of its member; any other link fails by name. Damaged archives, bad
   checksums (zip CRC, RAR5 BLAKE2sp, 7z header CRC) and truncated RAR are a `ContentException`
@@ -689,6 +691,7 @@ abstract final class Archive {
 
 ```dart
 await (http.get(releaseUrl) > Archive.unarchive('vendor'));
+await (http.get(releaseUrl) > Archive.unarchive('opt', match: 'tool-*/bin/*'));   // just the binaries
 await http.put(uploadUrl, body: .stream(Archive.archive(['.'], dir: 'site', format: .zip)));
 ```
 

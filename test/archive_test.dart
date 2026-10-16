@@ -1044,16 +1044,63 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       expect(await Fs.file(p('out/c.txt')).text(), 'abc');
     });
 
-    test('existing files are kept: a member at the same path is dropped', () async {
+    test('M4: existing files are replaced, like unzip -o', () async {
       await Fs.file(p('src/a.txt')).write('NEW');
       await Fs.file(p('src/b.txt')).write('NEW');
       await Fs.file(p('out/a.txt')).write('OLD');
-      if (!Platform.isWindows) await Process.run('chmod', ['600', p('out/a.txt')]);
+      await Fs.file(p('out/c.txt')).write('MINE');
       await (Archive.archive(['.'], dir: p('src')) > Archive.unarchive(p('out')));
-      expect(await Fs.file(p('out/a.txt')).text(), 'OLD');
+      expect(await Fs.file(p('out/a.txt')).text(), 'NEW');
       expect(await Fs.file(p('out/b.txt')).text(), 'NEW');
-      if (!Platform.isWindows) expect((await io.File(p('out/a.txt')).stat()).mode & 0x1FF, 0x180);
+      expect(await Fs.file(p('out/c.txt')).text(), 'MINE');
       expect((await Fs.dir(tmp.path).list()).map((e) => e.name()).where((n) => n.startsWith('.out')), isEmpty);
+    });
+
+    test('M4: a link in the target is replaced by the member, never written through', () async {
+      if (Platform.isWindows) return markTestSkipped('POSIX links');
+      await Fs.file(p('outside.txt')).write('SAFE');
+      await Fs.dir(p('out')).create();
+      await io.Link(p('out/a.txt')).create(p('outside.txt'));
+      final tar = [..._tarBlock('a.txt', 3, 0x30), ..._tarBody('NEW'.codeUnits), ...List.filled(1024, 0)];
+      await Archive.unarchive(p('out')).consume(Stream.value(tar));
+      expect(FileSystemEntity.isLinkSync(p('out/a.txt')), isFalse);
+      expect(await Fs.file(p('out/a.txt')).text(), 'NEW');
+      expect(await Fs.file(p('outside.txt')).text(), 'SAFE');
+    });
+
+    test('M4: match: extracts only the members whose path matches, as Dir.list(match:) does', () async {
+      await Fs.file(p('src/bin/tool')).write('T');
+      await Fs.file(p('src/bin/sub/deep')).write('D');
+      await Fs.file(p('src/README.md')).write('R');
+      await Fs.file(p('src/lib/a.txt')).write('A');
+      for (final format in [ArchiveFormat.zip, ArchiveFormat.tgz]) {
+        final out = p('out-${format.name}');
+        await (Archive.archive(['.'], dir: p('src'), format: format) > Archive.unarchive(out, match: 'bin/*'));
+        final got = [for (final e in await Fs.dir(out).list(match: '**')) e.relative(Fs.dir(out))];
+        // The folder bin/sub matches too, so it lands, empty: its file does not.
+        expect(got, ['bin', 'bin/sub', 'bin/tool'], reason: format.name);
+        final any = p('any-${format.name}');
+        await (Archive.archive(['.'], dir: p('src'), format: format) > Archive.unarchive(any, match: '**/*.{md,txt}'));
+        final txt = [for (final e in await Fs.dir(any).list(match: '**')) e.relative(Fs.dir(any))];
+        expect(txt, ['README.md', 'lib', 'lib/a.txt'], reason: format.name);
+      }
+    });
+
+    test('M4: a matched hardlink lands even when its target is not matched', () async {
+      final tar = [
+        ..._tarBlock('pkg/real.bin', 3, 0x30),
+        ..._tarBody('abc'.codeUnits),
+        ..._tarLink('pkg/bin/copy', 'pkg/real.bin', typeflag: 0x31),
+        ..._tarLink('pkg/other', 'real.bin'),
+        ...List.filled(1024, 0),
+      ];
+      await Archive.unarchive(p('out'), match: 'pkg/bin/*').consume(Stream.value(tar));
+      expect(await Fs.file(p('out/pkg/bin/copy')).text(), 'abc');
+      expect(await Fs.entry(p('out/pkg/real.bin')), isNull);
+      expect(await Fs.entry(p('out/pkg/other')), isNull);
+      final zipped = await Archive.archive(['.'], dir: p('out')).bytes();
+      await Archive.unarchive(p('again'), match: 'nothing').consume(Stream.value(zipped));
+      expect(await Fs.dir(p('again')).list(), isEmpty);
     });
 
     test('zip entries carry the file\'s modified time', () async {
@@ -1086,7 +1133,7 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       }
     });
 
-    test('a target that is a link merges into its folder and keeps what was there', () async {
+    test('a target that is a link merges into its folder and keeps the folders there', () async {
       if (Platform.isWindows) return markTestSkipped('POSIX modes');
       await Fs.file(p('src/secret.txt')).write('member');
       await Fs.dir(p('src/sub')).create();
@@ -1098,8 +1145,8 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       await Process.run('chmod', ['700', p('real/sub')]);
       await Process.run('ln', ['-s', p('real'), p('link')]);
       await Archive.unarchive(p('link')).consume(Stream.value(tar));
-      expect(await Fs.file(p('real/secret.txt')).text(), 'original');
-      expect((await FileStat.stat(p('real/secret.txt'))).mode & 0x1ff, 0x180);
+      expect(await Fs.file(p('real/secret.txt')).text(), 'member');
+      expect(FileSystemEntity.isLinkSync(p('link')), isTrue);
       expect((await FileStat.stat(p('real/sub'))).mode & 0x1ff, 0x1c0);
     });
 

@@ -62,7 +62,7 @@ T guard<T>(String what, T Function() body) {
 /// decoded and written in turn (any damage it hits named after it), links
 /// last; every byte written is taken from [budget]. Returns the modes to
 /// set.
-Modes unpackEntries(List<Entry> entries, String tmp, Budget budget) {
+Modes unpackEntries(List<Entry> entries, String tmp, Budget budget, [RegExp? match]) {
   final folded = <String, String>{};
   final links = <Link>[];
   for (final e in entries) {
@@ -72,11 +72,24 @@ Modes unpackEntries(List<Entry> entries, String tmp, Budget budget) {
       links.add((name: e.name, target: target, hard: e.kind == Kind.hardlink));
     }
   }
+  // With [match], files left out are never decoded; a matched hardlink's
+  // target stays (it lands as a copy of it), and the caller prunes the
+  // rest. Symlinks all land: they cost nothing and resolve each other.
+  bool Function(Entry)? skip;
+  if (match != null) {
+    bool hit(String name) => match.hasMatch(segments(name).join('/'));
+    links.removeWhere((l) => l.hard && !hit(l.name));
+    final needed = {
+      for (final l in links)
+        if (l.hard) segments(l.target).join('/'),
+    };
+    skip = (e) => e.kind == Kind.file && !hit(e.name) && !needed.contains(segments(e.name).join('/'));
+  }
   final Modes modes = [];
   final written = <String>{};
   final made = <String>{tmp};
   for (final e in entries) {
-    if (e.kind == Kind.symlink || e.kind == Kind.hardlink) continue;
+    if (e.kind == Kind.symlink || e.kind == Kind.hardlink || (skip?.call(e) ?? false)) continue;
     final dest = destIn(tmp, e.name);
     if (dest == null) continue;
     final parent = p.dirname(dest);
@@ -228,7 +241,7 @@ Modes placeLinks(String tmp, List<Link> links, Modes modes, Budget budget) {
 /// every link, the rest (not there yet) normalised as written.
 String _real(String path) {
   final tail = <String>[];
-  for (var head = path;; head = p.dirname(head)) {
+  for (var head = path; ; head = p.dirname(head)) {
     try {
       return p.normalize(p.joinAll([io.File(head).resolveSymbolicLinksSync(), ...tail.reversed]));
     } on io.FileSystemException {
