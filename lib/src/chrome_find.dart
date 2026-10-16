@@ -3,7 +3,7 @@
 /// than a full Chrome), else an installed Chrome or Chromium, else Chrome
 /// for Testing downloaded once per machine.
 ///
-/// The download runs in an isolate spawned from `chrome_fetch.dart`, so a
+/// The download runs in an isolate spawned from `fetch.dart`, so a
 /// chrome script never compiles http and archive at startup.
 library;
 
@@ -123,7 +123,7 @@ Future<String> _testingChrome({required bool headless}) async {
     final String? failed;
     try {
       final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
-      failed = await fetchInIsolate('chrome_fetch.dart', [url, _sha256['$kind $platform']!, dir], label: '$kind for $platform');
+      failed = await fetchInIsolate('fetch.dart', [url, _sha256['$kind $platform']!, 'app', dir], label: '$kind for $platform');
     } on UnsupportedError catch (e) {
       throw BrowserException(
         'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '

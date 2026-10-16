@@ -191,12 +191,12 @@ Future<void> _download(Tool t, String target) async {
   });
 }
 
-/// Download [build] in `tool_fetch.dart`'s isolate (see
+/// Download [build] in `fetch.dart`'s isolate (see
 /// [cache.fetchInIsolate]); a compiled exe asks for the tool on PATH.
 Future<void> _fetch(_Build build, String dir, String name) async {
   final String? failed;
   try {
-    failed = await cache.fetchInIsolate('tool_fetch.dart', [
+    failed = await cache.fetchInIsolate('fetch.dart', [
       build.url,
       build.sha256,
       build.member == null ? 'raw' : 'zip',

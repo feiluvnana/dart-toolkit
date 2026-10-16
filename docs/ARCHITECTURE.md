@@ -13,7 +13,7 @@ yaml ─────────────── json, src/names, src/yaml_par
 pool ─────────────── core, src/format, src/progress, src/rate, src/retry
 fs ───────────────── core, src/exit, src/format, src/glob, src/names, src/posix, src/progress, src/tree (+path)
 shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/timeout
-archive ──────────── core, shell, src/exit, src/format, src/posix, src/progress, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
+archive ──────────── src/tar (part file) → core, shell, src/exit, src/format, src/posix, src/progress, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
 http ─────────────── core, src/charset, src/cookies, src/origin, src/posix, src/rate, src/resume, src/retry, src/timeout
 html ─────────────── json, src/dom, src/html_parser, src/selector
 image ────────────── core, src/media, src/pixels (+path)
@@ -27,14 +27,14 @@ src/media ── shell, src/cache, src/posix, src/quiet, src/tool        src/too
 src/chrome_find ── src/cache, src/cdp        src/cache ── src/download_line (+path): the user cache and fetchInIsolate
 src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
 src/progress ── src/format: Probe, Task, Meter and the private run that feeds them
-src/tool_fetch, src/chrome_fetch ── archive, http, hash (+fs): spawned by URI, never imported
+src/fetch ── archive, http, hash, fs: spawned by URI, never imported
 src/unpack ── names (+path): member checks and link placement shared by every extraction
-src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── bridge, format, sanitize, winconsole
+src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── bridge, format, sanitize, width, keys_decode, winconsole
 src/logbook ── SDK only: every Console.log line, which console writes and tui's Region.log draws
 src/zip, src/xz ── aes, bcj, crc32, lzma (+crypto)   src/sevenzip, src/rar ── aes, bcj, budget, crc32, lzma, ppmd, zip (+crypto)
 ```
 
-No import cycles between modules. Cross-module edges are the compositions the API promises: `chrome → html` (a page's `html()`/`json()`), `html → json` (`Elements.json()`), `yaml → json` (a YAML document is a `Json`), `video → image` (`frame()`). `archive → shell` runs 7-Zip. The one-time downloads (`src/tool_fetch`, `src/chrome_fetch`) need http and archive, so they run in an isolate spawned by URI (`src/cache.dart` `fetchInIsolate`): a deferred import still compiles them at startup under `dart run`. The 7z/RAR/xz decoders stay imported by `archive`: a URI isolate per extraction would cost 240–380 ms each time (PLAN.md O2).
+No import cycles between modules. Cross-module edges are the compositions the API promises: `chrome → html` (a page's `html()`/`json()`), `html → json` (`Elements.json()`), `yaml → json` (a YAML document is a `Json`), `video → image` (`frame()`). `archive → shell` runs 7-Zip. The one-time downloads (`src/fetch`) need http and archive, so they run in an isolate spawned by URI (`src/cache.dart` `fetchInIsolate`): a deferred import still compiles them at startup under `dart run`. The 7z/RAR/xz decoders stay imported by `archive`: a URI isolate per extraction would cost 240–380 ms each time (PLAN.md O2).
 
 ## Startup per module
 

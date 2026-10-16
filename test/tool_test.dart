@@ -7,10 +7,9 @@ import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/cache.dart' as cache;
-import 'package:dart_toolkit/src/chrome_fetch.dart' as chrome;
 import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/src/tool.dart' as tool;
-import 'package:dart_toolkit/src/tool_fetch.dart' as fetch;
+import 'package:dart_toolkit/src/fetch.dart' as fetch;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -66,17 +65,17 @@ void main() {
 
   Future<Directory> fresh(String name) => Directory('${tmp.path}/$name').create(recursive: true);
 
-  group('T1: tool_fetch', () {
+  group('T1: fetch', () {
     test('unpacks a zip whose sha256 matches', () async {
       final dir = await fresh('ok');
-      await fetch.fetch('$url/tool.zip', sha(served['/tool.zip']!), raw: false, dir: dir.path, name: 'tool');
+      await fetch.fetch('$url/tool.zip', sha(served['/tool.zip']!), 'zip', dir.path);
       expect(await io.File('${dir.path}/bin/tool').readAsString(), contains('echo hi'));
     });
 
     test('a zip that does not match its sha256 unpacks nothing', () async {
       final dir = await fresh('bad');
       await expectLater(
-        fetch.fetch('$url/tool.zip', '0' * 64, raw: false, dir: dir.path, name: 'tool'),
+        fetch.fetch('$url/tool.zip', '0' * 64, 'zip', dir.path),
         throwsA(isA<ContentException>()),
       );
       expect(dir.listSync(recursive: true), isEmpty);
@@ -85,22 +84,22 @@ void main() {
     test('a raw download is written only when its sha256 matches', () async {
       final dir = await fresh('raw');
       await expectLater(
-        fetch.fetch('$url/raw', '0' * 64, raw: true, dir: dir.path, name: 'tool'),
+        fetch.fetch('$url/raw', '0' * 64, 'raw', dir.path, name: 'tool'),
         throwsA(isA<ContentException>()),
       );
       expect(dir.listSync(), isEmpty);
-      await fetch.fetch('$url/raw', sha(served['/raw']!), raw: true, dir: dir.path, name: 'tool');
+      await fetch.fetch('$url/raw', sha(served['/raw']!), 'raw', dir.path, name: 'tool');
       expect(await io.File('${dir.path}/tool').readAsString(), 'raw tool');
     });
 
     test('A3: the isolate reports a failure as text, success as null', () async {
       final dir = await fresh('iso');
       expect(
-        await cache.fetchInIsolate('tool_fetch.dart', ['$url/missing', '0' * 64, 'raw', dir.path, 'tool'], label: 'tool'),
+        await cache.fetchInIsolate('fetch.dart', ['$url/missing', '0' * 64, 'raw', dir.path, 'tool'], label: 'tool'),
         contains('404'),
       );
       expect(
-        await cache.fetchInIsolate('tool_fetch.dart', ['$url/raw', sha(served['/raw']!), 'raw', dir.path, 't'], label: 't'),
+        await cache.fetchInIsolate('fetch.dart', ['$url/raw', sha(served['/raw']!), 'raw', dir.path, 't'], label: 't'),
         isNull,
         reason: 'progress messages come first, then the answer',
       );
@@ -116,11 +115,11 @@ void main() {
 
   test('S13: a Chrome zip unpacks only when it matches its pinned sha256', () async {
     final bad = '${tmp.path}/cft/bad';
-    await expectLater(chrome.fetch('$url/tool.zip', '0' * 64, bad), throwsA(isA<ContentException>()));
+    await expectLater(fetch.fetch('$url/tool.zip', '0' * 64, 'app', bad), throwsA(isA<ContentException>()));
     expect(Directory(bad).existsSync(), isFalse);
     expect(Directory('${tmp.path}/cft').listSync().where((e) => e.path.contains('.tmp-')), isEmpty);
     final good = '${tmp.path}/cft/good';
-    await chrome.fetch('$url/tool.zip', sha(served['/tool.zip']!), good);
+    await fetch.fetch('$url/tool.zip', sha(served['/tool.zip']!), 'app', good);
     expect(await io.File('$good/bin/tool').readAsString(), contains('echo hi'));
   });
 
