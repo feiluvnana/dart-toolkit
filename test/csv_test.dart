@@ -76,6 +76,32 @@ void streaming() {
     expect(() => Csv.parse('a', sep: ''), throwsArgumentError);
   });
 
+  test('encode writes a lone empty cell as "" so the row round-trips (B21)', () {
+    expect(
+      Csv.encode([
+        ['a'],
+        [''],
+        [null],
+        ['b'],
+      ]),
+      'a\r\n""\r\n""\r\nb\r\n',
+    );
+    expect(
+      Csv.parse(
+        Csv.encode([
+          ['a'],
+          [''],
+          ['b'],
+        ]),
+      ),
+      [
+        ['a'],
+        [''],
+        ['b'],
+      ],
+    );
+  });
+
   test('reader.rows() streams rows across chunk boundaries', () async {
     const text = '﻿a,"b ""q"""\r\n"multi\nline",2\r\n\r\nx,y';
     final whole = Csv.parse(text);

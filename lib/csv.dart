@@ -45,7 +45,8 @@ abstract final class Csv {
   }
 
   /// [rows] as CSV text with CRLF line ends. A null cell is empty; a field
-  /// holding [sep], a quote, a newline or edge spaces is quoted.
+  /// holding [sep], a quote, a newline or edge spaces is quoted, and so is
+  /// a row's only cell when empty (a bare blank line is no row).
   static String encode(List<List<Object?>> rows, {String sep = ','}) {
     final out = StringBuffer();
     for (final row in rows) {
@@ -53,6 +54,7 @@ abstract final class Csv {
         if (k > 0) out.write(sep);
         final f = '${cell ?? ''}';
         final quote =
+            (f.isEmpty && row.length == 1) ||
             f.contains(sep) ||
             f.contains('"') ||
             f.contains('\n') ||

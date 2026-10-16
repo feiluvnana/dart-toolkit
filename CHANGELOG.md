@@ -21,6 +21,7 @@
 - `image`/`video`/`archive`: Ctrl-C during `Image.compress`/`Video.compress` no longer leaves a hidden `.name.compress` beside the file, nor a 7z `Archive.archive` its `dart_toolkit_7z_*` work folder.
 - `chrome`: `page.run(js)` (and `html()`/`text()`) gives up on a promise that never settles with a `TimeoutException` after the page's `open(timeout:)` (default 30 s); it waited forever and kept the script alive.
 - `video`: with `Video.open(url, headers:)`, an upstream failure (refused, unresolved, TLS) surfaces as itself naming the source URL, instead of ffmpeg's bare 502 against the loopback proxy's URL.
+- `csv`: `Csv.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
 
 **Performance**
 
