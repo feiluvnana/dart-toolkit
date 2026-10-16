@@ -427,7 +427,7 @@ final class Command {
       io.stderr.writeln('Run "${parsed.fullName} --help" for usage.');
       return 64;
     } on Exception catch (e) {
-      io.stderr.writeln(_oneLine(_failure(e)));
+      io.stderr.writeln(_lines(_failure(e)));
       return 1;
     }
   }
@@ -711,7 +711,7 @@ Duration? _parseDuration(String raw) {
   return negative ? -parsed : parsed;
 }
 
-/// A failure as one line: a toolkit error's message (not the SDK type's
+/// A failure's message: a toolkit error's message (not the SDK type's
 /// `toString`, which adds `uri = …` or a source excerpt), a plain
 /// `Exception('…')` without its prefix, anything else as it prints.
 String _failure(Exception e) => switch (e) {
@@ -721,6 +721,10 @@ String _failure(Exception e) => switch (e) {
 
 /// The first line of [s], controls shown as `�`: messages quote argv.
 String _oneLine(String s) => term.plainLabel(s.split('\n').first.trim());
+
+/// Every line of [s] (a tool's stderr is often after the first), each with
+/// controls shown as `�`.
+String _lines(String s) => s.trimRight().split('\n').map((l) => term.plainLabel(l.trimRight())).join('\n');
 
 Command? _findSub(List<Command> commands, String token) {
   for (final c in commands) {

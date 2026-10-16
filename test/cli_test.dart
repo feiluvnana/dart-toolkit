@@ -469,6 +469,12 @@ void main() {
   });
 
   group('messages', () {
+    test('B3: a failing handler prints every line of its error, controls inert', () async {
+      final cli = Command('app', 'X.', handler: (_) => throw Exception('rsync failed\nerror: disk full\x1b[2J\n'));
+      final err = await fails(cli, [], 1);
+      expect(err, 'rsync failed\nerror: disk full\uFFFD[2J\n');
+    });
+
     test('a bad value with escapes is quoted inert', () async {
       final r = await runDart(
         '''

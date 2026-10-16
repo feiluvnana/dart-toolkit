@@ -682,7 +682,7 @@ final class UsageException extends ToolkitException { const UsageException(Strin
 - **Errors:**
   - Usage errors print one line, plus `Run "<cmd> --help" for usage.` naming the deepest command,
     and exit 64. Unknown names suggest the closest option or command name.
-  - A handler's `UsageException` is a 64, and any other `Exception` prints one line and is a 1:
+  - A handler's `UsageException` is a 64, and any other `Exception` prints its message (every line) and is a 1:
     a toolkit error prints its `message`, a plain `Exception('…')` prints without the prefix, so
     `throw Exception('User not found')` is how a script fails.
   - An `Error` (a bug) propagates with its stack trace.
