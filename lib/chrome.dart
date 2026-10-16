@@ -234,10 +234,14 @@ abstract final class Chrome {
     try {
       var ws = url;
       if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-        final client = io.HttpClient()..connectionTimeout = _defaultTimeout;
+        final client = io.HttpClient();
         try {
-          final res = await (await client.getUrl(Uri.parse(url).resolve('/json/version'))).close();
-          final body = await res.transform(utf8.decoder).join().timeout(_defaultTimeout);
+          // One bound over connect, request and body: an endpoint that
+          // accepts and never answers fails too.
+          final body = await () async {
+            final res = await (await client.getUrl(Uri.parse(url).resolve('/json/version'))).close();
+            return res.transform(utf8.decoder).join();
+          }().timeout(_defaultTimeout);
           ws = (jsonDecode(body) as Map<String, Object?>)['webSocketDebuggerUrl']! as String;
         } finally {
           client.close(force: true);

@@ -10,6 +10,7 @@
 - `core`: a `Rate` shared by a `Pool` and an `Http.client` never lets more than its count start in one window (a start that waited could drop a live one from the window), and a start cancelled by a closed client or a failed `Pool.map` no longer counts.
 - `yaml`: a one-line flow document (minified JSON read as YAML) parses in linear time; 230 KB took 7 s.
 - `html`: `form()` reads the controls a browser posts: a form wrapped in a table (whose controls the parser places after it) and `form="id"` controls elsewhere in the page no longer give `fields: {}`.
+- `chrome`: `Chrome.connect` to an endpoint that accepts and never answers fails with a `BrowserException` after 30 s instead of hanging.
 
 **Changed**
 

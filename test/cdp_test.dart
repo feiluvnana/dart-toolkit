@@ -127,6 +127,26 @@ void main() {
     await expectLater(next, throwsA(isA<TypeError>()));
   });
 
+  test(
+    'connect to an endpoint that accepts and never answers fails within 30 s (B9)',
+    () async {
+      final silent = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final held = <Socket>[];
+      silent.listen(held.add); // accepts, never answers
+      addTearDown(() async {
+        for (final s in held) {
+          s.destroy();
+        }
+        await silent.close();
+      });
+      final sw = Stopwatch()..start();
+      await expectLater(Chrome.connect('http://127.0.0.1:${silent.port}'), throwsA(isA<BrowserException>()));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 35)));
+    },
+    tags: ['slow'],
+    timeout: const Timeout(Duration(seconds: 50)),
+  );
+
   test('B12: connect and launch failures are BrowserExceptions that say why', () async {
     await expectLater(
       Chrome.connect('http://127.0.0.1:1'),
