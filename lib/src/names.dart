@@ -37,22 +37,23 @@ String safeName(String name) {
 /// The last path segment of `a/b\\c`, made portable by [safeName]. Empty
 /// when nothing usable is left (callers fall back to `download`/`upload`).
 /// Used for header filenames and upload staging alike.
-String stripPath(String name) {
-  final parts = name.split(_separator);
-  return safeName(parts.isEmpty ? name : parts.last);
-}
+String stripPath(String name) => safeName(name.split(_separator).last);
 
 final _separator = RegExp(r'[\\/]');
 
 final _unsafe = RegExp(r'[\\/<>:"|?*\x00-\x1f\x7f]');
 final _trailing = RegExp(r'[. ]+$');
+
 /// A Windows device name, with or without an extension: `CON`, `PRN`,
 /// `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9` (superscript ¹²³ too),
 /// `CONIN$`, `CONOUT$`; spaces before the extension do not help
 /// (`nul .txt`).
 bool isReserved(String name) => _reserved.hasMatch(name);
 
-final _reserved = RegExp(r'^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\..*)?$', caseSensitive: false);
+final _reserved = RegExp(
+  r'^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\..*)?$',
+  caseSensitive: false,
+);
 
 /// [url] fit for an error message or log: no `user:password@`, and the
 /// values of credential query parameters shown as `***`. Only exact secret

@@ -54,7 +54,7 @@ Modes unpackEntries(List<Entry> entries, String tmp) {
       links.add((name: e.name, target: target, hard: e.kind == Kind.hardlink));
     }
   }
-  final modes = <(String, int, bool)>[];
+  final Modes modes = [];
   final written = <String>{};
   final made = <String>{tmp};
   for (final e in entries) {
@@ -96,7 +96,9 @@ List<String> segments(String path) => [
 ];
 
 /// An absolute path on any OS: `/x`, `\x`, `C:`.
-bool absolute(String path) => path.startsWith('/') || path.startsWith('\\') || RegExp(r'^[A-Za-z]:').hasMatch(path);
+bool absolute(String path) => path.startsWith('/') || path.startsWith('\\') || _drive.hasMatch(path);
+
+final _drive = RegExp(r'^[A-Za-z]:');
 
 /// The member path [parts] lead to from the root, following every symlink
 /// of the archive ([symlinks], name to target) on the way, as the OS would
@@ -137,7 +139,7 @@ Modes placeLinks(String tmp, List<Link> links, Modes modes) {
     for (final l in links)
       if (!l.hard) segments(l.name).join('/'): l.target,
   };
-  final out = <(String, int, bool)>[];
+  final Modes out = [];
   final planned = <(Link, String, List<String>)>[];
   for (final l in links) {
     final at = segments(l.name);

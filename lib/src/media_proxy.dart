@@ -104,8 +104,7 @@ final class _Proxy {
           target.path.endsWith('.m3u8') ||
           target.path.endsWith('.mpd');
       if (manifest) {
-        final text = _rewrite(await utf8.decoder.bind(up).join());
-        res.write(text);
+        res.write(_rewrite(await utf8.decoder.bind(up).join()));
       } else {
         if (up.contentLength >= 0) res.contentLength = up.contentLength;
         await res.addStream(up);

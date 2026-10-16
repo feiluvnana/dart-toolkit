@@ -101,9 +101,8 @@ String? testingPlatform() => switch (Abi.current()) {
 /// downloaded on first use: once per process (a memoized future) and one
 /// process at a time (a file lock).
 Future<String> testingChrome({required bool headless}) {
-  final key = headless;
-  return _fetching[key] ??= _testingChrome(headless: headless).catchError((Object e) {
-    _fetching.remove(key); // a failed download may be retried
+  return _fetching[headless] ??= _testingChrome(headless: headless).catchError((Object e) {
+    _fetching.remove(headless); // a failed download may be retried
     throw e;
   });
 }

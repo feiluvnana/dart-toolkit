@@ -1410,24 +1410,21 @@ final class _TarMeta {
       if (records.keys.any((k) => k.startsWith('GNU.sparse.'))) {
         throw ContentException('sparse tar member unsupported: ${records['GNU.sparse.name'] ?? records['path']}');
       }
+      final renamed = records['path'];
+      final named = renamed != null && renamed.isNotEmpty;
+      if (flag == 0x67) {
+        if (named) globalPath = renamed;
+        return;
+      }
+      if (named) path = renamed;
       final linkpath = records['linkpath'];
-      if (flag == 0x78 && linkpath != null && linkpath.isNotEmpty) link = linkpath;
+      if (linkpath != null && linkpath.isNotEmpty) link = linkpath;
       final secs = double.tryParse(records['mtime'] ?? '');
-      if (flag == 0x78 && secs != null && secs.isFinite && secs.abs() < 8e12) {
+      if (secs != null && secs.isFinite && secs.abs() < 8e12) {
         mtime = DateTime.fromMillisecondsSinceEpoch((secs * 1000).round());
       }
-      final renamed = records['path'];
-      if (renamed != null && renamed.isNotEmpty) {
-        if (flag == 0x78) {
-          path = renamed;
-        } else {
-          globalPath = renamed;
-        }
-      }
-      if (flag == 0x78) {
-        final sz = int.tryParse(records['size'] ?? '');
-        if (sz != null && sz >= 0) _size = sz;
-      }
+      final sz = int.tryParse(records['size'] ?? '');
+      if (sz != null && sz >= 0) _size = sz;
     } else if (flag == 0x4c || flag == 0x4b) {
       // GNU long name or link name: the data is the next entry's.
       var text = utf8.decode(data, allowMalformed: true);
