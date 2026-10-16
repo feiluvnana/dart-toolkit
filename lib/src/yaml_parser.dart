@@ -5,6 +5,8 @@
 /// multi-document streams. Read only. Private to the toolkit.
 library;
 
+import 'dart:collection';
+
 /// A YAML syntax error at [offset] (into the text as given).
 final class YamlError implements Exception {
   YamlError(this.message, this.offset);
@@ -33,6 +35,9 @@ final class _Parser {
   var i = 0;
   var _depth = 0;
   final _anchors = <String, Object?>{};
+
+  /// How many levels each collection reached through an alias holds.
+  final _heights = HashMap<Object, int>.identity();
 
   int get n => s.length;
 
@@ -164,6 +169,30 @@ final class _Parser {
   }
 
   bool _dash(int at) => _c(at) == 0x2D && _blankAt(at + 1);
+
+  /// How many levels of collections [v] holds, without recursion; shared
+  /// (aliased) collections are measured once.
+  int _height(Object? v) {
+    if (v is! List && v is! Map) return 0;
+    final stack = <(Object, bool)>[(v!, false)];
+    while (stack.isNotEmpty) {
+      final (node, done) = stack.removeLast();
+      final children = node is List ? node : (node as Map).values;
+      if (done) {
+        var h = 0;
+        for (final c in children) {
+          if (c is List || c is Map) h = h > _heights[c]! ? h : _heights[c]!;
+        }
+        _heights[node] = h + 1;
+      } else if (!_heights.containsKey(node)) {
+        stack.add((node, true));
+        for (final c in children) {
+          if ((c is List || c is Map) && !_heights.containsKey(c)) stack.add((c!, false));
+        }
+      }
+    }
+    return _heights[v]!;
+  }
 
   /// The node starting at [i] (a content character).
   Object? _node(int indent, {required bool seqAtParent, required bool mapOk}) {
@@ -396,7 +425,10 @@ final class _Parser {
     if (c == 0x2A) {
       final name = _name(i + 1, 'alias');
       if (!_anchors.containsKey(name)) throw _error('undefined alias "*$name"', start);
-      return _Candidate(start, _anchors[name], flow: true);
+      final v = _anchors[name];
+      // An alias pastes its node in: nested aliases multiply depth.
+      if (_depth + _height(v) > _maxDepth) throw _error('nested too deep (through aliases)', start);
+      return _Candidate(start, v, flow: true);
     }
     if (c == 0x22 || c == 0x27) {
       final v = c == 0x22 ? _double() : _single();

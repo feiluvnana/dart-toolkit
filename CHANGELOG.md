@@ -39,6 +39,7 @@
 - `archive`: `Archive.unarchive(dir, max:)` caps the bytes an extraction writes, hardlink copies included; past it the unpack fails with a `ContentException` and nothing lands (a 10 MB `.tar.gz` of zeros writes 10 GB without it).
 - `html`: hostile markup no longer costs quadratic time: the tree is at most 512 deep (deeper elements land beside the 512th, as in Chromium), misnested formatting (`<a><b>x</a>` × 160,000) parses in 0.2 s instead of 6.2 s, and `:has()` tries only the elements its combinators reach (`li:has(+ .z)` looks at one sibling; `div:has(a)` on 100,000 nested divs 165 s → 1.2 s).
 - `http`: a plain-http reply can no longer replace or shadow a `Secure` cookie (RFC 6265bis), and `Domain=` is refused on more shared names: `blogspot.*`, AWS's shared S3/compute hosts, CentralNic's `uk.com`-style names, Japan's prefecture registries (`tokyo.jp`) and country codes that register only below a category (`co.za`, `com.br`). A heuristic, no Public Suffix List.
+- `json`/`yaml`: a document nested deeper than 1,000 levels is a `ContentException` at parse (`Json.parse`, `reader.json()`, `ndjson()`, and YAML through nested aliases) instead of a `StackOverflowError` later in `toString`/`encode`; the depth scan costs about a tenth of the decode.
 
 **Performance**
 

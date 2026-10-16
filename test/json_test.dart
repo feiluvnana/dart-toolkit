@@ -42,6 +42,17 @@ void main() {
       expect(() => Json.parse('{oops'), throwsFormatException);
       expect(() => Json.parse(''), throwsFormatException);
     });
+
+    test('S8: past 1,000 levels a document is a ContentException, so toString never overflows', () async {
+      String nested(int n) => '${'[{"a":' * n}1${'}]' * n}';
+      expect(Json.parse(nested(500)).toString(), nested(500));
+      final deep = ['${'[' * 1001}${']' * 1001}', nested(600), '"${'[' * 5000}"'];
+      expect(() => Json.parse(deep[0]), throwsA(isA<ContentException>()));
+      expect(() => Json.parse(deep[1]), throwsA(isA<ContentException>()));
+      expect(Json.parse(deep[2]).value<String>(), hasLength(5000)); // brackets in a string are text
+      await expectLater(Mem(deep[0]).json(), throwsA(isA<ContentException>()));
+      await expectLater(Mem('1\n${deep[1]}\n').ndjson().toList(), throwsA(isA<ContentException>()));
+    });
   });
 
   group('Json.encode', () {
@@ -254,13 +265,14 @@ void main() {
       expect(sw.elapsedMilliseconds, lessThan(3000));
     });
   });
-  test('a document deeper than the call stack still queries, compares and hashes', () {
+  test('a value deeper than the call stack still queries, compares and hashes', () {
+    // Json.parse refuses text this deep (S8); a held value may be.
     final deep = '${'[' * 100000}{"x": 1}${']' * 100000}';
-    final a = Json.parse(deep), b = Json.parse(deep);
+    final a = Json.of(jsonDecode(deep)), b = Json.of(jsonDecode(deep));
     expect(a.$('**.x').asList<int>(), [1]);
     expect(a == b, isTrue);
     expect(a.hashCode, b.hashCode);
-    expect(a == Json.parse(deep.replaceFirst('1', '2')), isFalse);
+    expect(a == Json.of(jsonDecode(deep.replaceFirst('1', '2'))), isFalse);
   });
 }
 

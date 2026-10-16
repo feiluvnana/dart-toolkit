@@ -36,13 +36,17 @@ final class Json extends Iterable<Json> {
   final Object? _v;
   List<dynamic>? _valuesCache;
 
-  /// Parse [json]. Throws [ContentException] on invalid JSON.
+  /// Parse [json]. Throws [ContentException] on invalid JSON, and on a
+  /// document nested deeper than 1,000 levels (`toString` would overflow).
   static Json parse(String json) {
+    final Object? v;
     try {
-      return Json._(jsonDecode(json));
+      v = jsonDecode(json);
     } on FormatException catch (e) {
       throw ContentException('invalid JSON: ${e.message}', e.source, e.offset, e);
     }
+    if (_tooDeep(json)) throw const ContentException('invalid JSON: nested deeper than $_maxDepth levels');
+    return Json._(v);
   }
 
   /// Wrap a value you already hold (e.g. a decoded `run` result):
@@ -578,12 +582,15 @@ extension ReaderJson on Reader {
       if (or != null) return or;
       rethrow;
     }
+    final Object? v;
     try {
       // Decodes the bytes directly, without a String in between.
-      return Json._(_utf8Json.convert(bytes));
+      v = _utf8Json.convert(bytes);
     } on FormatException catch (e) {
       throw ContentException('invalid JSON${_from(origin())}: ${e.message}', e.source, e.offset, e);
     }
+    if (_tooDeepBytes(bytes)) throw ContentException('invalid JSON${_from(origin())}: nested deeper than $_maxDepth levels');
+    return Json._(v);
   }
 
   /// NDJSON (JSON Lines): one [Json] per non-blank line, as the lines
@@ -594,13 +601,73 @@ extension ReaderJson on Reader {
     await for (final line in lines()) {
       n++;
       if (line.trim().isEmpty) continue;
+      final Object? v;
       try {
-        yield Json._(jsonDecode(line));
+        v = jsonDecode(line);
       } on FormatException catch (e) {
         throw ContentException('invalid JSON${_from(origin())} at line $n: ${e.message}', e.source, e.offset, e);
       }
+      if (_tooDeep(line)) {
+        throw ContentException('invalid JSON${_from(origin())} at line $n: nested deeper than $_maxDepth levels');
+      }
+      yield Json._(v);
     }
   }
+}
+
+/// How deep a parsed document may nest: `toString` and `encode` recurse,
+/// and overflow the stack a few thousand levels down.
+const _maxDepth = 1000;
+
+/// Whether the JSON text [s] nests deeper than [_maxDepth] (brackets in
+/// strings skipped); a linear scan, a tenth of the decode.
+bool _tooDeep(String s) {
+  if (s.length <= 2 * _maxDepth) return false;
+  var depth = 0;
+  final n = s.length;
+  for (var i = 0; i < n; i++) {
+    final c = s.codeUnitAt(i);
+    if (c == 0x22) {
+      for (i++; i < n; i++) {
+        final d = s.codeUnitAt(i);
+        if (d == 0x5C) {
+          i++;
+        } else if (d == 0x22) {
+          break;
+        }
+      }
+    } else if (c == 0x5B || c == 0x7B) {
+      if (++depth > _maxDepth) return true;
+    } else if (c == 0x5D || c == 0x7D) {
+      depth--;
+    }
+  }
+  return false;
+}
+
+/// [_tooDeep] over UTF-8 [b] (no ASCII byte occurs inside a multibyte one).
+bool _tooDeepBytes(List<int> b) {
+  if (b.length <= 2 * _maxDepth) return false;
+  var depth = 0;
+  final n = b.length;
+  for (var i = 0; i < n; i++) {
+    final c = b[i];
+    if (c == 0x22) {
+      for (i++; i < n; i++) {
+        final d = b[i];
+        if (d == 0x5C) {
+          i++;
+        } else if (d == 0x22) {
+          break;
+        }
+      }
+    } else if (c == 0x5B || c == 0x7B) {
+      if (++depth > _maxDepth) return true;
+    } else if (c == 0x5D || c == 0x7D) {
+      depth--;
+    }
+  }
+  return false;
 }
 
 /// UTF-8 straight into JSON: faster than `text()` + `jsonDecode` (no

@@ -2,6 +2,15 @@ import 'package:dart_toolkit/yaml.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('S8: aliases cannot nest a document past 1,000 levels', () {
+    final b = StringBuffer('a0: &a0 x\n');
+    for (var k = 1; k <= 5; k++) {
+      b.writeln('a$k: &a$k ${'[' * 300}*a${k - 1}${']' * 300}');
+    }
+    expect(() => Yaml.parse(b.toString()), throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('deep'))));
+    expect(Yaml.parse('a: &a [[1]]\nb: [[*a, *a]]').toString(), '{"a":[[1]],"b":[[[[1]],[[1]]]]}');
+  });
+
   test('a document reads like Json: maps, lists, scalars, anchors', () {
     final doc = Yaml.parse('''
 name: app
