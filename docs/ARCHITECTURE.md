@@ -18,8 +18,8 @@ http ─────────────── core, src/charset, src/cookie
 html ─────────────── json, src/dom, src/html_parser, src/selector
 image ────────────── core, src/media, src/pixels (+path)
 cli ──────────────── core, src/sanitize
-console ──────────── core, src/exit, src/format, src/keys, src/progress, src/terminal
-tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/pixels, src/progress, src/terminal
+console ──────────── core, src/exit, src/format, src/keys, src/logbook, src/progress, src/terminal
+tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/logbook, src/pixels, src/progress, src/terminal
 video ────────────── image, src/format, src/media, src/media_proxy, src/progress (+path)
 chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/format, src/glob, src/keys, src/names, src/origin, src/progress (+path)
 
@@ -30,6 +30,7 @@ src/progress ── src/format: Probe, Task, Meter and the private run that feed
 src/tool_fetch, src/chrome_fetch ── archive, http, hash (+fs): spawned by URI, never imported
 src/unpack ── names (+path): member checks and link placement shared by every extraction
 src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── bridge, format, sanitize, winconsole
+src/logbook ── SDK only: every Console.log line, which console writes and tui's Region.log draws
 src/zip, src/xz ── aes, bcj, crc32, lzma (+crypto)   src/sevenzip, src/rar ── aes, bcj, budget, crc32, lzma, ppmd, zip (+crypto)
 ```
 

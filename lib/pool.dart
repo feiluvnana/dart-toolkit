@@ -65,7 +65,11 @@ final class Pool {
 
   /// Run [job] once a lane is free, first come first served, and return
   /// what it returns (or rethrow what it throws). The lane is freed either way.
-  Future<R> run<R>(FutureOr<R> Function() job) async {
+  /// A [Task]: a probe on it (`lanes.run(job) & bar`) shows it waiting, then
+  /// running.
+  Task<R> run<R>(FutureOr<R> Function() job) => task((_) => _lane(job));
+
+  Future<R> _lane<R>(FutureOr<R> Function() job) async {
     if (_free > 0) {
       _free--;
     } else {

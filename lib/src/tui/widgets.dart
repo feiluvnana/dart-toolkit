@@ -970,6 +970,38 @@ extension RegionWidgets on Region {
     return this;
   }
 
+  /// Every live `Console.bar` (and future watched with one), a row each:
+  /// a spinner until it counts, then `label ━━╸── counts  rate`, as
+  /// `Console.bar` draws it. A bar that ended shows its ✓/✗ row for 2 s
+  /// (unless it was `keep: false` and succeeded). Drawing this takes the
+  /// bars out of the status row. [color], [background] and [style] as in
+  /// `write`.
+  Region bars({Color? color, Color? background, Set<Style> style = const {}}) {
+    _s._barsShown = true;
+    final rows = _s._barRows();
+    if (rows.isNotEmpty) _s._spinVisible = true; // spinners and the 2 s ✓ rows need frames
+    return lines(rows.length, (row, i) => row.write(rows[i](row.width()), color: color, background: background, style: style));
+  }
+
+  /// Every `Console.log` line of the run that passes [only], a row each
+  /// with its time; inside a `scroll` that follows, the newest stays in
+  /// view. A failed line (`Console.log(line, failed: true)`) is bold, in
+  /// [failures] when given; others in [color]. Drawing this takes Console's
+  /// lines out of the status row.
+  Region log({
+    bool Function(({DateTime at, String text, bool failed}) line)? only,
+    Color? color,
+    Color? failures,
+  }) {
+    _s._logShown = true;
+    final shown = only == null ? logbook : [for (final l in logbook) if (only(l)) l];
+    return lines(shown.length, (row, i) {
+      final l = shown[i];
+      row.write('${l.at.format('HH:mm:ss')}  ', inline: true, style: {Style.dim});
+      row.write(l.text, color: l.failed ? failures : color, style: l.failed ? {Style.bold} : const {});
+    });
+  }
+
   /// A static spinner snapshot; the frame advances while visible. With
   /// [since], the elapsed time follows the label (`Thinking… (12 s)`, as
   /// `Duration.human()` says it). [color], [background], [style] and [on]

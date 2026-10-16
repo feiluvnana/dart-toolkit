@@ -37,22 +37,26 @@ abstract interface class Watcher {
 final watchers = Expando<Watcher>();
 
 /// The sum of the runs one probe watches, kept incrementally so a probe
-/// shared by thousands of runs costs the same per report as one.
+/// shared by thousands of runs costs the same per report as one. Runs add
+/// up within a unit; the probe shows the unit it heard last, so one bar can
+/// follow a download (bytes) and then its encode (time).
 final class Tally {
-  final _runs = <Object, (int, int?)>{};
-  var _unknown = 0; // open runs whose total is still null
-  var _total = 0;
-  var _ended = 0; // runs that finished
+  final _runs = <Object, (int, int?, Unit)?>{}; // null: begun, nothing reported yet
+  final _sums = <Unit, _Sum>{};
+  var _pending = 0;
   var _failed = 0;
-
-  /// The sum of every run's count.
-  int done = 0;
 
   /// The unit of the last report.
   Unit? unit;
 
-  /// The sum of every run's total; null while one is unknown.
-  int? get total => _unknown > 0 || _runs.isEmpty && _ended == 0 ? null : _total;
+  /// The sum of the counts in [unit].
+  int get done => _sums[unit]?.done ?? 0;
+
+  /// The sum of the totals in [unit]; null while one is unknown.
+  int? get total {
+    final s = _sums[unit];
+    return s == null || _pending > 0 || s.unknown > 0 ? null : s.total;
+  }
 
   /// Runs still open.
   int get open => _runs.length;
@@ -62,41 +66,53 @@ final class Tally {
 
   void begin(Object run) {
     if (_runs.containsKey(run)) return;
-    _runs[run] = (0, null);
-    _unknown++;
+    _runs[run] = null;
+    _pending++;
   }
 
   void report(Object run, int d, int? t, Unit u) {
-    final old = _runs[run];
-    if (old == null) return;
+    if (!_runs.containsKey(run)) return;
+    _take(run);
     unit = u;
-    done += d - old.$1;
-    if (old.$2 == null) {
-      _unknown--;
-    } else {
-      _total -= old.$2!;
-    }
-    if (t == null) {
-      _unknown++;
-    } else {
-      _total += t;
-    }
-    _runs[run] = (d, t);
+    (_sums[u] ??= _Sum()).add(d, t);
+    _runs[run] = (d, t, u);
   }
 
   /// The run is over: a finished one counts as complete (its count, or
-  /// its total when it reported one).
+  /// its total when it reported one); its sum stays.
   void finish(Object run, {required bool ok}) {
-    final old = _runs[run];
-    if (old == null) return;
-    if (ok) report(run, old.$2 ?? old.$1, old.$2 ?? old.$1, unit ?? Unit.items);
-    final (d, t) = _runs.remove(run)!;
-    if (t == null) {
-      _unknown--;
-      _total += d;
-    }
-    _ended++;
+    if (!_runs.containsKey(run)) return;
+    final last = _runs[run];
+    // A failed run without a total counts what it reached as its total. The
+    // shown unit stays the one reported last.
+    final shown = unit;
+    if (last != null) report(run, ok ? last.$2 ?? last.$1 : last.$1, last.$2 ?? last.$1, last.$3);
+    unit = shown;
+    if (_runs.remove(run) == null) _pending--;
     if (!ok) _failed++;
+  }
+
+  /// Take [run]'s last report out of its unit's sum.
+  void _take(Object run) {
+    final last = _runs[run];
+    if (last == null) {
+      _pending--;
+    } else {
+      _sums[last.$3]!.add(-last.$1, last.$2 == null ? null : -last.$2!, undo: true);
+    }
+  }
+}
+
+final class _Sum {
+  var done = 0, total = 0, unknown = 0;
+
+  void add(int d, int? t, {bool undo = false}) {
+    done += d;
+    if (t == null) {
+      unknown += undo ? -1 : 1;
+    } else {
+      total += t;
+    }
   }
 }
 

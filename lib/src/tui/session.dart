@@ -185,7 +185,14 @@ final class _Session<S> implements term.TuiBridge {
   final _suggests = <Field, _Suggest>{};
   _Suggest? _activeSg;
   final _prompts = <_Prompt>[];
-  final _cBars = <Object, term.BarState Function()>{};
+  final _cBars = <Object, ({term.BarState Function() state, bool keep})>{};
+
+  /// Bars that ended, shown as their ✓/✗ row for 2 s by `Region.bars`.
+  final _cDone = <({term.BarState state, bool ok, int at})>[];
+
+  /// Whether the last frame drew `Region.bars`/`Region.log`: Console's bars
+  /// and lines then live there, not in the status row.
+  var _barsShown = false, _logShown = false;
   var _termFocused = true;
   var _focusReported = false; // set by the first focus event
   var _statusY = 23;
@@ -375,6 +382,7 @@ final class _Session<S> implements term.TuiBridge {
 
   /// `✗`, or `x` where the locale is not UTF-8 (as in Console).
   String get _failMark => _caps.ascii ? 'x' : '✗';
+  String get _okMark => _caps.ascii ? '+' : '✓';
 
   /// Handler failures shown in the status row, with their stacks, for
   /// stderr after [_leave] restores the terminal (the last 20).
@@ -432,9 +440,9 @@ final class _Session<S> implements term.TuiBridge {
   // --- term.TuiBridge (Console-in-Tui routing) -----------------------------
 
   @override
-  Object barStarted(term.BarState Function() state) {
+  Object barStarted(term.BarState Function() state, {required bool keep}) {
     final id = Object();
-    _cBars[id] = state;
+    _cBars[id] = (state: state, keep: keep);
     // New work replaces a stale message, so its progress shows.
     _sayMsg = _error = null;
     _dirtyAndWake();
@@ -445,15 +453,40 @@ final class _Session<S> implements term.TuiBridge {
   void barChanged(Object id) => _dirtyAndWake();
 
   @override
-  void log(String line) {
-    _say(line);
+  void log(String line, {required bool failed}) {
+    // Drawn by the screen's Region.log; else the status row says it.
+    _logShown ? _dirtyAndWake() : _say(line);
   }
 
   @override
   void barEnded(Object id, bool ok) {
     final bar = _cBars.remove(id);
-    if (!ok && bar != null) _error = '$_failMark ${bar().label ?? ''}'.trimRight();
+    if (bar != null && _barsShown) {
+      if (bar.keep || !ok) _cDone.add((state: bar.state(), ok: ok, at: _now()));
+    } else if (!ok && bar != null) {
+      _error = '$_failMark ${bar.state().label ?? ''}'.trimRight();
+    }
     _dirtyAndWake();
+  }
+
+  /// The rows `Region.bars` draws, each fitted to a width: the live bars,
+  /// oldest first, then the ones that ended in the last 2 s.
+  List<String Function(int width)> _barRows() {
+    final now = _now();
+    _cDone.removeWhere((d) => now - d.at > 2000);
+    final frames = fmt.spinFrames(ascii: _caps.ascii);
+    return [
+      for (final bar in _cBars.values)
+        if (bar.state() case final b)
+          (w) => b.spinning
+              ? term.truncateWidth('${frames[_spinTick % frames.length]} ${b.label ?? ''}'.trimRight(), w)
+              : term.barLine(w, label: b.label, done: b.done, total: b.total, unit: b.unit, rate: b.rate, ascii: _caps.ascii),
+      for (final d in _cDone)
+        (w) => term.truncateWidth(
+          '${d.ok ? _okMark : _failMark} ${d.state.label ?? ''}  ${fmt.fmtCounts(d.state.done, d.state.total, d.state.unit)}'.trimRight(),
+          w,
+        ),
+    ];
   }
 
   @override
@@ -1061,6 +1094,7 @@ final class _Session<S> implements term.TuiBridge {
     _activeSg = null;
     _order = 0;
     _spinVisible = false;
+    _barsShown = _logShown = false;
     _cursorPos = null;
     for (final row in _grid) {
       row.fillRange(0, row.length, _Cell.blank);
@@ -1192,7 +1226,7 @@ final class _Session<S> implements term.TuiBridge {
       leftStyle = accent == null ? _pack(null, null, {Style.bold}) : _pack(Color.red, null, {});
     } else if (_sayMsg != null) {
       left = _sayMsg!;
-    } else if (_cBars.isNotEmpty) {
+    } else if (_cBars.isNotEmpty && !_barsShown) {
       left = _consoleStatus();
     } else if (_statusLine != null) {
       left = _statusLine!;
@@ -1228,8 +1262,8 @@ final class _Session<S> implements term.TuiBridge {
   String _consoleStatus() {
     final frames = fmt.spinFrames(ascii: _caps.ascii);
     final parts = <String>[];
-    for (final state in _cBars.values) {
-      final bar = state();
+    for (final entry in _cBars.values) {
+      final bar = entry.state();
       final lab = bar.label == null ? '' : '${bar.label} ';
       if (bar.spinning) {
         parts.add('${frames[_spinTick % frames.length]} ${bar.label ?? ''}'.trimRight());

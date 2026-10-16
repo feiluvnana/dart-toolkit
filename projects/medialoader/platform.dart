@@ -85,6 +85,7 @@ abstract class Platform {
     HttpStatusException(status: final status && (401 || 403), :final url) =>
       '$name refused (HTTP $status): the login in .$code.session may have expired ($url)',
     HttpStatusException(status: 429, :final url) => '$name rate limit (HTTP 429): try again in 15 minutes ($url)',
+    SessionException(:final url) => '$name logged you out: copy a fresh .$code.session from your browser ($url)',
     _ => e,
   };
 }

@@ -11,7 +11,6 @@ import 'dashboard.dart';
 import 'job.dart';
 import 'platform.dart';
 import 'platforms.dart';
-import 'queue.dart';
 
 // Downloads each target's kinds into [root]/<code>/<user>/, all at once:
 // every user's explorers feed one queue. Logs in and asks before the
@@ -35,12 +34,11 @@ Future<void> run(Map<Target, Set<Kind>> wants, Dir root, Options o) async {
     if (!await Console.confirm(question)) throw UsageException('--reset cancelled, nothing deleted.');
   }
   board.apis.addAll(apis.values);
-  final q = Queue(o);
   await watch(
     () async {
       final added = await Future.wait([
         for (final MapEntry(key: t, value: kinds) in wants.entries)
-          Job(t, kinds, apis[t.platform]!, root.dir(t.platform.code), q).run(),
+          Job(t, kinds, apis[t.platform]!, root.dir(t.platform.code), o).run(),
       ]);
       Console.notify('medialoader: ${o.dry ? 'dry run' : 'done'}, ${added.fold(0, (a, b) => a + b)} new files');
     },

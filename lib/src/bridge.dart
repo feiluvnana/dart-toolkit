@@ -15,11 +15,12 @@ typedef BarState = ({String? label, int done, int? total, Unit unit, double rate
 abstract class TuiBridge {
   static TuiBridge? current;
 
-  /// A bar started; the row reads [state] whenever it draws.
-  Object barStarted(BarState Function() state);
+  /// A bar started; the row reads [state] whenever it draws. A [keep] bar
+  /// shows its ✓/✗ row for a moment once it ends.
+  Object barStarted(BarState Function() state, {required bool keep});
   void barChanged(Object id);
   void barEnded(Object id, bool ok);
-  void log(String line);
+  void log(String line, {required bool failed});
   void notify(String message);
   void copy(String text);
 

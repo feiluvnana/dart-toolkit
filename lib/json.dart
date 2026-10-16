@@ -11,9 +11,10 @@
 /// - `reader.json()` reads one document (`or:` for a missing source),
 ///   `reader.ndjson()` streams one [Json] per line.
 /// - [Json] supports `$` (dotted path, `a|b.c` alternatives) `[]` (index the
-///   iteration) `value` (typed scalar read) `or` (read with a default) `text`
-///   (any scalar as a string) `max`/`min` (the extreme item) `asList`/`asMap`
-///   (flat collections).
+///   iteration) `value` (typed scalar read; `DateTime` from ISO or Unix time)
+///   `or` (read with a default) `text` (any scalar as a string) `texts`
+///   (every item's) `max`/`min` (the extreme item) `asList`/`asMap` (flat
+///   collections).
 /// - `toJson` lets `jsonEncode` read a nested [Json]; `toString` is the
 ///   JSON text; `==` compares values deeply.
 /// Everything else is private.
@@ -130,6 +131,15 @@ final class Json extends Iterable<Json> {
     _ => null,
   };
 
+  /// Every item's [text], misses dropped, as `Elements.texts()` gives every
+  /// match's: `data.$('**.uri').texts()` is each `uri` found as a string. A
+  /// scalar gives itself, null gives none.
+  List<String> texts() => switch (_v) {
+    final List<Object?> items => [for (final i in items) ?Json._(i).text()],
+    final Map<Object?, Object?> items => [for (final i in items.values) ?Json._(i).text()],
+    _ => [?text()],
+  };
+
   /// The item (array item or object value) with the largest [by], or a null
   /// [Json] when there are none; the first wins a tie.
   Json max(num Function(Json item) by) => _extreme(by, 1);
@@ -169,10 +179,13 @@ final class Json extends Iterable<Json> {
   /// A typed collection that the value is not (`value<List<int>>()` on a
   /// JSON array) is an [ArgumentError] in every build mode: that read is
   /// [asList]/[asMap]. The raw shapes (`value<List>()`, `value<Map>()`)
-  /// read as they are.
+  /// read as they are. A `DateTime` reads an ISO 8601 string or a Unix
+  /// time in seconds or milliseconds (a number or a string of digits), as
+  /// APIs and embedded page data write it.
   T? value<T>() {
     final v = _v;
     if (v is T) return v;
+    if (<T>[] is List<DateTime?>) return _date(v) as T?;
     if ((v is List || v is Map) && (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)) {
       throw ArgumentError('value<$T>() reads scalars and raw shapes; use asList/asMap');
     }
@@ -495,6 +508,21 @@ final class _MapJsonIterator implements Iterator<Json> {
   Json get current => _current ?? (throw StateError('no current element'));
 }
 
+/// [v] as a time: ISO 8601 text, or Unix seconds or milliseconds (a number,
+/// or digits as text). Below 10^11 it is seconds (until the year 5138).
+DateTime? _date(Object? v) {
+  final n = switch (v) {
+    final num n => n,
+    final String s => num.tryParse(s.trim()),
+    _ => null,
+  };
+  if (n == null) return v is String ? DateTime.tryParse(v.trim()) : null;
+  final ms = n.abs() < 1e11 ? n * 1000 : n;
+  // DateTime holds ±8.64e15 ms: past that (a snowflake id) it is not a time.
+  if (!ms.isFinite || ms.abs() > 8.64e15) return null;
+  return DateTime.fromMillisecondsSinceEpoch(ms.round());
+}
+
 /// Mismatch marker for the element converter below. It never escapes: every
 /// use checks `identical(c, _mismatch)` before the value can leave.
 final Object _mismatch = Object();
@@ -507,6 +535,7 @@ final Object _mismatch = Object();
 Object? _scalar<E>(Object? e) {
   if (<E>[] is List<Json?> && <Json>[] is List<E>) return Json._(e); // E is Json or Json?
   if (e is E) return e;
+  if (<E>[] is List<DateTime?>) return _date(e) ?? _mismatch;
   if (e is int) {
     final d = e.toDouble();
     if (d is E) return d;
@@ -588,6 +617,7 @@ extension JsonFuture on Future<Json> {
   Future<T?> value<T>() async => (await this).value<T>();
   Future<T> or<T>(T fallback) async => (await this).or(fallback);
   Future<String?> text() async => (await this).text();
+  Future<List<String>> texts() async => (await this).texts();
   Future<Json> max(num Function(Json item) by) async => (await this).max(by);
   Future<Json> min(num Function(Json item) by) async => (await this).min(by);
   Future<List<T>> asList<T>() async => (await this).asList<T>();

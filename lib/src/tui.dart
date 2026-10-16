@@ -9,10 +9,11 @@ import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import '../core.dart' show Spans, ToolkitException;
+import '../core.dart' show Spans, Times, ToolkitException;
 import 'exit.dart' as exit;
 import 'format.dart' as fmt;
 import 'keys.dart' as keys;
+import 'logbook.dart';
 import 'pixels.dart';
 import 'progress.dart' show Meter;
 import 'progress.dart' as progress show paceOf, unitOf;

@@ -182,21 +182,32 @@ Stream<List<int>> readAndDelete(String path) async* {
   }
 }
 
-/// What `Image.compress` and `Video.compress` did to a file.
+/// What `Image.compress` and `Video.compress` did to a file; [text] says
+/// it in words.
 sealed class Compression {
   const Compression();
+
+  /// In words: `1.6 MB (compressed from 2.7 MB, -39%)`, or `kept: re-encoding
+  /// would not make it smaller`.
+  String text();
 }
 
 /// The file was replaced by its re-encode: [before] and [after] bytes.
 final class Compressed extends Compression {
   const Compressed(this.before, this.after);
   final int before, after;
+
+  @override
+  String text() => '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
 }
 
 /// The file was left as it was, for [reason].
 final class Kept extends Compression {
   const Kept(this.reason);
   final KeptReason reason;
+
+  @override
+  String text() => 'kept: ${reason.text()}';
 }
 
 /// Why a file was [Kept]; [text] says it in words.
@@ -211,8 +222,11 @@ enum KeptReason {
   /// The re-encode was not at least 5% smaller.
   notSmaller('re-encoding would not make it smaller');
 
-  const KeptReason(this.text);
-  final String text;
+  const KeptReason(this._text);
+  final String _text;
+
+  /// The reason in words.
+  String text() => _text;
 }
 
 /// Replace [path] with [newer] when it is [by] (a fraction) smaller,

@@ -9,7 +9,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar].
-/// - `Console.ask/confirm/choose/key/bar/log/table/notify/copy/out/input()`
+/// - `Console.ask/confirm/choose/key/bar/log/logged/table/notify/copy/out/input()`
 ///   prompt, read keys, show progress, print above it or as columns, reach
 ///   the desktop, or read and write the script's own stdin and stdout.
 /// - [Bar] is a [Probe] (attach it with `&`) that supports `tick` `update`
@@ -27,6 +27,7 @@ export 'core.dart';
 import 'src/exit.dart' as exit;
 import 'src/format.dart' as fmt;
 import 'src/keys.dart' as keys;
+import 'src/logbook.dart';
 import 'src/progress.dart' as progress show Tally, Watcher;
 import 'src/progress.dart' show watchers;
 import 'src/terminal.dart' as term;
@@ -459,13 +460,16 @@ abstract final class Console {
   }
 
   /// Print [line] to stderr above a live spinner or bar, which redraws
-  /// beneath it. While a state-driven `Tui.run` is active it goes to the
-  /// status row.
-  static void log(String line) {
+  /// beneath it; a [failed] one is marked `✗`. Every line is kept, timed,
+  /// for [logged]. While a state-driven `Tui.run` is active it goes to the
+  /// screen's `Region.log`, or to the status row when the screen draws none.
+  static void log(String line, {bool failed = false}) {
+    logbook.add((at: DateTime.now(), text: line, failed: failed));
     final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.log(line);
-    if (_lives.isEmpty) return io.stderr.writeln(term.safeText(line));
-    io.stderr.write('${_erase()}${term.safeText(line)}\n');
+    if (bridge != null) return bridge.log(line, failed: failed);
+    final text = term.safeText(failed ? '$_failMark $line' : line);
+    if (_lives.isEmpty) return io.stderr.writeln(text);
+    io.stderr.write('${_erase()}$text\n');
     _drawn = 0;
     _paint(force: true);
   }
@@ -481,11 +485,17 @@ abstract final class Console {
   static Bar bar(String label, {int? total, bool keep = true}) {
     final shown = label.isEmpty ? null : term.plainLabel(label);
     final bridge = term.TuiBridge.current;
-    if (bridge != null) return Bar._bridged(bridge, shown, total);
+    if (bridge != null) return Bar._bridged(bridge, shown, total, keep: keep);
     final bar = Bar._(shown, total, keep: keep);
     _addLive(bar);
     return bar;
   }
+
+  /// Every line [log] printed this run, one per line with its time (failed
+  /// ones marked `✗`), as a [Reader]: `await (Console.logged() > Fs.file('run.log'))`.
+  static Reader logged() => Reader.of(utf8.encode([
+    for (final l in logbook) '${l.at.format('yyyy-MM-dd HH:mm:ss')}  ${l.failed ? '$_failMark ' : ''}${l.text}\n',
+  ].join()));
 
   /// Our stdout as a [Writer]: `Shell.read(cmd) > Console.out()` shows a
   /// program's output as it runs. Live bars step aside while it writes.
@@ -953,9 +963,9 @@ final class Bar extends _Live with Probe implements Closeable {
     watchers[this] = _BarWatch(this);
   }
 
-  Bar._bridged(term.TuiBridge bridge, this._label, this._handTotal) : _bridge = bridge, _keep = true {
+  Bar._bridged(term.TuiBridge bridge, this._label, this._handTotal, {this._keep = true}) : _bridge = bridge {
     watchers[this] = _BarWatch(this);
-    _bridgeId = bridge.barStarted(_state);
+    _bridgeId = bridge.barStarted(_state, keep: _keep);
   }
 
   /// Whether the final line stays when the bar finishes.

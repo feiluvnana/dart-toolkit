@@ -10,6 +10,7 @@
 ///
 /// Public surface is exactly: [Http], [Client], [Response], [Body],
 /// [HttpStatusException], [HttpRequestException], [RequestFailure],
+/// [SessionException], [Browser],
 /// [Server], [Request], [Reply], [Feed], [FeedPage].
 /// - `Http.client(...)` holds the settings a script states once (base,
 ///   headers, cookies, retries, pacing); `client.copy(...)` is a variant
@@ -22,7 +23,7 @@
 ///   (plus [Reader]/[Closeable]).
 /// - [Client] `sent` counts the requests put on the wire.
 /// - [Feed] walks a newest-first listing page by page (`run((page) {…})`,
-///   a [FeedPage] with `items` `add` `stop`): up to what is known, with a
+///   a [FeedPage] with `items` `add` `follow` `stop`): up to what is known, with a
 ///   cursor file that survives an interrupted run.
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
 ///   `.multipart` `.stream`. A [Body.stream] (or a multipart with
@@ -226,6 +227,50 @@ enum RequestFailure {
   unsendable,
 }
 
+/// The headers a desktop browser sends with a request, for sites that
+/// refuse anything else: `Http.client(browser: .page)`.
+enum Browser {
+  /// Opening a page: `accept: text/html…`, `sec-fetch-mode: navigate`,
+  /// `upgrade-insecure-requests`.
+  page,
+
+  /// A page's own script calling its API: `accept: */*`,
+  /// `sec-fetch-mode: cors`.
+  api,
+}
+
+/// What [Browser] adds, under any header the client or the call names.
+Map<String, String> _browserHeaders(Browser b) => switch (b) {
+  Browser.page => const {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'upgrade-insecure-requests': '1',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'same-origin',
+  },
+  Browser.api => const {
+    'accept': '*/*',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+  },
+};
+
+/// A logged-in session that is not any more: the request landed on one of
+/// the client's `login:` paths (a redirect to the sign-in page) instead of
+/// what it asked for. [url] is where it landed.
+final class SessionException extends ToolkitException {
+  SessionException(this.url) : super('logged out: the request landed on $url; log in again and refresh the session');
+
+  /// Where the request landed (credentials redacted).
+  final String url;
+
+  @override
+  String toString() => 'SessionException: $message';
+}
+
 /// A request that was aborted or could not follow a redirect. Extends
 /// [HttpException], so an existing `on HttpException` keeps catching it.
 final class HttpRequestException extends HttpException implements ToolkitException {
@@ -299,6 +344,12 @@ abstract final class Http {
   ///   `json`, `html`) may decode to; past it the read fails with a
   ///   [ContentException], so a gzip bomb cannot fill the heap. Piping a
   ///   body into a file has no limit.
+  /// - [browser]: send what a desktop browser sends for a page
+  ///   ([Browser.page]) or for its script's API call ([Browser.api]) along
+  ///   with the user-agent; [headers] and a call's headers still win.
+  /// - [login]: paths of the site's sign-in pages (`/accounts/login`); a
+  ///   response that lands on one, after redirects, throws
+  ///   [SessionException]: the session in [cookies] has run out.
   static Client client({
     String? base,
     Map<String, String> headers = const {},
@@ -316,6 +367,8 @@ abstract final class Http {
     int connections = 6,
     bool resume = false,
     int max = 256 << 20,
+    Browser? browser,
+    List<String> login = const [],
   }) {
     if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
@@ -333,6 +386,8 @@ abstract final class Http {
       ttl: ttl,
       resume: resume,
       max: max,
+      browser: browser,
+      login: login,
     );
     return _Client(
       settings,
@@ -413,6 +468,8 @@ sealed class Client implements Closeable {
     int? connections,
     bool? resume,
     int? max,
+    Browser? browser,
+    List<String>? login,
   });
 
   /// The cookie jar: persist it with `cookies().encode()`.
@@ -463,6 +520,8 @@ final class _Settings {
     required this.ttl,
     required this.resume,
     required this.max,
+    required this.browser,
+    required this.login,
   });
 
   final Uri? base;
@@ -477,6 +536,8 @@ final class _Settings {
   final Duration ttl;
   final bool resume;
   final int max;
+  final Browser? browser;
+  final List<String> login;
 }
 
 /// One `HttpClient` with its socket settings, counted by the requests and
@@ -632,6 +693,8 @@ final class _Client extends Client {
     int? connections,
     bool? resume,
     int? max,
+    Browser? browser,
+    List<String>? login,
   }) {
     final s = _s;
     final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections, timeout: timeout)
@@ -657,6 +720,8 @@ final class _Client extends Client {
         ttl: ttl ?? s.ttl,
         resume: resume ?? s.resume,
         max: max ?? s.max,
+        browser: browser ?? s.browser,
+        login: login ?? s.login,
       ),
       conn,
       this,
@@ -841,7 +906,14 @@ final class _Client extends Client {
     }
   }
 
-  Future<Response> _checked(Response res, bool check) async => check && _s.check && !res.ok() ? res.check() : res;
+  Future<Response> _checked(Response res, bool check) async {
+    final path = Uri.tryParse(res.url())?.path ?? '';
+    if (_s.login.any(path.startsWith)) {
+      await res.close();
+      throw SessionException(names.redact(Uri.parse(res.url())));
+    }
+    return check && _s.check && !res.ok() ? res.check() : res;
+  }
 
   /// One send plus manual redirect following. Network failures arrive as
   /// [_Failed]; a redirect that cannot be followed throws as-is.
@@ -943,6 +1015,11 @@ final class _Client extends Client {
       }
       if (!headers.keys.any((k) => k.toLowerCase() == 'user-agent')) {
         req.headers.set('user-agent', _s.cookies.agent() ?? _userAgent);
+      }
+      if (_s.browser case final b?) {
+        for (final MapEntry(:key, :value) in _browserHeaders(b).entries) {
+          if (req.headers.value(key) == null) req.headers.set(key, value);
+        }
       }
       final cookie = _cookieHeader(uri, headers);
       if (cookie != null) req.headers.set('cookie', cookie);
@@ -1073,6 +1150,8 @@ final class _Pool extends Client {
     int? connections,
     bool? resume,
     int? max,
+    Browser? browser,
+    List<String>? login,
   }) {
     if (proxy != null) {
       throw ArgumentError.value(proxy, 'proxy', 'a pool keeps each member\'s proxy: copy the members, then pool them');
@@ -1095,6 +1174,8 @@ final class _Pool extends Client {
           connections: connections,
           resume: resume,
           max: max,
+          browser: browser,
+          login: login,
         ) as _Client,
     ]);
   }

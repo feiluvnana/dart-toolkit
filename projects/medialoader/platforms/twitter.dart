@@ -66,13 +66,14 @@ final class Twitter extends Platform {
     check: true,
     cookies: jar,
     csrf: (cookie: 'ct0', header: 'x-csrf-token'),
+    browser: .api,
+    // A lost session is redirected to the login flow.
+    login: const ['/i/flow/login', '/account/access'],
     headers: {
       'authorization': bearer,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
       'x-twitter-client-language': 'en',
-      'accept': '*/*',
-      'sec-fetch-site': 'same-origin',
     },
   );
 
@@ -119,28 +120,28 @@ Future<Profile> profile(Client api, String name) async {
     final seg = Uri.parse(res.url()).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
     if (seg != null && seg != 'user' && !RegExp(r'^\d+$').hasMatch(seg)) name = seg;
   }
-  final response = await json(
-    api.get(
-      '/i/api/graphql/ck5KkZ8t5cOmoLssopN99Q/UserByScreenName',
-      query: {
-        'variables': {'screen_name': name, 'withSafetyModeUserFields': true},
-        'features': {
-          'hidden_profile_subscriptions_enabled': true,
-          'rweb_tipjar_consumption_enabled': true,
-          'responsive_web_graphql_exclude_directive_enabled': true,
-          'verified_phone_label_enabled': false,
-          'subscriptions_verification_info_is_identity_verified_enabled': true,
-          'subscriptions_verification_info_verified_since_enabled': true,
-          'highlights_tweets_tab_ui_enabled': true,
-          'responsive_web_twitter_article_notes_tab_enabled': true,
-          'creator_subscriptions_tweet_preview_api_enabled': true,
-          'responsive_web_graphql_skip_user_profile_image_extensions_enabled': false,
-          'responsive_web_graphql_timeline_navigation_enabled': true,
+  final response = await api
+      .get(
+        '/i/api/graphql/ck5KkZ8t5cOmoLssopN99Q/UserByScreenName',
+        query: {
+          'variables': {'screen_name': name, 'withSafetyModeUserFields': true},
+          'features': {
+            'hidden_profile_subscriptions_enabled': true,
+            'rweb_tipjar_consumption_enabled': true,
+            'responsive_web_graphql_exclude_directive_enabled': true,
+            'verified_phone_label_enabled': false,
+            'subscriptions_verification_info_is_identity_verified_enabled': true,
+            'subscriptions_verification_info_verified_since_enabled': true,
+            'highlights_tweets_tab_ui_enabled': true,
+            'responsive_web_twitter_article_notes_tab_enabled': true,
+            'creator_subscriptions_tweet_preview_api_enabled': true,
+            'responsive_web_graphql_skip_user_profile_image_extensions_enabled': false,
+            'responsive_web_graphql_timeline_navigation_enabled': true,
+          },
+          'fieldToggles': {'withAuxiliaryUserLabels': true},
         },
-        'fieldToggles': {'withAuxiliaryUserLabels': true},
-      },
-    ),
-  );
+      )
+      .json();
   final user = response.$('data.user.result');
   if (user.isEmpty || user.$('__typename').text() == 'UserUnavailable') {
     throw Exception('user not found or unavailable: "$name"');
@@ -182,24 +183,24 @@ const _features = {
 
 // One page (up to 20 tweets) of the user's media timeline.
 Future<Page> mediaTimeline(Client api, String userId, String? cursor) async {
-  final response = await json(
-    api.get(
-      '/i/api/graphql/jCRhbOzdgOHp6u9H4g2tEg/UserMedia',
-      query: {
-        'variables': {
-          'userId': userId,
-          'count': 20,
-          'cursor': ?cursor,
-          'includePromotedContent': false,
-          'withClientEventToken': false,
-          'withBirdwatchNotes': false,
-          'withVoice': true,
+  final response = await api
+      .get(
+        '/i/api/graphql/jCRhbOzdgOHp6u9H4g2tEg/UserMedia',
+        query: {
+          'variables': {
+            'userId': userId,
+            'count': 20,
+            'cursor': ?cursor,
+            'includePromotedContent': false,
+            'withClientEventToken': false,
+            'withBirdwatchNotes': false,
+            'withVoice': true,
+          },
+          'features': _features,
+          'fieldToggles': {'withArticlePlainText': false},
         },
-        'features': _features,
-        'fieldToggles': {'withArticlePlainText': false},
-      },
-    ),
-  );
+      )
+      .json();
   final timeline = response.$('data.user.result.timeline.timeline|data.user.result.timeline_v2.timeline');
   final tweets = [for (final t in timeline.$('**.tweet_results.result')) unwrap(t)];
   final next = timeline.$('**').where((n) => n.$('cursorType').text() == 'Bottom').firstOrNull?.$('value').text();
@@ -208,15 +209,15 @@ Future<Page> mediaTimeline(Client api, String userId, String? cursor) async {
 
 // One tweet by id.
 Future<Json> tweet(Client api, String id) async {
-  final response = await json(
-    api.get(
-      '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
-      query: {
-        'variables': {'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false},
-        'features': _features,
-      },
-    ),
-  );
+  final response = await api
+      .get(
+        '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
+        query: {
+          'variables': {'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false},
+          'features': _features,
+        },
+      )
+      .json();
   final t = unwrap(response.$('data.tweetResult.result'));
   return t.isEmpty ? throw Exception('tweet not found: $id') : t;
 }
@@ -269,14 +270,4 @@ List<Download> tweetFiles(Json tweet, Dir dir, [List<String>? order]) {
     if (out.isNotEmpty && caption != null && caption.trim().isNotEmpty)
       Download(month.file('$id.txt'), text: caption, at: at),
   ];
-}
-
-Future<Json> json(Future<Response> request) async {
-  final response = await request;
-  final url = response.url();
-  if (url.contains('/i/flow/login') || url.contains('/account/access')) {
-    await response.close();
-    throw Exception('Twitter logged you out: copy a fresh .twt.session from your browser.');
-  }
-  return response.json();
 }

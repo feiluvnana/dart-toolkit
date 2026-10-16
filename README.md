@@ -4,7 +4,7 @@ Scripting in Dart without the boilerplate: HTTP, HTML, files, archives, shells, 
 
 ```yaml
 dependencies:
-  dart_toolkit: ^0.0.6
+  dart_toolkit: ^0.1.0
 ```
 
 ## Tour
@@ -52,19 +52,19 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | Import | For | Highlights |
 |---|---|---|
 | `core` | the shared model | `Reader` (`bytes` `text` `lines` `cookies`), `Writer`, `Pipe`, `Probe` (`&`), `Task`, `Meter`, `Closeable`, `Origin`, `Cookies`, `Rate` (`perHost:`), `3.seconds`, `now.format(…)`, `d.human()` |
-| `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` that skips and resumes, safe retries, `cache:` with ETag revalidation, `Body.multipart`, `sent()`, `Http.pool`, `Http.serve`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run) |
+| `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` that skips and resumes, safe retries, `cache:` with ETag revalidation, `Body.multipart`, `sent()`, `Http.pool`, `Http.serve`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run), `browser: .page`/`.api` headers, `login:` paths that throw `SessionException` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `markup()`, `text()` that reads like a page; re-exports `json` |
-| `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()`, `or('')`, `text()`, `max`/`min`, `reader.ndjson()` |
+| `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`/`min`, `reader.ndjson()` |
 | `csv` | CSV | RFC 4180 `parse`, `records`, `encode`, `reader.csv(or:)`, streamed `reader.rows()` |
 | `yaml` | reading YAML | in-house YAML 1.2 reader, `file.yaml().$('version').text()`: the `json` reading API |
 | `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `watch()`, `dir.size()`, watchable `copy`/`move`/`list`, `Fs.tempDir`, `file.lock(timeout:)`, `modified()`/`touch(t)`, `Fs.sanitize(name)` |
 | `archive` | zip, tar, tgz, 7z, RAR, bz2/zst, cab/ar/xar | `archive(paths, password:)` (zip and tar stream, 7z via 7-Zip LZMA2; a probe sees the input packed), `unarchive(dir)` for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 in Dart, big or exotic ones via 7-Zip; modes, mtimes and inside links kept |
 | `hash` | md5 … sha512, HMAC | in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()` |
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:)` (a `Task`; `.check()`), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe`, `Shell.which`, `Shell.open` |
-| `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `rate:` `isolates:`, held `Pool(limit:).run(job)` lanes |
+| `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `rate:` `isolates:`, held `Pool(limit:).run(job)` lanes (a `Task` too) |
 | `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `dotenv:`, `version:`, suggestions |
-| `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log` `table` `notify` `copy`, `out()`/`input()` for stdout/stdin |
-| `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, mouse, markdown, diffs, ASCII and no-colour fallbacks |
+| `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify` `copy`, `out()`/`input()` for stdout/stdin |
+| `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, `bars()` and `log()` panes for Console's bars and log, mouse, markdown, diffs, ASCII and no-colour fallbacks |
 | `image` | read, resize, crop, encode, compress | ffmpeg engine: HEIC/AVIF/WebP, EXIF kept |
 | `video` | probe, remux, encode, trim, frames, compress | h264/h265/AV1/VP9, HLS/DASH, encodes a probe watches in media time; pinned FFmpeg |
 | `chrome` | a real browser | pages, screenshots, PDFs, downloads with the browser's progress, evaluated JS, `cookies()` for http, `responses()` capture |

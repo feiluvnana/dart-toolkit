@@ -84,6 +84,27 @@ void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long'
       expect((m.done(), m.total()), (9, 9), reason: 'a finished run counts as complete');
     });
 
+    test('a meter that follows two kinds of work shows the latest one, not their sum', () {
+      final m = Meter();
+      Run([m])
+        ..report(4000, 4000, fmt.Unit.bytes)
+        ..end();
+      expect((m.done(), m.total()), (4000, 4000));
+      Run([m]).report(1000000, 3000000, fmt.Unit.time);
+      expect((m.done(), m.total()), (1000000, 3000000), reason: 'the encode, not bytes + microseconds');
+    });
+
+    test('a failed run without a total does not leave the sum unknown', () {
+      final m = Meter();
+      Run([m])
+        ..report(5, null, fmt.Unit.bytes)
+        ..end(StateError('x'));
+      Run([m])
+        ..report(3, 3, fmt.Unit.bytes)
+        ..end();
+      expect((m.done(), m.total()), (8, 8));
+    });
+
     test('update sets a count by hand', () {
       final m = Meter()..update(3, 10);
       expect((m.done(), m.total()), (3, 10));
@@ -245,6 +266,19 @@ Future<void> main() async {
       expect(await p.exitCode.timeout(const Duration(seconds: 30)), 0);
       expect(out, 'confirm=true\nchoose=b\nkey=none\n');
     });
+  });
+
+  test('Console.log(failed:) marks the line; Console.logged() is the run\'s log as content', () async {
+    final r = await runDart('''
+import 'package:dart_toolkit/console.dart';
+Future<void> main() async {
+  Console.log('one');
+  Console.log('two', failed: true);
+  print(await Console.logged().text());
+}
+''');
+    expect(r.stderr, 'one\n✗ two\n');
+    expect(r.stdout, matches(RegExp(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d  one\n\S+ \S+  ✗ two\n')));
   });
 
   group('stdin and stdout', () {

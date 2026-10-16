@@ -15,14 +15,12 @@ final board = Board();
 final class Board {
   final started = DateTime.now();
   final users = <User>[];
-  final transfers = <Transfer>[]; // in flight, oldest first
-  final events = <Event>[];
   final usersScroll = Scroll(follow: false), transfersScroll = Scroll(follow: false), log = Scroll();
   final apis = <Client>[]; // the platform clients: counted, and closed when the run ends
   final meter = Meter(); // every CDN byte
   String? pause; // why a platform's calls are on hold
   Timer? _pauseTimer;
-  var done = false, crashed = false, failuresOnly = false, live = false, retrying = 0;
+  var done = false, crashed = false, failuresOnly = false, retrying = 0, active = 0; // active: files downloading
   final failures = <Failure>[]; // what r retries
   bool get finished => done && retrying == 0;
   int get requests => apis.fold(0, (n, c) => n + c.sent());
@@ -64,14 +62,11 @@ final class Board {
     return u;
   }
 
-  // A line in the log; without a terminal, printed as it happens.
-  void note(String line, {String? platform, bool failed = false}) {
-    events.add((at: DateTime.now(), line: line, platform: platform, failed: failed));
-    if (!live) Console.log('${platform == null ? '' : '[$platform] '}$line');
-  }
+  // A line in the run's log (Console's: the log pane, or printed without a terminal).
+  void note(String line, {String? platform, bool failed = false}) =>
+      Console.log('${platform == null ? '' : '[$platform] '}$line', failed: failed);
 }
 
-typedef Event = ({DateTime at, String line, String? platform, bool failed});
 typedef Failure = ({String line, Future<void> Function() retry});
 
 final class User {
@@ -106,18 +101,10 @@ final class Part {
   String get counts => '$added new · $had had${failed > 0 ? ' · $failed failed' : ''} · ${bytes.size()}';
 }
 
-final class Transfer {
-  Transfer(this.user, this.part, this.path);
-  final User user;
-  final Part part;
-  final String path;
-  var meter = Meter(); // this file's bytes, then its video encode
-  String? status;
-}
-
 // Runs [work] under the dashboard until q, then calls [close] (so downloads
 // stop and nothing keeps the process alive) and prints the summary. Without
-// a terminal the log prints as it goes and failures are retried once.
+// a terminal, Console prints the log and the bars as they go, and failures
+// are retried once.
 // Sets exitCode: 1 when something failed, 130 when quit before the end.
 Future<void> watch(Future<void> Function() work, {required Future<void> Function() close}) async {
   if (!stdout.hasTerminal) {
@@ -132,7 +119,6 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
     if (board.failures.isNotEmpty) exitCode = 1;
     return;
   }
-  board.live = true;
   try {
     await Tui.run(board, accent: Color.orange, (b, app) {
       return Screen(
@@ -152,7 +138,7 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
                 )
                 .whenComplete(() => b.done = true),
           ),
-          'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()} (${b.events.length} lines)')),
+          'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()}')),
           'f': (b.failuresOnly ? 'all lines' : 'failures only', () => b.failuresOnly = !b.failuresOnly),
           if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
           'q escape': (
@@ -167,9 +153,7 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
       );
     });
   } finally {
-    board
-      ..live = false
-      ..clearPause();
+    board.clearPause();
     await close();
   }
   summary();
@@ -208,15 +192,17 @@ void draw(Region r) {
   final [top, bottom] = r.rows([0, (r.height() / 3).round().clamp(5, 14)]);
   final [left, right] = top.cols([0, (top.width() * 0.4).round()]);
   users(left.box('users', color: border).scroll(b.usersScroll), b);
-  final t = b.total, waiting = t.queued - t.done - b.transfers.length;
-  transfers(
-    right
-        .box('downloading: ${b.transfers.length}, ${waiting < 0 ? 0 : waiting} waiting', color: border)
-        .scroll(b.transfersScroll),
-    b,
-  );
+  final t = b.total, waiting = t.queued - t.done - b.active;
+  // Every file in flight: Console bars, one row each.
+  right
+      .box('downloading: ${b.active}, ${waiting < 0 ? 0 : waiting} waiting', color: border)
+      .scroll(b.transfersScroll)
+      .bars(color: flow);
   // f shows only failures and rate limits, and back.
-  events(bottom.box(b.failuresOnly ? 'log: failures & rate limits only' : 'log', color: border).scroll(b.log), b);
+  bottom
+      .box(b.failuresOnly ? 'log: failures & rate limits only' : 'log', color: border)
+      .scroll(b.log)
+      .log(only: b.failuresOnly ? (l) => l.failed || l.text.toLowerCase().contains('rate limit') : null, failures: bad);
 }
 
 // `[ins] ` in the platform's colour, then the row continues.
@@ -277,58 +263,15 @@ void users(Region r, Board b) {
 }
 
 // Each file in flight: who and where, then its bytes and speed.
-void transfers(Region r, Board b) {
-  if (b.transfers.isEmpty) {
-    r.write(b.finished ? 'nothing left' : 'waiting for files', style: {.dim});
-    return;
-  }
-  r.lines(b.transfers.length * 2, (row, i) {
-    final t = b.transfers[i ~/ 2];
-    if (i.isEven) {
-      tag(row, t.user.platform);
-      row.write('@${t.user.name} ', inline: true, color: handle, style: {.bold}).write(t.path);
-    } else if (t.status case final status?) {
-      row.write('  $status', color: busy, style: {.bold});
-    } else {
-      row.bar(t.meter, color: flow);
-    }
-  });
-}
-
-bool isRateLimit(Event e) => e.line.toLowerCase().contains('rate limit');
-
-// Failures red, changes and waits yellow, saved files plain.
-void events(Region r, Board b) {
-  final shown = [
-    for (final e in b.events)
-      if (!b.failuresOnly || e.failed || isRateLimit(e)) e,
-  ];
-  r.lines(shown.length, (row, i) {
-    final e = shown[i];
-    row.write('${e.at.format('HH:mm:ss')}  ', inline: true, style: {.dim});
-    tag(row, e.platform);
-    row.write(
-      e.line,
-      color: e.failed ? bad : (e.line.contains(' changed: ') || isRateLimit(e) ? warn : null),
-      style: e.failed ? {.bold} : {},
-    );
-  });
-}
-
 // The palette: borders gray, platform tags unique, progress green,
 // working/waits yellow, failures red, usernames white.
 const border = Color.gray, handle = Color.white, busy = Color.yellow, flow = Color.green, good = Color.green;
 const bad = Color.red, warn = Color.yellow;
 
-// Every log line so far into .medialoader.log next to the script; returns its path.
+// The run's log so far into .medialoader.log next to the script; returns its path.
 Future<String> saveLog() async {
   final file = Fs.scriptDir().file('.medialoader.log');
-  await file.write(
-    [
-      for (final e in board.events)
-        '${e.at.format('yyyy-MM-dd HH:mm:ss')}  ${e.platform == null ? '' : '[${e.platform}] '}${e.line}\n',
-    ].join(),
-  );
+  await (Console.logged() > file);
   return file.path();
 }
 

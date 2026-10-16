@@ -5,6 +5,27 @@ import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('texts() is every item\'s text, as Elements.texts() is every match\'s', () {
+    final doc = Json.parse('{"a":[{"uri":"x"},{"uri":2},{"other":1},{"uri":null}],"one":"z"}');
+    expect(doc.$('a.*.uri').texts(), ['x', '2']);
+    expect(doc.$('**.uri').texts(), ['x', '2']);
+    expect(doc.$('one').texts(), ['z']);
+    expect(doc.$('missing').texts(), isEmpty);
+  });
+
+  test('value<DateTime>() reads ISO text and Unix seconds or milliseconds', () {
+    final doc = Json.parse('{"iso":"2024-05-01T10:00:00Z","s":1714557600,"ms":1714557600000,"txt":"1714557600","no":"soon"}');
+    final at = DateTime.utc(2024, 5, 1, 10);
+    expect(doc.$('iso').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
+    expect(doc.$('s').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
+    expect(doc.$('ms').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
+    expect(doc.$('txt').or(DateTime(0)).isAtSameMomentAs(at), isTrue);
+    expect(doc.$('no').value<DateTime>(), isNull);
+    expect(Json.parse('{"id":1700000000000000000000}').$('id').value<DateTime>(), isNull, reason: 'past DateTime: not a time');
+    expect(Json.parse('["99999999999999999999"]').asList<DateTime>(), isEmpty);
+    expect(Json.parse('[1714557600, 1714557600000]').asList<DateTime>(), hasLength(2));
+  });
+
   deepPathTests();
   valueTests();
   group('Json.parse', () {

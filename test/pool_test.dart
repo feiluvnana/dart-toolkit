@@ -302,8 +302,37 @@ Future<void> main() async => print(await Pool.map([1, 2, 3], sq, isolates: true)
       expect(await lanes.run(() async => 1), 1);
     });
 
+    test('run is a Task: a probe watches the job, waiting for its lane included', () async {
+      final lanes = Pool(limit: 1), first = Completer<void>();
+      final heard = <String>[];
+      final a = lanes.run(() => first.future);
+      final b = lanes.run(() => 'b') & _Ends(heard, 'b');
+      await pumpEventQueue();
+      expect(heard, isEmpty, reason: 'b waits for the one lane');
+      first.complete();
+      expect(await b, 'b');
+      await a;
+      expect(heard, ['b']);
+    });
+
     test('limit below 1 is an ArgumentError', () {
       expect(() => Pool(limit: 0), throwsArgumentError);
     });
   });
+}
+
+/// A probe that notes when the run it watches ends.
+final class _Ends with Probe {
+  _Ends(this._heard, this._name);
+  final List<String> _heard;
+  final String _name;
+  var _begun = false;
+  @override
+  void update(int done, int? total) {
+    if (!_begun) {
+      _begun = true; // the first update is the attach
+      return;
+    }
+    _heard.add(_name);
+  }
 }

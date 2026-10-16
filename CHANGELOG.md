@@ -1,10 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
+
+Scripts without chores: the plumbing a gallery-dl-class downloader wrote by hand is now the
+library's, and `&` works as well inside a Tui as in a terminal.
 
 **Added**
 
-- `http`: `Feed(page, cursor:)` walks a newest-first listing page by page: `run((page) {…}, all:)` hands each page as a `FeedPage` (`items()`, `add(work)`, `stop()`), fetches the next page while a page's work runs, and keeps a cursor file that moves only past finished work, so an interrupted run lists what is new, then continues where it stopped.
+- `tui`: `Region.bars()` draws every live `Console.bar` (and every future watched with one) as a row of its own, and `Region.log(only:, color:, failures:)` draws the run's `Console.log` lines with their times. A screen that draws them takes them out of the status row, so a script watches work the same way with and without a Tui.
+- `console`: `Console.log(line, failed: true)` marks a failure (`✗`, bold in a Tui log); `Console.logged()` is the run's log as a `Reader`: `await (Console.logged() > Fs.file('run.log'))`.
+- `http`: `Feed(page, cursor:)` walks a newest-first listing page by page: `run((page) {…}, all:)` hands each page as a `FeedPage` (`items()`, `add(work)`, `follow(cursor)`, `stop()`), fetches the next page while a page's work runs, visits each cursor once, and keeps a cursor file that moves only past finished work, so an interrupted run lists what is new, then continues where it stopped.
+- `http`: `Http.client(browser: .page | .api)` sends what a desktop browser sends for a page or for its script's API call; `login: [paths]` turns a redirect to a sign-in page into a `SessionException` (a `ToolkitException`, with the `url` it landed on).
+- `json`: `Json.texts()` (every item's text, as `Elements.texts()`); `value<DateTime>()` (and `or`, `asList`) reads ISO text and Unix seconds or milliseconds.
+- `image`/`video`: `Compression.text()` says what compressing did (`1.6 MB (compressed from 2.7 MB, -39%)`, `kept: …`).
+
+**Changed**
+
+- `pool`: a held `Pool(limit:).run(job)` returns a `Task`, so `lanes.run(job) & bar` watches it, waiting for its lane included.
+- `core`: a probe that watches work in two units (a download, then its encode) shows the latest unit's runs instead of adding bytes and microseconds; a failed run without a total no longer leaves the sum unknown.
+- `image`/`video`: `KeptReason.text` is a method, `text()`.
+- medialoader: `queue.dart`, its `Transfer`, the transfers pane and the log plumbing are gone (Console's bars and log in `bars()`/`log()` panes, `Pool.run` lanes); the platforms use `browser:`, `login:`, `Json.texts()`, epoch dates and `Feed.follow` (Facebook's photo walk). 2,272 → 2,125 lines; keybox 204 → 195.
 
 ## 0.0.6
 

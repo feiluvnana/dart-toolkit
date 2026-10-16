@@ -22,9 +22,6 @@ Future<Doc> load(Client c, String path) async {
   try {
     final res = await c.get(path);
     final text = await res.text();
-    if (res.url().contains('/login')) {
-      throw Exception('Facebook logged you out: copy a fresh .fbk.session from your browser.');
-    }
     final page = Html.parse(text, base: res.url());
     return (page: page, data: page.json(), text: text);
   } on HttpStatusException catch (e) {
@@ -34,17 +31,13 @@ Future<Doc> load(Client c, String path) async {
 }
 
 // The first of [paths] (`**.a|**.b`) found, as text.
-String? one(Json data, String paths) => data.$(paths).firstOrNull?.text();
-
-List<String> strings(Json data, String path) => [for (final s in data.$(path)) ?s.text()];
+String? one(Json data, String paths) => data.$(paths).texts().firstOrNull;
 
 // Every string in the page's data, and every link in its markup.
-List<String> links(Doc d) => [for (final n in d.data.$('**')) ?n.value<String>(), ...d.page.$('a[href]').attrs('href')];
+List<String> links(Doc d) => [...d.data.$('**').texts(), ...d.page.$('a[href]').attrs('href')];
 
-DateTime when(Json data, String paths) {
-  final s = int.tryParse(one(data, paths) ?? '');
-  return s == null ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch(s * 1000);
-}
+// When it was posted: the first of [paths], Unix seconds in the page data.
+DateTime when(Json data, String paths) => data.$(paths).firstOrNull?.value<DateTime>() ?? DateTime.now();
 
 String ext(String url) {
   final e = Uri.parse(url).path.split('.').last.toLowerCase();
@@ -65,7 +58,7 @@ Future<Profile> profile(Client c, String name) async {
     name: one(d.data, '**.userVanity|**.vanity') ?? name,
     avatar:
         one(d.data, '**.profilePicLarge.uri|**.profilePhoto.url|**.profile_pic_url') ??
-        strings(d.data, '**.uri').where((u) => u.contains('t39.30808-1')).firstOrNull,
+        d.data.$('**.uri').texts().where((u) => u.contains('t39.30808-1')).firstOrNull,
     cover: one(d.data, '**.coverPhoto.url|**.cover_photo.uri|**.cover_photo.**.image.uri'),
     doc: d,
   );
@@ -79,7 +72,7 @@ Future<Photo?> photo(Client c, String id, [String set = '']) async {
   final d = await load(c, '/photo/?fbid=$id${clean ? '&set=$set' : ''}');
   final url =
       d.page.$('link[rel="preload"][as="image"][data-preloader*="CometPhotoRoot"]').attr('href') ??
-      strings(d.data, '**.uri').where((u) => u.contains('t39.30808-6')).firstOrNull ??
+      d.data.$('**.uri').texts().where((u) => u.contains('t39.30808-6')).firstOrNull ??
       one(d.data, '**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri');
   if (url == null) return null;
   return (
@@ -175,18 +168,18 @@ List<StoryItem> storyItems(Json data) {
   final seen = <String>{};
   return [
     for (final url
-        in strings(data, '**.progressive_url') +
-            strings(data, '**.browser_native_hd_url') +
-            strings(data, '**.playable_url'))
+        in data.$('**.progressive_url').texts() +
+            data.$('**.browser_native_hd_url').texts() +
+            data.$('**.playable_url').texts())
       if (RegExp(r'xpv_asset_id%22%3A(\d+)').firstMatch(url)?[1] ??
               RegExp(r'/m\d+/([\w-]+)\.mp4').firstMatch(url)?[1] ??
               Uri.parse(url).pathSegments.last.split('.').first
           case final id when seen.add(id))
         (id: id, video: true, url: url),
     for (final url in [
-      ...strings(data, '**.uri').where((u) => u.contains('t39.30808-6')),
-      ...strings(data, '**.viewer_image.uri'),
-      ...strings(data, '**.image.uri'),
+      ...data.$('**.uri').texts().where((u) => u.contains('t39.30808-6')),
+      ...data.$('**.viewer_image.uri').texts(),
+      ...data.$('**.image.uri').texts(),
     ])
       if (Uri.parse(url).pathSegments.last case final file)
         if (RegExp(r'^\d+_(\d+)_').firstMatch(file)?[1] ?? file.split('.').first case final id when seen.add(id))
@@ -198,7 +191,7 @@ List<StoryItem> storyItems(Json data) {
 List<String> photoIds(Doc d) => {
   for (final n in d.data.$('**'))
     if (n.$('__typename').text() == 'Photo') ?n.$('id').text(),
-  ...strings(d.data, '**.photo_id'),
+  ...d.data.$('**.photo_id').texts(),
   for (final l in links(d))
     if (RegExp(r'[?&]fbid=(\d+)').firstMatch(l) case final m?) m[1]!,
 }.toList();
@@ -211,7 +204,7 @@ String? setIn(Iterable<String> links, [bool Function(String set)? test]) => link
     .firstOrNull;
 
 // The set of a profile's photos: the photo grid's, else any `pb.` set.
-String? profileSet(Doc d) => setIn(strings(d.data, '**.pageItems.**')) ?? setIn(links(d), (s) => s.startsWith('pb.'));
+String? profileSet(Doc d) => setIn(d.data.$('**.pageItems.**').texts()) ?? setIn(links(d), (s) => s.startsWith('pb.'));
 
 final platform = Facebook();
 
@@ -247,19 +240,8 @@ final class Facebook extends Platform {
   }
 
   @override
-  Client client(Cookies jar) => Http.client(
-    base: web,
-    rate: apiRate,
-    check: true,
-    cookies: jar,
-    headers: {
-      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'accept-language': 'en-US,en;q=0.9',
-      'sec-fetch-dest': 'document',
-      'sec-fetch-mode': 'navigate',
-      'sec-fetch-site': 'same-origin',
-    },
-  );
+  Client client(Cookies jar) =>
+      Http.client(base: web, rate: apiRate, check: true, cookies: jar, browser: .page, login: const ['/login']);
 
   @override
   Future<void> explore(Job j) async {
@@ -328,52 +310,45 @@ final class Facebook extends Platform {
     j.phase(Kind.posts, '$n posts', done: true);
   }
 
-  // Walks a photo set from [start] along each page's next photo into
-  // [dir]; stops after 3 known photos in a row. With [mark], the last photo
-  // whose files are down is saved there, and a rerun continues from it.
+  // Walks a photo set (http's Feed, one photo a page) from the first of
+  // [start] along each photo's next one, then the other start points, into
+  // [dir]; stops after 3 known photos in a row. With [mark], where it got to
+  // is kept there, and a rerun lists what is new, then continues from it.
   Future<int> _walk(Job j, List<String> start, String set, String key, Dir Function(Photo) dir, {File? mark}) async {
+    if (start.isEmpty) return 0;
     final jumps = mark != null && !set.startsWith('pcb.'); // the profile's photos wrap around
-    final queue = [...start], seen = <String>{};
-    var n = 0, known = 0, saving = Future<void>.value(), ok = true;
-    for (var i = 0; i < queue.length && known < 3; i++) {
-      final id = queue[i];
-      if (!seen.add(id)) continue;
-      if (_known(j, '$key:$id')) {
-        known++;
-        continue;
-      }
+    var n = 0, known = 0, first = true;
+    final photos = Feed<({String id, Photo? photo})>((cursor) async {
+      final id = cursor ?? start.first;
+      if (_known(j, '$key:$id')) return (items: [(id: id, photo: null)], next: null);
       final ph = await photo(j.api, id, set);
-      if (ph == null) continue;
+      if (ph == null) return (items: const <({String id, Photo? photo})>[], next: null);
       // In the profile's photos, a next photo far after this one is the set starting over.
       final jump = jumps && (int.tryParse(ph.next ?? '') ?? 0) > (int.tryParse(id) ?? 1 << 62) + 5000000;
-      if (ph.next case final next? when !jump) queue.add(next);
-      final file = dir(ph).file('${ph.id}.${ext(ph.url)}');
-      if (!j.o.all && await file.exists()) {
-        j.index.posts['$key:${ph.id}'] = const [];
-        known++;
-        continue;
+      return (items: [(id: id, photo: ph)], next: jump ? null : ph.next);
+    }, cursor: mark == null || j.o.dry ? null : mark.path());
+    await photos.run(all: j.o.all, (page) async {
+      if (first) start.skip(1).forEach(page.follow);
+      first = false;
+      final ph = page.items().single.photo;
+      final file = ph == null ? null : dir(ph).file('${ph.id}.${ext(ph.url)}');
+      if (ph == null || file == null || !j.o.all && await file.exists()) {
+        if (ph != null) j.index.posts['$key:${ph.id}'] = const [];
+        if (++known >= 3) page.stop();
+        return;
       }
       known = 0;
       // The profile's photos run newest first: past --since, the rest are older.
-      if (!j.keep(ph.at)) {
-        if (mark != null) break;
-        continue;
-      }
-      final batch = _remember(j, '$key:${ph.id}', [
-        Download(file, url: ph.url, at: ph.at),
-        if (ph.caption case final c? when c.trim().isNotEmpty)
-          Download(dir(ph).file('${ph.id}.txt'), text: c, at: ph.at),
-      ]);
-      if (mark != null && !j.o.dry) {
-        saving = saving.then((_) async {
-          ok = ok && (await batch).failures().isEmpty;
-          if (ok) await mark.write(id);
-        });
-      }
+      if (!j.keep(ph.at)) return mark != null ? page.stop() : null;
+      page.add(
+        _remember(j, '$key:${ph.id}', [
+          Download(file, url: ph.url, at: ph.at),
+          if (ph.caption case final c? when c.trim().isNotEmpty)
+            Download(dir(ph).file('${ph.id}.txt'), text: c, at: ph.at),
+        ]).then((r) => r.failures().isEmpty),
+      );
       n++;
-    }
-    await saving;
-    if (mark != null && ok && !j.o.dry) await mark.delete();
+    });
     return n;
   }
 
@@ -392,12 +367,15 @@ final class Facebook extends Platform {
       ids.addAll(photoIds(all));
       set = profileSet(all);
     }
-    final mark = j.cursor(Kind.photos);
-    final resume = j.o.all ? '' : (await mark.text(or: '')).trim();
     j.phase(Kind.photos, 'listing photos');
-    final n = await _walk(j, [if (resume.isNotEmpty) resume, ...ids], set ?? '', 'photo', (ph) {
-      return j.folder(Kind.photos).dir(ph.at.format('yyyy-MM'));
-    }, mark: mark);
+    final n = await _walk(
+      j,
+      ids,
+      set ?? '',
+      'photo',
+      (ph) => j.folder(Kind.photos).dir(ph.at.format('yyyy-MM')),
+      mark: j.cursor(Kind.photos),
+    );
     j.phase(Kind.photos, '$n photos listed', done: true);
   }
 
@@ -411,7 +389,7 @@ final class Facebook extends Platform {
       for (final d in pages) ...[
         for (final l in links(d))
           if (RegExp(r'/(?:videos|reels?)/(\d+)|/watch/?\?v=(\d+)').firstMatch(l) case final m?) m[1] ?? m[2]!,
-        ...strings(d.data, '**.video_id'),
+        ...d.data.$('**.video_id').texts(),
       ],
     };
     var n = 0;
@@ -466,8 +444,8 @@ final class Facebook extends Platform {
   Future<void> _stories(Job j, Profile p) async {
     j.phase(Kind.stories, 'fetching active stories');
     final buckets = {
-      ...strings(p.doc.data, '**.story_bucket.nodes.*.id'),
-      ...strings(p.doc.data, '**.story_bucket.id'),
+      ...p.doc.data.$('**.story_bucket.nodes.*.id').texts(),
+      ...p.doc.data.$('**.story_bucket.id').texts(),
     };
     var files = <Download>[];
     for (final path in [
@@ -492,7 +470,7 @@ final class Facebook extends Platform {
       final id = link.firstMatch(n.$('url').text() ?? '')?[1] ?? link.firstMatch(n.value<String>() ?? '')?[1];
       if (id != null && (found[id] ?? '').isEmpty) found[id] = n.$('title.text').text() ?? '';
     }
-    for (final id in strings(p.doc.data, '**.highlight_id')) {
+    for (final id in p.doc.data.$('**.highlight_id').texts()) {
       found[id] ??= '';
     }
     final now = <String, Set<String>>{};

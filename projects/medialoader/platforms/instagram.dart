@@ -62,19 +62,18 @@ final class Instagram extends Platform {
     cookies: jar,
     // Without the csrftoken echoed as a header, Instagram treats you as a bot.
     csrf: (cookie: 'csrftoken', header: 'x-csrftoken'),
-    headers: {
-      'accept': '*/*',
-      'accept-language': 'en-US,en;q=0.9',
-      'x-ig-app-id': '936619743392459',
-      'x-requested-with': 'XMLHttpRequest',
-      'sec-fetch-site': 'same-origin',
-    },
+    browser: .api,
+    // Asking you to log in again, or to verify the account, it redirects there.
+    login: const ['/accounts/login', '/challenge/'],
+    headers: {'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest'},
   );
 
   @override
   Object explain(Object e) => switch (e) {
     HttpStatusException(status: final status && (401 || 403 || 429), :final method, :final url) =>
       'Instagram refused $method $url (HTTP $status): probably rate limited, try again in 15 minutes',
+    SessionException(:final url) when url.contains('/challenge/') =>
+      'Instagram wants you to verify the account. Do it in the browser or the app, then run again.\n$url',
     _ => super.explain(e),
   };
 
@@ -165,12 +164,12 @@ Future<({Profile profile, Page? first})> profile(Client api, String name) async 
   Json u;
   Page? first;
   if (RegExp(r'^\d+$').hasMatch(name)) {
-    u = (await json(api.get('/api/v1/users/$name/info/'))).$('user');
+    u = (await api.get('/api/v1/users/$name/info/').json()).$('user');
   } else {
     first = await posts(api, name, null);
     u = first.items.firstOrNull?.$('user') ?? Json.of(null);
     if (u.isEmpty) {
-      u = (await json(api.get('/api/v1/users/web_profile_info/', query: {'username': name}))).$('data.user');
+      u = (await api.get('/api/v1/users/web_profile_info/', query: {'username': name}).json()).$('data.user');
     }
   }
   return (
@@ -185,32 +184,32 @@ Future<({Profile profile, Page? first})> profile(Client api, String name) async 
 
 // One page (12 posts) of the profile grid.
 Future<Page> posts(Client api, String user, String? cursor) async {
-  final response = await json(
-    api.post(
-      '/graphql/query',
-      headers: {'referer': '$web/$user/'},
-      body: .form({
-        'doc_id': '28975909992013618', // PolarisProfilePostsTabContentQuery
-        'server_timestamps': true,
-        'variables': {
-          'after': ?cursor,
-          'data': {
-            'count': 12,
-            'include_reel_media_seen_timestamp': true,
-            'include_relationship_info': true,
-            'latest_besties_reel_media': true,
-            'latest_reel_media': true,
+  final response = await api
+      .post(
+        '/graphql/query',
+        headers: {'referer': '$web/$user/'},
+        body: .form({
+          'doc_id': '28975909992013618', // PolarisProfilePostsTabContentQuery
+          'server_timestamps': true,
+          'variables': {
+            'after': ?cursor,
+            'data': {
+              'count': 12,
+              'include_reel_media_seen_timestamp': true,
+              'include_relationship_info': true,
+              'latest_besties_reel_media': true,
+              'latest_reel_media': true,
+            },
+            'first': 12,
+            'include_multi_captions': true,
+            'username': user,
+            '__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider': true,
+            '__relay_internal__pv__PolarisShortDramaEnabledrelayprovider': false,
+            '__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider': false,
           },
-          'first': 12,
-          'include_multi_captions': true,
-          'username': user,
-          '__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider': true,
-          '__relay_internal__pv__PolarisShortDramaEnabledrelayprovider': false,
-          '__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider': false,
-        },
-      }),
-    ),
-  );
+        }),
+      )
+      .json();
   final feed = response.$('data.xdt_api__v1__feed__user_timeline_graphql_connection');
   final more = feed.$('page_info.has_next_page').or(false);
   return (items: feed.$('edges.*.node').toList(), next: more ? feed.$('page_info.end_cursor').text() : null);
@@ -223,49 +222,35 @@ Future<Json> post(Client api, String code) async {
       .substring(0, min(11, code.length))
       .split('')
       .fold(BigInt.zero, (n, c) => n * BigInt.from(64) + BigInt.from(digits.indexOf(c)));
-  final item = (await json(api.get('/api/v1/media/$id/info/'))).$('items.0');
+  final item = (await api.get('/api/v1/media/$id/info/').json()).$('items.0');
   return item.isEmpty ? throw Exception('post not found: $code') : item;
 }
 
 // Every highlight as "highlight:<id>" (the profile page embeds few or none).
 Future<List<String>> highlights(Client api, Profile p) async {
-  final response = await json(
-    api.get(
-      '/graphql/query/',
-      query: {
-        'query_hash': 'd4d88dc1500312af6f937f7b804c68c3',
-        'variables': {'user_id': p.id, 'include_highlight_reels': true},
-      },
-      headers: {'referer': '$web/${p.name}/'},
-    ),
-  );
+  final response = await api
+      .get(
+        '/graphql/query/',
+        query: {
+          'query_hash': 'd4d88dc1500312af6f937f7b804c68c3',
+          'variables': {'user_id': p.id, 'include_highlight_reels': true},
+        },
+        headers: {'referer': '$web/${p.name}/'},
+      )
+      .json();
   return [for (final id in response.$('data.user.edge_highlight_reels.edges.*.node.id')) 'highlight:${id.text()}'];
 }
 
 // Several reels in one call: a user id is their current stories,
 // "highlight:<id>" one highlight.
 Future<List<Reel>> reels(Client api, List<String> ids, String user) async {
-  final response = await json(
-    api.get('/api/v1/feed/reels_media/', query: {'reel_ids': ids}, headers: {'referer': '$web/$user/'}),
-  );
+  final response = await api
+      .get('/api/v1/feed/reels_media/', query: {'reel_ids': ids}, headers: {'referer': '$web/$user/'})
+      .json();
   return [
     for (final r in response.$('reels_media'))
       (id: r.$('id').or(''), title: r.$('title').or(''), items: r.$('items').toList()),
   ];
-}
-
-// When Instagram wants something (log in again, verify the account) it
-// redirects API calls to an HTML page instead of answering them.
-Future<Json> json(Future<Response> request) async {
-  final response = await request;
-  final url = response.url();
-  if (!url.contains('/accounts/') && !url.contains('/challenge/')) return response.json();
-  await response.close();
-  throw Exception(
-    url.contains('/accounts/login')
-        ? 'Instagram logged you out: copy a fresh .ins.session from your browser.'
-        : 'Instagram wants you to verify the account. Do it in the browser or the app, then run again.\n$url',
-  );
 }
 
 // ── posts and stories as files ───────────────────────────────────────────

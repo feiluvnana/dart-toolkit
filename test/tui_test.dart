@@ -2592,6 +2592,53 @@ void main() {
       t.close();
     });
 
+    test('Region.bars() gives Console bars a row each, out of the status row', () async {
+      Bar? bar;
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.bars(), keys: {'b': ('', () => bar = Console.bar('dl', total: 4)..tick(2))}),
+        width: 50,
+        height: 4,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('b'));
+      await t.pump();
+      expect(t.row(0), matches(RegExp(r'^dl ━+─+  2/4  ')));
+      expect(t.row(3), isNot(contains('dl')), reason: 'not in the status row too');
+      await bar!.close();
+      await t.pump();
+      expect(t.row(0), startsWith('✓ dl'), reason: 'an ended bar shows its mark for a moment');
+      t.close();
+    });
+
+    test('Region.log() draws Console.log lines with their times, filtered; out of the status row', () async {
+      var failuresOnly = false;
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen(
+          (r) => r.log(only: failuresOnly ? (l) => l.failed : null),
+          keys: {
+            'a': ('', () => Console.log('saved a.jpg')),
+            'b': ('', () => Console.log('lost b.jpg', failed: true)),
+            'f': ('', () => failuresOnly = true),
+          },
+        ),
+        width: 40,
+        height: 5,
+      );
+      await t.pump();
+      t.bytes(utf8.encode('ab'));
+      await t.pump();
+      final rows = [for (var i = 0; i < 4; i++) t.row(i)].join('\n');
+      expect(rows, allOf(contains('saved a.jpg'), contains('lost b.jpg')));
+      expect(t.row(0), matches(RegExp(r'^\d\d:\d\d:\d\d  ')));
+      expect(t.row(4), isNot(contains('saved')));
+      t.bytes(utf8.encode('f'));
+      await t.pump();
+      expect([for (var i = 0; i < 4; i++) t.row(i)].join('\n'), allOf(contains('lost b.jpg'), isNot(contains('saved a.jpg'))));
+      t.close();
+    });
+
     test('a status-row bar draws label, glyphs, counts and rate like Console.bar', () async {
       Bar? bar;
       final t = testSession<int>(

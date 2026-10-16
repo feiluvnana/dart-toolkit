@@ -28,8 +28,10 @@ final class Feed<T> {
   ///
   /// [onPage] gets each non-empty page as a [FeedPage]: its `items()`,
   /// `add(work)` for what the page starts (a download, a save; `true` when
-  /// it succeeded), and `stop()` to end the walk there (the rest is known,
-  /// or older than wanted). [run] waits for [onPage], not for the work: the
+  /// it succeeded), `follow(cursor)` for another start point, and `stop()`
+  /// to end the walk there (the rest is known, or older than wanted). A
+  /// cursor is visited once a run, so a feed that loops back ends. A page
+  /// with no items ends its chain; the walk goes on with what was followed. [run] waits for [onPage], not for the work: the
   /// next page is fetched while it runs. The cursor moves past a page only
   /// once its work and every earlier page's succeeded. With [all], the walk
   /// starts from the top whatever cursor is saved (a full re-list). A
@@ -59,20 +61,29 @@ final class Feed<T> {
       });
     }
 
-    // From [cursor]; true when the end was reached.
+    // Cursors pages followed, and every cursor visited: each once.
+    final followed = <String>[], visited = <String?>{};
+
+    // From [cursor], then the followed ones; true when the end was reached.
     Future<bool> walk(String? cursor, {required bool tracked}) async {
+      visited.add(cursor);
       for (;;) {
         final p = await _page(cursor);
-        final end = p.items.isEmpty || p.next == null || p.next == cursor;
-        final page = p.items.isEmpty ? null : FeedPage<T>._(p.items);
+        final page = p.items.isEmpty ? null : FeedPage<T>._(p.items, followed);
         if (page != null) await onPage(page);
         if (page != null && page._stopped) {
           track(page, null, tracked: tracked);
           return false;
         }
-        track(page, end ? null : p.next, tracked: tracked);
-        if (end) return true;
-        cursor = p.next;
+        // This chain's next page, else the next followed cursor not seen yet.
+        var next = p.items.isEmpty || visited.contains(p.next) ? null : p.next;
+        while (next == null && followed.isNotEmpty) {
+          final f = followed.removeAt(0);
+          if (!visited.contains(f)) next = f;
+        }
+        track(page, next, tracked: tracked);
+        if (next == null) return true;
+        visited.add(cursor = next);
       }
     }
 
@@ -86,12 +97,13 @@ final class Feed<T> {
   }
 }
 
-/// One page of a [Feed] walk: its items, the work it starts, and whether
-/// the walk ends here.
+/// One page of a [Feed] walk: its items, the work it starts, the cursors
+/// it adds to the walk, and whether the walk ends here.
 final class FeedPage<T> {
-  FeedPage._(this._items);
+  FeedPage._(this._items, this._followed);
 
   final List<T> _items;
+  final List<String> _followed;
   final _work = <Future<bool>>[];
   var _stopped = false;
 
@@ -108,6 +120,14 @@ final class FeedPage<T> {
 
   /// End the walk at this page (its work still counts).
   void stop() => _stopped = true;
+
+  /// Walk [cursor] too, once the pages from here run out: another start
+  /// point (an album's first photo, a link found on the page). A cursor
+  /// already visited is skipped. Returns this page.
+  FeedPage<T> follow(String cursor) {
+    _followed.add(cursor);
+    return this;
+  }
 
   Future<bool> _done() async => (await Future.wait(_work)).every((ok) => ok);
 }

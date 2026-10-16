@@ -94,6 +94,13 @@ void main() {
           res.headers.set('location', '/ua');
         case '/ua':
           res.write(r.headers.value('user-agent'));
+        case '/seen':
+          res.write([for (final h in ['accept', 'sec-fetch-mode', 'upgrade-insecure-requests']) r.headers.value(h)].join('|'));
+        case '/private':
+          res.statusCode = 302;
+          res.headers.set('location', '/accounts/login/?next=/private');
+        case '/accounts/login/':
+          res.write('<form>sign in</form>');
         case '/multipart':
           final body = await utf8.decodeStream(r);
           res.write('${r.headers.value('content-type')}|${r.headers.contentLength}|$body');
@@ -370,6 +377,26 @@ Future<void> main() async {
       final quick = Http.client(proxy: 'socks5://127.0.0.1:${proxy.port}', timeout: 300.milliseconds, retries: 0);
       expect(await quick.copy(timeout: 5.seconds).get('$url/ua').status(), 200);
       await expectLater(quick.get('$url/ua'), throwsA(anything));
+    });
+  });
+
+  group('browser and login', () {
+    test('browser: sends what a browser sends for a page or an API call; headers still win', () async {
+      expect(await Http.client(browser: .page).get('$url/seen').text(), startsWith('text/html,'));
+      expect(await Http.client(browser: .page).get('$url/seen').text(), endsWith('|navigate|1'));
+      expect(await Http.client(browser: .api).get('$url/seen').text(), '*/*|cors|null');
+      expect(await Http.client(browser: .api, headers: {'accept': 'application/json'}).get('$url/seen').text(), startsWith('application/json|'));
+      expect(await Http.client().get('$url/seen').text(), contains('null|null'), reason: 'none without browser:');
+    });
+
+    test('login: landing on a sign-in page throws SessionException, a ToolkitException', () async {
+      final api = Http.client(login: ['/accounts/login']);
+      await expectLater(
+        api.get('$url/private'),
+        throwsA(isA<SessionException>().having((e) => e.url, 'url', contains('/accounts/login/'))),
+      );
+      expect(await api.get('$url/ua').status(), 200);
+      await expectLater(api.copy().get('$url/private'), throwsA(isA<ToolkitException>()), reason: 'a copy keeps login:');
     });
   });
 

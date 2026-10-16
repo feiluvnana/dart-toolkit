@@ -2,15 +2,18 @@
 // the files it asks for (a [Download]).
 library;
 
+import 'dart:convert';
+
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/video.dart';
 
 import 'dashboard.dart';
 import 'platform.dart';
-import 'queue.dart';
 
 typedef Options = ({bool all, bool reset, bool dry, DateTime? since, int? image, int? video});
 typedef Results = List<Outcome<Download, bool>>;
@@ -23,15 +26,20 @@ final class Download {
   final DateTime? at;
 }
 
+// Images and videos come from the CDNs: no rate limit, retries, resumes;
+// every user's files share 8 lanes.
+final cdn = Http.client(retries: 3, resume: true);
+final _lanes = Pool(limit: 8);
+
 // One user's download: what its explorers share. A failed one is reported
 // and retried on r.
 final class Job {
-  Job(this.target, this.kinds, this.api, this.root, this.queue);
+  Job(this.target, this.kinds, this.api, this.root, this.o);
   final Target target;
   final Set<Kind> kinds;
   final Client api;
   final Dir root; // downloads/<code>/
-  final Queue queue;
+  final Options o;
   late final u = board.user(target.user, platform: code);
   final batches = <Future<Results>>[];
   Dir? _dir;
@@ -39,7 +47,6 @@ final class Job {
 
   Platform get platform => target.platform;
   String get code => platform.code;
-  Options get o => queue.o;
   Dir get dir => _dir!;
   Index get index => _index!;
 
@@ -140,10 +147,71 @@ final class Job {
 
   var _profiles = 0;
 
+  // Queues [files], each waiting for a lane; completes when the batch is done.
   Future<Results> add(List<Download> files) {
-    final batch = queue.add(this, files);
+    final batch = Pool.settle(files, _save, limit: files.length);
     batches.add(batch);
     return batch;
+  }
+
+  // One file unless it is there (counted as had when the job opened); true
+  // when new. Its bar is a row in the dashboard, or a line without one.
+  Future<bool> _save(Download f) async {
+    if (await f.to.exists()) return false;
+    final path = f.to.path(from: dir);
+    final key = path.split('/').first, part = u.parts.putIfAbsent(key, () => Part(key));
+    part.queued++;
+    final got = Meter(); // this file's bytes, taken back if it fails
+    try {
+      if (o.dry) {
+        board.note('@${u.name} would save $path', platform: code);
+      } else {
+        final bar = Console.bar('[$code] @${u.name} $path', keep: false);
+        board.active++;
+        await _lanes
+            .run(
+              () => switch (f.text) {
+                final text? => Reader.of(utf8.encode(text)) & part.meter & got & bar > f.to,
+                _ => cdn.get(f.url!, headers: {'referer': '${platform.site}/'}) & board.meter & part.meter & got & bar > f.to,
+              },
+            )
+            .whenComplete(() => board.active--);
+        board.note('@${u.name} $path  ${await _compress(f, part)}', platform: code);
+        if (f.at case final at?) await f.to.touch(at);
+      }
+      part.added++;
+      return true;
+    } catch (e) {
+      part
+        ..failed += 1
+        ..stored -= got.done();
+      board.fail('✗ @${u.name} $path: $e', () async {
+        part
+          ..failed -= 1
+          ..queued -= 1;
+        await add([f]);
+      }, platform: code);
+      rethrow;
+    }
+  }
+
+  // Re-encodes the file at --image-quality/--video-quality; returns its size
+  // on disk and how compressing went: `1.6 MB (compressed from 2.7 MB, -39%)`.
+  Future<String> _compress(Download f, Part part) async {
+    final path = f.to.path(), size = (await f.to.size()).size();
+    final video = const {'mp4', 'mov', 'webm', 'mkv'}.contains(path.split('.').last.toLowerCase());
+    final quality = video ? o.video : o.image;
+    if (quality == null) return size;
+    final bar = Console.bar('[$code] compressing ${f.to.path(from: dir)}', keep: false);
+    try {
+      final c = video
+          ? await (Video.compress(path, quality: quality) & bar)
+          : await (Image.compress(path, quality: quality) & bar);
+      if (c case Compressed(:final before, :final after)) part.stored += after - before;
+      return c is Compressed ? c.text() : '$size (${c.text()})';
+    } on ToolkitException catch (e) {
+      return '$size (not compressed: ${e.message})';
+    }
   }
 
   // Returns the new files.

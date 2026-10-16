@@ -17,6 +17,7 @@ final class DownloadLine {
       _bridge = bridge;
       _id = bridge.barStarted(
         () => (label: _label, done: _done, total: _total, unit: Unit.bytes, rate: _window.rate(), spinning: false),
+        keep: false,
       );
     } else if (!_live) {
       io.stderr.writeln('dart_toolkit: $_label (once per machine)');
