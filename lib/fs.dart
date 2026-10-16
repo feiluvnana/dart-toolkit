@@ -377,10 +377,18 @@ final class File extends Entry with Reader, Writer {
       try {
         await tmpFile.create(exclusive: true);
         break;
-      } on io.FileSystemException {
+      } on io.PathExistsException {
         if (attempt >= 4) rethrow;
         tmp = tree.tmpPath(target);
         tmpFile = io.File(tmp);
+      } on io.FileSystemException catch (e) {
+        // A read-only or missing folder: say which file, not the hidden temp.
+        final os = e.osError ?? const io.OSError();
+        throw switch (e) {
+          io.PathAccessException() => io.PathAccessException(target, os, e.message),
+          io.PathNotFoundException() => io.PathNotFoundException(target, os, e.message),
+          _ => io.FileSystemException(e.message, target, e.osError),
+        };
       }
     }
     // An interrupt skips `finally`: the exit hook removes the temp file.

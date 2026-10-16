@@ -134,6 +134,17 @@ void main() {
       expect(await Fs.entry(p('dst.txt')), isNull);
     });
 
+    test('B18: a write into a read-only folder names the file, not its temp', () async {
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
+      await io.Directory(p('locked')).create();
+      await Process.run('chmod', ['555', p('locked')]);
+      addTearDown(() => Process.run('chmod', ['755', p('locked')]));
+      await expectLater(
+        Fs.file(p('locked/a.txt')).write('x'),
+        throwsA(isA<io.PathAccessException>().having((e) => e.path, 'path', p('locked/a.txt'))),
+      );
+    });
+
     test('B10: a dest link that cannot be removed fails the copy, never writes through it', () async {
       if (Platform.isWindows) return markTestSkipped('POSIX modes');
       await Fs.file(p('outside.txt')).write('keep');
