@@ -276,7 +276,8 @@ final class _Packed with Reader {
       final out = p.join(work.path, 'out.7z');
       await io.File(list).writeAsString(names.map((n) => '$n\n').join());
       final pw = _password;
-      final run = await Shell.run([
+      // A password goes on stdin (asked twice), never in the process list.
+      final make = Shell.filter([
         await tool(Tool.sevenzip),
         'a',
         '-t7z',
@@ -286,11 +287,15 @@ final class _Packed with Reader {
         '-bso0',
         '-bsp0',
         '-y',
-        if (pw != null) ...['-p$pw', '-mhe=on'],
+        if (pw != null) ...['-p', '-mhe=on'],
         out,
         '@$list',
       ], dir: base);
-      if (!run.ok()) throw io.FileSystemException('7-Zip failed: ${run.err().trim()}', base);
+      try {
+        await make.transform(Stream.value(pw == null ? const <int>[] : utf8.encode('$pw\n$pw\n'))).drain<void>();
+      } on io.ProcessException catch (e) {
+        throw io.FileSystemException('7-Zip failed: ${e.message}', base);
+      }
       yield* io.File(out).openRead();
     } finally {
       await work.delete(recursive: true).catchError((_) => work);
@@ -487,24 +492,39 @@ final class _Extraction {
         await sink.close();
       }
       final exe = await tool(Tool.sevenzip);
+      // A password goes on stdin, never in the process list; without one a
+      // bare `-p` (the empty password) keeps 7-Zip from asking.
+      final unpack = Shell.filter([exe, 'x', '-y', '-bso0', '-bsp0', if (password == null) '-p', '-o$out', src.path]);
+      final done = Completer<void>();
+      final sub = unpack
+          .transform(Stream.value(password == null ? const <int>[] : utf8.encode('$password\n')))
+          .listen(
+            null,
+            onError: (Object e, StackTrace st) {
+              if (!done.isCompleted) done.completeError(e, st);
+            },
+            onDone: () {
+              if (!done.isCompleted) done.complete();
+            },
+            cancelOnError: true,
+          );
       final cancel = _cancel = Completer<void>();
-      final run = await Shell.run([
-        exe,
-        'x',
-        '-y',
-        '-bso0',
-        '-bsp0',
-        '-p${password ?? ''}',
-        '-o$out',
-        src.path,
-      ], cancel: cancel.future);
-      _cancel = null;
-      if (!run.ok()) {
-        final err = run.err().trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
-        final why = err.isEmpty ? 'exit ${run.code()}' : err.sublist(err.length > 3 ? err.length - 3 : 0).join(' / ');
+      unawaited(
+        cancel.future.then((_) async {
+          await sub.cancel(); // kills 7-Zip and what it started
+          if (!done.isCompleted) done.completeError(const ContentException('corrupt archive: stopped'));
+        }),
+      );
+      try {
+        await done.future;
+      } on io.ProcessException catch (e) {
+        final err = e.message.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
+        final why = err.isEmpty ? 'exit ${e.errorCode}' : err.sublist(err.length > 3 ? err.length - 3 : 0).join(' / ');
         throw ContentException(
           why.contains('Wrong password') ? 'wrong password or corrupt archive' : 'corrupt archive: $why',
         );
+      } finally {
+        _cancel = null;
       }
       // Listed first: moving entries out while listing would skip some.
       for (final e in await io.Directory(out).list(recursive: true, followLinks: false).toList()) {

@@ -183,7 +183,7 @@ abstract final class Shell {
       final code = await proc.exitCode;
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
       if (check && code != 0) {
-        throw io.ProcessException(command[0], _shown(command.sublist(1)), 'exit $code: ${_tail(stderr).trim()}', code);
+        throw io.ProcessException(command[0], _shown(command).sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
       }
       return Output._(code, out.takeBytes(), stderr);
     } finally {
@@ -559,7 +559,7 @@ final class _Filter implements Pipe {
     } catch (_) {}
     if (code != 0) {
       final err = utf8.decode(stderrBuf.takeBytes(), allowMalformed: true);
-      throw io.ProcessException(_command[0], _shown(_command.sublist(1)), 'exit $code: ${_tail(err)}', code);
+      throw io.ProcessException(_command[0], _shown(_command).sublist(1), 'exit $code: ${_tail(err)}', code);
     }
   }
 
@@ -605,15 +605,23 @@ final class _LineSink implements Sink<String> {
 /// [args] fit for an error message: URL credentials and token values,
 /// secret header values (`-H 'Authorization: …'`) and secret options
 /// (`--token=…`, `--password …`) shown as `***`.
-List<String> _shown(List<String> args) => [
-  for (var i = 0; i < args.length; i++)
-    if (i > 0 && (args[i - 1] == '-H' || args[i - 1] == '--header'))
-      _header(args[i])
-    else if (i > 0 && _secretFlag.hasMatch(args[i - 1]) && !args[i - 1].contains('='))
-      '***'
-    else
-      _arg(args[i]),
-];
+List<String> _shown(List<String> command) {
+  // 7-Zip takes its password stuck to the flag: `-pSECRET`.
+  final sevenZip = command.isNotEmpty && _sevenZip.hasMatch(command.first);
+  return [
+    for (var i = 0; i < command.length; i++)
+      if (i > 0 && (command[i - 1] == '-H' || command[i - 1] == '--header'))
+        _header(command[i])
+      else if (i > 0 && _secretFlag.hasMatch(command[i - 1]) && !command[i - 1].contains('='))
+        '***'
+      else if (sevenZip && i > 0 && command[i].length > 2 && command[i].startsWith('-p'))
+        '-p***'
+      else
+        _arg(command[i]),
+  ];
+}
+
+final _sevenZip = RegExp(r'(^|[/\\])7z[a-z]?(\.exe)?$', caseSensitive: false);
 
 String _arg(String a) {
   final flag = _secretFlag.firstMatch(a);

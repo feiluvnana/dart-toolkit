@@ -165,6 +165,18 @@ Future<void> main() async {
       expect(() => a.add(0), throwsUnsupportedError);
     });
 
+    test('P2: a 7-Zip password stuck to -p is masked in the error', () async {
+      final dir = await Directory.systemTemp.createTemp('fake7z');
+      addTearDown(() => dir.delete(recursive: true));
+      final fake = '${dir.path}/7zz';
+      await Fs.file(fake).write('#!/bin/sh\nexit 2\n');
+      await Process.run('chmod', ['+x', fake]);
+      await expectLater(
+        Shell.run([fake, 'x', '-pSECRET', 'a.7z'], check: true),
+        throwsA(isA<ProcessException>().having((e) => '$e', 'text', allOf(contains('-p***'), isNot(contains('SECRET'))))),
+      );
+    }, testOn: '!windows');
+
     test('a program that cannot start throws ProcessException', () async {
       expect(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isA<ProcessException>()));
     });

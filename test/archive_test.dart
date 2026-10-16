@@ -1613,6 +1613,23 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       expect(await Fs.file(p('out-ar/a.txt')).text(), 'hello');
     });
 
+    test('P2: a big encrypted 7z goes through 7-Zip with the password on stdin', () async {
+      final big = Uint8List(33 << 20);
+      final rnd = Random(3);
+      for (var i = 0; i < big.length; i++) {
+        big[i] = rnd.nextInt(256); // incompressible: the archive passes 32 MiB
+      }
+      await (Reader.of(big) > Fs.file(p('src/big.bin')));
+      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip, password: 'pw s3cret') >
+          Fs.file(p('big.7z')));
+      await expectLater(
+        Fs.file(p('big.7z')) > Archive.unarchive(p('bad'), password: 'nope'),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('wrong password'))),
+      );
+      await (Fs.file(p('big.7z')) > Archive.unarchive(p('out'), password: 'pw s3cret'));
+      expect((await Fs.file(p('out/big.bin')).bytes()).length, big.length);
+    }, tags: 'slow');
+
     test('7z bigger than the in-memory limit goes through 7-Zip; a 7z write is LZMA2', () async {
       // Incompressible, so the archive itself passes 32 MiB.
       final big = Uint8List(33 << 20);
