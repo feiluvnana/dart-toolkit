@@ -10,6 +10,7 @@ import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/poll.dart';
 
 /// Python-generated fixtures (codecs with the same names): `python3 -c
 /// "open('x','wb').write('…'.encode('euc-kr'))"`, bytes pasted as literals so
@@ -1281,8 +1282,7 @@ Future<void> main() async {
       expect(await File(to.path).readAsBytes(), body);
       // A GET nobody pipes or awaits is still sent.
       unawaited(c.get('$url/file?lone').then((r) => r.close()));
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(hits['/file'], before + 2);
+      expect(await eventually(() => hits['/file'] == before + 2), isTrue);
       // A hash mismatch deletes the .part.
       await File(to.path).delete();
       await File('${to.path}.part').writeAsBytes(body.sublist(0, 10));

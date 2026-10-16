@@ -12,6 +12,7 @@ import 'package:test/test.dart';
 
 import 'support/capture.dart';
 import 'support/child.dart';
+import 'support/poll.dart';
 
 /// A [Writer] into a file path, so the resume handshake sees a path.
 final class _File with Reader, Writer {
@@ -166,7 +167,7 @@ void main() {
   test('bug 10: the pool abort error names the absolute URL', () async {
     final pool = Http.pool([Http.client(retries: 2, base: '$url/')]);
     final pending = pool.get('busy');
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(await eventually(() => (hits['/busy'] ?? 0) > 0), isTrue); // in flight, retrying
     unawaited(pool.close());
     await expectLater(pending, throwsA(isA<HttpRequestException>().having((e) => e.url, 'url', '$url/busy')));
   });
@@ -174,6 +175,11 @@ void main() {
   test('bug 10: a proxy without a port uses 1080; an unknown scheme is refused', () async {
     expect(() => Http.client(proxy: 'ftp://p'), throwsArgumentError);
     // The refusal (nothing listens on 1080 here) names the port it tried.
+    try {
+      await (await ServerSocket.bind(InternetAddress.loopbackIPv4, 1080)).close();
+    } on SocketException {
+      return markTestSkipped('something listens on 127.0.0.1:1080');
+    }
     await expectLater(
       Http.client(proxy: 'socks5://127.0.0.1', retries: 0).get('$url/ua').text(),
       throwsA(predicate((e) => '$e'.contains('1080'))),
@@ -298,7 +304,9 @@ Future<void> main() async {
       addTearDown(proxy.close);
       final quick = Http.client(proxy: 'socks5://127.0.0.1:${proxy.port}', timeout: 300.milliseconds, retries: 0);
       expect(await quick.copy(timeout: 5.seconds).get('$url/ua').status(), 200);
-      await expectLater(quick.get('$url/ua'), throwsA(anything));
+      final sw = Stopwatch()..start();
+      await expectLater(quick.get('$url/ua'), throwsA(isA<TimeoutException>()));
+      expect(sw.elapsed, greaterThanOrEqualTo(300.milliseconds));
     });
   });
 

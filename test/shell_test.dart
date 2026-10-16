@@ -412,9 +412,12 @@ Future<void> main() async {
       break;
     }
   }
-  await Future<void>.delayed(const Duration(milliseconds: 300));
-  final ps = await Process.run('ps', ['-p', pid!, '-o', 'pid=']);
-  print('alive=${'${ps.stdout}'.trim().isNotEmpty}');
+  var alive = true;
+  for (var i = 0; i < 100 && alive; i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    alive = '${(await Process.run('ps', ['-p', pid!, '-o', 'pid='])).stdout}'.trim().isNotEmpty;
+  }
+  print('alive=$alive');
 }
 ''', timeout: const Duration(seconds: 15));
       expect(r.stdout, contains('caught bad line'), reason: '${r.stderr}');

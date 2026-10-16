@@ -232,10 +232,20 @@ void main() {
     test('nested roots are walked once (regression: one walk per root)', () {
       final doc = Html.parse('${'<div>' * 3000}<a>x</a>${'</div>' * 3000}<div><a>y</a></div>');
       final divs = doc.$('div');
+      final one = Stopwatch()..start();
+      for (var i = 0; i < 5; i++) {
+        doc.$('a');
+      }
+      one.stop();
       final sw = Stopwatch()..start();
-      final links = divs.$('a');
+      late Elements links;
+      for (var i = 0; i < 5; i++) {
+        links = divs.$('a');
+      }
       expect(links.texts(), ['x', 'y']);
-      expect(sw.elapsedMilliseconds, lessThan(500)); // one walk is ~5 ms; one per root is seconds
+      // Relative to one walk of the tree, so load cannot fail it: a walk per
+      // root (3,001 of them) is ~1,000× one walk.
+      expect(sw.elapsed, lessThan(one.elapsed * 20 + 50.milliseconds));
       expect(divs.$('div').length, 3001);
     });
   });

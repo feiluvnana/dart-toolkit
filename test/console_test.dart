@@ -8,6 +8,7 @@ import 'package:dart_toolkit/src/progress.dart' show Run;
 import 'package:dart_toolkit/src/terminal.dart' as term;
 import 'package:test/test.dart';
 
+import 'support/capture.dart';
 import 'support/child.dart';
 
 void main() {
@@ -310,17 +311,23 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
     });
 
     test('two live bars may run at once', () async {
-      final open = Console.bar('', total: 10);
-      final other = Console.bar('', total: 5)..tick();
-      await other.close();
-      await open.close();
+      final run = await capture(() async {
+        final open = Console.bar('A', total: 10);
+        final other = Console.bar('B', total: 5)..tick();
+        await other.close();
+        await open.close();
+      });
+      expect(run.err, 'B 1/5\nA 0/10\n');
     });
 
-    test('tick counts and stops at the total, returns the bar', () async {
-      final bar = Console.bar('T', total: 3);
-      expect(identical(bar.tick(), bar), isTrue);
-      bar.tick(5);
-      await bar.close();
+    test('tick counts past the total and returns the bar', () async {
+      final run = await capture(() async {
+        final bar = Console.bar('T', total: 3);
+        expect(identical(bar.tick(), bar), isTrue);
+        bar.tick(5);
+        await bar.close();
+      });
+      expect(run.err, 'T 6/3\n');
     });
 
     test('L3: counts past the total are kept, negative ticks ignored', () async {
@@ -373,9 +380,12 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
     }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
 
     test('no total means unknown, like 0', () async {
-      final bar = Console.bar('U');
-      bar.tick(11);
-      await bar.close();
+      final run = await capture(() async {
+        final bar = Console.bar('U');
+        bar.tick(11);
+        await bar.close();
+      });
+      expect(run.err, startsWith('U 11 '));
     });
 
     test('K2: a pipeline that fails before the bar runs frees the line', () async {
@@ -387,16 +397,22 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
     });
 
     test('unknown totals count up', () async {
-      final bar = Console.bar('', total: 0);
-      bar.tick();
-      bar.tick(10);
-      await bar.close();
+      final run = await capture(() async {
+        final bar = Console.bar('Z', total: 0);
+        bar.tick();
+        bar.tick(10);
+        await bar.close();
+      });
+      expect(run.err, startsWith('Z 11 '));
     });
 
     test('close is idempotent', () async {
-      final bar = Console.bar('', total: 1);
-      await bar.close();
-      await bar.close();
+      final run = await capture(() async {
+        final bar = Console.bar('C', total: 1);
+        await bar.close();
+        await bar.close();
+      });
+      expect(run.err, 'C 0/1\n');
     });
 
     test('parallel watched futures and a bar print one line each when piped', () async {

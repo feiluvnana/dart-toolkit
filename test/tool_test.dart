@@ -53,7 +53,7 @@ void main() {
       final dir = await fresh('bad');
       await expectLater(
         fetch.fetch('$url/tool.zip', '0' * 64, raw: false, dir: dir.path, name: 'tool'),
-        throwsA(anything),
+        throwsA(isA<ContentException>()),
       );
       expect(dir.listSync(recursive: true), isEmpty);
     });
@@ -85,7 +85,7 @@ void main() {
 
   test('S13: a Chrome zip unpacks only when it matches its pinned sha256', () async {
     final bad = '${tmp.path}/cft/bad';
-    await expectLater(chrome.fetch('$url/tool.zip', '0' * 64, bad), throwsA(anything));
+    await expectLater(chrome.fetch('$url/tool.zip', '0' * 64, bad), throwsA(isA<ContentException>()));
     expect(Directory(bad).existsSync(), isFalse);
     expect(Directory('${tmp.path}/cft').listSync().where((e) => e.path.contains('.tmp-')), isEmpty);
     final good = '${tmp.path}/cft/good';

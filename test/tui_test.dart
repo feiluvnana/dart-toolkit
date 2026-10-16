@@ -703,30 +703,40 @@ void main() {
         width: 80,
         height: 20,
       );
+      final first = Stopwatch()..start();
       await t.pump();
+      first.stop();
       final sw = Stopwatch()..start();
       for (var i = 0; i < 20; i++) {
         t.bytes([0x78]); // any key: a new frame
         await t.pump();
       }
       expect(tick, greaterThan(10));
-      expect(sw.elapsedMilliseconds, lessThan(120)); // was ~14 ms a frame, 280 ms here
+      // Relative to the first frame, so load cannot fail it: recomputing
+      // both diffs every frame made 20 frames ~20× the first.
+      expect(sw.elapsed, lessThan(first.elapsed * 5));
       t.close();
     });
 
     test('a table frame costs the screen, not the rows (regression: 35 ms at 100k rows)', () async {
       final pick = Pick<int>(List.generate(1000000, (i) => i))..select(500000);
+      var built = 0;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) => r.table(pick, (i) => ['$i', 'row $i'], header: ['n', 'name'])),
+        (s, app) => Screen(
+          (r) => r.table(pick, (i) {
+            built++;
+            return ['$i', 'row $i'];
+          }, header: ['n', 'name']),
+        ),
         width: 40,
         height: 20,
       );
       await t.pump();
-      final sw = Stopwatch()..start();
+      built = 0;
       pick.select(500001);
       await t.pump();
-      expect(sw.elapsedMilliseconds, lessThan(150)); // was ~350 ms at a million rows
+      expect(built, lessThan(100)); // rows near the screen, never all million
       expect([for (var y = 0; y < 20; y++) t.row(y)].join('|'), contains('row 500001'));
       t.close();
     });
