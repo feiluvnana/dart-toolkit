@@ -209,6 +209,11 @@ void main() {
     test('a bad limit is an ArgumentError', () {
       expect(() => Pool.map([1], (x) => x, limit: 0), throwsArgumentError);
     });
+
+    test('B4: an empty batch with limit: items.length returns nothing', () async {
+      expect(await Pool.settle(<int>[], (x) => x, limit: 0), isEmpty);
+      expect(await Pool.map(<int>[], (x) => x, limit: 0), isEmpty);
+    });
   });
 
   group('Pool.settle', () {

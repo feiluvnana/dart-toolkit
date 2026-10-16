@@ -3,7 +3,6 @@
 library;
 
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/image.dart';
@@ -27,7 +26,7 @@ final class Queue {
     for (final (i, f) in files.indexed) {
       if (missing[i]) _part(j, f).queued++;
     }
-    return Pool.settle(files, (f) => _get(j, f), limit: max(files.length, 1));
+    return Pool.settle(files, (f) => _get(j, f), limit: files.length);
   }
 
   // The folder a file lands in is its part: posts/2024-05/x.jpg → posts.

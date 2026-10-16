@@ -121,10 +121,10 @@ final class Pool {
     void Function()? onDone, {
     required bool failFast,
   }) async {
+    final list = items.toList();
+    if (list.isEmpty) return []; // before the checks: `limit: items.length` is fine on an empty batch
     if (limit != null && limit < 1) throw ArgumentError.value(limit, 'limit', 'must be at least 1');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
-    final list = items.toList();
-    if (list.isEmpty) return [];
     final width = (limit ?? (isolates ? io.Platform.numberOfProcessors : 4)).clamp(1, list.length);
     final out = List<Outcome<T, R>?>.filled(list.length, null);
     final workers = <_Worker>[];
