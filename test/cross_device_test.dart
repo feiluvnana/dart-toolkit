@@ -96,4 +96,20 @@ void main() {
     expect(await io.Link('$ram/ln').target(), 'f.txt');
     expect(io.Directory(tmp).listSync().where((e) => e.path.contains('.tmp')), isEmpty);
   });
+
+  test('unarchive across devices replaces files by name: a link over a file, a file over a hard link', () async {
+    if (!await mounted()) return markTestSkipped('no RAM disk here');
+    await Fs.file('$tmp/src/ram/tool-1.2').write('new tool');
+    await io.Link('$tmp/src/ram/tool').create('tool-1.2');
+    await Fs.file('$tmp/src/ram/conf').write('new conf');
+    await (Archive.archive(['ram'], dir: '$tmp/src', format: ArchiveFormat.tar) > Fs.file('$tmp/b.tar'));
+    await Fs.file('$ram/tool').write('old tool');
+    await Fs.file('$ram/conf').write('old conf');
+    await io.Process.run('ln', ['$ram/conf', '$ram/other']); // a hard link the target shares
+    await (Fs.file('$tmp/b.tar') > Archive.unarchive(tmp));
+    expect(await io.Link('$ram/tool').target(), 'tool-1.2');
+    expect(await Fs.file('$ram/conf').text(), 'new conf');
+    expect(await Fs.file('$ram/other').text(), 'old conf', reason: 'never written through the old inode');
+    expect(io.Directory(ram).listSync().where((e) => e.path.contains('.tmp')), isEmpty);
+  });
 }

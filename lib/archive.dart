@@ -834,19 +834,33 @@ final class _Extraction {
       // Only a rename across devices copies then deletes; anything else
       // (permissions) is the caller's error, not a reason to copy.
       if (!posix.isCrossDevice(e)) rethrow;
-      // The copy must not go through a link being replaced.
-      if (destType == io.FileSystemEntityType.link) await io.Link(dest).delete();
-      switch (srcType) {
-        case io.FileSystemEntityType.directory:
-          await tree.copyTree(src, dest);
-          await io.Directory(src).delete(recursive: true);
-        case io.FileSystemEntityType.link:
-          await io.Link(dest).create(await io.Link(src).target());
+      if (srcType == io.FileSystemEntityType.directory) {
+        await tree.copyTree(src, dest);
+        await io.Directory(src).delete(recursive: true);
+        return;
+      }
+      // Made beside [dest] on its device, then renamed over it: whatever was
+      // there (a file, a link, a hard-linked inode) is replaced by name,
+      // never written through.
+      final next = tree.tmpPath(dest);
+      try {
+        if (srcType == io.FileSystemEntityType.link) {
+          await io.Link(next).create(await io.Link(src).target());
+          await io.Link(next).rename(dest);
           await io.Link(src).delete();
-        default:
-          await io.File(src).copy(dest);
-          await tree.preserveFileMeta(src, dest);
+        } else {
+          await io.File(src).copy(next);
+          await tree.preserveFileMeta(src, next);
+          await io.File(next).rename(dest);
           await io.File(src).delete();
+        }
+      } catch (_) {
+        if (srcType == io.FileSystemEntityType.link) {
+          await io.Link(next).delete().catchError((_) => io.Link(next));
+        } else {
+          await io.File(next).delete().catchError((_) => io.File(next));
+        }
+        rethrow;
       }
     }
   }
