@@ -44,10 +44,11 @@ export 'src/progress.dart' show Meter, Probe, Task, Watch;
 
 /// What a reader knows about its source: URL, status, file name, path, size.
 ///
-/// Modules never import each other: `html`/`json` read `reader.origin().url()`
-/// for the base URL and `origin().status()` for error-page annotation;
-/// `chrome` reads `origin().name()`/`origin().path()` for upload staging.
-/// A plain in-memory reader carries an empty [Origin].
+/// It is how modules learn about a source without importing each other:
+/// `html`/`json` read `reader.origin().url()` for the base URL and
+/// `origin().status()` for error-page annotation; `chrome` and `Body.stream`
+/// read `origin().name()`/`path()`/`size()`. In-memory bytes know only their
+/// size; a reader with nothing to say carries an empty [Origin].
 final class Origin {
   /// An origin with whatever the source knows; [Origin.new] with no
   /// arguments is the empty one.
@@ -514,6 +515,7 @@ final class _Memory with Reader {
 /// argument, `TimeoutException` for a wait that runs out) keep their SDK
 /// types; see §5 of docs/VISION.md.
 abstract class ToolkitException implements Exception {
+  /// A failure saying [message], caused by [cause] when there is one.
   const ToolkitException(this.message, {this.cause});
 
   /// One line saying what failed and where.
@@ -529,6 +531,7 @@ abstract class ToolkitException implements Exception {
 /// so an existing `on FormatException` keeps catching it; prefer matching the
 /// specific type. The offending `source`/`offset` ride along when known.
 final class ContentException extends FormatException implements ToolkitException {
+  /// Rejected content: what is wrong, and where in [source] when known.
   const ContentException([super.message = '', super.source, super.offset, this.cause]);
 
   @override
@@ -538,6 +541,7 @@ final class ContentException extends FormatException implements ToolkitException
 /// An encrypted archive with no password, or the wrong one: ask again
 /// instead of treating the data as damaged. A [ContentException].
 final class PasswordException extends ContentException {
+  /// A missing or wrong password, saying [message].
   const PasswordException(super.message);
 }
 
@@ -545,6 +549,7 @@ final class PasswordException extends ContentException {
 /// or set: ffmpeg, 7-Zip or Chrome not on PATH and not downloadable here (a
 /// compiled exe, an ABI with no pinned build), no `HOME` for the cache.
 final class SetupException extends ToolkitException {
+  /// A missing tool or setting; [message] says what to do.
   const SetupException(super.message, {super.cause});
 
   @override
@@ -558,6 +563,7 @@ final class SetupException extends ToolkitException {
 /// `finally` can save state. `pool` never retries it. A `Tui.run` that quits
 /// fails its own work's waits with it the same way, and the script goes on.
 final class InterruptedException extends ToolkitException {
+  /// A wait ended by Ctrl-C or a quitting `Tui.run`.
   const InterruptedException() : super('interrupted');
 
   @override

@@ -1,6 +1,7 @@
 // Markdown: lexer, layout, streaming memo.
 part of '../tui.dart';
 
+/// Markdown drawing for a [Region].
 extension RegionMarkdown on Region {
   /// Markdown: headings, lists (nested, numbered), `>` quotes, tables
   /// (box-drawn), `---`, inline bold/italic/strike/`code`/links (OSC 8).

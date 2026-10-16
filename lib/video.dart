@@ -42,11 +42,37 @@ export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 /// Containers [Video.encode] writes and [Video.sniff] names; `.name` is the
 /// extension. [m4a], [mp3] and [opus] keep the audio only. [avi] is read,
 /// never written (its codecs lose to mp4 at every size).
-enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }
+enum VideoFormat {
+  /// MP4.
+  mp4,
+  /// WebM.
+  webm,
+  /// Matroska.
+  mkv,
+  /// QuickTime.
+  mov,
+  /// AVI, read only.
+  avi,
+  /// AAC audio in MP4.
+  m4a,
+  /// MP3 audio.
+  mp3,
+  /// Opus audio.
+  opus,
+}
 
 /// Video codecs [Video.encode] writes: [h264] plays everywhere, [h265] and
 /// [av1] are about half the size at the same quality, [vp9] is WebM's.
-enum VideoCodec { h264, h265, av1, vp9 }
+enum VideoCodec {
+  /// H.264 (AVC).
+  h264,
+  /// H.265 (HEVC).
+  h265,
+  /// AV1.
+  av1,
+  /// VP9.
+  vp9,
+}
 
 /// A video (or audio) source and what ffprobe says about it.
 final class Video {

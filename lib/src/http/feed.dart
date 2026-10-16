@@ -11,14 +11,14 @@ part of '../../http.dart';
 /// await posts.run((page) => page.items().every(seen) ? page.stop() : page.add(save(page.items())));
 /// ```
 ///
-/// [page] fetches the page at a cursor (null: the newest) and names the
+/// `page` fetches the page at a cursor (null: the newest) and names the
 /// next one (null: the end). With [cursor], a path, the walk remembers
 /// where it got to: the next page's cursor is written there once a page's
 /// work has succeeded, and removed when the walk ends. A run that finds one
 /// first lists the top up to what is known (what is new since), then
 /// continues from it.
 final class Feed<T> {
-  /// A feed of [page]s; [cursor] is the file that remembers the walk.
+  /// A feed of `page`s; `cursor` is the file that remembers the walk.
   Feed(this._page, {this._cursor});
 
   final Future<({List<T> items, String? next})> Function(String? cursor) _page;
@@ -36,7 +36,7 @@ final class Feed<T> {
   /// waits for [onPage], not for the work: the next page is fetched while
   /// it runs. The cursor moves past a page only once its work and every
   /// earlier page's succeeded. With [all], the walk starts from the top
-  /// whatever cursor is saved (a full re-list). A failing [page] fails the
+  /// whatever cursor is saved (a full re-list). A failing `page` fails the
   /// run; the cursor stays at the last page whose work was done. [run]
   /// completes after every page's work.
   Future<bool> run(FutureOr<void> Function(FeedPage<T> page) onPage, {bool all = false}) async {

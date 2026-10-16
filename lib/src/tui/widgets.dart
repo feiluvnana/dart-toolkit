@@ -8,6 +8,7 @@ part of '../tui.dart';
 /// exposes a live [UnmodifiableListView] over it (no copy per [add]). Do not hold the view across frames;
 /// call [items] again after mutating.
 final class Pick<T> {
+  /// A list of [items], the first selected.
   Pick([List<T> items = const []]) : _items = List<T>.of(items);
 
   final List<T> _items;
@@ -59,6 +60,7 @@ final class Pick<T> {
 
 /// An input's text, cursor and history. Lives in the app's state object.
 final class Field {
+  /// An input holding [text], with [history] to recall.
   Field({String text = '', List<String> history = const []})
     : _text = _lf(text),
       _history = List<String>.unmodifiable(history) {
@@ -103,6 +105,7 @@ final class Field {
 /// A scroll view's offset. `follow` keeps the view pinned to the end as
 /// content grows; scrolling up unpins, `end` re-pins.
 final class Scroll {
+  /// A view at the top; [follow] pins it to the end as content grows.
   // ignore: prefer_initializing_formals – the public argument stays `follow`.
   Scroll({bool follow = true}) : _follow = follow;
 
@@ -111,6 +114,7 @@ final class Scroll {
   var _pinned = true;
 }
 
+/// Widgets drawn into a [Region]: lists, tables, inputs, tabs, bars, logs.
 extension RegionWidgets on Region {
   /// A tab row; returns the area below it. [color], [background] and
   /// [style] paint the tabs as in `write`; [highlight] backs the selected

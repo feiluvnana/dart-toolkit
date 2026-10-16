@@ -60,6 +60,7 @@ final class App<S> {
 /// key bindings.
 /// An unknown binding name in [keys] is an [ArgumentError].
 final class Screen {
+  /// A screen that [draw]s into the whole terminal.
   // ignore: prefer_initializing_formals – the public arguments keep their names.
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}})
     : _draw = draw,

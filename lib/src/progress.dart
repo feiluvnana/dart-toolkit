@@ -382,6 +382,7 @@ extension Watch<T> on Future<T> {
 /// [update] sets a count by hand (`Meter()..update(done, queued)`); a meter
 /// is one or the other, and mixing them is a [StateError].
 final class Meter with Probe {
+  /// A meter at zero, counted by the runs it is attached to or by [update].
   Meter() {
     watchers[this] = _MeterWatch(this);
   }

@@ -450,16 +450,24 @@ final class TerminalCaps {
 /// Downgraded to the terminal's level at paint time (truecolor → 256 → 16;
 /// `NO_COLOR` drops colours and keeps styles).
 final class Color {
-  /// The eight basic terminal colours and gray (the palette's 0–8): they
-  /// follow the user's terminal theme.
+  /// The eight basic terminal colours and gray (the palette's 0–8) follow
+  /// the user's terminal theme. Black.
   static const black = Color._(0, null);
+  /// Red.
   static const red = Color._(1, null);
+  /// Green.
   static const green = Color._(2, null);
+  /// Yellow.
   static const yellow = Color._(3, null);
+  /// Blue.
   static const blue = Color._(4, null);
+  /// Magenta.
   static const magenta = Color._(5, null);
+  /// Cyan.
   static const cyan = Color._(6, null);
+  /// White.
   static const white = Color._(7, null);
+  /// Gray (bright black).
   static const gray = Color._(8, null);
 
   /// The shared live accent (xterm 173, a muted orange):

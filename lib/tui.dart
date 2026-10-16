@@ -27,16 +27,17 @@
 ///   the screen for a state and never blocks. `work:` is the job the screen
 ///   watches: started once shown, cancelled by quitting, run with Console
 ///   when there is no terminal.
-/// - [App] supports `state` `go` `status` `quit` (notifications and the
-///   clipboard are `Console.notify`/`copy`, which route here while it runs).
+/// - [App] supports `go` `status` `quit` (notifications and the clipboard
+///   are `Console.notify` and utils' `ConsoleUtils.copy`, which route here
+///   while it runs).
 /// - Widget state lives in [Pick], [Field] and [Scroll]
 ///   objects held by the app's state, so focus, selection and scroll survive
 ///   `go` and back.
 /// - `Region.bar` draws a [Meter] (core's, re-exported here): attach it
 ///   with `&` to the work it should count.
-/// - While `run` is active, `Console.bar` draws in the status row,
-///   `Console.ask`/`confirm`/`choose`/`key` open a popup and `Console.log`
-///   goes to the status row.
+/// - While `run` is active, `Console.bar` and `Console.log` draw in the
+///   status row, or in `Region.bars()`/`log()` when the screen draws them;
+///   `Console.ask`/`confirm`/`choose`/`pick` open a popup.
 ///
 /// {@canonicalFor terminal.Color}
 /// {@canonicalFor pixels.Pixels}

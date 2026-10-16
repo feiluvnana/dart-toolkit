@@ -43,7 +43,26 @@ const _maxPixels = 1 << 28;
 
 /// Image formats. [Image.sniff] names one; [Image.encode] writes all but
 /// [heic] (read only: no free encoder). `.name` is the usual extension.
-enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
+enum ImageFormat {
+  /// PNG, lossless.
+  png,
+  /// JPEG.
+  jpg,
+  /// GIF.
+  gif,
+  /// Windows bitmap.
+  bmp,
+  /// TIFF.
+  tiff,
+  /// Windows icon.
+  ico,
+  /// WebP.
+  webp,
+  /// AVIF.
+  avif,
+  /// HEIC/HEIF, read only.
+  heic,
+}
 
 /// An image: a source, its size as displayed, and the steps to apply.
 final class Image {

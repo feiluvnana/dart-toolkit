@@ -167,8 +167,8 @@ final class Region {
     if (on != null && rows > 0 && _w > 0) _reg(_s._bindId(on), _gx, _gy + top, _w, rows, _s._order++, null, onMap: on);
   }
 
-  /// The rest of the region as half-block cells (`▀`) showing [image] (an
-  /// `Image` from `image.dart`), scaled down to fit with the aspect kept.
+  /// The rest of the region as half-block cells (`▀`) showing [image] (what
+  /// `image.pixels()` returns), scaled down to fit with the aspect kept.
   /// Returns the receiver.
   Region picture(Pixels image) => _drawPicture(this, image.width(), image.height(), image.pixel);
 

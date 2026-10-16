@@ -31,8 +31,8 @@
 ///   [HttpRequestException] is a request that was aborted or could not
 ///   follow a redirect.
 /// A non-2xx status throws [HttpStatusException] by default; with
-/// `check: false` it is a [Response] and only network failures and
-/// timeouts throw. Everything else is private.
+/// `check: false` it is a [Response] to branch on. Everything else is
+/// private.
 library;
 
 import 'dart:async';
@@ -195,6 +195,7 @@ Stream<List<int>> _streamPieces(List<Object> pieces) async* {
 /// switch on `status` instead of parsing the message. Extends [HttpException],
 /// so an existing `on HttpException` keeps catching it.
 final class HttpStatusException extends HttpException implements ToolkitException {
+  /// A non-2xx answer, with its fields.
   HttpStatusException(super.message, {required this.status, required this.method, required this.url, this.snippet = ''})
     : super(uri: Uri.tryParse(url)) {
     // A 4xx is the server's answer to this request: `pool` never retries
@@ -240,6 +241,7 @@ enum RequestFailure {
 /// the client's `login:` paths (a redirect to the sign-in page) instead of
 /// what it asked for. [url] is where it landed.
 final class SessionException extends ToolkitException {
+  /// A request that landed on a login page at [url].
   SessionException(this.url) : super('logged out: the request landed on $url; log in again and refresh the session') {
     retry.permanent(this);
   }
@@ -254,6 +256,7 @@ final class SessionException extends ToolkitException {
 /// A request that was aborted or could not follow a redirect. Extends
 /// [HttpException], so an existing `on HttpException` keeps catching it.
 final class HttpRequestException extends HttpException implements ToolkitException {
+  /// A [method] request to [url] that ended for [reason].
   HttpRequestException(this.method, this.url, this.reason, [String? detail])
     : super('${detail ?? reason.name}: $method $url', uri: Uri.tryParse(url)) {
     retry.permanent(this);

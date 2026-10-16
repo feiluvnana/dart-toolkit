@@ -78,6 +78,7 @@ final class _Reader<T> {
 /// `or: true` also enables `--no-name` and renders `--[no-]name` in
 /// usage.
 final class Flag extends Param<bool> {
+  /// A `--name` switch; [short] is its one-letter `-x`, [or] its default.
   Flag(String name, String help, {String? short, bool or = false})
     : _or = or,
       super._(name: name, short: short, help: help, kind: _Kind.flag, required: false, hint: '', absent: () => or) {
@@ -99,6 +100,7 @@ final class Flag extends Param<bool> {
 /// `Opt<int?>('quality', …, min: 1, max: 100)` turns `--quality 150` into a
 /// usage error, and usage shows `[1-100]`.
 final class Opt<T> extends Param<T> {
+  /// A `--name value` option; [env] names a variable read when it is absent.
   Opt(
     String name,
     String help, {
@@ -163,6 +165,7 @@ final class Opt<T> extends Param<T> {
 /// list several, comma-separated (`--kind=photo,reel`). Yes/no is always a
 /// [Flag]: `Multi<bool>` is an [ArgumentError].
 final class Multi<T> extends Param<List<T>> {
+  /// A `--name value` option that may repeat.
   Multi(String name, String help, {List<T> or = const [], T Function(String)? parse, List<T>? values})
     : this._withElement(name, help, _resolve<T>(name, parse, values), or: or, commas: values != null);
 
@@ -199,6 +202,7 @@ final class Multi<T> extends Param<List<T>> {
 /// is inferred where [or] or [parse] gives it. Yes/no is always a
 /// [Flag]: `Arg<bool>` is an [ArgumentError].
 final class Arg<T> extends Param<T> {
+  /// The next positional, named [name] in usage.
   Arg(String name, String help, {T? or, bool required = false, T Function(String)? parse, List<T>? values})
     : this._withReader(name, help, _resolve<T>(name, parse, values), or: or, required: required);
 
@@ -223,6 +227,7 @@ final class Arg<T> extends Param<T> {
 /// none are given; `required` wants at least one). Declared last, at most
 /// once per command. `T` is inferred where [parse] gives it.
 final class Rest<T> extends Param<List<T>> {
+  /// Every positional left, named [name] in usage.
   Rest(String name, String help, {bool required = false, T Function(String)? parse, List<T>? values})
     : this._withElement(name, help, _resolve<T>(name, parse, values), required: required);
 
@@ -243,6 +248,7 @@ final class Rest<T> extends Param<List<T>> {
 
 /// A command: schema plus the handler that runs it.
 final class Command {
+  /// A command named [name]: its [params], subcommands and [handler].
   Command(
     String name,
     String help, {
@@ -440,6 +446,7 @@ final class Context {
 /// Extends [ToolkitException], so one `on ToolkitException` covers every
 /// failure the toolkit reports.
 final class UsageException extends ToolkitException {
+  /// A usage error saying [message].
   const UsageException(super.message);
 
   @override

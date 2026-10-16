@@ -18,7 +18,20 @@ const _fallbackCaps = term.TerminalCaps(
 String _lf(String s) => s.contains('\r\n') ? s.replaceAll('\r\n', '\n') : s;
 
 /// Text styles.
-enum Style { bold, dim, italic, underline, strike, reverse }
+enum Style {
+  /// Bold.
+  bold,
+  /// Dim (faint).
+  dim,
+  /// Italic.
+  italic,
+  /// Underlined.
+  underline,
+  /// Struck through.
+  strike,
+  /// Foreground and background swapped.
+  reverse,
+}
 
 final class _Cell {
   const _Cell(this.ch, this.style, this.width, {this.link});

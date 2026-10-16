@@ -50,6 +50,7 @@ import 'src/tree.dart' as tree;
 /// What [File.lock] throws when another holder keeps the lock: tell it
 /// from other disk errors by type. A [io.FileSystemException].
 final class LockedException extends io.FileSystemException implements ToolkitException {
+  /// The lock at [path] is held elsewhere.
   const LockedException(super.message, [super.path]);
 
   @override

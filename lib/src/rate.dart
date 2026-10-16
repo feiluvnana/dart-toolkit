@@ -27,6 +27,7 @@ import 'dart:math';
 /// });
 /// ```
 final class Rate {
+  /// At most [count] starts per [per], each after a random pause up to [pause].
   Rate(
     int count,
     Duration per, {

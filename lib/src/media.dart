@@ -236,7 +236,12 @@ sealed class Compression {
 /// (`after < before`). Only `compress` makes one.
 final class Compressed extends Compression {
   const Compressed._(this.before, this.after);
-  final int before, after;
+
+  /// The size in bytes before the re-encode.
+  final int before;
+
+  /// The size in bytes after it.
+  final int after;
 
   @override
   String text() => '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
@@ -245,6 +250,8 @@ final class Compressed extends Compression {
 /// The file was left as it was, for [reason]. Only `compress` makes one.
 final class Kept extends Compression {
   const Kept._(this.reason);
+
+  /// Why the file was kept.
   final KeptReason reason;
 
   @override

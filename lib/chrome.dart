@@ -1,5 +1,5 @@
-/// Browser automation over the Chrome DevTools Protocol (in-house client,
-/// `dart:io` WebSocket).
+/// Browser automation over the Chrome DevTools Protocol (in-house client:
+/// the pipe of a launched Chrome, a `dart:io` WebSocket for `connect`).
 ///
 /// ```dart
 /// final browser = await Chrome.launch(profile: '.chrome');
@@ -51,9 +51,13 @@ export 'src/cdp.dart' show BrowserException;
 
 /// What [Browser.open]'s `block:` can stop a tab from loading.
 enum Resource {
+  /// Pictures (`<img>`, CSS backgrounds).
   image('Image'),
+  /// Web fonts.
   font('Font'),
+  /// Audio and video.
   media('Media'),
+  /// CSS files.
   stylesheet('Stylesheet');
 
   const Resource(this._cdp);

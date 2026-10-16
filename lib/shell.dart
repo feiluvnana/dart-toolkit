@@ -42,6 +42,7 @@ export 'core.dart';
 /// so an existing `on ProcessException` keeps catching it; one that cannot
 /// start stays a plain [io.ProcessException].
 final class ExitException extends io.ProcessException implements ToolkitException {
+  /// [executable] ran with [arguments] and exited with [errorCode].
   ExitException(super.executable, super.arguments, super.message, super.errorCode);
 
   @override

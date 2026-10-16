@@ -23,6 +23,7 @@ import 'exit.dart' as exit;
 /// protocol call the browser rejects. An [Exception] like every toolkit
 /// failure (a `Command` prints its message, never a stack trace).
 final class BrowserException extends ToolkitException {
+  /// A page failure saying [message], at [selector] when one was in use.
   BrowserException(super.message, {this.selector, super.cause});
 
   /// The selector in use, when the failure names one.
