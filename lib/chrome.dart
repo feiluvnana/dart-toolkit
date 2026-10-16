@@ -58,6 +58,10 @@ abstract final class Chrome {
   /// (`http://host:port`, `socks5://host:port`). Throws when the browser
   /// can't start.
   static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy}) async {
+    if (proxy != null && (Uri.tryParse(proxy)?.userInfo.isNotEmpty ?? false)) {
+      // It would sit in the process list, and Chrome ignores it anyway.
+      throw ArgumentError.value(origin.redact(proxy), 'proxy', 'Chrome takes no proxy password: use an open local proxy');
+    }
     final exe = path ?? await chromeExecutable(headless: headless && profile == null);
     final temp = profile == null ? await io.Directory.systemTemp.createTemp('dart_toolkit_chrome-') : null;
     if (profile != null) {

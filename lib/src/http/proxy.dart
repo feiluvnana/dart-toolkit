@@ -12,19 +12,23 @@ final class _Proxy {
     try {
       u = Uri.parse(text.contains('://') ? text : 'http://$text');
     } on FormatException catch (e) {
-      throw ArgumentError.value(text, 'proxy', 'invalid proxy URL: ${e.message}');
+      throw ArgumentError.value(names.redact(text), 'proxy', 'invalid proxy URL: ${e.message}');
     }
     final socks = switch (u.scheme) {
       'http' => false,
       'socks5' || 'socks5h' => true,
-      _ => throw ArgumentError.value(text, 'proxy', 'must be http://, socks5:// or socks5h://'),
+      _ => throw ArgumentError.value(names.redact(text), 'proxy', 'must be http://, socks5:// or socks5h://'),
     };
-    if (u.host.isEmpty) throw ArgumentError.value(text, 'proxy', 'has no host');
+    if (u.host.isEmpty) throw ArgumentError.value(names.redact(text), 'proxy', 'has no host');
     String? user, pass;
     if (u.userInfo.isNotEmpty) {
       final colon = u.userInfo.indexOf(':');
       user = Uri.decodeComponent(colon < 0 ? u.userInfo : u.userInfo.substring(0, colon));
       pass = colon < 0 ? '' : Uri.decodeComponent(u.userInfo.substring(colon + 1));
+      // RFC 1929 sends each in one length byte.
+      if (socks && (utf8.encode(user).length > 255 || utf8.encode(pass).length > 255)) {
+        throw ArgumentError.value(names.redact(text), 'proxy', 'SOCKS user and password are at most 255 bytes');
+      }
     }
     return _Proxy._(socks, u.host, u.hasPort ? u.port : 1080, user, pass);
   }
@@ -84,6 +88,8 @@ final class _Proxy {
       }
       final ip = InternetAddress.tryParse(url.host);
       final name = utf8.encode(url.host);
+      // One length byte: a longer name would make the proxy read another host.
+      if (ip == null && name.length > 255) throw SocketException('SOCKS proxy: host name over 255 bytes: ${url.host}');
       s.add([
         5, 1, 0, //
         ...switch (ip?.type) {

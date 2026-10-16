@@ -147,4 +147,11 @@ void main() {
       throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('bad flag --x'))),
     );
   });
+
+  test('S12: a proxy password never reaches Chrome\'s argv', () async {
+    await expectLater(
+      Chrome.launch(proxy: 'http://user:SECRET@127.0.0.1:8080'),
+      throwsA(isA<ArgumentError>().having((e) => '$e', 'text', allOf(contains('no proxy password'), isNot(contains('SECRET'))))),
+    );
+  });
 }
