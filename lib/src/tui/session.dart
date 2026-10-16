@@ -1486,11 +1486,23 @@ final class _Session<S> implements term.TuiBridge {
       '\x1b[<u\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l';
 
   void _listenStdin() => _subs.add(
-    term.sharedStdin().listen((b) {
-      _pending.addAll(b);
-      _wake();
-    }, onError: (_) {}),
+    term.sharedStdin().listen(
+      (b) {
+        _pending.addAll(b);
+        _wake();
+      },
+      onError: (Object e) => _inputLost('$e'),
+      onDone: () => _inputLost('closed'),
+    ),
   );
+
+  /// The terminal reader ended (not a suspend, which cancels it first):
+  /// with no keys and no Ctrl-C (ISIG is off) the app could never quit.
+  void _inputLost(String why) {
+    if (_done || _fatal != null) return;
+    _fatal = io.StdinException('the TUI lost its terminal input ($why): no keys, no Ctrl-C');
+    _wake();
+  }
 
   /// Ctrl-Z (POSIX): give the terminal back, stop this process, and take the
   /// terminal again when the shell continues it.
