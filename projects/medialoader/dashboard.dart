@@ -103,7 +103,7 @@ final class Transfer {
   final User user;
   final Part part;
   final String path;
-  final since = DateTime.now();
+  final speed = Speed(); // this file's bytes, for its rate
   var done = 0;
   int? total;
   String? status;
@@ -288,7 +288,7 @@ void transfers(Region r, Board b) {
     } else if (t.status case final status?) {
       row.write('  $status', color: busy, style: {.bold});
     } else {
-      row.bar(t.done, t.total, bytes: true, since: t.since, color: flow);
+      row.bar(t.done, t.total, bytes: true, rate: t.speed.rate(), color: flow);
     }
   });
 }

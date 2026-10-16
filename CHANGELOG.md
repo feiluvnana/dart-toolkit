@@ -14,7 +14,7 @@
 - `shell`: `Shell.run(cancel:)`.
 - `chrome`: `page.cookies(all: true)`; `run` takes a function source; Chrome for Testing downloads with resume (chrome-headless-shell for headless runs); `connect` takes an `http://` URL.
 - `console`: `Console.ask(timeout:)` returns `or` and stops its reader, so the script can exit; `Speed` (`add`, `rate`, and a `Pipe`): a 5 s rate that ignores negative counts and bytes a resumed download replays.
-- `tui`: `Region.write(inline: true)` spans measured in cells; `Region.bar(since:)` shows the rate.
+- `tui`: `Region.write(inline: true)` spans measured in cells; `Region.bar(rate:)` shows a rate (a `Speed`'s).
 - `cli`: `Opt(min:, max:)` (usage shows `[1-100]`); `Command(version:)` answers `--version` at any depth.
 - `html`: `:scope` and a leading `>`/`+`/`~` relative to the receiver (`ul.$('> li')`); `Element`/`Elements.html()`; `srcset`/`data-srcset`/`<meta content>` paths resolve against the base.
 - `json`: negative indexes (`items.-1`); `asList<Json>()`/`asMap<Json>()` wrap their values; `Reader.ndjson()`.

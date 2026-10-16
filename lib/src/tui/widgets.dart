@@ -945,8 +945,9 @@ extension RegionWidgets on Region {
   }
 
   /// A static progress snapshot laid out like `Console.bar`; with [bytes],
-  /// the counts are sizes (`1.2 MB/4.0 MB`). With [since] (when the work
-  /// started), the rate follows (`1.2 MB/s`, or `3.1/s` for items). It
+  /// the counts are sizes (`1.2 MB/4.0 MB`). With [rate] (per second, as a
+  /// `Speed` from console measures it), it follows (`1.2 MB/s`, or `3.1/s`
+  /// for items). It
   /// keeps to one row: the bar shrinks, then the label is cut with `…`.
   /// [color], [background], [style] and [on] as in `write`.
   Region bar(
@@ -954,20 +955,19 @@ extension RegionWidgets on Region {
     int? total, {
     String? label,
     bool bytes = false,
-    DateTime? since,
+    double? rate,
     Color? color,
     Color? background,
     Set<Style> style = const {},
     Map<String, Binding>? on,
   }) {
-    final ms = since == null ? 0 : DateTime.now().difference(since).inMilliseconds;
     final line = term.barLine(
       _w - _col,
       label: label,
       done: done,
       total: total,
       bytes: bytes,
-      rate: since == null ? null : (ms > 0 ? done * 1000 / ms : 0.0),
+      rate: rate,
       ascii: _s._caps.ascii,
     );
     write(line, color: color, background: background, style: style, on: on);

@@ -785,7 +785,7 @@ final class Region {
   Region table<T>(Pick<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = '', Color? highlight});
   Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
-  Region bar(int done, int? total, {String? label, bool bytes = false, DateTime? since});   // since: adds the rate
+  Region bar(int done, int? total, {String? label, bool bytes = false, double? rate});   // rate: per second, e.g. a Speed's
   Region spin(String label, {DateTime? since});
 }
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
@@ -867,7 +867,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
     `-`/`+` rows on red/green with the changed words of paired lines brighter.
   - `rows`/`cols`: a size above 0 is fixed, 0 shares what is left. `box(title)` borders the rest
     and returns the inside. `popup` is drawn last, centered. `bar` lays out like `Console.bar`.
-    `bar` keeps to one row (the bar shrinks, then the label is cut) and with `since:` shows the rate;
+    `bar` keeps to one row (the bar shrinks, then the label is cut) and with `rate:` shows it;
     `spin(since:)` says the time as `Duration.human()` does.
     `scroll` lays out its content once per redraw and paints only the viewport.
   - Colours are downgraded to the terminal's level (truecolor → 256 → 16). `NO_COLOR` drops them

@@ -2759,13 +2759,13 @@ void main() {
       t.close();
     });
 
-    test('bar keeps to one row in a narrow region; since: shows the rate', () async {
+    test('bar keeps to one row in a narrow region; rate: shows the rate', () async {
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
           r.bar(5, 10, label: 'a label far too long for the row');
           r.write('below');
-          r.bar(2048, 4096, bytes: true, since: DateTime.now().subtract(const Duration(seconds: 2)));
+          r.bar(2048, 4096, bytes: true, rate: 1024);
         }),
         width: 30,
         height: 4,

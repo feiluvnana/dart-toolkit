@@ -70,7 +70,7 @@ final class Queue {
       try {
         await _lanes.run(() {
           board.transfers.add(t);
-          return cdn.get(f.url!, headers: {'referer': '${j.platform.site}/'}) | board.speed | Pipe.tap(t.update) > f.to;
+          return cdn.get(f.url!, headers: {'referer': '${j.platform.site}/'}) | board.speed | t.speed | Pipe.tap(t.update) > f.to;
         });
         shown = await _compress(f, t);
       } finally {
