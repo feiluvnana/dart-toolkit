@@ -1264,16 +1264,12 @@ const _tarMetaMax = 1 << 20;
 Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async* {
   final head = BytesBuilder(copy: false);
   final metaBuf = BytesBuilder(copy: false);
+  final meta = _TarMeta();
   var remaining = 0; // body bytes still to come
   var pad = 0; // padding bytes still to skip
   var metaFlag = 0; // typeflag of the pax/GNU record being collected, else 0
   var emit = false; // forward the current body as events
   var seen = 0; // members yielded so far
-  String? pendingPath; // pax `x` / GNU `L`: name override for the next entry
-  String? globalPath; // pax `g`: name override for every following entry
-  String? pendingLink; // pax `linkpath` / GNU `K`: link target for the next entry
-  int? pendingSize; // pax `size`: size override for the next entry
-  DateTime? pendingMtime; // pax `mtime`: for the next entry
 
   Never fail(String message, {bool notTar = false}) {
     // Data that decodes but opens with a bad header is not a tar at all.
@@ -1284,47 +1280,7 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async*
   }
 
   void finishMeta() {
-    final data = metaBuf.takeBytes();
-    if (metaFlag == 0x78 || metaFlag == 0x67) {
-      // Pax extended ('x') or global ('g') header: `path=` renames,
-      // `linkpath=` is a link's target, `mtime=` (seconds, maybe
-      // fractional) its time.
-      final records = _parsePax(data);
-      if (records.keys.any((k) => k.startsWith('GNU.sparse.'))) {
-        throw ContentException('sparse tar member unsupported: ${records['GNU.sparse.name'] ?? records['path']}');
-      }
-      final linkpath = records['linkpath'];
-      if (metaFlag == 0x78 && linkpath != null && linkpath.isNotEmpty) pendingLink = linkpath;
-      final secs = double.tryParse(records['mtime'] ?? '');
-      if (metaFlag == 0x78 && secs != null && secs.isFinite && secs.abs() < 8e12) {
-        pendingMtime = DateTime.fromMillisecondsSinceEpoch((secs * 1000).round());
-      }
-      final renamed = records['path'];
-      if (renamed != null && renamed.isNotEmpty) {
-        if (metaFlag == 0x78) {
-          pendingPath = renamed;
-        } else {
-          globalPath = renamed;
-        }
-      }
-      if (metaFlag == 0x78) {
-        final sz = int.tryParse(records['size'] ?? '');
-        if (sz != null && sz >= 0) pendingSize = sz;
-      }
-    } else if (metaFlag == 0x4c || metaFlag == 0x4b) {
-      // GNU long name or link name: the data is the next entry's.
-      var text = utf8.decode(data, allowMalformed: true);
-      while (text.endsWith('\x00')) {
-        text = text.substring(0, text.length - 1);
-      }
-      if (text.isEmpty) {
-        // nothing to override
-      } else if (metaFlag == 0x4c) {
-        pendingPath = text;
-      } else {
-        pendingLink = text;
-      }
-    }
+    meta.read(metaFlag, metaBuf.takeBytes());
     metaFlag = 0;
   }
 
@@ -1381,10 +1337,7 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async*
       }
       final typeflag = h[156];
       final isMeta = typeflag == 0x78 || typeflag == 0x67 || typeflag == 0x4c || typeflag == 0x4b;
-      if (!isMeta && pendingSize != null) {
-        size = pendingSize!;
-        pendingSize = null;
-      }
+      if (!isMeta) size = meta.takeSize() ?? size;
       pad = (512 - size % 512) % 512;
       remaining = size;
       if (isMeta) {
@@ -1396,42 +1349,98 @@ Stream<_TarEvent> _parseTar(Stream<List<int>> input, {String? container}) async*
         if (size == 0 && metaFlag != 0) finishMeta();
         continue;
       }
-      var name = _tarString(h, 0, 100);
-      final prefix = _tarString(h, 345, 155);
-      if (prefix.isNotEmpty) name = '$prefix/$name';
-      name = pendingPath ?? globalPath ?? name;
-      final link = pendingLink ?? _tarString(h, 157, 100);
-      final secs = _tarOctal(h, 136, 12);
-      final mtime = pendingMtime ?? (secs > 0 ? DateTime.fromMillisecondsSinceEpoch(secs * 1000) : null);
-      pendingPath = pendingLink = pendingMtime = null;
-      // Old (V7) tars mark a folder with a regular type and a trailing '/';
-      // '7' (contiguous file) is a regular file everywhere but on old
-      // Masscomp systems.
-      final regular = typeflag == 0x30 || typeflag == 0 || typeflag == 0x37;
-      if (typeflag == 0x35 || regular && name.endsWith('/')) {
-        seen++;
-        emit = false;
-        yield _TarHeader(name, _tarMode(h), mtime, un.Kind.dir);
-      } else if (regular) {
-        seen++;
-        emit = true;
-        yield _TarHeader(name, _tarMode(h), mtime, un.Kind.file);
-        if (size == 0) yield _TarEnd();
-      } else if (typeflag == 0x31 || typeflag == 0x32) {
-        // A link's data, if any, is skipped.
-        seen++;
-        emit = false;
-        yield _TarHeader(name, _tarMode(h), mtime, typeflag == 0x31 ? un.Kind.hardlink : un.Kind.symlink, link);
-      } else {
-        fail(
-          'corrupt archive: unsupported tar entry '
-          "'${String.fromCharCode(typeflag)}' for $name",
-        );
-      }
+      final member = _tarMember(h, typeflag, meta);
+      seen++;
+      emit = member.kind == un.Kind.file; // a link's data, if any, is skipped
+      yield member;
+      if (emit && size == 0) yield _TarEnd();
     }
   }
   if (!ended && (head.length != 0 || remaining != 0 || pad != 0)) {
     fail('corrupt archive: truncated tar', notTar: true);
+  }
+}
+
+/// The member that tar header [h] (of [typeflag]) opens, with [meta]'s
+/// overrides applied and cleared. Another type is a [ContentException].
+_TarHeader _tarMember(Uint8List h, int typeflag, _TarMeta meta) {
+  var name = _tarString(h, 0, 100);
+  final prefix = _tarString(h, 345, 155);
+  if (prefix.isNotEmpty) name = '$prefix/$name';
+  name = meta.path ?? meta.globalPath ?? name;
+  final link = meta.link ?? _tarString(h, 157, 100);
+  final secs = _tarOctal(h, 136, 12);
+  final mtime = meta.mtime ?? (secs > 0 ? DateTime.fromMillisecondsSinceEpoch(secs * 1000) : null);
+  meta.path = meta.link = meta.mtime = null;
+  // Old (V7) tars mark a folder with a regular type and a trailing '/';
+  // '7' (contiguous file) is a regular file everywhere but on old
+  // Masscomp systems.
+  final regular = typeflag == 0x30 || typeflag == 0 || typeflag == 0x37;
+  if (typeflag == 0x35 || regular && name.endsWith('/')) return _TarHeader(name, _tarMode(h), mtime, un.Kind.dir);
+  if (regular) return _TarHeader(name, _tarMode(h), mtime, un.Kind.file);
+  if (typeflag == 0x31 || typeflag == 0x32) {
+    return _TarHeader(name, _tarMode(h), mtime, typeflag == 0x31 ? un.Kind.hardlink : un.Kind.symlink, link);
+  }
+  throw ContentException("corrupt archive: unsupported tar entry '${String.fromCharCode(typeflag)}' for $name");
+}
+
+/// What pax and GNU records say about the next member, or (pax `g`)
+/// every following one.
+final class _TarMeta {
+  String? path; // pax `x` / GNU `L`: the next entry's name
+  String? globalPath; // pax `g`: every following entry's name
+  String? link; // pax `linkpath` / GNU `K`: the next entry's link target
+  int? _size; // pax `size`: the next entry's size
+  DateTime? mtime; // pax `mtime`: the next entry's time
+
+  /// The pax size override, once.
+  int? takeSize() {
+    final s = _size;
+    _size = null;
+    return s;
+  }
+
+  /// Take in a record of [flag] (`x`, `g`, `L` or `K`) holding [data].
+  void read(int flag, Uint8List data) {
+    if (flag == 0x78 || flag == 0x67) {
+      // Pax extended ('x') or global ('g') header: `path=` renames,
+      // `linkpath=` is a link's target, `mtime=` (seconds, maybe
+      // fractional) its time.
+      final records = _parsePax(data);
+      if (records.keys.any((k) => k.startsWith('GNU.sparse.'))) {
+        throw ContentException('sparse tar member unsupported: ${records['GNU.sparse.name'] ?? records['path']}');
+      }
+      final linkpath = records['linkpath'];
+      if (flag == 0x78 && linkpath != null && linkpath.isNotEmpty) link = linkpath;
+      final secs = double.tryParse(records['mtime'] ?? '');
+      if (flag == 0x78 && secs != null && secs.isFinite && secs.abs() < 8e12) {
+        mtime = DateTime.fromMillisecondsSinceEpoch((secs * 1000).round());
+      }
+      final renamed = records['path'];
+      if (renamed != null && renamed.isNotEmpty) {
+        if (flag == 0x78) {
+          path = renamed;
+        } else {
+          globalPath = renamed;
+        }
+      }
+      if (flag == 0x78) {
+        final sz = int.tryParse(records['size'] ?? '');
+        if (sz != null && sz >= 0) _size = sz;
+      }
+    } else if (flag == 0x4c || flag == 0x4b) {
+      // GNU long name or link name: the data is the next entry's.
+      var text = utf8.decode(data, allowMalformed: true);
+      while (text.endsWith('\x00')) {
+        text = text.substring(0, text.length - 1);
+      }
+      if (text.isEmpty) return;
+      if (flag == 0x4c) {
+        path = text;
+      } else {
+        link = text;
+      }
+    }
   }
 }
 
