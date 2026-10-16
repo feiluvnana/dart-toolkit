@@ -10,7 +10,7 @@
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Probe], [Meter],
 /// [Task], [Watch], [Closeable], [Origin], [ToolkitException],
-/// [ContentException], [PasswordException]. Helpers (unit literals, sizes,
+/// [ContentException], [PasswordException], [SetupException]. Helpers (unit literals, sizes,
 /// times, `Rate`, `Cookies`, hashes, CSV) are `package:dart_toolkit/utils.dart`.
 /// - [Reader]: `stream` `bytes` `text` `lines` `|` `&` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
@@ -23,6 +23,7 @@
 /// - [Origin]: typed `url()` / `status()` / `name()` / `path()` / `size()` for a reader.
 /// - [ToolkitException]: the base of every failure the toolkit itself reports.
 /// - [ContentException]: a value the toolkit rejects (bad JSON, archive, image…).
+/// - [SetupException]: this machine lacks what a call needs (a tool, `HOME`).
 /// Everything else is private.
 library;
 
@@ -495,4 +496,14 @@ final class ContentException extends FormatException implements ToolkitException
 /// instead of treating the data as damaged. A [ContentException].
 final class PasswordException extends ContentException {
   const PasswordException(super.message);
+}
+
+/// This machine lacks what a call needs, and [message] says what to install
+/// or set: ffmpeg, 7-Zip or Chrome not on PATH and not downloadable here (a
+/// compiled exe, an ABI with no pinned build), no `HOME` for the cache.
+final class SetupException extends ToolkitException {
+  const SetupException(super.message, {super.cause});
+
+  @override
+  String toString() => 'SetupException: $message';
 }

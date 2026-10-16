@@ -8,6 +8,7 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/cache.dart' as cache;
 import 'package:dart_toolkit/src/fetch.dart' as fetch;
 import 'package:dart_toolkit/src/media.dart' as media;
+import 'package:dart_toolkit/src/retry.dart' as retry;
 import 'package:dart_toolkit/src/tool.dart' as tool;
 import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
@@ -186,11 +187,12 @@ Future<void> main(List<String> args) async {
   test('P1: no HOME is an error, never a shared temp folder', () async {
     final r = await runDart(
       '''
+import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/src/cache.dart';
 void main() {
   try {
     print(userCacheDir());
-  } on UnsupportedError catch (e) {
+  } on ToolkitException catch (e) {
     print('refused: \${e.message}');
   }
 }
@@ -199,6 +201,48 @@ void main() {
     );
     expect(r.stdout, contains('refused: no user cache folder'), reason: '${r.stderr}');
   }, testOn: '!windows');
+
+  test('E8: a download isolate that cannot start is a SetupException, not "compiled exe" under dart run', () async {
+    await expectLater(
+      cache.fetchInIsolate('no_such_library.dart', const [], label: 'thing'),
+      throwsA(
+        isA<SetupException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('could not start the download of thing'), isNot(contains('compiled exe'))),
+        ),
+      ),
+    );
+    expect(retry.isPermanent(const SetupException('x')), isTrue);
+  });
+
+  test('E8: a compiled exe says so', () async {
+    final dir = await Directory.systemTemp.createTemp('aot');
+    addTearDown(() => dir.delete(recursive: true));
+    await io.File('${dir.path}/main.dart').writeAsString('''
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/src/cache.dart';
+Future<void> main() async {
+  try {
+    await fetchInIsolate('fetch.dart', const [], label: 'ffmpeg');
+  } on SetupException catch (e) {
+    print(e.message);
+  }
+}
+''');
+    final exe = '${dir.path}/main.exe';
+    final c = await Process.run(Platform.resolvedExecutable, [
+      'compile',
+      'exe',
+      '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+      '-o',
+      exe,
+      '${dir.path}/main.dart',
+    ]);
+    expect(c.exitCode, 0, reason: '${c.stderr}${c.stdout}');
+    final r = await Process.run(exe, const []);
+    expect(r.stdout, contains('a compiled exe cannot download ffmpeg'), reason: '${r.stderr}');
+  }, tags: 'slow', timeout: const Timeout(Duration(minutes: 3)));
 
   test('S8: spooled media lands in an owner-only folder of the user cache', () async {
     final path = await media.spool(Stream.value([1, 2, 3]));

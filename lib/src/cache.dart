@@ -13,6 +13,7 @@ import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 
+import '../core.dart' show SetupException;
 import 'download_line.dart';
 
 /// The OS user cache directory. Throws when no home or cache variable names
@@ -33,7 +34,7 @@ String userCacheDir() {
     }
   }
   if (dir == null || dir.isEmpty) {
-    throw UnsupportedError(
+    throw SetupException(
       io.Platform.isWindows
           ? 'no user cache folder: set LOCALAPPDATA'
           : 'no user cache folder: set HOME (or XDG_CACHE_HOME)',
@@ -46,13 +47,18 @@ String userCacheDir() {
 /// (a deferred import still compiles its imports at startup, this does
 /// not) with [args]; its `main(args, SendPort)` sends `'ok'` or the error
 /// text. Returns null on success, else why it failed (an isolate that dies
-/// without a reply is a failure). Throws [UnsupportedError] when it cannot
-/// spawn: a compiled exe has no package sources.
+/// without a reply is a failure). Throws [SetupException] when it cannot
+/// spawn: "a compiled exe" only when it is one (AOT, or no package sources).
 Future<String?> fetchInIsolate(String library, List<String> args, {required String label}) async {
+  Uri? entry;
+  try {
+    entry = await Isolate.resolvePackageUri(Uri.parse('package:dart_toolkit/src/$library'));
+  } catch (_) {}
+  if (entry == null || const bool.fromEnvironment('dart.vm.product')) {
+    throw SetupException('a compiled exe cannot download $label (it has no package sources)');
+  }
   final reply = ReceivePort();
   try {
-    final entry = await Isolate.resolvePackageUri(Uri.parse('package:dart_toolkit/src/$library'));
-    if (entry == null) throw UnsupportedError('no package config');
     await Isolate.spawnUri(
       entry,
       args,
@@ -63,7 +69,7 @@ Future<String?> fetchInIsolate(String library, List<String> args, {required Stri
     );
   } catch (e) {
     reply.close();
-    throw UnsupportedError('$e');
+    throw SetupException('could not start the download of $label: $e', cause: e);
   }
   // The isolate posts `[done, total]` while it downloads, then its answer.
   final line = DownloadLine(label);

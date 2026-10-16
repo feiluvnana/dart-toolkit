@@ -12,6 +12,7 @@ import 'dart:io' as io;
 
 import 'package:path/path.dart' as p;
 
+import '../core.dart' show SetupException;
 import 'cache.dart';
 import 'cdp.dart';
 import 'which.dart';
@@ -106,7 +107,7 @@ final _fetching = <bool, Future<String>>{};
 Future<String> _testingChrome({required bool headless}) async {
   final (:kind, :platform, :dir, :exe) =
       _testingPath(headless: headless) ??
-      (throw BrowserException(
+      (throw SetupException(
         'no Chrome found and no Chrome for Testing build for ${Abi.current()}: '
         'install Chrome or Chromium',
       ));
@@ -118,12 +119,8 @@ Future<String> _testingChrome({required bool headless}) async {
     try {
       final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
       failed = await fetchInIsolate('fetch.dart', [url, _sha256['$kind $platform']!, 'app', dir], label: '$kind for $platform');
-    } on UnsupportedError catch (e) {
-      throw BrowserException(
-        'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '
-        '(`dart run`): install Chrome or Chromium (${e.message})',
-        cause: e,
-      );
+    } on SetupException catch (e) {
+      throw SetupException('no Chrome found, and ${e.message}: install Chrome or Chromium', cause: e);
     }
     if (failed != null || !io.File(exe).existsSync()) {
       throw BrowserException('Chrome for Testing download failed: ${failed ?? 'no $exe'}', cause: failed);

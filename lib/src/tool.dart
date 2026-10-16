@@ -163,7 +163,7 @@ Future<Set<String>> _encoders(String ffmpeg) async {
 Future<void> _download(Tool t, String target) async {
   final build = _builds[Abi.current()]?[t];
   if (build == null) {
-    throw UnsupportedError('no pinned ${t.name} for ${Abi.current()}: install ${t.name} on PATH');
+    throw SetupException('no pinned ${t.name} for ${Abi.current()}: install ${t.name} on PATH');
   }
   final home = _home(t);
   await io.Directory(home).create(recursive: true);
@@ -193,7 +193,7 @@ Future<void> _download(Tool t, String target) async {
 }
 
 /// Download [build] in `fetch.dart`'s isolate (see
-/// [cache.fetchInIsolate]); a compiled exe asks for the tool on PATH.
+/// [cache.fetchInIsolate]); when it cannot start, asks for the tool on PATH.
 Future<void> _fetch(_Build build, String dir, String name) async {
   final String? failed;
   try {
@@ -204,8 +204,8 @@ Future<void> _fetch(_Build build, String dir, String name) async {
       dir,
       name,
     ], label: p.basename(build.url));
-  } on UnsupportedError catch (e) {
-    throw UnsupportedError('$name is not on PATH and can only be downloaded from a `dart run` script: install it (${e.message})');
+  } on SetupException catch (e) {
+    throw SetupException('$name is not on PATH and ${e.message}: install it', cause: e);
   }
   if (failed == null) return;
   // A hash mismatch is the file's fault; anything else (no network, a
