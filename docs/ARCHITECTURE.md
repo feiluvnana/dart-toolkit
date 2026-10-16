@@ -6,7 +6,7 @@ Structure, not features: module edges, startup cost, dependencies and the seams 
 
 ```
 core ─────────────── src/resume, src/progress
-utils ────────────── core, src/cookies, src/csv, src/format, src/hash, src/rate, src/shell_utils, src/time: a separate import, re-exported by no module
+utils ────────────── core, src/console_utils, src/cookies, src/csv, src/format, src/hash, src/rate, src/shell_utils, src/time: a separate import, re-exported by no module
 json ─────────────── core, src/names
 yaml ─────────────── json, src/names, src/yaml_parser
 pool ─────────────── core, src/format, src/progress, src/rate, src/retry
@@ -17,13 +17,13 @@ http ─────────────── core, src/charset, src/cookie
 html ─────────────── json, src/dom, src/html_parser, src/selector
 image ────────────── core, src/media, src/pixels (+path)
 cli ──────────────── core, src/sanitize
-console ──────────── core, src/exit, src/format, src/keys, src/logbook, src/progress, src/terminal, src/time
+console ──────────── core, src/exit, src/format, src/logbook, src/progress, src/terminal, src/time
 tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/logbook, src/pixels, src/progress, src/terminal, src/time
 video ────────────── image, src/format, src/media, src/media_proxy, src/progress (+path)
 chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/format, src/glob, src/keys, src/names, src/origin, src/progress, src/time (+path)
 
 src/media ── shell, src/cache, src/format, src/posix, src/quiet, src/tool      src/tool ── shell, src/cache, src/names, src/posix, src/which (+path)
-src/shell_utils ── src/which: `ShellUtils.which` and `open`, SDK only
+src/shell_utils ── src/which: `ShellUtils.which` and `open`, SDK only      src/console_utils ── src/bridge: `ConsoleUtils.copy`, never the terminal layer
 src/chrome_find ── src/cache, src/cdp, src/which      src/cache ── src/download_line (+path): the user cache and fetchInIsolate
 src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
 src/progress ── src/format: Probe, Task, Meter and the private run that feeds them

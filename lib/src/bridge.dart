@@ -3,6 +3,8 @@
 /// without loading it.
 library;
 
+import 'dart:convert';
+
 import 'format.dart' show Unit;
 
 /// What a Console bar shows now, read by the Tui status row on each draw.
@@ -31,3 +33,6 @@ abstract class TuiBridge {
   Future<String?> promptChoose(String question, List<String> choices, int initial, {Duration? timeout});
 }
 
+
+/// Clipboard copy as OSC 52 (base64, so [text] cannot break out).
+String copyCodes(String text) => '\x1b]52;c;${base64.encode(utf8.encode(text))}\x1b\\';

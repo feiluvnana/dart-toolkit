@@ -453,7 +453,7 @@ final class _Session<S> implements term.TuiBridge {
     out(term.notifyCodes(message));
   }
 
-  /// `Console.copy` while the app runs.
+  /// `ConsoleUtils.copy` while the app runs.
   @override
   void copy(String text) => out(term.copyCodes(text));
 

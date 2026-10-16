@@ -52,7 +52,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | Import | For | Highlights |
 |---|---|---|
 | `core` | the shared model | `Reader` (`bytes` `text` `lines`), `Writer`, `Pipe`, `Probe` (`&`), `Task`, `Meter`, `Closeable`, `Origin` |
-| `utils` | helpers, a separate import | `3.seconds`, `bytes.size()`, `now.format(…)`, `d.human()`, `Rate` (`perHost:`), `Cookies` (`reader.cookies(or:)`), `HashUtils.md5()` … `sha512()` (in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()`), `CsvUtils.parse`/`encode`, `reader.csv(or:)`, streamed `reader.rows()`, `HttpUtils.page`/`api` (a browser's headers for `Http.client(headers:)`) |
+| `utils` | helpers, a separate import | `3.seconds`, `bytes.size()`, `now.format(…)`, `d.human()`, `Rate` (`perHost:`), `Cookies` (`reader.cookies(or:)`), `HashUtils.md5()` … `sha512()` (in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()`), `CsvUtils.parse`/`encode`, `reader.csv(or:)`, streamed `reader.rows()`, `HttpUtils.page`/`api` (a browser's headers for `Http.client(headers:)`), `ShellUtils.which`/`open`, `ConsoleUtils.copy` |
 | `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` that skips and resumes, safe retries, `Body.multipart`, `sent()`, `Http.pool`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run), `login:` paths that throw `SessionException` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `markup()`, `text()` that reads like a page; re-exports `json` |
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`, `reader.ndjson()` |
@@ -62,7 +62,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:)` (a `Task`; `.check()`), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `isolates:`, held `Pool(limit:).run(job)` lanes (a `Task` too) |
 | `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `version:`, suggestions |
-| `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify` `copy`, `out()`/`input()` for stdout/stdin |
+| `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify`, `out()`/`input()` for stdout/stdin |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, `bars()` and `log()` panes for Console's bars and log, mouse, markdown, ASCII and no-colour fallbacks |
 | `image` | read, resize, crop, encode, compress | ffmpeg engine: HEIC/AVIF/WebP, EXIF kept |
 | `video` | probe, remux, encode, trim, frames, compress | h264/h265/AV1/VP9, HLS/DASH, encodes a probe watches in media time; pinned FFmpeg |

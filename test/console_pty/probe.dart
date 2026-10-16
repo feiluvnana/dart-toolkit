@@ -25,6 +25,7 @@ import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/src/terminal.dart' as term;
+import 'package:dart_toolkit/utils.dart';
 
 Future<void> main(List<String> args) async {
   final log = File(args[0]);
@@ -158,7 +159,7 @@ Future<void> main(List<String> args) async {
       await log.writeAsString('secret=$answer\n');
     case 'dumb':
       Console.notify('finished');
-      Console.copy('clip');
+      ConsoleUtils.copy('clip');
       stderr.writeln('done');
   }
 }

@@ -16,12 +16,13 @@
 /// final api = Http.client(headers: {...HttpUtils.api, 'x-app': '1'});          // later names win
 /// if (await ShellUtils.which('ffmpeg') == null) print('install ffmpeg');
 /// await ShellUtils.open('https://example.com');                                // the default browser
+/// ConsoleUtils.copy(link);                                                      // to the clipboard
 /// ```
 ///
 /// Public surface is exactly: [DurationUtils], [SizeUtils], [TimeUtils],
 /// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies],
 /// [HashUtils], [Hasher], [CsvUtils], [ReaderCsv], [ReaderFutureCsv],
-/// [HttpUtils], [ShellUtils].
+/// [HttpUtils], [ShellUtils], [ConsoleUtils].
 /// - [DurationUtils]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [SizeUtils]: `bytes.size()` (`12.1 MB`).
 /// - [TimeUtils]: `now.format('yyyy-MM-dd')`; [SpanUtils]: `wait.human()` (`11 min 5 s`).
@@ -39,8 +40,11 @@
 ///   `Http.client(headers:)`.
 /// - [ShellUtils]: `which` finds an installed program on `PATH`, `open`
 ///   hands a URL or path to the OS (`open`, `xdg-open`, `rundll32`).
+/// - [ConsoleUtils]: `copy` puts text on the clipboard (OSC 52; through
+///   the app inside a `Tui.run`).
 /// Everything else is private.
 ///
+/// {@canonicalFor console_utils.ConsoleUtils}
 /// {@canonicalFor cookies.Cookies}
 /// {@canonicalFor csv.CsvUtils}
 /// {@canonicalFor csv.ReaderCsv}
@@ -60,6 +64,7 @@ import 'dart:io' show PathNotFoundException;
 import 'core.dart';
 import 'src/cookies.dart';
 
+export 'src/console_utils.dart' show ConsoleUtils;
 export 'src/cookies.dart' show Cookies;
 export 'src/csv.dart' show CsvUtils, ReaderCsv, ReaderFutureCsv;
 export 'src/format.dart' show SizeUtils;

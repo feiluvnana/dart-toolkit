@@ -155,10 +155,6 @@ void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long'
       expect(Console.choose('Pick', <String>[], (s) => s), throwsArgumentError);
     });
 
-    test('an unknown keys binding is an ArgumentError, before any prompt', () {
-      expect(Console.choose('Pick', ['a', 'b'], (s) => s, keys: {'notakey-xyz': 'a'}), throwsArgumentError);
-    });
-
     test('an initial that is not an item is an ArgumentError', () {
       expect(Console.choose('Pick', ['a', 'b'], (s) => s, or: 'z'), throwsArgumentError);
     });

@@ -70,6 +70,7 @@
 - `hash`: moved to `package:dart_toolkit/utils.dart` as `HashUtils` (`HashUtils.sha256(expect: sum)` in a pipe, `key:` for HMAC) and `Hasher`; `package:dart_toolkit/hash.dart` is gone.
 - `csv`: moved to `package:dart_toolkit/utils.dart` as `CsvUtils.parse`/`encode`; `reader.csv(or:)` and `reader.rows()` are utils' `ReaderCsv` extension. `package:dart_toolkit/csv.dart` is gone.
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
+- `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
 - `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
 
 **Removed**
@@ -98,6 +99,7 @@
 - `cli`: `Command(dotenv:, aliases:)`. An `Opt(env:)` reads the real environment (`set -a; . ./.env; set +a` before the script, or a shell wrapper); a subcommand has one name, and a near miss still suggests it.
 - `cli`: `Multi(short:)`; a repeated option is spelled `--tag a --tag b` (or, with `values:`, `--tag a,b`).
 - `hash`: `Hash.sha1(key:, expect:)` and `Hash.sha512(key:, expect:)`; an HMAC or a checked download uses `Hash.sha256(key:)` / `Hash.sha256(expect:)` (md5 keeps both for old mirrors' sums), and a sha1/sha512 sum is compared by hand: `h.hex() == sum`.
+- `console`: `Console.choose(keys:)`; Escape gives `or:` (null without one), so a "back" is `await Console.choose(q, items, label) ?? Next.back`, and another shortcut is one more item.
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0

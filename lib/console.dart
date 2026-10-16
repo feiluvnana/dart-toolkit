@@ -26,7 +26,6 @@ export 'core.dart';
 
 import 'src/exit.dart' as exit;
 import 'src/format.dart' as fmt;
-import 'src/keys.dart' as keys;
 import 'src/logbook.dart';
 import 'src/progress.dart' as progress show Tally, Watcher;
 import 'src/progress.dart' show watchers;
@@ -270,23 +269,16 @@ abstract final class Console {
   /// where arrows don't reach, e.g. Windows consoles where arrow keys never
   /// arrive at all) move, `1`-`9` jump to that row, and Enter picks, in the
   /// bold with a scrolling window when the items outnumber the
-  /// rows. [keys] maps bindings to values that return immediately without
-  /// Enter (`{'b escape': Next.back, 'q': Next.quit}` — one typed map for
-  /// shortcuts and Escape together); each binding lists space-separated
-  /// alternatives (key names as in `Tui`); an unknown name is an
-  /// [ArgumentError].
-  /// Bindings win over movement keys. An unbound Escape gives [or]. Where raw mode is unavailable (or piped), a numbered list
+  /// rows. Escape gives [or] (null without one: a "back"). Where raw mode is unavailable (or piped), a numbered list
   /// and a number instead, so the menu always works. Empty [items] is an
   /// [ArgumentError]. While a state-driven `Tui.run` is active, shows as a
   /// popup (the popup speaks labels and the answer is mapped back, so
-  /// duplicate labels resolve to their first item; [keys] is the console
-  /// menu's own and does not apply there).
+  /// duplicate labels resolve to their first item).
   static Future<T?> choose<T>(
     String question,
     List<T> items,
     String Function(T item) label, {
     T? or,
-    Map<String, T>? keys,
     Duration? timeout,
   }) async {
     if (items.isEmpty) {
@@ -311,31 +303,19 @@ abstract final class Console {
       }
       return items[at];
     }
-    final bindings = _canonicalBindings(keys);
     try {
       return await _parkedFor(() async {
         // TERM=dumb takes no cursor motion: the numbered list there too.
         if (!term.stdinTty || !io.stderr.hasTerminal || !_animated || !term.rawModeSticks()) {
           return await _chooseNumbered(question, items, labels, timeout);
         }
-        return await _chooseInteractive(question, items, labels, selected, bindings, or, timeout);
+        return await _chooseInteractive(question, items, labels, selected, or, timeout);
       });
     } on io.StdinException {
       return or;
     } on TimeoutException {
       return or;
     }
-  }
-
-  /// Canonicalize each [keys] binding (`'b escape'`, `'ctrl+c'`) up front so
-  /// a misspelled key fails fast with [ArgumentError].
-  static Map<String, T> _canonicalBindings<T>(Map<String, T>? ks) {
-    if (ks == null) return {};
-    final out = <String, T>{};
-    ks.forEach((binding, value) {
-      out[keys.splitBinding(binding).map(keys.canonicalize).join(' ')] = value;
-    });
-    return out;
   }
 
   /// Numbered choose: print the list, read a number. Used piped and
@@ -424,14 +404,6 @@ abstract final class Console {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.notify(message);
     if (_animated) io.stderr.write(term.notifyCodes(message)); // TERM=dumb takes no escapes
-  }
-
-  /// Copy [text] to the clipboard (OSC 52; the terminal may ask first or
-  /// refuse). Inside a running `Tui.run` it goes through the app.
-  static void copy(String text) {
-    final bridge = term.TuiBridge.current;
-    if (bridge != null) return bridge.copy(text);
-    if (_animated) io.stderr.write(term.copyCodes(text));
   }
 
   static final _blank = RegExp('[\n\t]');
@@ -670,7 +642,6 @@ abstract final class Console {
     List<T> items,
     List<String> labels,
     int selected,
-    Map<String, T> bindings,
     T? or,
     Duration? timeout,
   ) async {
@@ -683,15 +654,6 @@ abstract final class Console {
         final keyName = await found.nextKey();
         if (keyName == null) {
           throw const io.StdinException('stdin is closed');
-        }
-        // Bound keys return at once, no Enter needed. They win over
-        // movement keys, so consoles without arrows/escape stay fully
-        // operable from letters alone.
-        for (final entry in bindings.entries) {
-          if (keys.matchesBinding(entry.key, keyName)) {
-            io.stderr.writeln();
-            return entry.value;
-          }
         }
         switch (keyName) {
           case 'up' || 'w' || 'W' || 'k' || 'K':
@@ -714,7 +676,6 @@ abstract final class Console {
             io.stderr.writeln();
             return items[current];
           case 'escape':
-            // A bound Escape returned through [bindings] above.
             io.stderr.writeln();
             return or;
           default:

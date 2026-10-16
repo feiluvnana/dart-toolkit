@@ -6,6 +6,7 @@ import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/src/terminal.dart' as term;
 import 'package:dart_toolkit/src/tui.dart' show TestSession, testSession;
 import 'package:dart_toolkit/tui.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -2671,7 +2672,7 @@ Future<void> main() async {
         return Screen((r) {});
       });
       await t.pump();
-      Console.copy('hé');
+      ConsoleUtils.copy('hé');
       expect(t.output, contains('\x1b]52;c;${base64.encode(utf8.encode('hé'))}\x1b\\'));
       t.close();
     });
