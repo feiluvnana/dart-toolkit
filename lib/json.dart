@@ -550,16 +550,13 @@ DateTime? _date(Object? v) {
     _ => null,
   };
   if (n == null) return v is String ? DateTime.tryParse(v.trim()) : null;
-  final size = n.abs();
-  final ms = size < 1e11
-      ? n * 1000
-      : size < 1e14
-      ? n
-      : size < 1e17
-      ? n / 1000
-      : size < 1e19
-      ? n / 1e6
-      : double.infinity;
+  final ms = switch (n.abs()) {
+    < 1e11 => n * 1000,
+    < 1e14 => n,
+    < 1e17 => n / 1000,
+    < 1e19 => n / 1e6,
+    _ => double.infinity,
+  };
   // DateTime holds ±8.64e15 ms: past that (a snowflake id) it is not a time.
   if (!ms.isFinite || ms.abs() > 8.64e15) return null;
   return DateTime.fromMillisecondsSinceEpoch(ms.round());

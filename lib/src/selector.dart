@@ -596,7 +596,11 @@ bool _has(_Complex c, Element scope) {
   bool anchor(Element x) => identical(x, scope);
   // How many levels below scope's level a match sits (null: any), and how
   // many siblings along at scope's own level (null: any later one).
-  int? depth = c.lead == _Comb.child ? 1 : (c.lead == _Comb.descendant ? null : 0);
+  int? depth = switch (c.lead) {
+    _Comb.child => 1,
+    _Comb.descendant => null,
+    _ => 0,
+  };
   int? along = c.lead == _Comb.adjacent ? 1 : null;
   for (final comb in c.combs) {
     switch (comb) {

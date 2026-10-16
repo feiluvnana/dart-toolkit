@@ -749,9 +749,7 @@ _Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
     if (t.startsWith('-') || t == '--') break;
     final sub = _findSub(cmd._commands, t);
     if (sub == null) {
-      final guess = _closest(t, [
-        for (final c in cmd._commands) c._name,
-      ]);
+      final guess = _closest(t, [for (final c in cmd._commands) c._name]);
       throw ContentException('Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}');
     }
     cmd = sub;
@@ -882,9 +880,7 @@ final class _Parse {
       }
       // No subcommand named and no Arg defs: unknown command.
       if (argDefs.isEmpty) {
-        final guess = _closest(token, [
-          for (final c in root._commands) c._name,
-        ]);
+        final guess = _closest(token, [for (final c in root._commands) c._name]);
         throw ContentException('Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}');
       }
     } else if (isHelpName && extraArgs.isEmpty && root._commands.isEmpty && argDefs.isEmpty) {
@@ -1120,9 +1116,7 @@ String _commandUsage(Command target, List<Command> chain) {
   }
 
   section('Arguments:', [for (final a in argDefs) (_argPlaceholder(a), _describeArg(a))]);
-  section('Commands:', [
-    for (final c in target._commands) (c._name, c._help),
-  ]);
+  section('Commands:', [for (final c in target._commands) (c._name, c._help)]);
   final optionRows = _optionRows(target);
   optionRows.add(_helpRow(target, chain));
   if (chain.any((c) => c._version != null)) optionRows.add(('    --version', 'Show the version and exit.'));

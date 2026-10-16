@@ -303,9 +303,7 @@ final class IncrementalDecoder {
   void _utf8(List<int> chunk, bool last, StringBuffer out) {
     final sink = _u8 ??= const Utf8Decoder(allowMalformed: true).startChunkedConversion(_u8out);
     sink.addSlice(chunk, 0, chunk.length, last);
-    for (final s in _u8out.parts) {
-      out.write(s);
-    }
+    out.writeAll(_u8out.parts);
     _u8out.parts.clear();
   }
 

@@ -13,7 +13,6 @@
 /// Everything else is private.
 library;
 
-
 import 'json.dart';
 export 'json.dart';
 

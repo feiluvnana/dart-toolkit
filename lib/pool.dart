@@ -82,12 +82,9 @@ final class Pool {
       _waiting.add(turn);
       await turn.future;
     }
-    if (exit.interrupted) {
-      // Its caller already failed: hand the lane on without running.
-      _waiting.isEmpty ? _free++ : _waiting.removeFirst().complete();
-      throw const InterruptedException();
-    }
     try {
+      // Its caller already failed: hand the lane on without running.
+      if (exit.interrupted) throw const InterruptedException();
       return await job();
     } finally {
       // Hand the lane straight to the next waiter, so a newcomer cannot jump the queue.
