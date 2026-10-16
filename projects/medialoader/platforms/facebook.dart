@@ -317,19 +317,22 @@ final class Facebook extends Platform {
   Future<int> _walk(Job j, List<String> start, String set, String key, Dir Function(Photo) dir, {File? mark}) async {
     if (start.isEmpty) return 0;
     final jumps = mark != null && !set.startsWith('pcb.'); // the profile's photos wrap around
-    var n = 0, known = 0, first = true;
+    var n = 0, known = 0;
+    // The other start points, each walked once the chain before it ends.
+    final rest = start.skip(1).toList();
+    String? more() => rest.isEmpty ? null : rest.removeAt(0);
     final photos = Feed<({String id, Photo? photo})>((cursor) async {
-      final id = cursor ?? start.first;
-      if (_known(j, '$key:$id')) return (items: [(id: id, photo: null)], next: null);
-      final ph = await photo(j.api, id, set);
-      if (ph == null) return (items: const <({String id, Photo? photo})>[], next: null);
-      // In the profile's photos, a next photo far after this one is the set starting over.
-      final jump = jumps && (int.tryParse(ph.next ?? '') ?? 0) > (int.tryParse(id) ?? 1 << 62) + 5000000;
-      return (items: [(id: id, photo: ph)], next: jump ? null : ph.next);
+      for (String? id = cursor ?? start.first; id != null; id = more()) {
+        if (_known(j, '$key:$id')) return (items: [(id: id, photo: null)], next: more());
+        final ph = await photo(j.api, id, set);
+        if (ph == null) continue;
+        // In the profile's photos, a next photo far after this one is the set starting over.
+        final jump = jumps && (int.tryParse(ph.next ?? '') ?? 0) > (int.tryParse(id) ?? 1 << 62) + 5000000;
+        return (items: [(id: id, photo: ph)], next: jump ? more() : ph.next ?? more());
+      }
+      return (items: const <({String id, Photo? photo})>[], next: null);
     }, cursor: mark == null || j.o.dry ? null : mark.path());
     await photos.run(all: j.o.all, (page) async {
-      if (first) start.skip(1).forEach(page.follow);
-      first = false;
       final ph = page.items().single.photo;
       final file = ph == null ? null : dir(ph).file('${ph.id}.${ext(ph.url)}');
       if (ph == null || file == null || !j.o.all && await file.exists()) {

@@ -22,7 +22,7 @@
 ///   (plus [Reader]/[Closeable]).
 /// - [Client] `sent` counts the requests put on the wire.
 /// - [Feed] walks a newest-first listing page by page (`run((page) {…})`,
-///   a [FeedPage] with `items` `add` `follow` `stop`): up to what is known, with a
+///   a [FeedPage] with `items` `add` `stop`): up to what is known, with a
 ///   cursor file that survives an interrupted run.
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
 ///   `.multipart` `.stream`. A [Body.stream] (or a multipart with

@@ -93,21 +93,6 @@ void main() {
     expect(File(cursor).existsSync(), isFalse);
   });
 
-  test('follow(): more start points, each cursor once, after the pages from here run out', () async {
-    final firsts = <int>[];
-    var followed = false;
-    // p2 ends its own chain (last: 2); the followed p5 runs p5 → p6; p1 again is skipped.
-    final complete = await Feed((c) async => c == 'p5' ? _page(c, 6) : _page(c, 2)).run((page) {
-      firsts.add(page.items().first);
-      if (!followed) {
-        followed = true;
-        page.follow('p5').follow('p1');
-      }
-    });
-    expect(complete, isTrue);
-    expect(firsts, [0, 3, 6, 15, 18]);
-  });
-
   test('a feed that loops back to a cursor it saw ends instead of spinning', () async {
     var pages = 0;
     final complete = await Feed<int>((c) async => (items: [1], next: c == 'b' ? 'a' : (c == 'a' ? 'b' : 'a'))).run(
