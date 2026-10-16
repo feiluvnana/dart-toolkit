@@ -182,6 +182,42 @@ void main() {
       expect(profiles(), isFalse);
     }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
 
+    test('a launched browser never closed lets the script exit, and Chromium goes with it (B8)', () async {
+      final tmp = await Directory.systemTemp.createTemp('chrome_noclose');
+      addTearDown(() => tmp.delete(recursive: true));
+      final child = await Process.start(
+        Platform.resolvedExecutable,
+        ['run', 'test/fixtures/chrome_noclose.dart'],
+        environment: {'TMPDIR': tmp.path},
+      );
+      final out = StringBuffer(), err = StringBuffer();
+      child.stdout.transform(utf8.decoder).listen(out.write);
+      child.stderr.transform(utf8.decoder).listen(err.write);
+      final code = await child.exitCode.timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          child.kill(ProcessSignal.sigkill);
+          return -1;
+        },
+      );
+      expect((code, out.toString().trim()), (0, 'hi'), reason: '$err');
+      Future<List<String>> chromes() async {
+        final r = await Process.run('pgrep', ['-f', tmp.path]);
+        return (r.stdout as String).split('\n').where((e) => e.isNotEmpty).toList();
+      }
+
+      final end = DateTime.now().add(const Duration(seconds: 20));
+      while (DateTime.now().isBefore(end) &&
+          ((await chromes()).isNotEmpty || tmp.listSync().any((e) => e.path.contains('dart_toolkit_chrome')))) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      final left = await chromes();
+      for (final pid in left) {
+        Process.killPid(int.parse(pid), ProcessSignal.sigkill);
+      }
+      expect(left, isEmpty);
+    }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
+
     test('S10: a launched Chrome talks over a pipe and listens on no TCP port', () async {
       if (Platform.isWindows) return markTestSkipped('Windows keeps the debugging port');
       final profile = await Directory.systemTemp.createTemp('chrome_nolisten');

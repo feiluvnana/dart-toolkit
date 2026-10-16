@@ -16,7 +16,7 @@ In `lib/chrome.dart`, `Chrome._watchdog` returns null on Windows. Add a Windows 
 io.Process.start('cmd', ['/c', 'findstr "^" >nul & taskkill /F /T /PID %CT_PID% >nul & rd /s /q "%CT_DIR%"'],
     environment: {'CT_PID': '$pid', 'CT_DIR': dir ?? ''});
 ```
-Skip `rd` when there is no temp dir. Check that `dog.kill()` in `close()` ends the chain before `taskkill` runs. Port the H1 regression test: use `tasklist` instead of `pgrep` and `%TEMP%` instead of `TMPDIR`, and remove its Windows `skip:`. Verify with `dart test test/chrome_test.dart -n H1`.
+Skip `rd` when there is no temp dir. Check that `io.Process.killPid(dog.pid)` in `close()` ends the chain before `taskkill` runs. Then B8 (an unclosed browser keeps the script alive): POSIX starts Chrome `detached` with its stderr in a log file and reads the CDP pipe in a helper isolate whose port is unref'd while idle (`Cdp.pipe`); Windows still starts it attached with piped stderr and talks over the debugging-port WebSocket, which holds the VM. Port the same shape (detached start, the WebSocket read in a helper isolate behind a `RawReceivePort` with `keepIsolateAlive` toggled by `Cdp.hold`), then run `dart test test/chrome_test.dart -n B8` without its Windows `skip:`. Port the H1 regression test: use `tasklist` instead of `pgrep` and `%TEMP%` instead of `TMPDIR`, and remove its Windows `skip:`. Verify with `dart test test/chrome_test.dart -n H1`.
 
 ### W3. M13: `.cmd`/`.bat` programs in `Shell.run`
 In `lib/shell.dart`, the two start sites are the `io.Process.start` in `Shell.run` and the one in `_Filter.transform` (`Shell.filter`); `Shell.open` starts the OS launcher and stays as it is.

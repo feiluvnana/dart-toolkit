@@ -12,6 +12,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import '../core.dart';
@@ -34,7 +35,7 @@ typedef Msg = Map<String, Object?>;
 
 /// One browser connection.
 final class Cdp {
-  Cdp._(Stream<Object?> incoming, this._add, this._closeWire) {
+  Cdp._(Stream<Object?> incoming, this._add, this._closeWire, [this._ref]) {
     incoming.listen(_onMessage, onDone: _onDone, onError: _onDone, cancelOnError: true);
     browser.on('Target.detachedFromTarget', (e) => _sessions.remove(e['sessionId'])?._end());
   }
@@ -46,36 +47,100 @@ final class Cdp {
   }
 
   /// Talk over a pipe pair: NUL-terminated JSON messages written to [into],
-  /// read from [from].
-  static Cdp pipe(Stream<List<int>> from, io.IOSink into) {
+  /// read from the FIFO at [from]. The read runs in a helper isolate whose
+  /// port holds the script open only while a call or a wait is pending, so
+  /// a browser nobody closed never keeps a finished script alive.
+  static Future<Cdp> pipe(String from, io.IOSink into) async {
     // A write to a Chrome that died fails here; the read side's end says so.
     into.done.catchError((Object _) {});
+    final port = RawReceivePort()..keepIsolateAlive = false;
+    final incoming = StreamController<Object?>(sync: true);
+    var open = true;
+    port.handler = (Object? m) {
+      switch (m) {
+        case null:
+          open = false;
+          port.close();
+          incoming.close();
+        case [final String error]:
+          incoming.addError(io.FileSystemException(error, from));
+        default:
+          incoming.add(m);
+      }
+    };
+    final reader = await Isolate.spawn(_readPipe, (port.sendPort, from));
     return Cdp._(
-      _nulSplit(from),
+      incoming.stream,
       (m) => into
         ..add(utf8.encode(m))
         ..add(const [0]),
-      into.close,
+      () async {
+        await into.close();
+        reader.kill();
+        if (open) {
+          open = false;
+          port.close();
+          await incoming.close();
+        }
+        return null;
+      },
+      (alive) {
+        if (open) port.keepIsolateAlive = alive;
+      },
     );
   }
 
-  /// The NUL-terminated messages in [bytes].
-  static Stream<Object?> _nulSplit(Stream<List<int>> bytes) async* {
+  /// The helper isolate: each NUL-terminated message at the FIFO [from], as
+  /// text, to [to]; then null (or `[error]` first).
+  static Future<void> _readPipe((SendPort, String) args) async {
+    final (to, from) = args;
     final buf = BytesBuilder(copy: false);
-    await for (final chunk in bytes) {
-      var from = 0;
-      for (var i = 0; i < chunk.length; i++) {
-        if (chunk[i] != 0) continue;
-        buf.add(chunk.sublist(from, i));
-        from = i + 1;
-        yield buf.takeBytes();
+    try {
+      await for (final chunk in io.File(from).openRead()) {
+        var start = 0;
+        for (var i = 0; i < chunk.length; i++) {
+          if (chunk[i] != 0) continue;
+          buf.add(chunk.sublist(start, i));
+          start = i + 1;
+          to.send(utf8.decode(buf.takeBytes(), allowMalformed: true));
+        }
+        if (start < chunk.length) buf.add(chunk.sublist(start));
       }
-      if (from < chunk.length) buf.add(chunk.sublist(from));
+    } catch (e) {
+      to.send(['$e']);
     }
+    to.send(null);
   }
 
   final void Function(String message) _add;
   final Future<Object?> Function() _closeWire;
+
+  /// Holds the script open while true (a pipe's reader port); null for a
+  /// WebSocket, whose socket holds it anyway.
+  final void Function(bool alive)? _ref;
+
+  /// Hears the busy state flip: a call or a wait is pending (true), or
+  /// none is (false).
+  void Function(bool busy)? onBusy;
+
+  var _holds = 0;
+
+  /// Count [work] as pending until it completes: the script stays alive
+  /// for it. Returns [work].
+  Future<T> hold<T>(Future<T> work) {
+    if (_holds++ == 0) _busy(true);
+    return work.whenComplete(() {
+      if (--_holds == 0) _busy(false);
+    });
+  }
+
+  void _busy(bool busy) {
+    _ref?.call(busy);
+    onBusy?.call(busy);
+  }
+
+  /// Completes when the connection ends (the browser exited or closed it).
+  Future<void> get done => _done.future;
   var _next = 0;
   final _pending = <int, (Completer<Msg>, String, CdpSession)>{};
   final _sessions = <String, CdpSession>{};
@@ -184,7 +249,7 @@ final class CdpSession {
       _cdp._pending.remove(n);
       return Future.error(BrowserException('$method: browser closed', cause: e));
     }
-    return done.future;
+    return _cdp.hold(done.future);
   }
 
   /// Call [handler] for every [method] event; the returned function stops it.
@@ -232,7 +297,7 @@ final class CdpSession {
       });
     }
     _waiters.add(ended);
-    return done.future;
+    return _cdp.hold(done.future);
   }
 
   /// The pending [once] calls, failed when the session ends.

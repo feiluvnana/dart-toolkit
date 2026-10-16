@@ -105,6 +105,10 @@ abstract final class Chrome {
       }
     }
 
+    // POSIX: Chrome runs detached, its stdout dropped and its stderr in a
+    // log beside the FIFOs, so no pipe of it holds a finished script open
+    // (the watchdog ends it). Windows keeps a child with piped stdio.
+    final log = pipes == null ? null : io.File('${pipes.path}/stderr');
     final io.Process proc;
     try {
       if (pipes == null) {
@@ -114,70 +118,83 @@ abstract final class Chrome {
         if (made.exitCode != 0) throw io.ProcessException('mkfifo', [], '${made.stderr}'.trim(), made.exitCode);
         proc = await io.Process.start('/bin/sh', [
           '-c',
-          r'i=$1; o=$2; shift 2; exec "$@" 3<"$i" 4>"$o"',
+          r'i=$1; o=$2; e=$3; shift 3; exec "$@" 3<"$i" 4>"$o" >/dev/null 2>"$e"',
           'sh',
           '${pipes.path}/in',
           '${pipes.path}/out',
+          log!.path,
           exe,
           ...args,
-        ]);
+        ], mode: io.ProcessStartMode.detached);
       }
     } catch (e) {
       await dropTemp();
       throw BrowserException('Chrome would not start: $exe ($e)', cause: e);
     }
-    proc.stdout.drain<void>().ignore();
     final endpoint = Completer<String>();
     final tail = <String>[];
-    proc.stderr
-        .transform(const Utf8Decoder(allowMalformed: true))
-        .transform(const LineSplitter())
-        .listen(
-          (line) {
-            if (pipes == null && !endpoint.isCompleted) {
-              if (_listening.firstMatch(line) case final m?) return endpoint.complete(m[1]!);
-            }
-            if (tail.length == 8) tail.removeAt(0);
-            tail.add(line);
-          },
-          onDone: () {
-            if (!endpoint.isCompleted) endpoint.completeError(BrowserException('Chrome exited: ${tail.join('\n')}'));
-          },
-          onError: (Object _) {},
-        );
-    String why(String what) => '$what: $exe${tail.isEmpty ? '' : '\n${tail.join('\n')}'}';
-    final Cdp cdp;
+    if (pipes == null) {
+      proc.stdout.drain<void>().ignore();
+      proc.stderr
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .transform(const LineSplitter())
+          .listen(
+            (line) {
+              if (!endpoint.isCompleted) {
+                if (_listening.firstMatch(line) case final m?) return endpoint.complete(m[1]!);
+              }
+              if (tail.length == 8) tail.removeAt(0);
+              tail.add(line);
+            },
+            onDone: () {
+              if (!endpoint.isCompleted) endpoint.completeError(BrowserException('Chrome exited: ${tail.join('\n')}'));
+            },
+            onError: (Object _) {},
+          );
+    }
+    Future<String> why(String what) async {
+      try {
+        final lines = [...?(await log?.readAsLines())?.where((l) => l.trim().isNotEmpty)];
+        tail.addAll(lines.length > 8 ? lines.sublist(lines.length - 8) : lines);
+      } catch (_) {}
+      return '$what: $exe${tail.isEmpty ? '' : '\n${tail.join('\n')}'}';
+    }
+
+    Cdp? cdp;
     try {
       if (pipes == null) {
         final url = await endpoint.future.timeout(
           _defaultTimeout,
-          onTimeout: () => throw BrowserException(why('Chrome did not start in ${_defaultTimeout.inSeconds} s')),
+          onTimeout: () async => throw BrowserException(await why('Chrome did not start in ${_defaultTimeout.inSeconds} s')),
         );
         cdp = await Cdp.connect(url).timeout(_defaultTimeout);
       } else {
         // sh opens `in` for reading first, then `out` for writing: open
         // both ends at once (each open waits for its other side).
-        endpoint.future.ignore();
-        cdp = Cdp.pipe(io.File('${pipes.path}/out').openRead(), io.File('${pipes.path}/in').openWrite());
+        cdp = await Cdp.pipe('${pipes.path}/out', io.File('${pipes.path}/in').openWrite());
         try {
           await cdp.browser.send('Browser.getVersion').timeout(_defaultTimeout);
         } on TimeoutException {
-          throw BrowserException(why('Chrome did not start in ${_defaultTimeout.inSeconds} s'));
+          throw BrowserException(await why('Chrome did not start in ${_defaultTimeout.inSeconds} s'));
         } on BrowserException {
-          // The pipe closed: Chrome exited. Its stderr says why once read to the end.
-          await endpoint.future.then((_) {}, onError: (Object _) {}).timeout(const Duration(seconds: 2), onTimeout: () {});
-          throw BrowserException(why('Chrome exited'));
+          // The pipe closed: Chrome exited, and its log says why.
+          throw BrowserException(await why('Chrome exited'));
         }
         await pipes.delete(recursive: true).catchError((_) => pipes); // both ends are open
       }
     } catch (_) {
-      proc.kill(io.ProcessSignal.sigkill);
-      await proc.exitCode;
+      if (pipes == null) {
+        proc.kill(io.ProcessSignal.sigkill);
+        await proc.exitCode;
+      } else {
+        io.Process.killPid(proc.pid, io.ProcessSignal.sigkill);
+        await cdp?.close();
+      }
       await dropTemp();
       rethrow;
     }
     final dog = proc.pid > 1 && !io.Platform.isWindows ? await _watchdog(proc.pid, temp?.path) : null;
-    return Browser._(cdp, process: proc, dog: dog, temp: temp);
+    return Browser._(cdp, pid: proc.pid, dog: dog, temp: temp);
   }
 
   static final _listening = RegExp(r'^DevTools listening on (ws://\S+)');
@@ -213,6 +230,7 @@ abstract final class Chrome {
   /// any reason (even an uncaught throw), then kills Chromium and removes the
   /// temp profile. The pid and dir are arguments, never interpolated.
   /// POSIX only; Windows has no watchdog yet.
+  /// Detached with its stdin piped, it never holds the script open.
   static Future<io.Process?> _watchdog(int pid, String? dir) async {
     try {
       return await io.Process.start('/bin/sh', [
@@ -221,7 +239,7 @@ abstract final class Chrome {
         '_',
         '$pid',
         dir ?? '',
-      ]);
+      ], mode: io.ProcessStartMode.detachedWithStdio);
     } catch (_) {
       return null;
     }
@@ -258,24 +276,40 @@ abstract final class Chrome {
 }
 
 /// An open browser. Owns its pages; one browser serves many pages.
-/// Live launched browsers are tracked process-wide so a SIGTERM/SIGHUP (or a
-/// cooked-terminal SIGINT/Ctrl-C) still closes Chromium and deletes temp
-/// profiles instead of orphaning them.
+/// A launched browser nobody closes never keeps a finished script alive: a
+/// watchdog ends Chromium and its temp profile with the script (POSIX). A
+/// SIGTERM/SIGHUP (or a cooked-terminal Ctrl-C) during a call closes it.
 final class Browser implements Closeable {
-  Browser._(this._cdp, {io.Process? process, this._dog, this._temp}) : _process = process {
-    if (process != null) {
+  Browser._(this._cdp, {int? pid, this._dog, this._temp}) : _pid = pid {
+    if (pid == null) return;
+    // With the watchdog, a signal closes the browser gracefully only while
+    // it works: an idle one holds no signal watcher open, and the watchdog
+    // ends it with the script. Without one (Windows) the hook stays.
+    if (_dog == null) {
+      _hook(true);
+    } else {
+      _cdp.onBusy = _hook;
+    }
+  }
+
+  void _hook(bool on) {
+    if (on && _exitToken == null && !_closed) {
       _exitToken = exit.onExit(() async {
         try {
           await close();
         } catch (_) {}
       });
+    } else if (!on && _exitToken != null) {
+      exit.offExit(_exitToken!);
+      _exitToken = null;
     }
   }
 
   final Cdp _cdp;
 
-  /// The launched process (`null` when connected: close only disconnects).
-  final io.Process? _process;
+  /// The launched process's pid (`null` when connected: close only
+  /// disconnects).
+  final int? _pid;
 
   /// Orphan watchdog (see [Chrome.launch]) and the temp profile it removes.
   final io.Process? _dog;
@@ -371,20 +405,23 @@ final class Browser implements Closeable {
     ])) {
       if (page != null) await page._unstage();
     }
-    final process = _process;
-    if (process != null) {
+    final pid = _pid;
+    if (pid != null) {
       try {
         await _cdp.browser.send('Browser.close').timeout(const Duration(seconds: 5));
       } catch (_) {}
-      await process.exitCode.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () {
-          process.kill(io.ProcessSignal.sigkill);
-          return process.exitCode;
-        },
-      );
+      // The connection ends when the process does.
+      await _cdp
+          .hold(_cdp.done)
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              io.Process.killPid(pid, io.ProcessSignal.sigkill);
+              return _cdp.done.timeout(const Duration(seconds: 2), onTimeout: () {});
+            },
+          );
       // Only after the process is gone: a failed close keeps the watchdog.
-      _dog?.kill();
+      if (_dog case final dog?) io.Process.killPid(dog.pid);
     } else {
       if (_downloadDir != null) {
         try {
@@ -725,9 +762,12 @@ final class Page implements Closeable {
   Stream<Capture> responses(String pattern) {
     final match = glob(pattern, paths: false);
     void Function()? off;
+    // Listened, it is pending work: the script waits for its events.
+    final listened = Completer<void>();
     late final StreamController<Capture> out;
     out = StreamController<Capture>(
       onListen: () {
+        _browser._cdp.hold(listened.future).ignore();
         off = _s.on('Network.responseReceived', (e) {
           if (e['type'] != 'XHR' && e['type'] != 'Fetch') return;
           final r = e['response']! as Map<String, Object?>;
@@ -739,9 +779,15 @@ final class Page implements Closeable {
             }, _body(e['requestId']! as String, url)),
           );
         });
-        _s.gone.then((_) => out.close());
+        _s.gone.then((_) {
+          if (!listened.isCompleted) listened.complete();
+          return out.close();
+        });
       },
-      onCancel: () => off?.call(),
+      onCancel: () {
+        off?.call();
+        if (!listened.isCompleted) listened.complete();
+      },
     );
     return out.stream;
   }
@@ -749,7 +795,7 @@ final class Page implements Closeable {
   /// A response body, fetched once the request finished.
   Future<List<int>> _body(String id, String url) async {
     final done = _ends[id] ??= Completer<bool>();
-    if (!await done.future) throw BrowserException('response failed: $url');
+    if (!await _browser._cdp.hold(done.future)) throw BrowserException('response failed: $url');
     final r = await _s.send('Network.getResponseBody', {'requestId': id});
     final body = r['body']! as String;
     return r['base64Encoded'] == true ? base64Decode(body) : utf8.encode(body);
