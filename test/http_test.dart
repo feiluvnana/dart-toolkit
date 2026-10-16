@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
 import 'package:dart_toolkit/src/resume.dart' show PassThrough, replays;
-import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
@@ -493,9 +492,9 @@ void abortTests() {
     test('a script that aborts a slow download exits by itself', () async {
       final r = await runDart(
         '''
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+import 'package:dart_toolkit/utils.dart';
 Future<void> main(List<String> a) async {
   final c = Http.client();
   final res = await c.get(a[0]);
@@ -618,9 +617,9 @@ void edgeTests() {
     test('a writer that never reads still lets the script exit', () async {
       final r = await runDart('''
 import 'dart:io';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+import 'package:dart_toolkit/utils.dart';
 final class Ignore with Writer {
   @override
   Future<void> consume(Stream<List<int>> input) async {}
@@ -672,9 +671,9 @@ Future<void> main() async {
     test('an unread response, chunked or not, lets the script exit', () async {
       final r = await runDart('''
 import 'dart:io';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+import 'package:dart_toolkit/utils.dart';
 Future<void> main() async {
   final s = await HttpServer.bind('127.0.0.1', 0);
   s.listen((r) {
@@ -817,9 +816,9 @@ Future<void> main() async {
       final sw = Stopwatch()..start();
       final r = await runDart(
         '''
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
+import 'package:dart_toolkit/utils.dart';
 Future<void> main(List<String> a) async {
   final c = Http.client();
   print(await c.get(a[0]).text());
@@ -1242,14 +1241,14 @@ Future<void> main() async {
       final c = Http.client(resume: true);
       final to = _Path('${dir.path}/f.bin');
       await File('${to.path}.part').writeAsBytes(body.sublist(0, 400));
-      final sum = Hash.sha256().addBytes(body).hex();
+      final sum = HashUtils.sha256().addBytes(body).hex();
       final count = _Count();
-      await (c.get('$url/file') | count | Hash.sha256(expect: sum) > to);
+      await (c.get('$url/file') | count | HashUtils.sha256(expect: sum) > to);
       expect(count.bytes, 1000, reason: 'the pipes saw the whole file');
       expect(await File(to.path).readAsBytes(), body);
       // A complete file: the pipes see the stored bytes; nothing is fetched twice.
       final again = _Count();
-      await (c.get('$url/file') | again | Hash.sha256(expect: sum) > to);
+      await (c.get('$url/file') | again | HashUtils.sha256(expect: sum) > to);
       expect(again.bytes, 1000);
       // A pipe that may change bytes never trusts stored ones: it downloads again.
       final before = hits['/file']!;
@@ -1262,7 +1261,7 @@ Future<void> main() async {
       // A hash mismatch deletes the .part.
       await File(to.path).delete();
       await File('${to.path}.part').writeAsBytes(body.sublist(0, 10));
-      await expectLater(c.get('$url/file') | Hash.sha256(expect: '0' * 64) > to, throwsA(isA<ContentException>()));
+      await expectLater(c.get('$url/file') | HashUtils.sha256(expect: '0' * 64) > to, throwsA(isA<ContentException>()));
       expect(File('${to.path}.part').existsSync(), isFalse);
     });
 

@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' show Hmac, sha1;
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/aes.dart';
 import 'package:dart_toolkit/src/crc32.dart';
 import 'package:dart_toolkit/src/lzma.dart';
@@ -16,6 +15,7 @@ import 'package:dart_toolkit/src/ppmd.dart';
 import 'package:dart_toolkit/src/rar.dart' as rar;
 import 'package:dart_toolkit/src/sevenzip.dart' as sevenzip;
 import 'package:dart_toolkit/src/zip.dart' as zip;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -478,7 +478,7 @@ Future<void> main(List<String> args) async =>
     test('RAR5 BLAKE2sp hashes and the MAC-tweaked CRCs of a solid encrypted archive are checked', () async {
       final fx = 'test/fixtures/archives';
       await (Fs.file('$fx/rar5_blake2.rar') > Archive.unarchive(p('b2')));
-      final h = Hash.sha256();
+      final h = HashUtils.sha256();
       await (Fs.file(p('b2/cebula.txt')) > h);
       expect(h.hex(), '1e98540238b2b13d1a22f4f4fa8e2eb6c66e24d46115ffdfafd3f3f981b212e7');
       await (Fs.file('$fx/rar5_solid_encrypted.rar') > Archive.unarchive(p('se'), password: 'password'));
@@ -508,7 +508,7 @@ Future<void> main(List<String> args) async =>
       }
       expect(await Fs.file(p('arm64/code.bin')).bytes(), code.buffer.asUint8List());
       await (Fs.file('$fx/7z_ppmd_restart.7z') > Archive.unarchive(p('ppmd')));
-      final h = Hash.sha256();
+      final h = HashUtils.sha256();
       await (Fs.file(p('ppmd/mix4000.txt')) > h);
       expect(h.hex(), 'c582bb308da8b1cd68cc5854313b5aa49d5d8db8341cf40e062e1de11d7f619d'); // fixtures/README.md
     });

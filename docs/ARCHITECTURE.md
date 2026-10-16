@@ -6,9 +6,8 @@ Structure, not features: module edges, startup cost, dependencies and the seams 
 
 ```
 core ─────────────── src/resume, src/progress
-utils ────────────── core, src/cookies, src/format, src/rate, src/time: a separate import, re-exported by no module
+utils ────────────── core, src/cookies, src/format, src/hash, src/rate, src/time: a separate import, re-exported by no module
 json ─────────────── core, src/names
-hash ─────────────── core, src/resume (+crypto)
 csv ──────────────── core
 yaml ─────────────── json, src/names, src/yaml_parser
 pool ─────────────── core, src/format, src/progress, src/rate, src/retry
@@ -28,7 +27,8 @@ src/media ── shell, src/cache, src/format, src/posix, src/quiet, src/tool   
 src/chrome_find ── src/cache, src/cdp, src/which      src/cache ── src/download_line (+path): the user cache and fetchInIsolate
 src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
 src/progress ── src/format: Probe, Task, Meter and the private run that feeds them
-src/fetch ── archive, http, hash, fs: spawned by URI, never imported
+src/fetch ── archive, http, fs, src/hash: spawned by URI, never imported
+src/hash ── core, src/resume (+crypto)
 src/unpack ── names (+path): member checks and link placement shared by every extraction
 src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── bridge, format, sanitize, width, keys_decode, winconsole
 src/logbook ── SDK only: every Console.log line, which console writes and tui's Region.log draws
@@ -43,7 +43,7 @@ Each module imported alone, as the median of 7 runs minus an empty script's (141
 
 | import | ms | what it costs |
 |---|---|---|
-| core, csv, json, pool, shell, hash | 62–75 | — |
+| core, csv, json, pool, shell | 62–75 | — |
 | yaml, cli | 88–89 | in-house YAML parser; option parsing |
 | fs | 103 | path |
 | html, console, http | 119–127 | parser and selectors; terminal; charset tables |

@@ -1,43 +1,26 @@
-/// Incremental hashes, one-shot or in a pipe. Thin facade over `package:crypto`.
-///
-/// ```dart
-/// final id = Hash.md5().add(url).hex();
-/// final h = Hash.sha256().addBytes(header).add(name);
-/// await (http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
-/// final h = Hash.sha256(); await (Fs.file('disc.iso') > h); print(h.hex());   // a file's digest
-/// final sig = Hash.sha256(key: utf8.encode(secret)).add(body).hex();   // HMAC
-/// ```
-///
-/// Public surface is exactly: [Hash], [Hasher].
-/// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher]; on md5 and sha256
-///   `key:` makes it an HMAC and `expect:` checks the digest.
-/// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
-///   `bytes` (finish, as text or raw); `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
-///   unchanged and digests, so `reader | hasher > file` stores and checksums
-///   in one pass.
-/// Everything else is private.
+/// Incremental hashes, one-shot or in a pipe (exported by `utils` as
+/// [HashUtils] and [Hasher]). Thin facade over `package:crypto`.
 library;
 
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart' as c;
 
-import 'core.dart';
-import 'src/resume.dart' show PassThrough;
-export 'core.dart';
+import '../core.dart';
+import 'resume.dart' show PassThrough;
 
 /// Entry point: one method per algorithm. With [expect] (hex) the hasher
 /// checks itself at the end of a run: a mismatch fails the pipeline with a
 /// [ContentException] before the writer commits, so
-/// `http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')`
+/// `http.get(u) | HashUtils.sha256(expect: sum) > Archive.unarchive('opt')`
 /// never unpacks a bad download. It is checked when a run ends (`>`, `|`,
 /// `of`); `hex()` alone does not check.
 ///
 /// With [key] the hasher is an HMAC (RFC 2104) over that secret:
-/// `Hash.sha256(key: utf8.encode(secret)).add(payload).hex()` checks a
+/// `HashUtils.sha256(key: utf8.encode(secret)).add(payload).hex()` checks a
 /// webhook signature, and a digest's [Hasher.bytes] keys the next step of a
 /// signing chain.
-abstract final class Hash {
+abstract final class HashUtils {
   /// MD5 hasher.
   static Hasher md5({String? expect, List<int>? key}) => Hasher._(c.md5, 'md5', expect, key);
 

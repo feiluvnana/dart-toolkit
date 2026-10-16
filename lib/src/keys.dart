@@ -1,6 +1,6 @@
 /// One key-name table for `tui`, `console` and `chrome.press`.
 ///
-/// VISION §4.12 is the canon: printable characters as themselves plus
+/// VISION §4.11 is the canon: printable characters as themselves plus
 /// `'space'`; `'enter'` `'tab'` `'shift+tab'` `'backspace'` `'escape'`
 /// `'insert'` `'delete'`; `'up'` `'down'` `'left'` `'right'` `'home'` `'end'`
 /// `'pageup'` `'pagedown'`, `'f1'`…`'f12'`; `ctrl+`/`alt+`/`shift+` prefixes.
@@ -63,7 +63,7 @@ const Map<String, String> _aliases = {
   ' ': 'space',
 };
 
-/// Canonicalize [key] to the VISION §4.12 name (lower-case).
+/// Canonicalize [key] to the VISION §4.11 name (lower-case).
 ///
 /// - A single printable character returns as-is (`'a'`, `'Q'`, `'1'`; `'+'`
 ///   stays `'+'` — the caller types it, except `' '` which is `'space'`).

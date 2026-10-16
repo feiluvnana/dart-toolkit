@@ -15,8 +15,8 @@ import 'package:path/path.dart' as p;
 
 import '../archive.dart';
 import '../fs.dart';
-import '../hash.dart';
 import '../http.dart';
+import 'hash.dart';
 import 'progress.dart' show portProbe;
 
 Future<void> main(List<String> args, SendPort reply) async {
@@ -37,7 +37,7 @@ Future<void> fetch(String url, String sha256, String mode, String dir, {String? 
   final http = Http.client(retries: 3, check: true, resume: app, timeout: Duration(seconds: app ? 120 : 30));
   try {
     // A hash mismatch fails the run before anything is written or unpacked.
-    final body = http.get(url) & progress | Hash.sha256(expect: sha256);
+    final body = http.get(url) & progress | HashUtils.sha256(expect: sha256);
     switch (mode) {
       case 'raw':
         await (body > Fs.file(p.join(dir, name!)));

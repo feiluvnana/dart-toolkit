@@ -10,7 +10,7 @@ import 'dart:typed_data';
 
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -52,7 +52,7 @@ void main() {
     ]);
     if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
     await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-    final h = Hash.sha256();
+    final h = HashUtils.sha256();
     await (Fs.file(p('big/big.txt')) > h);
     expect(h.hex(), '${made.stdout}'.trim());
   });
@@ -129,7 +129,7 @@ void main() {
     ]);
     if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
     await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-    final h = Hash.sha256();
+    final h = HashUtils.sha256();
     await (Fs.file(p('big/big.txt')) > h);
     expect(h.hex(), '${made.stdout}'.trim());
   });

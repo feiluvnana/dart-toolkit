@@ -982,7 +982,7 @@ function() {
     return (c, '', 0, c);
   }
 
-  /// The §4.12 key names as DevTools keys.
+  /// The §4.11 key names as DevTools keys.
   static final Map<String, _Key> _named = {
     'enter': ('Enter', 'Enter', 13, '\r'),
     'tab': ('Tab', 'Tab', 9, null),

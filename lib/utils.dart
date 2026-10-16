@@ -1,23 +1,35 @@
 /// Helpers beside the core, one separate import (no module re-exports it):
-/// unit literals, human sizes and times, pacing and cookie jars.
+/// unit literals, human sizes and times, pacing, cookie jars and hashes.
 ///
 /// ```dart
 /// final http = Http.client(rate: Rate(4, 1.seconds), cookies: await Fs.file('.session').cookies(or: Cookies()));
 /// print('${bytes.size()} in ${took.human()} at ${DateTime.now().format('HH:mm')}');
+/// await (http.get(isoUrl) | HashUtils.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
+/// final h = HashUtils.sha256(); await (Fs.file('disc.iso') > h); print(h.hex());  // a file's digest
+/// final id = HashUtils.md5().add(url).hex();
+/// final sig = HashUtils.sha256(key: utf8.encode(secret)).add(body).hex();       // HMAC
 /// ```
 ///
 /// Public surface is exactly: [DurationUtils], [SizeUtils], [TimeUtils],
-/// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies].
+/// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies],
+/// [HashUtils], [Hasher].
 /// - [DurationUtils]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [SizeUtils]: `bytes.size()` (`12.1 MB`).
 /// - [TimeUtils]: `now.format('yyyy-MM-dd')`; [SpanUtils]: `wait.human()` (`11 min 5 s`).
 /// - [Rate]: paces the work that shares it (`wait`; `perHost:` paces each host apart).
 /// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `encode` `[]` `set`;
 ///   `reader.cookies(or:)` reads a `cookies.txt` session from any reader.
+/// - [HashUtils]: `md5` `sha1` `sha256` `sha512` make a [Hasher]; on md5 and
+///   sha256 `key:` makes it an HMAC and `expect:` checks the digest.
+/// - [Hasher]: `add` (text) `addBytes` `hex` `bytes`. As a [Writer] it
+///   digests a stream; as a [Pipe] it forwards unchanged and digests, so
+///   `reader | hasher > file` stores and checksums in one pass.
 /// Everything else is private.
 ///
 /// {@canonicalFor cookies.Cookies}
 /// {@canonicalFor format.SizeUtils}
+/// {@canonicalFor hash.HashUtils}
+/// {@canonicalFor hash.Hasher}
 /// {@canonicalFor rate.Rate}
 /// {@canonicalFor time.DurationUtils}
 /// {@canonicalFor time.SpanUtils}
@@ -31,6 +43,7 @@ import 'src/cookies.dart';
 
 export 'src/cookies.dart' show Cookies;
 export 'src/format.dart' show SizeUtils;
+export 'src/hash.dart' show HashUtils, Hasher;
 export 'src/rate.dart' show Rate;
 export 'src/time.dart' show DurationUtils, SpanUtils, TimeUtils;
 

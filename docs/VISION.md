@@ -1,7 +1,7 @@
 # dart_toolkit
 
-**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is sixteen
-small modules (plus `core`) for command-line automation: fetch, drive a browser, move files, run
+**Write the script you would write in a shell, in Dart, with types.** dart_toolkit is fifteen
+small modules (plus `core` and its helpers, `utils`) for command-line automation: fetch, drive a browser, move files, run
 programs, archive, hash, prompt, and draw a terminal UI. Each module is a thin facade over its
 engine (`dart:io`, a pinned native tool, or an in-house parser), and every module speaks the same five interfaces, so the bytes flow between them like a
 pipe in a shell, and everything that takes time can be watched the same way.
@@ -12,7 +12,7 @@ final title = await http.get('https://example.com').html().$('title').text();
 final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 await (Fs.file('photo.jpg').image().resize(width: 800).encode(.jpg) > Fs.file('thumb.jpg'));
 
-final hash = Hash.sha256();
+final hash = HashUtils.sha256();
 await (http.get(isoUrl) & Console.bar('ubuntu.iso') | hash > Fs.file('ubuntu.iso'));   // the bar learns the size
 await http.post(api, body: .json({'sha256': hash.hex()}));
 await (Pool.map(urls, fetch) & Console.bar('pages'));                                // anything long: & a probe
@@ -132,7 +132,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 
 `utils.dart` is a separate import: no module re-exports it, so the core and each module stay
 lean. It holds what scripts use often but no module needs to name: unit literals, human text for
-sizes and times, and the shared values two modules pass along (chrome produces a `Cookies` jar,
+sizes and times, hashes, and the shared values two modules pass along (chrome produces a `Cookies` jar,
 http consumes it; a `Rate` paces http sends or any job). Helper classes are `<Module>Utils`.
 
 ```dart
@@ -147,6 +147,23 @@ final class Cookies {                             // the jar chrome produces and
 }
 extension ReaderCookies on Reader { Future<Cookies> cookies({Cookies? or}); }   // a cookies.txt session; or: when missing
 ```
+
+**Hashes** (`HashUtils`, over `package:crypto`):
+
+```dart
+abstract final class HashUtils { static Hasher md5({String? expect, List<int>? key});  static Hasher sha256({String? expect, List<int>? key});
+  static Hasher sha1();  static Hasher sha512(); }   // key: = HMAC
+final class Hasher with Writer implements Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  List<int> bytes(); }
+// expect: (hex) fails the run at its end, before the writer commits: http.get(u) | HashUtils.sha256(expect: sum) > Archive.unarchive('opt')
+```
+
+- One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a
+  tee: `r | h > file`, one pass that both stores and checksums.
+- `hex()` and `bytes()` finish the hash (`base64Encode(h.bytes())` for base64) (each re-reads the same digest), and an `add`
+  after them is a `StateError`. A hasher that saw part of a failed run throws `StateError`
+  instead of returning a wrong digest.
+- `key:` makes an HMAC: `HashUtils.sha256(key: utf8.encode(secret)).add(body).hex()` checks a webhook
+  signature, and `bytes()` keys the next step of a signing chain.
 
 ## 3. Names
 
@@ -168,7 +185,7 @@ extension ReaderCookies on Reader { Future<Cookies> cookies({Cookies? or}); }   
 | check a result                         | `check()`                                                               | `Response`, `Output`                                                         |
 | run a body with a resource, then free  | `tempDir((dir) …)` / `lock(() …)`                                        | `Fs` / `File`                                                                |
 | a variant with other settings          | `copy(...)`                                                             | `Client`                                                                     |
-| a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen`                                                             |
+| a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.11) | `Page`, `Screen`                                                             |
 | draw or store into                     | `write`                                                                 | `File`, `Region`                                                             |
 | dimensions                             | `width()` `height()` / `width:` `height:`                               | `Image`, `Region` / `open`, `resize`, `popup`                                |
 | the function that does the work        | `handler`                                                               | `Command(handler:)`                                                          |
@@ -190,7 +207,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
-| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` (a separate import)                                                                                                                                                                                   | in-house                            |
+| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` (a separate import)                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
@@ -200,7 +217,6 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `which` `filter` `open` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
-| `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` (a `Task`) · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
 | `console` | `Console.ask` `confirm` `choose` `key` `bar` `log` `logged` `table` `notify` `copy` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
@@ -353,7 +369,7 @@ final class Response with Reader implements Closeable {
 - `rate: Rate(75, 11.minutes, pause: 3.seconds)` paces every send of the clients that share it;
   `Rate(1, 1.seconds, perHost: true)` keeps one window per host.
 - **Downloads respect the pipe.** With `resume: true`, a GET piped into a file
-  (`cdn.get(u) & Console.bar(name) | Hash.sha256(expect: s) > Fs.file(f)`):
+  (`cdn.get(u) & Console.bar(name) | HashUtils.sha256(expect: s) > Fs.file(f)`):
   - skips a complete file (same `content-length`, or any file when the server sends none);
   - resumes a `.part` with `Range` when the server answers 206 (anything else restarts), and
     finishes a complete one on a 416; a changed file reuses the first GET;
@@ -444,7 +460,7 @@ final class Capture with Reader { int status();  String url();  String? header(S
   status row while a `Tui.run` is active.
 - `run` evaluates an expression or statements once (a function result is called once), awaits
   promises, throws `BrowserException` when the script throws, and returns the result as `Json`:
-  `await page.run('document.title').or('')`, `.value<int>()`, `.$('a.b')`, `.asList<String>()`. `press` takes the key names of §4.12;
+  `await page.run('document.title').or('')`, `.value<int>()`, `.$('a.b')`, `.asList<String>()`. `press` takes the key names of §4.11;
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
 - **The session is a value:** `cookies()` is a `Cookies` jar (utils) (domain, path, expiry kept;
@@ -654,24 +670,7 @@ await (http.get(releaseUrl) > Archive.unarchive('vendor'));
 await http.put(uploadUrl, body: .stream(Archive.archive(['.'], dir: 'site', format: .zip)));
 ```
 
-### 4.8 hash
-
-```dart
-abstract final class Hash { static Hasher md5({String? expect, List<int>? key});  static Hasher sha256({String? expect, List<int>? key});
-  static Hasher sha1();  static Hasher sha512(); }   // key: = HMAC
-final class Hasher with Writer implements Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  List<int> bytes(); }
-// expect: (hex) fails the run at its end, before the writer commits: http.get(u) | Hash.sha256(expect: sum) > Archive.unarchive('opt')
-```
-
-- One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a
-  tee: `r | h > file`, one pass that both stores and checksums.
-- `hex()` and `bytes()` finish the hash (`base64Encode(h.bytes())` for base64) (each re-reads the same digest), and an `add`
-  after them is a `StateError`. A hasher that saw part of a failed run throws `StateError`
-  instead of returning a wrong digest.
-- `key:` makes an HMAC: `Hash.sha256(key: utf8.encode(secret)).add(body).hex()` checks a webhook
-  signature, and `bytes()` keys the next step of a signing chain.
-
-### 4.9 pool
+### 4.8 pool
 
 ```dart
 final class Pool {
@@ -716,7 +715,7 @@ for (final Failed(:item, :error) in done.failures()) Console.log('✗ ${item.to.
 final thumbs = await Pool.map(paths, makeThumb, isolates: true);
 ```
 
-### 4.10 cli
+### 4.9 cli
 
 ```dart
 sealed class Param<T> {}                                   // read back with context(param) as a T
@@ -773,7 +772,7 @@ await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
 ]).run(argv);
 ```
 
-### 4.11 console
+### 4.10 console
 
 ```dart
 abstract final class Console {
@@ -828,7 +827,7 @@ final class Bar with Probe implements Closeable { Bar update(int done, int? tota
 - Progress drawn by hand (a Tui) uses core's `Meter`: `get(u) & meter > file`, then
   `r.bar(meter)`.
 
-### 4.12 tui
+### 4.11 tui
 
 ```dart
 abstract final class Tui {
@@ -1002,7 +1001,7 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 });
 ```
 
-### 4.13 image
+### 4.12 image
 
 ```dart
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
@@ -1032,7 +1031,7 @@ extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).imag
   EXIF and ICC survive (orientation reset), a lossless WebP stays lossless.
 - `pixels` decodes RGB for `Region.picture`: `r.picture(await img.pixels(width: 80))`.
 
-### 4.14 video
+### 4.13 video
 
 ```dart
 enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }   // avi read only; m4a/mp3/opus audio only
@@ -1070,7 +1069,7 @@ build pinned by sha256 is downloaded once into the user cache (ffmpeg: Martin Ri
 and Linux, Gyan's for Windows; 7-Zip: its own release, `7zr.exe` on Windows), one process at a time.
 At most half the cores' worth of encodes run at once.
 
-### 4.15 csv
+### 4.14 csv
 
 ```dart
 abstract final class Csv {
@@ -1085,7 +1084,7 @@ extension on Reader { Future<List<List<String>>> csv({String sep = ',', List<Lis
   only what needs it. `rows()` streams the rows as the bytes arrive, in constant memory. Rows
   keyed by the header are `final [keys, ...rows] = Csv.parse(t)` and a map per row.
 
-### 4.16 yaml
+### 4.15 yaml
 
 ```dart
 abstract final class Yaml { static Json parse(String text); }

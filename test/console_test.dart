@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/format.dart' as fmt;
 import 'package:dart_toolkit/src/progress.dart' show Run;
 import 'package:dart_toolkit/src/terminal.dart' as term;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/capture.dart';
@@ -448,7 +448,7 @@ Future<void> main() async {
     test('works in a download pipeline', () async {
       final dir = await Directory.systemTemp.createTemp('bar_pipe');
       addTearDown(() => dir.delete(recursive: true));
-      final hash = Hash.sha256();
+      final hash = HashUtils.sha256();
       await (Mem('0123456789') & Console.bar('') | hash > _Writer(File('${dir.path}/out.bin')));
       expect(hash.hex().length, 64);
     });

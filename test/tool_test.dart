@@ -5,11 +5,11 @@ import 'dart:io' as io show File;
 
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/cache.dart' as cache;
+import 'package:dart_toolkit/src/fetch.dart' as fetch;
 import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/src/tool.dart' as tool;
-import 'package:dart_toolkit/src/fetch.dart' as fetch;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -61,7 +61,7 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  String sha(List<int> b) => Hash.sha256().addBytes(b).hex();
+  String sha(List<int> b) => HashUtils.sha256().addBytes(b).hex();
 
   Future<Directory> fresh(String name) => Directory('${tmp.path}/$name').create(recursive: true);
 
