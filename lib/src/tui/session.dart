@@ -598,26 +598,6 @@ final class _Session<S> implements term.TuiBridge {
   /// from the last block boundary.
   final _mdMemos = <_MdMemo>[];
 
-  /// Diff colours without an accent or colours given: removed text dim,
-  /// added bold.
-  int _diffStyle(_DiffSeg g, ({Color? removed, Color? added, Color? color, Color? background, Set<Style> style}) p) {
-    final st = {...g.style, ...p.style};
-    if (accent != null || p.removed != null || p.added != null || p.color != null) {
-      final fg = g.fg == Color.red
-          ? (p.removed ?? Color.red)
-          : g.fg == Color.green
-          ? (p.added ?? Color.green)
-          : (g.fg ?? p.color);
-      return _pack(fg, g.bg ?? p.background, st);
-    }
-    if (g.fg == Color.red) {
-      st
-        ..remove(Style.bold)
-        ..add(Style.dim);
-    }
-    return _pack(null, p.background, st);
-  }
-
   /// Markdown runs: fenced code in the accent, or dim without one.
   int _mdStyle(_MdSeg g, Color? color, Color? background, Set<Style> style) => accent != null || color != null
       ? _pack(g.fg == _mdCode ? (accent ?? color) : g.fg ?? color, g.bg ?? background, {...g.style, ...style})

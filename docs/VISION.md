@@ -843,12 +843,12 @@ final class Field {                          // an editor's text, cursor and his
 }
 final class Scroll { Scroll({bool follow = true}); }
 // Every drawing method also takes write's {Color? color, Color? background, Set<Style> style}, and
-// the ones without their own mouse handling (write markdown diff box bar spin) take
+// the ones without their own mouse handling (write markdown box bar spin) take
 // {Map<String, Binding>? on}, bound to what they drew (a box: its header row).
 final class Region {
   int width();  int height();  bool hovered();
   Region write(String text, {String? link, bool inline = false});   // inline: the next write continues the row
-  Region markdown(String source);  Region diff(String before, String after, {Color? removed, Color? added});
+  Region markdown(String source);
   Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
   Region lines(int count, void Function(Region row, int i) line);  // in a scroll: only the lines in view draw
   Region tabs<T>(Pick<T> tabs, String Function(T tab) label, {Color? highlight});  Region scroll(Scroll scroll);
@@ -871,12 +871,11 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 
 `r.picture(await image.pixels(width: 80))` draws an image in half-block cells; `tui` and `image` never load each other (they share a private pixel interface).
 
-- **Events on what was drawn.** `on:` on `write`, `markdown`, `diff`, `bar`, `spin` and `box` (its
+- **Events on what was drawn.** `on:` on `write`, `markdown`, `bar`, `spin` and `box` (its
   header row) binds a `Binding` map, as `Region.on` does for the rest of a region; interactive
   widgets (`list`, `table`, `tabs`, `input`, `button`) handle the mouse themselves.
 - **Colour everywhere.** Every drawing method takes the same `color`, `background` and `style` as
-  `write` (a box or popup paints its border and title; markdown and diff take them as the base,
-  diff's `removed`/`added` replace red and green). `highlight` backs the selection of `list`,
+  `write` (a box or popup paints its border and title; markdown takes them as the base). `highlight` backs the selection of `list`,
   `table` and `tabs`; it defaults to `accent`, which also colours the title row. Without any, the
   look is monochrome and shared with `Console`:
   - `Region.box` draws `┌ ┐ └ ┘` lines with the title after the top edge. `Console.choose` marks the
@@ -940,8 +939,6 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   - `markdown`: headings, nested and numbered lists, quotes, box-drawn tables, `---`; bold,
     italic, strike, `code`, links; fenced code plain, in the accent (dim without one). Safe to stream: an unclosed fence or emphasis
     renders as closed. Layout is cached by `(source, width)`.
-  - `diff`: a Myers line diff in unified hunks with 3 context lines, gutter line numbers, and
-    `-`/`+` rows on red/green with the changed words of paired lines brighter.
   - `rows`/`cols`: a size above 0 is fixed, 0 shares what is left. `box(title)` borders the rest
     and returns the inside. `popup` is drawn last, centered. `bar` lays out like `Console.bar`.
     `bar` keeps to one row (the bar shrinks, then the label is cut) and with `rate:` shows it;

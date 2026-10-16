@@ -30,7 +30,7 @@
 - `fs`: `Link.resolve()` is null only for a broken link (missing target, a loop); a permission error throws instead of reading as broken.
 - `chrome`: a DevTools reply that does not parse fails its call with a `BrowserException` instead of leaving it pending forever, and malformed UTF-8 in a reply is replaced rather than dropping the message.
 - `archive`: zip member names without the UTF-8 flag that are not UTF-8 read as CP437, the zip default (`caf\x82.txt` from Windows is `café.txt`, not a C1 control), and an Info-ZIP Unicode Path field wins when its CRC matches.
-- `tui`: CRLF text (a Windows file, an HTTP body) draws as lines in `write`, `markdown`, `diff` and inputs; every `\r` drew as `�`. A `Field` keeps its text with `\n` line ends.
+- `tui`: CRLF text (a Windows file, an HTTP body) draws as lines in `write`, `markdown` and inputs; every `\r` drew as `�`. A `Field` keeps its text with `\n` line ends.
 - `image`/`video`/`archive`/`chrome`: the first-use download of ffmpeg, 7-Zip or Chrome for Testing is shared by the isolates of one process too (`Pool(isolates: true)` on a fresh machine downloaded once per isolate, and Chrome's resumable `.part` could be written by two at once): the OS lock, which only excludes other processes, now goes with a per-process sentinel.
 - `console`: `Console.choose` under `TERM=dumb` asks with the numbered list instead of drawing the live menu (its escapes leaked), and under `LC_ALL=C` the menu hint is ASCII.
 - `console`/`tui`: an empty `NO_COLOR=` no longer turns colour off (no-color.org: set and not empty), and `FORCE_COLOR=2`/`3` (or any value but empty, `0`, `false`) forces it like `1`.
@@ -80,6 +80,7 @@
 - `core`: `Cookies(agent:)`, `Cookies.agent()` and `Cookies.header(url)`; http reads the jar itself. A session's user-agent is the `user-agent:` line of its cookies.txt (`Cookies.parse('# user-agent: X\n…')`, kept by `encode()`), which the client still sends unless a `user-agent` header is given.
 - `fs`: `Fs.link(path)` and `Link.create(target)`; a new link is `dart:io`'s `Link(path).create(target)`, and a `Link` handle comes from `Fs.entry(path)` or `Dir.list()` (`target()` and `resolve()` stay).
 - `fs`: `Dir.watch()`; `io.Directory(path).watch(recursive: true)` (not recursive on Linux either way).
+- `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0
 

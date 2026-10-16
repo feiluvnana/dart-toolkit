@@ -21,7 +21,7 @@
 ///
 /// Public surface is exactly: [Tui], [App], [Screen], [Binding],
 /// [Pick], [Field], [Scroll], [Region], [Color], [Style], [Pixels], [Meter],
-/// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
+/// plus the [RegionWidgets] and [RegionMarkdown] extensions
 /// (applied to [Region] on import).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
 ///   the screen for a state and never blocks.
@@ -41,7 +41,7 @@
 library;
 
 export 'src/tui.dart'
-    show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, RegionDiff, Style;
+    show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, Style;
 export 'src/terminal.dart' show Color;
 export 'src/pixels.dart' show Pixels;
 export 'src/progress.dart' show Meter;

@@ -568,16 +568,15 @@ Future<void> main() async {
       expect(await t.pump(), isFalse);
     });
 
-    test('no accent by default: list, tabs, diff and markdown emit no colour codes', () async {
+    test('no accent by default: list, tabs and markdown emit no colour codes', () async {
       final tabs = Pick<String>(['one', 'two']);
       final rows = Pick<String>(['a', 'b']);
       Future<String> out({Color? accent}) async {
         final t = testSession<int>(
           0,
           (s, app) => Screen(title: 't', (r) {
-            final [top, mid, low] = r.tabs(tabs, (x) => x).rows([3, 0, 0]);
+            final [top, low] = r.tabs(tabs, (x) => x).rows([3, 0]);
             top.list(rows, (x) => x);
-            mid.diff('one\ntwo words\nx', 'one\ntwo birds\ny');
             low.markdown('# h\n```dart\nfinal a = "s"; // c\n```');
           }),
           width: 40,
@@ -668,14 +667,13 @@ Future<void> main() async {
       expect(t.row(3), contains('hello there'));
     });
 
-    test('P3: CRLF text draws as lines, never a replacement glyph: write, markdown, diff, input', () async {
+    test('P3: CRLF text draws as lines, never a replacement glyph: write, markdown, input', () async {
       final f = Field(text: 'f1\r\nf2');
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
           r.write('w1\r\nw2\r\n');
           r.markdown('m1\r\n\r\nm2\r\n');
-          r.diff('d1\r\nd2', 'd1\r\nd3');
           r.input(f, lines: 2);
         }),
         width: 30,
@@ -688,7 +686,6 @@ Future<void> main() async {
       for (final line in ['w1', 'w2', 'm1', 'm2', 'f1', 'f2']) {
         expect(rows.where((r) => r.trim() == line), hasLength(1), reason: '$line in $rows');
       }
-      expect(rows.where((r) => r.contains('d2')), isNotEmpty, reason: '$rows');
       expect(f.text(), 'f1\nf2');
       t.close();
     });
@@ -712,39 +709,6 @@ Future<void> main() async {
       expect(rows.join('|'), isNot(contains(')) after')));
       expect(rows.join('|'), contains('both'));
       expect(rows.join('|'), isNot(contains('both*')));
-      t.close();
-    });
-
-    test('two diffs on one screen are each computed once (regression: Myers every frame)', () async {
-      String text(int seed) =>
-          [for (var i = 0; i < 3000; i++) i % 7 == seed ? 'changed $i $seed' : 'line $i'].join('\n');
-      final a = text(0), b = text(1), c = text(2), d = text(3);
-      var tick = 0;
-      final t = testSession<int>(
-        0,
-        (s, app) {
-          tick++;
-          return Screen((r) {
-            final [left, right] = r.cols([1, 1]);
-            left.diff(a, b);
-            right.diff(c, d);
-          });
-        },
-        width: 80,
-        height: 20,
-      );
-      final first = Stopwatch()..start();
-      await t.pump();
-      first.stop();
-      final sw = Stopwatch()..start();
-      for (var i = 0; i < 20; i++) {
-        t.bytes([0x78]); // any key: a new frame
-        await t.pump();
-      }
-      expect(tick, greaterThan(10));
-      // Relative to the first frame, so load cannot fail it: recomputing
-      // both diffs every frame made 20 frames ~20× the first.
-      expect(sw.elapsed, lessThan(first.elapsed * 5));
       t.close();
     });
 
@@ -2220,54 +2184,6 @@ Future<void> main() async {
       await t.pump();
       expect(t.row(0), 'Modified Title');
       expect(t.row(1), 'Brand new body.');
-      t.close();
-    });
-
-    test('diff: hunks with 3 context lines and gutters', () async {
-      final before = [for (var i = 1; i <= 20; i++) 'line $i'].join('\n');
-      final after = before.replaceFirst('line 15', 'line fifteen');
-      final t = testSession<int>(0, (s, app) => Screen((r) => r.diff(before, after)), width: 40, height: 12);
-      await t.pump();
-      expect(
-        [for (var i = 0; i < 8; i++) t.row(i)],
-        [
-          '  12   12   line 12',
-          '  13   13   line 13',
-          '  14   14   line 14',
-          '  15      - line 15',
-          '       15 + line fifteen',
-          '  16   16   line 16',
-          '  17   17   line 17',
-          '  18   18   line 18',
-        ],
-      );
-      expect(t.row(8), '');
-      t.close();
-    });
-
-    test('diff: merged hunks keep unchanged lines as context', () async {
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen((r) => r.diff('x\ns\ns\ny', 'X\ns\ns\nY')),
-        width: 40,
-        height: 12,
-      );
-      await t.pump();
-      expect(
-        [for (var i = 0; i < 7; i++) t.row(i)],
-        ['   1      - x', '        1 + X', '   2    2   s', '   3    3   s', '   4      - y', '        4 + Y', ''],
-      );
-      t.close();
-    });
-
-    test('diff: large texts are fast and memoized', () async {
-      final a = [for (var i = 0; i < 4000; i++) 'a$i'].join('\n');
-      final b = [for (var i = 0; i < 4000; i++) 'b$i'].join('\n');
-      final t = testSession<int>(0, (s, app) => Screen((r) => r.diff(a, b)), width: 40, height: 12);
-      final sw = Stopwatch()..start();
-      await t.pump();
-      await t.pump();
-      expect(sw.elapsedMilliseconds, lessThan(1500));
       t.close();
     });
 
