@@ -18,6 +18,7 @@
 //   empty:  prompts answered by empty lines (stdin is \n per prompt).
 //   park:   a spinner runs while ask waits (pty); writes the answer.
 //   asktimeout: ask(timeout:) with nobody answering; writes what it gave.
+//   dumb:   notify and copy, then `done` (TERM=dumb: no escapes may print).
 import 'dart:async';
 import 'dart:io';
 
@@ -146,6 +147,10 @@ Future<void> main(List<String> args) async {
     case 'secret':
       final answer = await Console.ask('Password?', secret: true);
       await log.writeAsString('secret=$answer\n');
+    case 'dumb':
+      Console.notify('finished');
+      Console.copy('clip');
+      stderr.writeln('done');
   }
 }
 

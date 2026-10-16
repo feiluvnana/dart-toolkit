@@ -419,7 +419,7 @@ abstract final class Console {
   static void notify(String message) {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.notify(message);
-    if (_hasTerminal) io.stderr.write(term.notifyCodes(message));
+    if (_animated) io.stderr.write(term.notifyCodes(message)); // TERM=dumb takes no escapes
   }
 
   /// Copy [text] to the clipboard (OSC 52; the terminal may ask first or
@@ -427,15 +427,7 @@ abstract final class Console {
   static void copy(String text) {
     final bridge = term.TuiBridge.current;
     if (bridge != null) return bridge.copy(text);
-    if (_hasTerminal) io.stderr.write(term.copyCodes(text));
-  }
-
-  static bool get _hasTerminal {
-    try {
-      return io.stderr.hasTerminal;
-    } catch (_) {
-      return false;
-    }
+    if (_animated) io.stderr.write(term.copyCodes(text));
   }
 
   static final _blank = RegExp('[\n\t]');

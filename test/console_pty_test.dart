@@ -45,6 +45,30 @@ void main() {
       expect(await log.readAsString(), 'answer=ada\n');
     }, timeout: const Timeout(Duration(seconds: 90)));
 
+    test('P3: under TERM=dumb notify and copy print no escapes', () async {
+      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
+      final root = Directory.current;
+      final res = await Process.run(
+        'python3',
+        [
+          '${root.path}/test/console_pty/drive.py',
+          '--size', '24', '80', //
+          '--',
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          '${Directory.systemTemp.path}/probe-dumb-$pid.log',
+          'dumb',
+        ],
+        workingDirectory: root.path,
+        stdoutEncoding: null,
+        environment: {'LANG': 'en_US.UTF-8', 'TERM': 'dumb'},
+      );
+      if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
+      final out = utf8.decode(res.stdout as List<int>, allowMalformed: true);
+      expect(out, contains('done'));
+      expect(out, isNot(contains('\x1b]')));
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
     // Regression (ARCHITECTURE A6): an unanswered piped prompt kept the VM
     // alive until a line arrived.
     test('ask(timeout:) on an open pipe gives or and lets the script exit', () async {
