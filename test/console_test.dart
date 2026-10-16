@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 
 import 'support/capture.dart';
 import 'support/child.dart';
+import 'support/io.dart';
 
 void main() {
   test('Console.table aligns by cell width, numbers right, plain when piped', () async {
@@ -390,7 +391,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
 
     test('K2: a pipeline that fails before the bar runs frees the line', () async {
       final bar = Console.bar('stuck?');
-      await expectLater(_Mem('hello') & bar > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
+      await expectLater(Mem('hello') & bar > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
       // The line must be free: the next bar builds without StateError.
       final next = Console.bar('free', total: 1);
       await next.close();
@@ -433,43 +434,24 @@ Future<void> main() async {
 
     test('as a probe it counts bytes and closes itself', () async {
       final bar = Console.bar('P');
-      final out = await (_Mem('hello') & bar).bytes();
+      final out = await (Mem('hello') & bar).bytes();
       expect(out, utf8.encode('hello'));
       await bar.close(); // already closed by the pipe: no-op
     });
 
     test('a failed run prints and rethrows', () async {
       final bar = Console.bar('');
-      await expectLater(_Mem('x') & bar | _Boom() > null, throwsStateError);
+      await expectLater(Mem('x') & bar | BoomPipe() > null, throwsStateError);
     });
 
     test('works in a download pipeline', () async {
       final dir = await Directory.systemTemp.createTemp('bar_pipe');
       addTearDown(() => dir.delete(recursive: true));
       final hash = Hash.sha256();
-      await (_Mem('0123456789') & Console.bar('') | hash > _Writer(File('${dir.path}/out.bin')));
+      await (Mem('0123456789') & Console.bar('') | hash > _Writer(File('${dir.path}/out.bin')));
       expect(hash.hex().length, 64);
     });
   });
-}
-
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(utf8.encode(_text));
-}
-
-final class _Boom implements Pipe {
-  @override
-  Stream<List<int>> transform(Stream<List<int>> input) async* {
-    await for (final _ in input) {
-      throw StateError('boom');
-    }
-  }
-
-  @override
-  void abort(Object error) {}
 }
 
 final class _Writer with Writer {

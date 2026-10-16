@@ -4,6 +4,8 @@ import 'dart:io' hide File;
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/hash.dart';
+
+import 'support/io.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -127,55 +129,40 @@ void main() {
 
     test('as a Writer it digests the stream', () async {
       final h = Hash.sha256();
-      await (_Mem('hello') > h);
+      await (Mem('hello') > h);
       expect(h.hex(), Hash.sha256().add('hello').hex());
     });
 
     test('as a Pipe it forwards unchanged and digests', () async {
       final h = Hash.sha256();
-      final out = await (_Mem('hello') | h).bytes();
+      final out = await (Mem('hello') | h).bytes();
       expect(out, utf8.encode('hello'));
       expect(h.hex(), Hash.sha256().add('hello').hex());
     });
 
     test('a failed run poisons the hasher instead of a partial hex', () async {
       final h = Hash.sha256();
-      await expectLater(_Boom() | h > null, throwsStateError);
+      await expectLater(BoomReader() | h > null, throwsStateError);
       expect(() => h.hex(), throwsStateError);
       expect(() => h.add('more'), throwsStateError);
-      expect(_Boom() | h > null, throwsStateError);
+      expect(BoomReader() | h > null, throwsStateError);
     });
 
     test('a finished hasher cannot take another pipeline', () async {
       final h = Hash.sha256().add('x');
       h.hex();
       // Pipelines are lazy: the StateError surfaces when the run starts.
-      expect(_Mem('y') > h, throwsStateError);
-      expect((_Mem('y') | h).bytes(), throwsStateError);
+      expect(Mem('y') > h, throwsStateError);
+      expect((Mem('y') | h).bytes(), throwsStateError);
     });
 
     test('F6: a writer that fails before reading poisons the pipe hasher too', () async {
       final h = Hash.sha256();
-      await expectLater(_Mem('hello') | h > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
+      await expectLater(Mem('hello') | h > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
       // Not the empty-input digest: the run never delivered the bytes.
       expect(() => h.hex(), throwsStateError);
     });
   });
-}
-
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(utf8.encode(_text));
-}
-
-final class _Boom with Reader {
-  @override
-  Stream<List<int>> stream() async* {
-    yield utf8.encode('part');
-    throw StateError('reader blew up mid-write');
-  }
 }
 
 /// Fails before ever listening to the input stream (a missing parent, an

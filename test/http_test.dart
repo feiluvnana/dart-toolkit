@@ -10,6 +10,7 @@ import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/io.dart';
 import 'support/poll.dart';
 
 /// Python-generated fixtures (codecs with the same names): `python3 -c
@@ -251,7 +252,7 @@ void main() {
     test('body streams a Reader', () async {
       final res = await http.put(
         '$base/upload',
-        body: Body.stream(_Mem('0123456789')),
+        body: Body.stream(Mem('0123456789')),
         headers: {'content-length': '10'},
       );
       expect(await res.text(), 'size:10;length:10');
@@ -266,7 +267,7 @@ void main() {
 
     test('a streamed body is sent once, whatever retries says', () async {
       final before = hits['PUT'] ?? 0;
-      await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(_Mem('x')));
+      await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(Mem('x')));
       expect(hits['PUT'], before + 1);
     });
   });
@@ -324,7 +325,7 @@ void main() {
 
     test('piping streams without caching; reading after is StateError', () async {
       final res = await http.get('$base/hello');
-      final sink = _Sink();
+      final sink = Collect();
       await (res > sink);
       expect(sink.data, isNotEmpty);
       expect(() => res.stream(), throwsStateError);
@@ -368,7 +369,7 @@ void main() {
 
     test('a failed pipe releases the connection', () async {
       final res = await http.get('$base/hello');
-      await expectLater(res > _BoomWriter(), throwsStateError);
+      await expectLater(res > BoomWriter(), throwsStateError);
       // The socket must not linger: close() is a no-op, not a hang.
       await res.close().timeout(const Duration(seconds: 5));
     });
@@ -404,13 +405,6 @@ void main() {
   });
 }
 
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(utf8.encode(_text));
-}
-
 /// An endless body, for the blackhole test: the only exit is the timeout.
 final class _SlowReader with Reader {
   @override
@@ -418,27 +412,6 @@ final class _SlowReader with Reader {
     while (true) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       yield List.filled(65536, 65);
-    }
-  }
-}
-
-final class _Sink with Writer {
-  final data = <int>[];
-  @override
-  Future<void> consume(Stream<List<int>> input) async {
-    await for (final c in input) {
-      data.addAll(c);
-    }
-  }
-}
-
-final class _BoomWriter with Writer {
-  @override
-  Future<void> consume(Stream<List<int>> input) async {
-    var n = 0;
-    await for (final _ in input) {
-      n++;
-      if (n == 1) throw StateError('writer blew up mid-write');
     }
   }
 }
@@ -479,11 +452,10 @@ void abortTests() {
     });
 
     test('a pending request fails and is not retried', () async {
-      final slow = await HttpServer.bind('127.0.0.1', 0);
       var hits = 0;
-      slow.listen((r) => hits++); // never answers
+      final (_, slow) = await serve((r) => hits++); // never answers
       final c = Http.client(retries: 3);
-      final f = c.get('http://127.0.0.1:${slow.port}/');
+      final f = c.get('$slow/');
       final expectation = expectLater(
         f,
         throwsA(isA<HttpRequestException>().having((e) => e.reason, 'reason', RequestFailure.aborted)),
@@ -493,22 +465,20 @@ void abortTests() {
       await expectation.timeout(const Duration(seconds: 1));
       await Future<void>.delayed(const Duration(milliseconds: 1500));
       expect(hits, 1);
-      await slow.close(force: true);
     }, tags: 'slow');
 
     test('abort wakes a pending retry backoff', () async {
-      final bad = await HttpServer.bind('127.0.0.1', 0);
-      bad.listen((r) {
-        r.response.statusCode = 503;
-        r.response.close();
-      });
+      final (_, bad) = await serve(
+        (r) => r.response
+          ..statusCode = 503
+          ..close(),
+      );
       final c = Http.client(retries: 3);
-      final f = c.get('http://127.0.0.1:${bad.port}/');
+      final f = c.get('$bad/');
       final expectation = expectLater(f, throwsA(isA<HttpRequestException>()));
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await c.close();
       await expectation.timeout(const Duration(milliseconds: 800));
-      await bad.close(force: true);
     });
 
     test('close is per client: others keep working, the closed one refuses', () async {
@@ -668,18 +638,16 @@ Future<void> main() async {
     });
 
     test('a cross-origin redirect drops credential headers, custom ones too', () async {
-      final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final seen = <String, String?>{};
-      other.listen((r) {
+      final (_, other) = await serve((r) {
         for (final h in ['authorization', 'x-api-key', 'private-token', 'accept']) {
           seen[h] = r.headers.value(h);
         }
         r.response.close();
       });
-      addTearDown(() => other.close(force: true));
       await http
           .get(
-            '$url/to-other?to=http://127.0.0.1:${other.port}/',
+            '$url/to-other?to=$other/',
             headers: {'authorization': 'Bearer T', 'x-api-key': 'K', 'private-token': 'P', 'accept': 'text/html'},
           )
           .then((r) => r.close());
@@ -725,18 +693,16 @@ Future<void> main() async {
 
     test('a body past the 64 KB prefix reads whole after a delay, and pipes', () async {
       final big = List.generate(300000, (i) => i % 251);
-      final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      other.listen(
+      final (_, other) = await serve(
         (r) => r.response
           ..add(big)
           ..close(),
       );
-      addTearDown(() => other.close(force: true));
-      final u = 'http://127.0.0.1:${other.port}/';
+      final u = '$other/';
       final res = await http.get(u);
       await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(await res.bytes(), big);
-      final sink = _Sink();
+      final sink = Collect();
       await (await http.get(u) > sink);
       expect(sink.data, big);
     });
@@ -754,13 +720,11 @@ Future<void> main() async {
 
     test('query: appends encoded pairs; a null value drops its key', () async {
       final seen = <String>[];
-      final echo = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      echo.listen((r) {
+      final (_, echo) = await serve((r) {
         seen.add(r.uri.query);
         r.response.close();
       });
-      addTearDown(() => echo.close(force: true));
-      final u = 'http://127.0.0.1:${echo.port}/s';
+      final u = '$echo/s';
       await http.get(u, query: {'q': 'a b&c', 'page': 2, 'skip': null, 'on': true}).status();
       await http.get('$u?x=1', query: {'y': 'é'}).status();
       await http
@@ -1197,7 +1161,7 @@ Future<void> main() async {
       });
 
       test('a writer without a path just receives the body; awaiting the GET sends it', () async {
-        final sink = _Sink();
+        final sink = Collect();
         await (c.get('$url/file') > sink);
         expect(sink.data, hasLength(1000));
         expect((await c.get('$url/file')).status(), 200);
@@ -1333,7 +1297,7 @@ Future<void> main() async {
         small.get('$url/gzip').text(),
         throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('over 1000 bytes'))),
       );
-      final sink = _Sink();
+      final sink = Collect();
       await (small.get('$url/gzip') > sink);
       expect(sink.data, hasLength(5000));
       expect((await Http.client().get('$url/gzip').text()).length, 5000);
@@ -1355,7 +1319,7 @@ Future<void> main() async {
     test('piping an error page throws what check() throws', () async {
       final res = await Http.client().get('$url/missing');
       await expectLater(
-        res > _Sink(),
+        res > Collect(),
         throwsA(
           isA<HttpStatusException>()
               .having((e) => e.method, 'method', 'GET')

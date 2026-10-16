@@ -8,6 +8,8 @@ import 'dart:typed_data';
 import 'package:dart_toolkit/http.dart';
 import 'package:test/test.dart';
 
+import 'support/io.dart';
+
 /// A one-shot SOCKS5 proxy: [script] answers the handshake (it gets the
 /// bytes so far and the socket); after a success reply the socket speaks
 /// HTTP and answers `via socks`.
@@ -106,10 +108,8 @@ void main() {
   });
 
   test('T5: an http proxy that asks for a login gets the URL\'s credentials', () async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    addTearDown(() => server.close(force: true));
     final want = 'Basic ${base64Encode(utf8.encode('u:p w'))}';
-    server.listen((r) {
+    final (server, _) = await serve((r) {
       if (r.headers.value('proxy-authorization') != want) {
         r.response
           ..statusCode = 407

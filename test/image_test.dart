@@ -13,6 +13,8 @@ import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/video.dart' show Video;
 import 'package:test/test.dart';
 
+import 'support/io.dart';
+
 List<int> get tinyPng =>
     base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
 
@@ -50,13 +52,6 @@ final class _Swap with Pipe {
     await input.drain<void>();
     yield _bytes;
   }
-}
-
-final class _Mem with Reader {
-  _Mem(this._bytes);
-  final List<int> _bytes;
-  @override
-  Stream<List<int>> stream() => Stream.value(_bytes);
 }
 
 void main() {
@@ -157,7 +152,7 @@ void main() {
       final path = '${tmp.path}/one.png';
       await io.File(path).writeAsBytes(tinyPng);
       expect((await Fs.file(path).image()).width(), 1);
-      expect((await _Mem(tinyPng).image()).height(), 1);
+      expect((await Mem.bytes(tinyPng).image()).height(), 1);
     });
 
     test('a piped file is read through its pipe, not from the path (regression: the path skipped the pipe)', () async {
@@ -170,7 +165,7 @@ void main() {
     });
 
     test('mirror on Future<Reader>', () async {
-      expect(await Future<Reader>.value(_Mem(tinyPng)).image().width(), 1);
+      expect(await Future<Reader>.value(Mem.bytes(tinyPng)).image().width(), 1);
     });
   });
 

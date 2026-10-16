@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:dart_toolkit/json.dart';
+
+import 'support/io.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -96,15 +98,15 @@ void main() {
 
   group('Reader.json', () {
     test('reads a value', () async {
-      expect(await _Mem('{"a": 1}').json().$('a').value<int>(), 1);
+      expect(await Mem('{"a": 1}').json().$('a').value<int>(), 1);
     });
 
     test('invalid JSON is a FormatException', () {
-      expect(_Mem('{nope').json(), throwsFormatException);
+      expect(Mem('{nope').json(), throwsFormatException);
     });
 
     test('mirror on Future<Reader>', () async {
-      expect(await Future<Reader>.value(_Mem('[1,2]')).json().$('1').value<int>(), 2);
+      expect(await Future<Reader>.value(Mem('[1,2]')).json().$('1').value<int>(), 2);
     });
   });
 
@@ -257,13 +259,6 @@ void main() {
     expect(a.hashCode, b.hashCode);
     expect(a == Json.parse(deep.replaceFirst('1', '2')), isFalse);
   });
-}
-
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(_text.codeUnits);
 }
 
 void deepPathTests() {

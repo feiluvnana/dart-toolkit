@@ -12,6 +12,7 @@ import 'package:test/test.dart';
 
 import 'support/capture.dart';
 import 'support/child.dart';
+import 'support/io.dart';
 import 'support/poll.dart';
 
 /// A [Writer] into a file path, so the resume handshake sees a path.
@@ -188,9 +189,7 @@ void main() {
 
   test('S3: secret client headers go only to the base origin, or the first one without base', () async {
     final seen = <String, Map<String, String?>>{};
-    final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    addTearDown(() => other.close(force: true));
-    other.listen((r) {
+    final (other, _) = await serve((r) {
       seen['${r.uri}'] = {'auth': r.headers.value('authorization'), 'key': r.headers.value('x-api-key'), 'ua': r.headers.value('x-app')};
       r.response.close();
     });

@@ -7,6 +7,7 @@ import 'package:dart_toolkit/shell.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/io.dart';
 import 'support/poll.dart';
 
 void main() {
@@ -232,19 +233,19 @@ Future<void> main() async {
   group('Shell.filter', () {
     test('a process as a Pipe', () async {
       final out = await Shell.run(['printf', 'a\nb\nc\n']);
-      final filtered = _Mem(await out.text()) | Shell.filter(['grep', 'b']);
+      final filtered = Mem(await out.text()) | Shell.filter(['grep', 'b']);
       expect((await filtered.text()).trim(), 'b');
     });
 
     test('non-zero exit fails the run with a ProcessException', () async {
       expect(
-        _Mem('x') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null,
+        Mem('x') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null,
         throwsA(isA<ExitException>().having((e) => e.errorCode, 'code', 2)),
       );
     });
 
     test('an upstream error is rethrown, not masked', () async {
-      expect(_Boom() | Shell.filter(['cat']) > null, throwsStateError);
+      expect(BoomReader() | Shell.filter(['cat']) > null, throwsStateError);
     });
 
     test('empty command is an ArgumentError', () {
@@ -256,7 +257,7 @@ Future<void> main() async {
       final lines = List.generate(10000, (i) => 'line $i').join('\n');
       final tmp = await Directory.systemTemp.createTemp('shell_f4');
       try {
-        await (_Mem(lines) | Shell.filter(['head', '-n', '1']) > Fs.file('${tmp.path}/one.txt'));
+        await (Mem(lines) | Shell.filter(['head', '-n', '1']) > Fs.file('${tmp.path}/one.txt'));
         final first = await Fs.file('${tmp.path}/one.txt').text();
         expect(first.trim(), 'line 0');
       } finally {
@@ -266,7 +267,7 @@ Future<void> main() async {
 
     test('a failing filter keeps the last 64 KB of stderr', () async {
       final big = List.generate(4000, (i) => 'noise line $i ................................').join('\n');
-      final e = await (_Mem('$big\nLAST\n') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null).then<Object?>(
+      final e = await (Mem('$big\nLAST\n') | Shell.filter(['sh', '-c', 'cat >&2; exit 2']) > null).then<Object?>(
         (_) => null,
         onError: (Object e) => e,
       );
@@ -277,28 +278,13 @@ Future<void> main() async {
 
     test('F12: late stderr survives into the exception', () async {
       await expectLater(
-        _Mem('x') | Shell.filter(['sh', '-c', 'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2']) > null,
+        Mem('x') | Shell.filter(['sh', '-c', 'cat >/dev/null; sleep 0.3; echo late-stderr >&2; exit 2']) > null,
         throwsA(
           isA<ProcessException>().having((e) => e.message, 'message', allOf(contains('2'), contains('late-stderr'))),
         ),
       );
     });
   });
-}
-
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(_text.codeUnits);
-}
-
-final class _Boom with Reader {
-  @override
-  Stream<List<int>> stream() async* {
-    yield [1, 2, 3];
-    throw StateError('reader blew up mid-write');
-  }
 }
 
 void timeoutTests() {

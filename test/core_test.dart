@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dart_toolkit/core.dart';
+
+import 'support/io.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -14,7 +16,7 @@ void main() {
     });
 
     test('stream is the one member to implement', () async {
-      expect(await _Mem([1, 2]).bytes(), [1, 2]);
+      expect(await Mem.bytes([1, 2]).bytes(), [1, 2]);
     });
 
     test('bytes reads everything', () async {
@@ -28,38 +30,38 @@ void main() {
     });
 
     test('text decodes UTF-8, malformed replaced', () async {
-      expect(await _Mem(utf8.encode('héllo')).text(), 'héllo');
-      expect(await _Mem([0xff, 0xfe]).text(), '��');
+      expect(await Mem.bytes(utf8.encode('héllo')).text(), 'héllo');
+      expect(await Mem.bytes([0xff, 0xfe]).text(), '��');
     });
 
     test('pipe is lazy: nothing flows yet', () async {
       var ran = false;
-      final r = _Mem([1]) | _Tap(() => ran = true);
+      final r = Mem.bytes([1]) | _Tap(() => ran = true);
       expect(ran, isFalse);
       await (r > null);
       expect(ran, isTrue);
     });
 
     test('null pipe returns this reader unchanged', () {
-      final r = _Mem([1]);
+      final r = Mem.bytes([1]);
       expect(identical(r | null, r), isTrue);
     });
 
     test('| groups like a shell', () async {
       final seen = <int>[];
-      await (_Mem([1]) | _Tap(() => seen.add(1)) | _Tap(() => seen.add(2)) > null);
+      await (Mem.bytes([1]) | _Tap(() => seen.add(1)) | _Tap(() => seen.add(2)) > null);
       expect(seen, [1, 2]);
     });
 
     test('null writer runs upstream and discards', () async {
       var ran = false;
-      await (_Mem([1, 2]) | _Tap(() => ran = true) > null);
+      await (Mem.bytes([1, 2]) | _Tap(() => ran = true) > null);
       expect(ran, isTrue);
     });
 
     test('method chain needs no parentheses', () async {
-      final w = _Sink();
-      await (_Mem([7]) | null > w);
+      final w = Collect();
+      await (Mem.bytes([7]) | null > w);
       expect(w.data, [7]);
     });
   });
@@ -88,7 +90,7 @@ void main() {
     test('ordering: bytes flow through stages in order', () async {
       final order = <String>[];
       final writer = _OrderWriter(order);
-      await (_Mem([1]) | _Tap(() => order.add('pipe')) > writer);
+      await (Mem.bytes([1]) | _Tap(() => order.add('pipe')) > writer);
       expect(order, ['pipe', 'write']);
     });
 
@@ -99,24 +101,24 @@ void main() {
     });
 
     test('re-readable reader streams again', () async {
-      final r = _Mem([1]);
+      final r = Mem.bytes([1]);
       await (r > null);
       expect(await r.bytes(), [1]);
     });
 
     test('an error anywhere fails the whole run', () async {
-      expect(_Mem([1]) | _Boom() > _Sink(), throwsA(isA<StateError>()));
+      expect(Mem.bytes([1]) | BoomPipe() > Collect(), throwsA(isA<StateError>()));
     });
 
     test('a writer that throws mid-run cancels the reader and rethrows', () async {
       final reader = _CancelReader();
-      await expectLater(reader | null > _BoomWriter(), throwsStateError);
+      await expectLater(reader | null > BoomWriter(at: 2), throwsStateError);
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(reader.cancelled, isTrue);
     });
 
     test('a pipe that throws mid-run fails the run', () async {
-      expect(_Mem([1]) | _Boom() > null, throwsStateError);
+      expect(Mem.bytes([1]) | BoomPipe() > null, throwsStateError);
     });
 
     test('backpressure: writer pauses reader', () async {
@@ -146,7 +148,7 @@ void main() {
 
   group('Future mirrors', () {
     test('Future<Reader> mirrors Reader', () async {
-      final f = Future<Reader>.value(_Mem(utf8.encode('x')));
+      final f = Future<Reader>.value(Mem.bytes(utf8.encode('x')));
       expect(await f.text(), 'x');
       expect(await f.bytes(), utf8.encode('x'));
       await (f | null > null);
@@ -177,13 +179,6 @@ void main() {
       await Future<Closeable>.value(c).close();
     });
   });
-}
-
-final class _Mem with Reader {
-  _Mem(this._data);
-  final List<int> _data;
-  @override
-  Stream<List<int>> stream() => Stream.value(_data);
 }
 
 final class _Chunks with Reader {
@@ -229,28 +224,6 @@ final class _Tap implements Pipe {
 
   @override
   void abort(Object error) {}
-}
-
-final class _Boom implements Pipe {
-  @override
-  Stream<List<int>> transform(Stream<List<int>> input) async* {
-    await for (final _ in input) {
-      throw StateError('boom');
-    }
-  }
-
-  @override
-  void abort(Object error) {}
-}
-
-final class _Sink with Writer {
-  final data = <int>[];
-  @override
-  Future<void> consume(Stream<List<int>> input) async {
-    await for (final c in input) {
-      data.addAll(c);
-    }
-  }
 }
 
 final class _OrderWriter with Writer {
@@ -304,17 +277,6 @@ final class _CancelReader with Reader {
       cancelled = true;
     };
     return controller.stream;
-  }
-}
-
-final class _BoomWriter with Writer {
-  @override
-  Future<void> consume(Stream<List<int>> input) async {
-    var n = 0;
-    await for (final _ in input) {
-      n++;
-      if (n == 2) throw StateError('writer blew up mid-write');
-    }
   }
 }
 

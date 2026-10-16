@@ -8,6 +8,7 @@ import 'package:dart_toolkit/src/cdp.dart';
 import 'package:test/test.dart';
 
 import 'support/capture.dart';
+import 'support/io.dart';
 
 /// A fake browser endpoint: [answer] maps each command to its reply
 /// (null: no reply); [events] lets a test push events.
@@ -131,12 +132,12 @@ void main() {
       Chrome.connect('http://127.0.0.1:1'),
       throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('no browser to connect to'))),
     );
-    final junk = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    addTearDown(() => junk.close(force: true));
-    junk.listen((r) => r.response
-      ..write('not json')
-      ..close());
-    await expectLater(Chrome.connect('http://127.0.0.1:${junk.port}'), throwsA(isA<BrowserException>()));
+    final (_, junk) = await serve(
+      (r) => r.response
+        ..write('not json')
+        ..close(),
+    );
+    await expectLater(Chrome.connect(junk), throwsA(isA<BrowserException>()));
     if (Platform.isWindows) return;
     final dir = await Directory.systemTemp.createTemp('fake_chrome');
     addTearDown(() => dir.delete(recursive: true));

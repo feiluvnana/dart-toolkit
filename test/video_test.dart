@@ -9,6 +9,8 @@ import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/video.dart';
 import 'package:test/test.dart';
 
+import 'support/io.dart';
+
 late io.Directory tmp;
 
 /// [bytes] as a video, the way a script reads bytes.
@@ -20,13 +22,6 @@ Future<String> make(String name, List<String> args) async {
   final out = '${tmp.path}/$name';
   await media.ffmpeg([...args, '-y', out]);
   return out;
-}
-
-final class _Mem with Reader {
-  _Mem(this._bytes);
-  final List<int> _bytes;
-  @override
-  Stream<List<int>> stream() => Stream.value(_bytes);
 }
 
 void main() {
@@ -130,13 +125,13 @@ void main() {
     test('bytes and streams go through a temp file', () async {
       final bytes = await io.File(clip).readAsBytes();
       expect((await _video(bytes)).width(), 640);
-      expect((await _Mem(bytes).video()).height(), 360);
-      expect(await Future<Reader>.value(_Mem(bytes)).video().width(), 640);
+      expect((await Mem.bytes(bytes).video()).height(), 360);
+      expect(await Future<Reader>.value(Mem.bytes(bytes)).video().width(), 640);
     });
 
     test('unknown bytes are a ContentException', () async {
       await expectLater(_video(List.filled(64, 7)), throwsA(isA<ContentException>()));
-      await expectLater(_Mem(List.filled(64, 7)).video(), throwsA(isA<ContentException>()));
+      await expectLater(Mem.bytes(List.filled(64, 7)).video(), throwsA(isA<ContentException>()));
     });
 
     test('a rotated video reports its displayed size', () async {

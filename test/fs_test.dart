@@ -7,6 +7,7 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/io.dart';
 import 'support/poll.dart';
 
 void main() {
@@ -369,14 +370,14 @@ void main() {
     });
 
     test('as a Writer it stores atomically', () async {
-      await (_Mem('data') > Fs.file(p('out.txt')));
+      await (Mem('data') > Fs.file(p('out.txt')));
       expect(await Fs.file(p('out.txt')).text(), 'data');
     });
 
     test('a failed run keeps the old content and no temp file', () async {
       final f = Fs.file(p('keep.txt'));
       await f.write('OLD');
-      await expectLater(_Boom() > f, throwsStateError);
+      await expectLater(BoomReader() > f, throwsStateError);
       expect(await f.text(), 'OLD');
       final leftovers = await Directory(tmp.path).list().where((e) => e.path.contains('.tmp')).toList();
       expect(leftovers, isEmpty);
@@ -779,17 +780,3 @@ Future<void> expectThrows(Future<void> f, String what) async {
   });
 }
 
-final class _Mem with Reader {
-  _Mem(this._text);
-  final String _text;
-  @override
-  Stream<List<int>> stream() => Stream.value(_text.codeUnits);
-}
-
-final class _Boom with Reader {
-  @override
-  Stream<List<int>> stream() async* {
-    yield [1, 2, 3];
-    throw StateError('reader blew up mid-write');
-  }
-}

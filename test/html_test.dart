@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/src/charset.dart';
+
+import 'support/io.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -252,12 +254,12 @@ void main() {
 
   group('Reader.html', () {
     test('parses bytes', () async {
-      final doc = await _Mem('<p>hi</p>').html();
+      final doc = await Mem('<p>hi</p>').html();
       expect(doc.$('p').text(), 'hi');
     });
 
     test('a piped Future<Reader> keeps its origin for links', () async {
-      final src = _Mem('<a href="b.html">x</a>', const Origin(url: 'https://e.com/d/'));
+      final src = Mem('<a href="b.html">x</a>', const Origin(url: 'https://e.com/d/'));
       final doc = await (Future<Reader>.value(src) | null).html();
       expect(doc.$('a')[0].attr('href'), 'https://e.com/d/b.html');
       final piped = await (Future<Reader>.value(src) | _Id()).html();
@@ -265,7 +267,7 @@ void main() {
     });
 
     test('mirror on Future<Reader>', () async {
-      final doc = await Future<Reader>.value(_Mem('<p>hi</p>')).html();
+      final doc = await Future<Reader>.value(Mem('<p>hi</p>')).html();
       expect(doc.$('p').text(), 'hi');
     });
   });
@@ -718,20 +720,10 @@ void main() {
     });
 
     test('html exports json: chains reach Json with one import', () async {
-      final j = await _Mem('<script type="application/json">{"a":{"b":5}}</script>').html().json().$('**.b');
+      final j = await Mem('<script type="application/json">{"a":{"b":5}}</script>').html().json().$('**.b');
       expect(j.asList<int>(), [5]);
     });
   });
-}
-
-final class _Mem with Reader {
-  _Mem(String text, [this._origin = const Origin()]) : _data = text;
-  final String _data;
-  final Origin _origin;
-  @override
-  Origin origin() => _origin;
-  @override
-  Stream<List<int>> stream() => Stream.value(_data.codeUnits);
 }
 
 final class _Id with Pipe {
