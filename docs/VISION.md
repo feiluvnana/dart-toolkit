@@ -147,7 +147,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | query a tree / typed read, null if not | `$` / `value<T>()`, `run()`                                             | `Elements`, `Element`, `Json` / `Json`, `Page`                               |
 | an attribute / every match's attribute | `attr` / `attrs`                                                        | `Element(s)`                                                                 |
 | a tree without some parts              | `not(selector)`                                                         | `Element(s)`                                                                 |
-| feed data / watch progress / count by hand | `add(data)` / `work & probe` / `tick(n)`, `update(done, total)`     | `Hasher` / every reader, `Task`, future / `Bar`, `Meter`                     |
+| feed data / watch progress / count by hand | `add(data)` / `work & probe` / `update(done, total)`               | `Hasher` / every reader, `Task`, future / `Bar`, `Meter`                     |
 | release / remove from disk / make      | `close()` / `delete()` / `create()`                                     | `Closeable` / `Entry` / `Dir`, `Link`                                        |
 | final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`                                           | `Response` (`Page` has `url()`)                                              |
 | a file name / a size in bytes          | `name()` / `size()`                                                     | `Entry`, `Download`, `Response`, `Capture` / `File`, `Response`, `Origin`    |
@@ -191,7 +191,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` (a `Task`) · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
-| `console` | `Console.ask` `confirm` `choose` `key` `bar` `log` `logged` `table` `notify` `copy` `out` `input` · `Bar` `tick` `update`                                                                                                                                                                                                                                                                         | in-house                            |
+| `console` | `Console.ask` `confirm` `choose` `key` `bar` `log` `logged` `table` `notify` `copy` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`, `bars`, `log`) · `Color` · `Style` · `Meter` (core's)                                                                                                                                                                                                                                                       | in-house                            |
 | `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
 | `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `format` `codec` `audioCodec` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
@@ -771,7 +771,7 @@ abstract final class Console {
   static Future<bool> confirm(String question, {bool or = false, Duration? timeout});
   static Future<T?> choose<T>(String question, List<T> items, String Function(T item) label, {T? or, Map<String, T>? keys, Duration? timeout});
   static Future<String> key(String prompt, {String? or, Duration? timeout});   // '' = no prompt
-  static Bar bar(String label, {int? total, bool keep = true});   // a probe: work & Console.bar('build'); keep: false vanishes when done
+  static Bar bar(String label, {bool keep = true});   // a probe: work & Console.bar('build'); keep: false vanishes when done
   static Writer out();  static Reader input();                    // our stdout and stdin, so a script can be a filter
   static void log(String line, {bool failed = false});   // prints above a live bar; ✗ when failed; kept for logged()
   static Reader logged();                          // the run's log, timed: Console.logged() > Fs.file('run.log')
@@ -779,7 +779,7 @@ abstract final class Console {
   static void notify(String message);              // OSC 9/777 + bell; through the app inside Tui.run (silent while focused)
   static void copy(String text);                   // OSC 52; through the app inside Tui.run
 }
-final class Bar with Probe implements Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total); }
+final class Bar with Probe implements Closeable { Bar update(int done, int? total); }   // by hand: bar.update(++n, total)
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
@@ -805,7 +805,7 @@ final class Bar with Probe implements Closeable { Bar tick([int count = 1]);  Ba
   (`1:12/4:30  3.4×`), a `Task` in items (`12/40  3.1/s`), and a plain future as a spinner until it
   completes (`✓ label`). Bytes a resumed download replays from its `.part` fill the bar but not the
   rate. The rate is the speed now: 100 ms steps smoothed over about a second, not a long average.
-  Used by hand, `tick()`/`update()` count items towards `total:`. The bar renders as a clean line
+  Used by hand, `update(done, total)` counts items (a total may grow; a count never goes back). The bar renders as a clean line
   track (`━━╸──`), matching the `tui` aesthetic. It closes itself when the runs it watches end (✗
   when one failed) or a hand count reaches its total; `close()` prints the final line early.
 - A bar takes the live line when made and gives it back when it closes, or when its run fails at

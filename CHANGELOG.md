@@ -36,6 +36,7 @@
 - `console`/`tui`: an empty `NO_COLOR=` no longer turns colour off (no-color.org: set and not empty), and `FORCE_COLOR=2`/`3` (or any value but empty, `0`, `false`) forces it like `1`.
 - `tui`: an error no handler owns (a timer or future the script started outside the Tui) fails `Tui.run` after the alternate screen is left, so its trace stays on screen; it printed on the alternate screen and vanished with it.
 - `console`: live bars and spinners redraw in place after the terminal narrows: the block counts the rows a reflowing terminal wrapped its old lines onto (as `choose` does), instead of stacking stale rows.
+- `console`: a bar made without a count and then counted by hand (`Console.bar('x')..update(3, 10)`) stops its spinner's timer, so an unclosed one no longer keeps the finished script alive.
 
 **Security**
 
@@ -75,6 +76,7 @@
 - `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
 - `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
 - `tui`: `Pick.addAll`, `remove` and `removeWhere`; `pick.set([...pick.items(), ...more])` or `set([for (final i in pick.items()) if (keep(i)) i])` (the selection is kept either way).
+- `console`: `Bar.tick` and `Console.bar(total:)`; a bar counted by hand is `bar.update(++n, total)`, which closes it at the total as `tick` did.
 
 ## 0.1.0
 

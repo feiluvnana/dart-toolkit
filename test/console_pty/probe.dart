@@ -8,8 +8,8 @@
 //   narrow: two bars live while the test halves the terminal width.
 //   orphan-exit|crash|cancel: start the tty reader, print its pid, then
 //           exit(3), crash, or cancel and report whether it is alive.
-//   leak:   ticks a bar and returns without closing it; must still exit.
-//   over:   ticks past the total and by a negative count; close prints the count.
+//   leak:   counts a bar and returns without closing it; must still exit.
+//   over:   counts past the total, then back; close prints the highest count.
 //   keep:   a kept bar, a `keep: false` one, and a `keep: false` one that fails.
 //   evil:   choose over a label with ESC and a newline (piped).
 //   ask:    reads one line (piped stdin); writes the answer.
@@ -31,47 +31,47 @@ Future<void> main(List<String> args) async {
   final mode = args[1];
   switch (mode) {
     case 'bar':
-      final bar = Console.bar('a very long label that must be cut somewhere along the way', total: 100);
-      for (var i = 0; i < 5; i++) {
-        bar.tick(20);
+      final bar = Console.bar('a very long label that must be cut somewhere along the way');
+      for (var i = 1; i <= 5; i++) {
+        bar.update(i * 20, 100);
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
       await bar.close();
     case 'keep':
-      Console.bar('kept', total: 2).tick(2);
-      Console.bar('gone', total: 2, keep: false).tick(2);
+      Console.bar('kept').update(2, 2);
+      Console.bar('gone', keep: false).update(2, 2);
       try {
         await (Reader.of([1, 2, 3]) & Console.bar('broken', keep: false) > _Failing());
       } catch (_) {}
       await Future<void>.delayed(const Duration(milliseconds: 50));
       stdout.writeln('done');
     case 'short':
-      final bar = Console.bar('Pages', total: 40);
-      bar.tick(12);
+      final bar = Console.bar('Pages');
+      bar.update(12, 40);
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await bar.close();
     case 'spin':
       await (Future<void>.delayed(const Duration(milliseconds: 400)) & Console.bar('working'));
       stdout.writeln('spun');
     case 'stack':
-      final bar = Console.bar('files', total: 4);
+      final bar = Console.bar('files')..update(0, 4);
       final spins = Future.wait([
         Future<void>.delayed(const Duration(milliseconds: 500)) & Console.bar('alpha'),
         Future<void>.delayed(const Duration(milliseconds: 250)) & Console.bar('beta'),
       ]);
-      for (var i = 0; i < 4; i++) {
+      for (var i = 1; i <= 4; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 150));
-        bar.tick();
+        bar.update(i, 4);
       }
       await spins;
       stdout.writeln('stacked');
     case 'narrow':
       // Two bars live across a resize narrower than their rows.
-      final a = Console.bar('alpha', total: 20), b = Console.bar('beta', total: 20);
-      for (var i = 0; i < 20; i++) {
+      final a = Console.bar('alpha')..update(0, 20), b = Console.bar('beta')..update(0, 20);
+      for (var i = 1; i <= 20; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
-        a.tick();
-        b.tick();
+        a.update(i, 20);
+        b.update(i, 20);
       }
       stdout.writeln('narrowed');
     case 'orphan-exit' || 'orphan-crash' || 'orphan-cancel':
@@ -108,7 +108,7 @@ Future<void> main(List<String> args) async {
       }
       throw StateError('crash');
     case 'leak':
-      Console.bar('', total: 10).tick(3);
+      Console.bar('').update(3, 10);
       stdout.writeln('ready-leak');
     case 'total':
       final bar = Console.bar('T');
@@ -116,8 +116,8 @@ Future<void> main(List<String> args) async {
       Console.log('logged above');
       await bar.close();
     case 'over':
-      final bar = Console.bar('', total: 3);
-      bar.tick(5).tick(-2);
+      final bar = Console.bar('');
+      bar.update(5, 3).update(3, 3);
       await bar.close();
     case 'evil':
       await Console.choose('Pick', ['a\x1b[31mb\nc'], (s) => s);

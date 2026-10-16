@@ -299,39 +299,39 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
   });
 
   group('Bar', () {
-    test('a bar ticked to its total closes itself; a second one may start', () async {
-      final first = Console.bar('items', total: 3);
-      for (var i = 0; i < 3; i++) {
-        first.tick();
+    test('a bar counted to its total closes itself; a second one may start', () async {
+      final first = Console.bar('items');
+      for (var i = 1; i <= 3; i++) {
+        first.update(i, 3);
       }
       await Future<void>.delayed(Duration.zero);
-      final second = Console.bar('', total: 2)..tick(2);
+      final second = Console.bar('')..update(2, 2);
       await Future<void>.delayed(Duration.zero);
-      expect(() => Console.bar('', total: 1)..tick(), returnsNormally);
+      expect(() => Console.bar('')..update(1, 1), returnsNormally);
       await second.close();
     });
 
     test('two live bars may run at once', () async {
       final run = await capture(() async {
-        final open = Console.bar('A', total: 10);
-        final other = Console.bar('B', total: 5)..tick();
+        final open = Console.bar('A')..update(0, 10);
+        final other = Console.bar('B')..update(1, 5);
         await other.close();
         await open.close();
       });
       expect(run.err, 'B 1/5\nA 0/10\n');
     });
 
-    test('tick counts past the total and returns the bar', () async {
+    test('update counts past the total and returns the bar', () async {
       final run = await capture(() async {
-        final bar = Console.bar('T', total: 3);
-        expect(identical(bar.tick(), bar), isTrue);
-        bar.tick(5);
+        final bar = Console.bar('T');
+        expect(identical(bar.update(1, null), bar), isTrue);
+        bar.update(6, 3);
         await bar.close();
       });
       expect(run.err, 'T 6/3\n');
     });
 
-    test('L3: counts past the total are kept, negative ticks ignored', () async {
+    test('L3: counts past the total are kept, a count never goes back', () async {
       final root = Directory.current;
       final res = await Process.run(Platform.resolvedExecutable, [
         '${root.path}/test/console_pty/probe.dart',
@@ -383,7 +383,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
     test('no total means unknown, like 0', () async {
       final run = await capture(() async {
         final bar = Console.bar('U');
-        bar.tick(11);
+        bar.update(11, null);
         await bar.close();
       });
       expect(run.err, startsWith('U 11 '));
@@ -393,15 +393,15 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final bar = Console.bar('stuck?');
       await expectLater(Mem('hello') & bar > _ThrowBeforeRead(), throwsA(isA<ArgumentError>()));
       // The line must be free: the next bar builds without StateError.
-      final next = Console.bar('free', total: 1);
+      final next = Console.bar('free');
       await next.close();
     });
 
     test('unknown totals count up', () async {
       final run = await capture(() async {
-        final bar = Console.bar('Z', total: 0);
-        bar.tick();
-        bar.tick(10);
+        final bar = Console.bar('Z');
+        bar.update(1, 0);
+        bar.update(11, 0);
         await bar.close();
       });
       expect(run.err, startsWith('Z 11 '));
@@ -409,7 +409,7 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
 
     test('close is idempotent', () async {
       final run = await capture(() async {
-        final bar = Console.bar('C', total: 1);
+        final bar = Console.bar('C')..update(0, 1);
         await bar.close();
         await bar.close();
       });
@@ -420,12 +420,12 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       final r = await runDart('''
 import 'package:dart_toolkit/console.dart';
 Future<void> main() async {
-  final bar = Console.bar('outer', total: 2);
+  final bar = Console.bar('outer')..update(0, 2);
   await Future.wait([
     Future<void>.delayed(const Duration(milliseconds: 50)) & Console.bar('one'),
     Future<void>.delayed(const Duration(milliseconds: 10)) & Console.bar('two'),
   ]);
-  bar.tick(2);
+  bar.update(2, 2);
 }
 ''');
       expect(r.exitCode, 0, reason: r.stderr as String);

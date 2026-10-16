@@ -1063,7 +1063,7 @@ Future<void> main() async {
             'b': (
               '',
               () {
-                bar = Console.bar('↓ ch.1', total: 4)..tick();
+                bar = Console.bar('↓ ch.1')..update(1, 4);
               },
             ),
           },
@@ -2598,7 +2598,7 @@ Future<void> main() async {
             keys: {
               'e': ('', () => throw Exception('boom')),
               's': ('', () => done.future & Console.bar('working')),
-              'b': ('', () => Console.bar('dl', total: 3)),
+              'b': ('', () => Console.bar('dl')..update(0, 3)),
             },
           );
         },
@@ -2636,7 +2636,7 @@ Future<void> main() async {
       Bar? bar;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) => r.bars(), keys: {'b': ('', () => bar = Console.bar('dl', total: 4)..tick(2))}),
+        (s, app) => Screen((r) => r.bars(), keys: {'b': ('', () => bar = Console.bar('dl')..update(2, 4))}),
         width: 50,
         height: 4,
       );
@@ -2683,7 +2683,7 @@ Future<void> main() async {
       Bar? bar;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.bar('↓ ch', total: 4)..tick(2))}),
+        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.bar('↓ ch')..update(2, 4))}),
         width: 60,
         height: 3,
       );
@@ -2691,7 +2691,7 @@ Future<void> main() async {
       t.bytes(utf8.encode('b'));
       await t.pump();
       expect(t.row(2), matches(RegExp(r'^↓ ch ━━━━━───── 2/4  \S+/s')));
-      bar!.tick(-8); // ignored, as Console.bar documents
+      bar!.update(1, 4); // a count never goes back
       await t.pump();
       expect(t.row(2), contains(' 2/4 '));
       await bar!.close();

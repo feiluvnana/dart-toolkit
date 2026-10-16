@@ -12,7 +12,7 @@
 /// - `Console.ask/confirm/choose/key/bar/log/logged/table/notify/copy/out/input()`
 ///   prompt, read keys, show progress, print above it or as columns, reach
 ///   the desktop, or read and write the script's own stdin and stdout.
-/// - [Bar] is a [Probe] (attach it with `&`) that supports `tick` `update`
+/// - [Bar] is a [Probe] (attach it with `&`) that supports `update`
 ///   (plus [Closeable]).
 /// Everything else is private.
 library;
@@ -496,16 +496,16 @@ abstract final class Console {
   /// A live progress line labelled [label] (`''` for none): attach it with `&` to a flow,
   /// a [Task] or any future (`work & Console.bar('build')`), and it shows
   /// that run: its count, total and rate, or a spinner until it completes.
-  /// Or [Bar.tick] it by hand towards [total]. Stacks with other live bars;
+  /// Or count it by hand with [Bar.update]. Stacks with other live bars;
   /// without a terminal only the final line prints. While a state-driven
   /// `Tui.run` is active, draws in its status row instead (several at
   /// once). With `keep: false` the line vanishes when the bar finishes (a
   /// failed one still prints ✗).
-  static Bar bar(String label, {int? total, bool keep = true}) {
+  static Bar bar(String label, {bool keep = true}) {
     final shown = label.isEmpty ? null : term.plainLabel(label);
     final bridge = term.TuiBridge.current;
-    if (bridge != null) return Bar._bridged(bridge, shown, total, keep: keep);
-    final bar = Bar._(shown, total, keep: keep);
+    if (bridge != null) return Bar._bridged(bridge, shown, keep: keep);
+    final bar = Bar._(shown, keep: keep);
     _addLive(bar);
     return bar;
   }
@@ -971,20 +971,20 @@ abstract final class _Live {
 }
 
 /// A live progress line: a [Probe] that shows the run it watches (`&`),
-/// or a count you [tick] by hand. [Closeable]: [close] prints its final line.
+/// or a count you [update] by hand. [Closeable]: [close] prints its final line.
 ///
 /// Watching a flow it shows sizes and a rate (`12.1/40 MB  1.2 MB/s`), an
 /// encode media time (`1:12/4:30  3.4×`), a [Task] its items (`12/40
 /// 3.1/s`), and a plain future a spinner until it completes. The total is
 /// learned from the run. Bytes a resumed download replays from its `.part`
 /// fill the bar but not the rate. A bar closes itself when the runs it
-/// watches end (✗ when one failed), and a hand-ticked one at its total.
+/// watches end (✗ when one failed), and a hand-counted one at its total.
 final class Bar extends _Live with Probe implements Closeable {
-  Bar._(this._label, this._handTotal, {this._keep = true}) : _bridge = null {
+  Bar._(this._label, {this._keep = true}) : _bridge = null {
     watchers[this] = _BarWatch(this);
   }
 
-  Bar._bridged(term.TuiBridge bridge, this._label, this._handTotal, {this._keep = true}) : _bridge = bridge {
+  Bar._bridged(term.TuiBridge bridge, this._label, {this._keep = true}) : _bridge = bridge {
     watchers[this] = _BarWatch(this);
     _bridgeId = bridge.barStarted(_state, keep: _keep);
   }
@@ -997,7 +997,7 @@ final class Bar extends _Live with Probe implements Closeable {
   Object? _bridgeId;
   var _closed = false;
 
-  /// Counted by hand ([tick], [update]); a [total] given to `Console.bar`.
+  /// Counted by hand ([update]).
   var _hand = 0;
   int? _handTotal;
   var _handUsed = false;
@@ -1018,34 +1018,29 @@ final class Bar extends _Live with Probe implements Closeable {
 
   /// No count yet and no total: a spinner.
   @override
-  bool get _spinning => !_reported && !_handUsed && _handTotal == null;
+  bool get _spinning => !_reported && !_handUsed;
 
   term.BarState _state() =>
       (label: _label, done: _done, total: _total, unit: _unit, rate: _window.rate(), spinning: _spinning);
 
-  /// Add [count] (1 by default; non-positive is ignored). A bar counting
-  /// items closes itself when it reaches its total, so a loop needs no
-  /// `close()`. Returns this bar.
-  Bar tick([int count = 1]) {
-    if (_closed || count <= 0) return this;
-    if (!_clock.isRunning) _clock.start();
-    _handUsed = true;
-    _hand += count;
-    _window.add(count);
-    _changed();
-    final total = _handTotal;
-    if (total != null && total > 0 && _hand >= total) unawaited(close());
-    return this;
-  }
-
-  /// Show [done] of [total] by hand, for a total that grows as work is
-  /// found (`bar.update(done, queued)`). Closes at the total like [tick].
+  /// Show [done] of [total] items by hand (`bar.update(++n, files.length)`;
+  /// a total may grow as work is found). A count never goes back. The bar
+  /// closes itself when [done] reaches a positive [total], so a loop needs
+  /// no `close()`. Returns this bar.
   @override
   Bar update(int done, int? total) {
+    if (_closed) return this;
+    if (!_clock.isRunning) _clock.start();
+    final was = _spinning;
     _handTotal = total;
     _handUsed = true;
-    if (done > _hand) return tick(done - _hand);
+    if (was) Console._syncTicker(); // a spinner until now: its frames may stop
+    if (done > _hand) {
+      _window.add(done - _hand);
+      _hand = done;
+    }
     _changed();
+    if (total != null && total > 0 && _hand >= total) unawaited(close());
     return this;
   }
 
@@ -1060,7 +1055,7 @@ final class Bar extends _Live with Probe implements Closeable {
   }
 
   /// Print the final line. A bar does this itself when its runs end or a
-  /// ticked count reaches its total; call it for bars that may stop early
+  /// hand count reaches its total; call it for bars that may stop early
   /// (in `finally`).
   @override
   Future<void> close() async => _end(ok: !_tally.failed);
