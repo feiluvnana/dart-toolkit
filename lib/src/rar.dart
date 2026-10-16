@@ -12,6 +12,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import 'aes.dart';
+import 'budget.dart';
 import 'crc32.dart';
 import 'lzma.dart' show declaredCeiling;
 import 'ppmd.dart';
@@ -61,7 +62,8 @@ Never _bad(String why) => throw ContentException('corrupt archive: RAR $why');
 /// The members of the RAR archive in [b].
 List<RarEntry> readRar(Uint8List b, {String? password}) {
   if (!isRar(b)) _bad('signature');
-  if (b[6] == 0) return _readRar4(b, password);
+  final budget = Budget();
+  if (b[6] == 0) return _readRar4(b, password, budget);
   if (b.length < 8 || b[7] != 0) _bad('signature');
   final r = _Reader(b, 8);
   final out = <RarEntry>[];
@@ -83,12 +85,13 @@ List<RarEntry> readRar(Uint8List b, {String? password}) {
         final flags = h.vint();
         final kdf = h.byte();
         final salt = h.bytes(16);
-        final key = _Key.derive(password, salt, kdf);
+        final key = _Key.derive(password, salt, kdf, budget);
         if (flags & 1 != 0) key.check(h.bytes(12));
         headerKey = _HeaderKey(key.key);
       case 2: // file
-        final entry = _fileEntry(h, b, password, solid);
+        final entry = _fileEntry(h, b, password, solid, budget);
         if (entry != null) out.add(entry);
+        budget.count(out.length, 'RAR');
       case 5: // end
         return out;
       default:
@@ -100,7 +103,7 @@ List<RarEntry> readRar(Uint8List b, {String? password}) {
   _bad('archive ends without its end block (truncated)');
 }
 
-RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
+RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid, Budget budget) {
   final flags = h.vint();
   final size = h.vint();
   final attrs = h.vint();
@@ -129,12 +132,14 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
     final type = x.vint();
     if (type == 1) {
       if (password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
+      // One per member: each costs up to 2^24 key rounds.
+      if (key != null) _bad('two encryption records for $name');
       if (x.vint() != 0) _bad('encryption version');
       final f = x.vint();
       final kdf = x.byte();
       final salt = x.bytes(16);
       iv = x.bytes(16);
-      key = _Key.derive(password, salt, kdf);
+      key = _Key.derive(password, salt, kdf, budget);
       if (f & 1 != 0) key.check(x.bytes(12), member: name);
       tweaked = f & 2 != 0;
     } else if (type == 3) {
@@ -164,6 +169,7 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid) {
   }
   final mode = host == 1 ? attrs & 0xFFFF : 0;
   if (isDir) return RarEntry(name, true, mode, mtime, () => Uint8List(0));
+  budget.take(size, 'RAR $name');
   final version = info & 0x3F;
   final isSolid = info & 0x40 != 0;
   final method = info >> 7 & 7;
@@ -330,11 +336,12 @@ final class _Key {
   // one salt. Bounded, oldest out.
   static final _cache = <String, _Key>{};
 
-  static _Key derive(String password, Uint8List salt, int kdf) {
+  static _Key derive(String password, Uint8List salt, int kdf, Budget budget) {
     if (kdf > 24) _bad('KDF count $kdf');
     final id = '$kdf:${salt.join(',')}:$password';
     final hit = _cache[id];
     if (hit != null) return hit;
+    budget.kdf(1 << kdf, 'RAR');
     if (_cache.length >= 16) _cache.remove(_cache.keys.first);
     return _cache[id] = () {
       final hmac = crypto.Hmac(crypto.sha256, utf8.encode(password));
@@ -723,6 +730,9 @@ final class _Unpack5 {
         var channels = 0;
         if (type == 0) channels = r.take(5) + 1;
         if (type > 3) _bad('filter type $type');
+        // unrar's limits: a filter covers at most 4 MiB, 8192 wait at once.
+        if (length > 0x400000) _bad('filter of $length bytes');
+        if (filters.length >= 8192) _bad('more than 8192 filters');
         filters.add((start: _pos + start, length: length, type: type, channels: channels));
       } else if (slot == 257) {
         if (_lastLen != 0) _copy(_lastLen, _old[0], limit);

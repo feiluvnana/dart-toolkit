@@ -848,6 +848,9 @@ Uint8List ppmdDecode7z(Uint8List input, List<int> props, int size) {
   final mem = props[1] | props[2] << 8 | props[3] << 16 | props[4] << 24;
   // 2 GiB is 32-bit 7-Zip's limit: every archive it writes opens.
   if (order < 2 || order > 64 || mem < 2048 || mem > 1 << 31) _bad('properties');
+  // The model is allocated up front: past 256 MiB (7-Zip's -mx9 uses 192)
+  // 7-Zip decodes it instead.
+  if (mem > 256 << 20) throw ContentException('unsupported in memory: PPMd model of ${mem >> 20} MiB');
   if (size < 0) _bad('size');
   var i = 0;
   // A few zero bytes past the end are the coder's lookahead; more is a

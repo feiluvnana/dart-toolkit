@@ -10,6 +10,7 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import 'aes.dart';
 import 'bcj.dart';
+import 'budget.dart';
 import 'crc32.dart';
 import 'lzma.dart';
 import 'ppmd.dart';
@@ -62,6 +63,7 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
   if (crc32(b, start: start, end: start + nextSize) != nextCrc) _bad('header CRC');
   var header = _Bytes(Uint8List.sublistView(b, start, start + nextSize), 0);
   final pw = password;
+  final budget = Budget();
   // An encoded header is a folder whose output is the real header; 7-Zip
   // nests at most one, so a deeper chain (or one pointing at itself) is
   // damage.
@@ -70,7 +72,9 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
     header.byte();
     final info = _StreamsInfo.read(header);
     if (info.folders.isEmpty) _bad('empty encoded header');
-    final decoded = _decodeFolder(b, info, 0, pw);
+    // 7-Zip's own headers stay far below this; the size drives allocations.
+    if (info.folders[0].unpackSize > 64 << 20) _bad('encoded header of ${info.folders[0].unpackSize} bytes');
+    final decoded = _decodeFolder(b, info, 0, pw, budget);
     final crc = info.folders[0].crc;
     if (crc != null && crc32(decoded) != crc) {
       throw ContentException(pw == null ? 'corrupt archive: 7z header CRC' : 'wrong password or corrupt archive');
@@ -94,12 +98,15 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
       case 0x04:
         main = _StreamsInfo.read(header);
       case 0x05:
-        files = _readFiles(header);
+        files = _readFiles(header, budget);
       default:
         _bad('header property $id');
     }
   }
   final info = main ?? _StreamsInfo.empty();
+  for (final f in info.folders) {
+    budget.take(f.unpackSizes.fold(0, (a, n) => a + n), '7z');
+  }
   // Files with data take the substreams in order; empty ones take none.
   final out = <SevenzipEntry>[];
   var folder = 0, inFolder = 0, sub = 0, offset = 0;
@@ -122,7 +129,7 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
     final crc = info.subCrcs[si];
     out.add(
       SevenzipEntry._(f.name, false, f.mode, f.mtime, () {
-        final whole = cache[fi] ??= _decodeFolder(b, info, fi, pw);
+        final whole = cache[fi] ??= _decodeFolder(b, info, fi, pw, budget);
         if (--left[fi] <= 0) cache.remove(fi);
         if (size < 0 || at + size > whole.length) _bad('file past its folder');
         final data = Uint8List.sublistView(whole, at, at + size);
@@ -150,10 +157,11 @@ final class _File {
   final DateTime? mtime;
 }
 
-List<_File> _readFiles(_Bytes h) {
+List<_File> _readFiles(_Bytes h, Budget budget) {
   final n = h.number();
   // Every file needs at least its two-byte name terminator.
   if (n > h.b.length) _bad('$n files in a ${h.b.length}-byte header');
+  budget.count(n, '7z');
   var emptyStream = List.filled(n, false);
   var emptyFile = <bool>[];
   var names = List.filled(n, '');
@@ -434,17 +442,17 @@ void _readSubstreams(_Bytes h, _StreamsInfo info) {
 /// Decode folder [index] of [info] to its final bytes. With a password,
 /// any decoding failure inside an AES folder reads as a wrong password: the
 /// cipher cannot tell, and the coders after it only see garbage.
-Uint8List _decodeFolder(Uint8List b, _StreamsInfo info, int index, String? password) {
+Uint8List _decodeFolder(Uint8List b, _StreamsInfo info, int index, String? password, Budget budget) {
   final aes = info.folders[index].coders.any((c) => _hex(c.id) == '06f10701');
-  if (!aes || password == null) return _decodeFolderRaw(b, info, index, password);
+  if (!aes || password == null) return _decodeFolderRaw(b, info, index, password, budget);
   try {
-    return _decodeFolderRaw(b, info, index, password);
+    return _decodeFolderRaw(b, info, index, password, budget);
   } on FormatException {
     throw const ContentException('wrong password or corrupt archive');
   }
 }
 
-Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? password) {
+Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? password, Budget budget) {
   final f = info.folders[index];
   final firstPack = info.firstPack(index);
   final cache = <int, Uint8List>{};
@@ -484,7 +492,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
     if (coder.ins != 1 || coder.outs != 1) {
       throw ContentException('unsupported 7z coder ${_hex(coder.id)} (BCJ2): repack with BCJ or no filter');
     }
-    return _run(coder, input(firstIn), f.unpackSizes[out], password);
+    return _run(coder, input(firstIn), f.unpackSizes[out], password, budget);
   }();
 
   final data = output(f.mainOut);
@@ -495,7 +503,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   return data;
 }
 
-Uint8List _run(_Coder c, Uint8List input, int size, String? password) {
+Uint8List _run(_Coder c, Uint8List input, int size, String? password, Budget budget) {
   final id = _hex(c.id);
   switch (id) {
     case '00': // copy
@@ -517,13 +525,13 @@ Uint8List _run(_Coder c, Uint8List input, int size, String? password) {
       return delta(Uint8List.fromList(input), (c.props.isEmpty ? 0 : c.props[0]) + 1);
     case '06f10701': // AES-256 + SHA-256
       if (password == null) throw const ContentException('archive is encrypted (pass password:)');
-      return _aes(input, c.props, password, size);
+      return _aes(input, c.props, password, size, budget);
     default:
       throw ContentException('unsupported 7z coder $id');
   }
 }
 
-Uint8List _aes(Uint8List input, Uint8List props, String password, int size) {
+Uint8List _aes(Uint8List input, Uint8List props, String password, int size, Budget budget) {
   if (props.isEmpty) _bad('AES properties');
   final b0 = props[0];
   final cycles = b0 & 0x3F;
@@ -542,7 +550,11 @@ Uint8List _aes(Uint8List input, Uint8List props, String password, int size) {
   // One key per (password, salt, rounds): a non-solid archive repeats it per
   // folder and for the header, ~100 ms each at the default 2^19.
   final id = '$cycles ${salt.join(',')} $password';
-  final key = _keys.remove(id) ?? sevenzipKey(password, salt, cycles);
+  var key = _keys.remove(id);
+  if (key == null) {
+    budget.kdf(cycles == 0x3F ? 0 : 1 << cycles, '7z');
+    key = sevenzipKey(password, salt, cycles);
+  }
   _keys[id] = key;
   if (_keys.length > 8) _keys.remove(_keys.keys.first);
   final plain = Aes(key).cbcDecrypt(input, iv);

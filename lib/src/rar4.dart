@@ -7,7 +7,7 @@ part of 'rar.dart';
 // 1.5/2.x members are named in a ContentException.
 
 /// The members of a RAR4 archive in [b].
-List<RarEntry> _readRar4(Uint8List b, String? password) {
+List<RarEntry> _readRar4(Uint8List b, String? password, Budget budget) {
   var pos = 7;
   var encryptedHeaders = false;
   final out = <RarEntry>[];
@@ -73,8 +73,10 @@ List<RarEntry> _readRar4(Uint8List b, String? password) {
           addSize,
           password,
           flags & 0x10 != 0 ? run : run = _Run4(),
+          budget,
         );
         out.add(entry);
+        budget.count(out.length, 'RAR');
       case 0x7B: // end
         return out;
       default:
@@ -104,6 +106,7 @@ RarEntry _file4(
   int packSize,
   String? password,
   _Run4 run,
+  Budget budget,
 ) {
   var size = _u32le(h, hp + 11);
   final host = h[hp + 15];
@@ -129,6 +132,7 @@ RarEntry _file4(
   final isLink = mode & 0xF000 == 0xA000;
   final mtime = _fromDos4(_u32le(h, hp + 20));
   if (isDir) return RarEntry(name, true, mode, mtime, () => Uint8List(0));
+  budget.take(size, 'RAR $name');
   final encrypted = flags & 0x04 != 0;
   if (encrypted && password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
   final packed = Uint8List.sublistView(b, dataStart, dataStart + packSize);

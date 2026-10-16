@@ -1118,6 +1118,51 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       await expectLater(unpack(_sevenzip(real, encoded(crc32(real) ^ 1))), throwsA(content('header CRC')));
     });
 
+    // 0x80000000 as a 7z number: four extra bytes, little-endian.
+    const twoGiB = [0xF0, 0, 0, 0, 0x80];
+
+    test('S1: a 7z that declares more than 1 GiB is refused before any decode', () async {
+      // Main streams: one 3-byte pack stream, one LZMA2 coder (id 0x21,
+      // a 1-byte dictionary property) claiming 2 GiB; one file "a".
+      final header = [
+        0x01, 0x04, 0x06, 0, 1, 0x09, 3, 0, //
+        0x07, 0x0B, 1, 0, 1, 0x21, 0x21, 1, 0x18, 0x0C, ...twoGiB, 0, 0,
+        0x05, 1, 0x11, 5, 0, 0x61, 0, 0, 0, 0, 0,
+      ];
+      final b = Uint8List.fromList(_sevenzip(const [1, 0, 0], header));
+      expect(() => sevenzip.readSevenzip(b), throwsA(content('unsupported in memory')));
+    });
+
+    test('S2: a 7z encoded header claiming 2 GiB is refused, not decoded', () async {
+      final header = [0x17, 0x06, 0, 1, 0x09, 3, 0, 0x07, 0x0B, 1, 0, 1, 0x21, 0x21, 1, 0x18, 0x0C, ...twoGiB, 0, 0];
+      await expectLater(unpack(_sevenzip(const [1, 0, 0], header)), throwsA(content('encoded header of')));
+    });
+
+    test('S2: a 7z file count past 4 million is refused before allocating', () {
+      // 0x400001 as a 7z number (three extra bytes), padded so the header
+      // is as long as the count.
+      final header = [0x01, 0x05, 0xE0, 0x01, 0x00, 0x40, ...List.filled(0x400010, 0)];
+      final b = Uint8List.fromList(_sevenzip(const [], header));
+      expect(() => sevenzip.readSevenzip(b), throwsA(content('claims 4194305 members')));
+    });
+
+    test('S7: a RAR5 member with two encryption records is refused', () {
+      final record = [1, 0, 0, 1, ...List.filled(32, 7)]; // type 1, v0, flags 0, 2^1 rounds, salt, iv
+      final extra = [for (var k = 0; k < 2; k++) ...[..._vint(record.length), ...record]];
+      final b = Uint8List.fromList(_rar5(List.filled(16, 0), extra: extra));
+      expect(() => rar.readRar(b, password: 'pw'), throwsA(content('two encryption records')));
+    });
+
+    test('S1: a RAR member declaring 2 GiB is refused before any decode', () {
+      final b = Uint8List.fromList(_rar5(const [1, 2, 3], size: 2 << 30, method: 1));
+      expect(() => rar.readRar(b), throwsA(content('unsupported in memory')));
+    });
+
+    test('S9: a PPMd model over 256 MiB goes to 7-Zip instead of the heap', () {
+      final props = [6, ..._le32(512 << 20)];
+      expect(() => ppmdDecode7z(Uint8List(8), props, 10), throwsA(content('unsupported in memory')));
+    });
+
     test('7z refuses data over 4 GiB instead of writing it short', () {
       final huge = Uint8List((1 << 32) + 10); // untouched pages: costs no memory
       final tooBig = isA<ContentException>().having((e) => e.message, 'message', contains('4 GiB'));
