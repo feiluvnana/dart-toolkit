@@ -99,9 +99,6 @@ final class Region {
     return _toLocal(m.$1, m.$2) != null;
   }
 
-  /// True when the session focus belongs to a focusable drawn in this region.
-  bool focused() => _s._focusIn(_gx, _gy, _w, _h);
-
   /// Draw text, wrapping at the right edge (`\n` breaks, `\t` expands,
   /// controls show as `�`, rows past the bottom end with `…`). `link` makes an OSC 8 hyperlink.
   /// [on] binds events (as in [Region.on]) to the rows the text took.

@@ -73,6 +73,7 @@
 - `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
 - `csv`: `Csv.records(text)`; `final [keys, ...rows] = Csv.parse(text)` and `{for (final (k, v) in row.indexed) keys[k]: v}` per row.
 - `video`: `Video.compress(codec:)`; another codec is `Fs.file(path).video().encode(.mp4, codec: .h265) > Fs.file(out)`.
+- `tui`: `Region.focused()`; nothing called it, and focused widgets already draw their own state.
 
 ## 0.1.0
 

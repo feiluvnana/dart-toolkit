@@ -847,7 +847,7 @@ final class Scroll { Scroll({bool follow = true}); }
 // the ones without their own mouse handling (write markdown diff box bar spin) take
 // {Map<String, Binding>? on}, bound to what they drew (a box: its header row).
 final class Region {
-  int width();  int height();  bool hovered();  bool focused();
+  int width();  int height();  bool hovered();
   Region write(String text, {String? link, bool inline = false});   // inline: the next write continues the row
   Region markdown(String source);  Region diff(String before, String after, {Color? removed, Color? added});
   Region box(String title);  List<Region> rows(List<int> sizes);  List<Region> cols(List<int> sizes);
@@ -914,7 +914,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
     cap); `shift+enter`, `alt+enter` or `\` + `enter` insert a newline; `up`/`down` at the first or
     last line walk the history. `onSubmit` handles form submissions; when omitted, unconsumed
     `enter` bubbles to `keys`. `suggest` opens a popup of matches for the word at the cursor.
-  - `on`: a region binding a keyboard key is focusable; `focused()`/`hovered()` draw its state.
+  - `on`: a region binding a keyboard key is focusable; `hovered()` draws its state.
 - **Focus** is object identity (the `Pick`/`Field`/`Scroll`, the `on` key set, a button's label),
   so it survives redraws and state switches. When the focused thing isn't drawn, the first
   focusable one is. A focused list uses the accent, unfocused dim reversed; a focused input shows

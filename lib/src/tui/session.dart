@@ -568,17 +568,6 @@ final class _Session<S> implements term.TuiBridge {
     _strSeq[id] = ++_seq;
   }
 
-  bool _focusIn(int x, int y, int w, int h) {
-    final id = _focusId;
-    if (id == null) return false;
-    for (final f in _focusables) {
-      if (_sameId(f.id, id) && f.x < x + w && f.x + f.w > x && f.y < y + h && f.y + f.h > y) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   void _addFocusable(
     Object id,
     int x,
