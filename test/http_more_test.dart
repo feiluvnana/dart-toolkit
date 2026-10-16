@@ -484,6 +484,58 @@ Future<void> main() async {
     await c.get('$url/ua').status();
     expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 550)));
   });
+
+  group('a body with no length', () {
+    test('streams each line as it arrives (B2)', () async {
+      final (_, base) = await serve((req) async {
+        final res = req.response
+          ..bufferOutput = false
+          ..headers.contentType = ContentType('text', 'event-stream');
+        for (final line in ['a', 'b', 'c']) {
+          res.write('data: $line\n');
+          await res.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        await res.close();
+      });
+      final c = Http.client();
+      final res = await c.get(base);
+      final sw = Stopwatch()..start();
+      final at = [await for (final _ in res.lines()) sw.elapsedMilliseconds];
+      expect(at, hasLength(3));
+      expect(at.first, lessThan(200));
+      expect(at.last, greaterThanOrEqualTo(400));
+      await c.close();
+    });
+
+    test('a paused consumer pauses the socket (B4)', () async {
+      var sent = 0;
+      final (_, base) = await serve((req) async {
+        final res = req.response..bufferOutput = false;
+        final chunk = Uint8List(1 << 20);
+        try {
+          while (sent < 200 << 20) {
+            res.add(chunk);
+            await res.flush();
+            sent += chunk.length;
+          }
+          await res.close();
+        } catch (_) {}
+      });
+      final c = Http.client();
+      final res = await c.get(base);
+      final first = Completer<void>();
+      final sub = res.stream().listen((_) {
+        if (!first.isCompleted) first.complete();
+      });
+      await first.future;
+      sub.pause();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(sent, lessThan(64 << 20));
+      await sub.cancel();
+      await c.close();
+    });
+  });
 }
 
 /// A SOCKS5 server for tests: optional login, an optional delay before it

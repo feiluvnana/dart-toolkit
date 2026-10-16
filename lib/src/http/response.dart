@@ -80,29 +80,32 @@ final class Response with Reader implements Closeable {
     );
   }
 
-  /// The prefetched body as a stream: the cache, or the held prefix then
-  /// the rest through the resumed subscription.
+  /// The prefetched body as a stream: the cache once it ended, else the
+  /// bytes held so far, then the rest live through the same subscription,
+  /// paused while the consumer is (a body with no length is never held back).
   Stream<List<int>> _fromPrefetch() async* {
-    await _preReady!.future;
-    final e = _preError;
-    if (e != null) Error.throwWithStackTrace(e, _preStack!);
+    final ready = _preReady!;
     if (_preEnded) {
+      final e = _preError;
+      if (e != null) Error.throwWithStackTrace(e, _preStack!);
       yield _cached!.asUnmodifiableView();
       return;
     }
     if (_preTaken) throw StateError('body already streaming: ${names.redact(url())}');
     _preTaken = true;
-    yield _preBuf.takeBytes();
-    final rest = StreamController<List<int>>();
-    final sub = _preSub!
+    final overflowed = ready.isCompleted;
+    if (!overflowed) ready.complete();
+    final sub = _preSub!;
+    final rest = StreamController<List<int>>(onPause: sub.pause, onResume: sub.resume, onCancel: sub.cancel);
+    if (_preBuf.isNotEmpty) rest.add(_preBuf.takeBytes());
+    sub
       ..onData(rest.add)
       ..onError((Object e, StackTrace st) {
         rest.addError(e, st);
         rest.close();
       })
       ..onDone(rest.close);
-    rest.onCancel = sub.cancel;
-    sub.resume();
+    if (overflowed) sub.resume();
     try {
       yield* rest.stream;
     } finally {
