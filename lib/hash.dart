@@ -4,7 +4,7 @@
 /// final id = Hash.md5().add(url).hex();
 /// final h = Hash.sha256().addBytes(header).add(name);
 /// await (http.get(isoUrl) | Hash.sha256(expect: sum) > Fs.file('disc.iso')); // a mismatch never lands
-/// final digest = await Hash.sha256().of(Fs.file('disc.iso'));
+/// final h = Hash.sha256(); await (Fs.file('disc.iso') > h); print(h.hex());   // a file's digest
 /// final sig = Hash.sha256(key: utf8.encode(secret)).add(body).hex();   // HMAC
 /// ```
 ///
@@ -12,8 +12,7 @@
 /// - `Hash.md5/sha1/sha256/sha512()` make a [Hasher]; `key:` makes it an
 ///   HMAC.
 /// - [Hasher] supports `add` (feed text) `addBytes` (feed bytes) `hex`
-///   `base64` `bytes` (finish, as text or raw) `of` (digest a [Reader]);
-///   `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
+///   `bytes` (finish, as text or raw); `expect:` checks the result. As a [Writer] it digests a stream; as a [Pipe] it forwards
 ///   unchanged and digests, so `reader | hasher > file` stores and checksums
 ///   in one pass.
 /// Everything else is private.
@@ -132,10 +131,6 @@ final class Hasher with Writer implements Pipe, PassThrough {
   /// and an [add]/[addBytes] after it is a [StateError].
   String hex() => _finish('hex').toString();
 
-  /// The digest as standard base64 (`Content-MD5`, `integrity=` hashes,
-  /// most signature headers). Finishes like [hex].
-  String base64() => base64Encode(_finish('base64').bytes);
-
   /// The raw digest bytes. Finishes like [hex].
   List<int> bytes() => List.of(_finish('bytes').bytes);
 
@@ -146,13 +141,6 @@ final class Hasher with Writer implements Pipe, PassThrough {
       _state = _State.done;
     }
     return _capture.digest;
-  }
-
-  /// Read [source] to the end and return the digest (a [Reader] of a file,
-  /// a response, an archive): `await Hash.sha256().of(Fs.file(p))`.
-  Future<String> of(Reader source) async {
-    await (source > this);
-    return hex();
   }
 
   /// With `expect:`, a finished digest that differs is a FormatException.

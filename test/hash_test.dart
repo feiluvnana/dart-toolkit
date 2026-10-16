@@ -10,7 +10,7 @@ void main() {
   group('digest forms and HMAC', () {
     test('base64() and bytes() finish like hex()', () {
       final h = Hash.sha256().add('abc');
-      expect(h.base64(), 'ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=');
+      expect(base64Encode(h.bytes()), 'ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=');
       expect(h.hex(), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
       expect(h.bytes(), hasLength(32));
       expect(h.bytes().first, 0xba);
@@ -22,7 +22,9 @@ void main() {
       final key = utf8.encode('Jefe');
       expect(Hash.sha256(key: key).add(msg).hex(), '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843');
       expect(Hash.md5(key: key).add(msg).hex(), '750c783e6ab0b503eaa86e310a5db738');
-      expect(await Hash.sha256(key: key).of(Reader.of(utf8.encode(msg))), startsWith('5bdcc146'));
+      final hmac = Hash.sha256(key: key);
+      await (Reader.of(utf8.encode(msg)) > hmac);
+      expect(hmac.hex(), startsWith('5bdcc146'));
       // a digest keys the next step of a signing chain
       final step = Hash.sha256(key: Hash.sha256(key: key).add('a').bytes()).add('b').hex();
       expect(step, hasLength(64));
@@ -58,7 +60,9 @@ void main() {
     tearDown(() => tmp.delete(recursive: true));
 
     test('of() digests a reader', () async {
-      expect(await Hash.sha256().of(Reader.of(utf8.encode('abc'))), abc);
+      final read = Hash.sha256();
+      await (Reader.of(utf8.encode('abc')) > read);
+      expect(read.hex(), abc);
     });
 
     test('a matching expect: passes through; a mismatch never lands', () async {

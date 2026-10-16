@@ -1284,7 +1284,7 @@ Future<void> main() async {
       final c = Http.client(resume: true);
       final to = _Path('${dir.path}/f.bin');
       await File('${to.path}.part').writeAsBytes(body.sublist(0, 400));
-      final sum = (await Hash.sha256().of(Reader.of(body)));
+      final sum = Hash.sha256().addBytes(body).hex();
       final count = _Count();
       await (c.get('$url/file') | count | Hash.sha256(expect: sum) > to);
       expect(count.bytes, 1000, reason: 'the pipes saw the whole file');

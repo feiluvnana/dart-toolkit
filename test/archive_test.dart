@@ -494,7 +494,9 @@ void main() {
       ]);
       if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
       await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-      expect(await Hash.sha256().of(Fs.file(p('big/big.txt'))), '${made.stdout}'.trim());
+      final h = Hash.sha256();
+      await (Fs.file(p('big/big.txt')) > h);
+      expect(h.hex(), '${made.stdout}'.trim());
     }, tags: 'slow');
 
     test('PPMd: 7z from bsdtar and a RAR4 best-mode archive decode exactly', () async {
@@ -1843,7 +1845,9 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       ]);
       if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
       await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-      expect(await Hash.sha256().of(Fs.file(p('big/big.txt'))), '${made.stdout}'.trim());
+      final h = Hash.sha256();
+      await (Fs.file(p('big/big.txt')) > h);
+      expect(h.hex(), '${made.stdout}'.trim());
     }, tags: 'slow');
   });
 }
