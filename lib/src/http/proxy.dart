@@ -34,8 +34,9 @@ final class _Proxy {
   final int port;
   final String? user, pass;
 
-  /// Route [c] through this proxy; [trusted] is the `insecure:` test.
-  void apply(HttpClient c, bool Function(String host) trusted) {
+  /// Route [c] through this proxy; [trusted] is the `insecure:` test, and
+  /// a SOCKS handshake that takes longer than [timeout] fails.
+  void apply(HttpClient c, bool Function(String host) trusted, Duration timeout) {
     if (!socks) {
       c.findProxy = (_) => 'PROXY $host:$port';
       if (user != null) c.addProxyCredentials(host, port, '', HttpClientBasicCredentials(user!, pass!));
@@ -44,11 +45,24 @@ final class _Proxy {
     c.findProxy = (_) => 'DIRECT';
     c.connectionFactory = (url, _, _) async {
       final task = await Socket.startConnect(host, port);
+      Socket? connected;
       final socket = task.socket.then(
-        (s) => _socks(s, url, trusted),
+        (s) {
+          connected = s;
+          return _socks(s, url, trusted).timeout(
+            timeout,
+            onTimeout: () {
+              s.destroy();
+              throw SocketException('SOCKS proxy $host:$port: no answer for ${timeout.inMilliseconds} ms');
+            },
+          );
+        },
         onError: (Object e) => throw SocketException('SOCKS proxy $host:$port: $e'),
       );
-      return ConnectionTask.fromSocket(socket, task.cancel);
+      return ConnectionTask.fromSocket(socket, () {
+        task.cancel();
+        connected?.destroy();
+      });
     };
   }
 

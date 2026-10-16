@@ -542,7 +542,7 @@ final class _Conn {
     if (p == null) {
       c.findProxy = HttpClient.findProxyFromEnvironment;
     } else {
-      p.apply(c, _trusts);
+      p.apply(c, _trusts, timeout);
     }
     return c;
   }

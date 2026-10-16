@@ -11,6 +11,7 @@ import 'package:dart_toolkit/src/cookies.dart' as jar;
 import 'package:test/test.dart';
 
 import 'support/capture.dart';
+import 'support/child.dart';
 
 /// A [Writer] into a file path, so the resume handshake sees a path.
 final class _File with Reader, Writer {
@@ -219,6 +220,27 @@ void main() {
       Http.client(proxy: 'socks5://127.0.0.1', retries: 0).get('$url/ua').text(),
       throwsA(predicate((e) => '$e'.contains('1080'))),
     );
+  });
+
+  test('B1: a SOCKS proxy that never answers times out and lets the script exit', () async {
+    final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/http.dart';
+Future<void> main() async {
+  final silent = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  silent.listen((_) {}); // accepts, never answers
+  final c = Http.client(proxy: 'socks5://127.0.0.1:\${silent.port}', timeout: const Duration(milliseconds: 300), retries: 0);
+  try {
+    await c.get('http://example.invalid/').text();
+  } catch (e) {
+    print('failed');
+  }
+  await c.close();
+  await silent.close();
+}
+''', timeout: const Duration(seconds: 10));
+    expect(r.stdout, contains('failed'));
+    expect(r.exitCode, 0, reason: 'still running 10 s later: \${r.stderr}');
   });
 
   test('bug 10: Http.serve caps a request body (413), declared or streamed', () async {
