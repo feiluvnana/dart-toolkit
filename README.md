@@ -61,7 +61,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `archive` | zip, tar, tgz, 7z, RAR, bz2/zst, cab/ar/xar | `archive(paths, password:)` (zip and tar stream, 7z via 7-Zip LZMA2; a probe sees the input packed), `unarchive(dir, match:)` (replaces files, like `unzip -o`; `match:` a glob of members) for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 in Dart, big or exotic ones via 7-Zip; modes, mtimes and inside links kept |
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:, terminal:)` (a `Task`; `.check()`; `terminal: true` gives the child our tty), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `isolates:`, held `Pool(limit:).run(job)` lanes (a `Task` too) |
-| `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `version:`, suggestions |
+| `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest` (`Opt<DateTime>` takes `7d` as a week ago), `min:`/`max:`, subcommands, `env:`, `version:`, suggestions |
 | `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify`, `out()`/`input()` for stdout/stdin |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, `bars()` and `log()` panes for Console's bars and log, mouse, markdown, ASCII and no-colour fallbacks |
 | `image` | read, resize, crop, encode, compress | ffmpeg engine: HEIC/AVIF/WebP, EXIF kept |

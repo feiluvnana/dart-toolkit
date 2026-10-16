@@ -2,7 +2,7 @@
 // stories, albums, highlights, profile pictures) or single posts.
 //
 //   dart run projects/medialoader/medialoader.dart download <user|url>...
-//       [--platform=ins|twt|fbk] [--category=posts,stories,…] [--since=2024-05-01]
+//       [--platform=ins|twt|fbk] [--category=posts,stories,…] [--since=2024-05-01|7d]
 //       [--compress | --quality=<1-100> | --image-quality=<1-100> --video-quality=<1-100>]
 //       [--all] [--reset] [--dry-run]
 //   dart run projects/medialoader/medialoader.dart update [same options]
@@ -57,11 +57,7 @@ final categories = Multi<Kind>(
   values: Kind.values,
   or: Kind.values,
 );
-final since = Opt<DateTime?>(
-  'since',
-  'Only what was posted on or after this date (2024-05-01).',
-  parse: DateTime.parse,
-);
+final since = Opt<DateTime?>('since', 'Only what was posted on or after this date (2024-05-01, or 7d for a week ago).');
 final all = Flag('all', 'List every post again, not only the new ones.');
 final reset = Flag('reset', 'Delete the chosen categories (after asking) and download them again.');
 final dryRun = Flag('dry-run', 'List what would download; write nothing.');

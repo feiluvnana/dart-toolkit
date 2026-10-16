@@ -766,7 +766,8 @@ final class UsageException extends ToolkitException { const UsageException(Strin
 - **The type comes from the definition.** `Opt<int>('port', …, or: 8080)` reads as `int`, and
   `Opt<String?>('out', …)` reads as `String?`. A non-nullable `T` without `or` or `required` is an
   `ArgumentError`. Built-in `T`s are `String`, `int`, `double`, `num`, `Duration`, `DateTime` and
-  `Uri`; anything else needs `parse:`. `values: Section.values` takes one of a fixed set, by
+  `Uri`; anything else needs `parse:`. A `DateTime` is a date (`2026-10-08`) or a duration with a
+  unit meaning that long ago (`--since 7d`, `1h30m`). `values: Section.values` takes one of a fixed set, by
   (enum) name, case-insensitive; usage shows `<photos|reels>` and a typo suggests the closest.
   `min:`/`max:` bound a value that orders (`Opt<int?>('quality', …, min: 1, max: 100)`; usage shows
   `[1-100]`, `150` is a usage error). Yes/no is always a `Flag`. `Multi<T>` reads as `List<T>`; with `values:` one occurrence may list several, comma-separated.

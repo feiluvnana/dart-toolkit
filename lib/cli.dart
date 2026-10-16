@@ -581,9 +581,11 @@ _Reader<T> _resolve<T>(String name, T Function(String)? parse, List<T>? values) 
     }, '<duration>');
   } else if (_same<T, DateTime>() || _same<T, DateTime?>()) {
     return _Reader((raw, what) {
-      final v = DateTime.tryParse(raw);
+      // A duration with a unit is that long ago: `--since 7d`.
+      final ago = RegExp(r'[a-zA-Z]$').hasMatch(raw.trim()) ? _parseDuration(raw) : null;
+      final v = DateTime.tryParse(raw) ?? (ago == null || ago.isNegative ? null : DateTime.now().subtract(ago));
       if (v == null) {
-        throw ContentException('Invalid value "$raw" for $what: expected a date such as 2026-10-08');
+        throw ContentException('Invalid value "$raw" for $what: expected a date such as 2026-10-08 or a time ago such as 7d');
       }
       return v as T;
     }, '<date>');

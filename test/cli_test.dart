@@ -253,6 +253,23 @@ void main() {
       expect(await fails(cli, ['--uri', 'notaurl']), contains('expected a URL'));
     });
 
+    test('Opt<DateTime> takes a duration as that long ago (--since 7d)', () async {
+      final since = Opt<DateTime?>('since', 'S.');
+      DateTime? at;
+      final cli = Command('app', 'X.', params: [since], handler: (ctx) => at = ctx(since));
+      final before = DateTime.now();
+      expect(await cli.run(['--since', '7d']), 0);
+      final week = before.subtract(const Duration(days: 7));
+      expect(at!.difference(week).inSeconds.abs(), lessThan(5));
+      expect(await cli.run(['--since', '1h30m']), 0);
+      expect(DateTime.now().difference(at!).inMinutes, 90);
+      expect(await cli.run(['--since', '2026-10-08']), 0);
+      expect(at, DateTime(2026, 10, 8));
+      expect(await fails(cli, ['--since', 'soon']), contains('expected a date such as 2026-10-08 or a time ago such as 7d'));
+      expect(await fails(cli, ['--since', '-7d']), contains('expected a date')); // the future is a date
+      expect(await fails(cli, ['--since', '7']), contains('expected a date')); // a unit says ago
+    });
+
     test('suggestions name options, not Args; -vh helps', () async {
       final verbose = Flag('verbose', 'V.', short: 'v');
       final url = Opt<String>('url', 'U.', or: '');
