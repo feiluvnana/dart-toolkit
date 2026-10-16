@@ -393,7 +393,7 @@ final class Browser implements Closeable {
 }
 final class Page implements Closeable {
   Future<Page> go(String url, {Duration? timeout});                                  // wait for load
-  Future<Page> back({Duration? timeout});  Future<Page> reload({Duration? timeout});
+  Future<Page> back({Duration? timeout});                                            // a reload is go(await url())
   Future<String> url();  Future<Elements> html();  Future<String> text();
   Future<Json> run(String js);   Future<Cookies> cookies({bool all = false});          // the current URL's jar
   Future<String> cookie(String name, {Duration? timeout});                              // waits until set

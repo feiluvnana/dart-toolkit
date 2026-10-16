@@ -12,7 +12,7 @@
 /// Public surface is exactly: [Chrome], [Browser], [Page], [Download], [Capture], [Resource], [BrowserException].
 /// - `Chrome.launch/connect()` open a browser.
 /// - [Browser] supports `open` `pages` `close`.
-/// - [Page] supports `go` `back` `reload` `url` `html` `text` `run`
+/// - [Page] supports `go` `back` `url` `html` `text` `run`
 ///   `cookies` `cookie` `responses` `click` `fill` `press` `select` `upload`
 ///   `scroll` `wait` `idle`
 ///   `screenshot` `pdf` `download` `close`.
@@ -615,12 +615,6 @@ final class Page implements Closeable {
       return null;
     });
   }
-
-  /// Reload; waits for the load event. Returns this page.
-  Future<Page> reload({Duration? timeout}) => _navigate(_url, timeout, () async {
-    await _s.send('Page.reload');
-    return null;
-  });
 
   /// Run [start] and wait for the main frame's load. [start] returns the
   /// new loader id, or null to learn it from the next `frameNavigated`
@@ -1504,7 +1498,6 @@ extension BrowserFuture on Future<Browser> {
 extension PageFuture on Future<Page> {
   Future<Page> go(String url, {Duration? timeout}) async => (await this).go(url, timeout: timeout);
   Future<Page> back({Duration? timeout}) async => (await this).back(timeout: timeout);
-  Future<Page> reload({Duration? timeout}) async => (await this).reload(timeout: timeout);
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();

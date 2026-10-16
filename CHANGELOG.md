@@ -69,6 +69,7 @@
 - `http`: `Http.client(cache:, ttl:)` and `copy(cache:, ttl:)`, the GET disk cache; a scraper under development keeps its pages with `get(u) > Fs.file(f)`.
 - `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed` from that cursor, or the `page` function returning it as `next` when its chain ends (medialoader's photo walk does).
 - `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
+- `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
 
 ## 0.1.0
 
