@@ -118,10 +118,8 @@ Future<String> _testingChrome({required bool headless}) async {
       ));
   if (io.File(exe).existsSync()) return exe;
   await io.Directory(p.dirname(dir)).create(recursive: true);
-  final lock = await io.File('$dir.lock').open(mode: io.FileMode.append);
-  try {
-    await lock.lock(io.FileLock.blockingExclusive);
-    if (io.File(exe).existsSync()) return exe; // another process fetched it
+  return downloadLock('$dir.lock', () async {
+    if (io.File(exe).existsSync()) return exe; // another run fetched it
     final String? failed;
     try {
       final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
@@ -137,7 +135,5 @@ Future<String> _testingChrome({required bool headless}) async {
       throw BrowserException('Chrome for Testing download failed: ${failed ?? 'no $exe'}', cause: failed);
     }
     return exe;
-  } finally {
-    await lock.close(); // closing releases the lock
-  }
+  });
 }

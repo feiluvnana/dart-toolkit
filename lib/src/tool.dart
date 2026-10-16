@@ -166,10 +166,8 @@ Future<void> _download(Tool t, String target) async {
   }
   final home = _home(t);
   await io.Directory(home).create(recursive: true);
-  // Across processes: one downloads, the rest wait and find the binary.
-  final lock = await io.File(p.join(home, '.lock')).open(mode: io.FileMode.append);
-  try {
-    await lock.lock(io.FileLock.blockingExclusive);
+  // One downloads, the rest (processes and isolates) wait and find it.
+  await cache.downloadLock(p.join(home, '.lock'), () async {
     if (await io.File(target).exists()) return;
     final tmp = await io.Directory(home).createTemp('.dl-');
     try {
@@ -190,9 +188,7 @@ Future<void> _download(Tool t, String target) async {
     } finally {
       await tmp.delete(recursive: true).catchError((_) => tmp);
     }
-  } finally {
-    await lock.close(); // closing releases the lock
-  }
+  });
 }
 
 /// Download [build] in `tool_fetch.dart`'s isolate (see

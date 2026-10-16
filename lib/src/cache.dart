@@ -7,6 +7,7 @@
 /// `Platform`: they call [userCacheDir].
 library;
 
+import 'dart:async';
 import 'dart:io' as io;
 import 'dart:isolate';
 
@@ -85,5 +86,42 @@ Future<String?> fetchInIsolate(String library, List<String> args, {required Stri
   } finally {
     line.end(ok: failed == null);
     reply.close();
+  }
+}
+
+/// Runs [body] holding the download lock at [path]: one downloader per
+/// machine, the rest wait. The OS lock (fcntl) excludes other processes
+/// but not other isolates of this one (`Pool(isolates: true)` on a fresh
+/// machine), so a `<path>.<pid>` sentinel, created exclusively and touched
+/// while held, goes first; one untouched for a minute is a crashed run's.
+Future<T> downloadLock<T>(String path, Future<T> Function() body) async {
+  final sentinel = io.File('$path.${io.pid}');
+  while (true) {
+    try {
+      await sentinel.create(exclusive: true);
+      break;
+    } on io.FileSystemException {
+      try {
+        if (DateTime.now().difference(await sentinel.lastModified()) > const Duration(minutes: 1)) {
+          await sentinel.delete();
+        }
+      } on io.FileSystemException {
+        // released meanwhile
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+  final beat = Timer.periodic(const Duration(seconds: 10), (_) => sentinel.setLastModified(DateTime.now()).ignore());
+  try {
+    final lock = await io.File(path).open(mode: io.FileMode.append);
+    try {
+      await lock.lock(io.FileLock.blockingExclusive);
+      return await body();
+    } finally {
+      await lock.close(); // closing releases the lock
+    }
+  } finally {
+    beat.cancel();
+    await sentinel.delete().catchError((_) => sentinel);
   }
 }

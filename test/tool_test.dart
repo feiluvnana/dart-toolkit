@@ -1,5 +1,6 @@
 // Pinned tool downloads against a loopback server, and the user cache.
 import 'dart:io' hide File;
+import 'dart:isolate';
 import 'dart:io' as io show File;
 
 import 'package:dart_toolkit/archive.dart';
@@ -15,6 +16,28 @@ import 'package:test/test.dart';
 import 'support/child.dart';
 
 void main() {
+  test('P6: the download lock excludes isolates of one process, not only other processes', () async {
+    final dir = await Directory.systemTemp.createTemp('tool_lock');
+    addTearDown(() => dir.delete(recursive: true));
+    final path = '${dir.path}/.lock';
+    // Each isolate logs in/out around a held stretch; overlap means no lock.
+    final spans = await Future.wait([
+      for (var i = 0; i < 3; i++)
+        Isolate.run(
+          () => cache.downloadLock(path, () async {
+            final start = DateTime.now().microsecondsSinceEpoch;
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            return (start, DateTime.now().microsecondsSinceEpoch);
+          }),
+        ),
+    ]);
+    spans.sort((a, b) => a.$1.compareTo(b.$1));
+    for (var k = 1; k < spans.length; k++) {
+      expect(spans[k].$1, greaterThanOrEqualTo(spans[k - 1].$2), reason: '$spans');
+    }
+    expect(dir.listSync().map((e) => e.path.split('/').last), ['.lock']); // no sentinel left
+  });
+
   late Directory tmp;
   late HttpServer server;
   late String url;
