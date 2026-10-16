@@ -97,42 +97,10 @@ abstract final class Shell {
       // Subscriptions, not `await for`: a timeout cancels them, so a
       // descendant that still holds the pipes cannot keep the VM alive.
       final subs = <StreamSubscription<List<int>>>[];
-      Future<void> collect(Stream<List<int>> src, BytesBuilder buf, io.IOSink? tee) {
-        final lines = onLine == null
-            ? null
-            : const Utf8Decoder(allowMalformed: true)
-                  .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
-        final done = Completer<void>();
-        late final StreamSubscription<List<int>> sub;
-        subs.add(
-          sub = src.listen(
-            (chunk) {
-              buf.add(chunk);
-              tee?.add(chunk);
-              try {
-                lines?.add(chunk);
-              } catch (e, st) {
-                // [onLine] threw: the run fails with its error (the tree is
-                // killed below), never an uncaught error in this listener.
-                unawaited(sub.cancel());
-                if (!done.isCompleted) done.completeError(e, st);
-              }
-            },
-            onError: done.completeError,
-            onDone: () {
-              lines?.close();
-              done.complete();
-            },
-            cancelOnError: true,
-          ),
-        );
-        return done.future;
-      }
-
       try {
         final work = Future.wait([
-          collect(proc.stdout, out, live ? io.stdout : null),
-          collect(proc.stderr, err, live ? io.stderr : null),
+          _collect(proc.stdout, out, live ? io.stdout : null, onLine, subs),
+          _collect(proc.stderr, err, live ? io.stderr : null, onLine, subs),
           proc.exitCode,
         ], eagerError: true);
         // A cancel kills the tree, then lets the pipes drain briefly: a
@@ -390,6 +358,48 @@ extension OutputFuture on Future<Output> {
   Future<int> code() async => (await this).code();
   Future<bool> ok() async => (await this).ok();
   Future<String> err() async => (await this).err();
+}
+
+/// Gather [src] into [buf] (teed to [tee]), each line to [onLine]; the
+/// subscription joins [subs] so a timeout or cancel can drop it. Completes
+/// when [src] ends; fails with [src]'s error, or with [onLine]'s (then the
+/// subscription is cancelled: the caller kills the tree).
+Future<void> _collect(
+  Stream<List<int>> src,
+  BytesBuilder buf,
+  io.IOSink? tee,
+  void Function(String line)? onLine,
+  List<StreamSubscription<List<int>>> subs,
+) {
+  final lines = onLine == null
+      ? null
+      : const Utf8Decoder(allowMalformed: true)
+            .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
+  final done = Completer<void>();
+  late final StreamSubscription<List<int>> sub;
+  subs.add(
+    sub = src.listen(
+      (chunk) {
+        buf.add(chunk);
+        tee?.add(chunk);
+        try {
+          lines?.add(chunk);
+        } catch (e, st) {
+          // [onLine] threw: the run fails with its error (the tree is
+          // killed by the caller), never an uncaught error in this listener.
+          unawaited(sub.cancel());
+          if (!done.isCompleted) done.completeError(e, st);
+        }
+      },
+      onError: done.completeError,
+      onDone: () {
+        lines?.close();
+        done.complete();
+      },
+      cancelOnError: true,
+    ),
+  );
+  return done.future;
 }
 
 /// Which started processes have exited (and been reaped), for [_killTree].
