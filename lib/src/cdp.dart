@@ -1,6 +1,8 @@
-/// A Chrome DevTools Protocol client over `dart:io` `WebSocket`, for
-/// `chrome`. One [Cdp] is one browser connection; every tab is a flat
-/// [CdpSession] on it (`Target.attachToTarget` with `flatten`).
+/// A Chrome DevTools Protocol client for `chrome`, over a WebSocket
+/// ([Cdp.connect]) or the pipe a launched Chrome reads (fds 3 and 4,
+/// `--remote-debugging-pipe`: no port any local process could reach). One
+/// [Cdp] is one browser connection; every tab is a flat [CdpSession] on it
+/// (`Target.attachToTarget` with `flatten`).
 ///
 /// Events reach handlers synchronously, in protocol order, so a handler that
 /// registers for a follow-up event (a response's `loadingFinished`) never
@@ -10,6 +12,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:typed_data';
 
 import '../core.dart';
 
@@ -31,16 +34,48 @@ typedef Msg = Map<String, Object?>;
 
 /// One browser connection.
 final class Cdp {
-  Cdp._(this._ws) {
-    _ws.listen(_onMessage, onDone: _onDone, onError: _onDone, cancelOnError: true);
+  Cdp._(Stream<Object?> incoming, this._add, this._closeWire) {
+    incoming.listen(_onMessage, onDone: _onDone, onError: _onDone, cancelOnError: true);
     browser.on('Target.detachedFromTarget', (e) => _sessions.remove(e['sessionId'])?._end());
   }
 
   /// Connect to a `ws://…/devtools/browser/…` endpoint.
-  static Future<Cdp> connect(String url) async =>
-      Cdp._(await io.WebSocket.connect(url, compression: io.CompressionOptions.compressionOff));
+  static Future<Cdp> connect(String url) async {
+    final ws = await io.WebSocket.connect(url, compression: io.CompressionOptions.compressionOff);
+    return Cdp._(ws, ws.add, ws.close);
+  }
 
-  final io.WebSocket _ws;
+  /// Talk over a pipe pair: NUL-terminated JSON messages written to [into],
+  /// read from [from].
+  static Cdp pipe(Stream<List<int>> from, io.IOSink into) {
+    // A write to a Chrome that died fails here; the read side's end says so.
+    into.done.catchError((Object _) {});
+    return Cdp._(
+      _nulSplit(from),
+      (m) => into
+        ..add(utf8.encode(m))
+        ..add(const [0]),
+      into.close,
+    );
+  }
+
+  /// The NUL-terminated messages in [bytes].
+  static Stream<Object?> _nulSplit(Stream<List<int>> bytes) async* {
+    final buf = BytesBuilder(copy: false);
+    await for (final chunk in bytes) {
+      var from = 0;
+      for (var i = 0; i < chunk.length; i++) {
+        if (chunk[i] != 0) continue;
+        buf.add(chunk.sublist(from, i));
+        from = i + 1;
+        yield buf.takeBytes();
+      }
+      if (from < chunk.length) buf.add(chunk.sublist(from));
+    }
+  }
+
+  final void Function(String message) _add;
+  final Future<Object?> Function() _closeWire;
   var _next = 0;
   final _pending = <int, (Completer<Msg>, String, CdpSession)>{};
   final _sessions = <String, CdpSession>{};
@@ -62,7 +97,7 @@ final class Cdp {
   Future<void> close() async {
     _closing = true;
     try {
-      await _ws.close();
+      await _closeWire();
     } catch (_) {}
     _onDone();
   }
@@ -146,7 +181,7 @@ final class CdpSession {
     final n = ++_cdp._next;
     _cdp._pending[n] = (done, method, this);
     try {
-      _cdp._ws.add(jsonEncode({'id': n, 'method': method, 'params': params, 'sessionId': ?id}));
+      _cdp._add(jsonEncode({'id': n, 'method': method, 'params': params, 'sessionId': ?id}));
     } catch (e) {
       _cdp._pending.remove(n);
       return Future.error(BrowserException('$method: browser closed', cause: e));

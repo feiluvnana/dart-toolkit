@@ -182,6 +182,25 @@ void main() {
       expect(profiles(), isFalse);
     }, skip: Platform.isWindows ? 'watchdog is POSIX only' : null);
 
+    test('S10: a launched Chrome talks over a pipe and listens on no TCP port', () async {
+      if (Platform.isWindows) return markTestSkipped('Windows keeps the debugging port');
+      final profile = await Directory.systemTemp.createTemp('chrome_nolisten');
+      addTearDown(() => profile.delete(recursive: true));
+      final b = await Chrome.launch(profile: profile.path);
+      addTearDown(b.close);
+      expect(await (await b.open('$base/')).url(), '$base/');
+      final ps = await Process.run('ps', ['-ax', '-o', 'pid=,args=']);
+      final pids = [
+        for (final line in '${ps.stdout}'.split('\n'))
+          if (line.contains('--user-data-dir=${profile.path}') && !line.contains('--type=')) line.trim().split(' ').first,
+      ];
+      expect(pids, isNotEmpty);
+      for (final pid in pids) {
+        final lsof = await Process.run('lsof', ['-a', '-p', pid, '-iTCP', '-sTCP:LISTEN']);
+        expect('${lsof.stdout}'.trim(), isEmpty, reason: 'Chrome $pid listens: ${lsof.stdout}');
+      }
+    });
+
     test('a reused profile keeps its cookies but not its tabs', () async {
       final profile = await Directory.systemTemp.createTemp('chrome_profile');
       addTearDown(() => profile.delete(recursive: true));

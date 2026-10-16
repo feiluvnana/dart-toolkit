@@ -65,25 +65,44 @@ abstract final class Chrome {
         await io.Directory(p.join(profile, 'Default', 'Sessions')).delete(recursive: true);
       } on io.PathNotFoundException catch (_) {}
     }
+    // POSIX: CDP over fds 3 and 4 (two FIFOs in an owner-only folder), so
+    // no TCP port any local process could drive. Windows keeps the port.
+    final pipes = io.Platform.isWindows ? null : await io.Directory.systemTemp.createTemp('dart_toolkit_cdp');
     final args = [
       ..._flags,
       if (headless) ...['--headless', '--hide-scrollbars', '--mute-audio'],
       if (proxy != null) '--proxy-server=$proxy',
       // Keeps session cookies (logins); the session's tabs were deleted above.
       if (profile != null) '--restore-last-session',
-      '--remote-debugging-port=0',
+      if (pipes == null) '--remote-debugging-port=0' else '--remote-debugging-pipe',
       '--user-data-dir=${profile ?? temp!.path}',
       'about:blank',
     ];
     Future<void> dropTemp() async {
-      try {
-        await temp?.delete(recursive: true);
-      } catch (_) {}
+      for (final d in [temp, pipes]) {
+        try {
+          await d?.delete(recursive: true);
+        } catch (_) {}
+      }
     }
 
     final io.Process proc;
     try {
-      proc = await io.Process.start(exe, args);
+      if (pipes == null) {
+        proc = await io.Process.start(exe, args);
+      } else {
+        final made = await io.Process.run('mkfifo', ['${pipes.path}/in', '${pipes.path}/out']);
+        if (made.exitCode != 0) throw io.ProcessException('mkfifo', [], '${made.stderr}'.trim(), made.exitCode);
+        proc = await io.Process.start('/bin/sh', [
+          '-c',
+          r'i=$1; o=$2; shift 2; exec "$@" 3<"$i" 4>"$o"',
+          'sh',
+          '${pipes.path}/in',
+          '${pipes.path}/out',
+          exe,
+          ...args,
+        ]);
+      }
     } catch (e) {
       await dropTemp();
       throw BrowserException('Chrome would not start: $exe ($e)', cause: e);
@@ -96,8 +115,9 @@ abstract final class Chrome {
         .transform(const LineSplitter())
         .listen(
           (line) {
-            if (endpoint.isCompleted) return;
-            if (_listening.firstMatch(line) case final m?) return endpoint.complete(m[1]!);
+            if (pipes == null && !endpoint.isCompleted) {
+              if (_listening.firstMatch(line) case final m?) return endpoint.complete(m[1]!);
+            }
             if (tail.length == 8) tail.removeAt(0);
             tail.add(line);
           },
@@ -106,15 +126,31 @@ abstract final class Chrome {
           },
           onError: (Object _) {},
         );
+    String why(String what) => '$what: $exe${tail.isEmpty ? '' : '\n${tail.join('\n')}'}';
     final Cdp cdp;
     try {
-      final url = await endpoint.future.timeout(
-        _defaultTimeout,
-        onTimeout: () => throw BrowserException(
-          'Chrome did not start in ${_defaultTimeout.inSeconds} s: $exe${tail.isEmpty ? '' : '\n${tail.join('\n')}'}',
-        ),
-      );
-      cdp = await Cdp.connect(url).timeout(_defaultTimeout);
+      if (pipes == null) {
+        final url = await endpoint.future.timeout(
+          _defaultTimeout,
+          onTimeout: () => throw BrowserException(why('Chrome did not start in ${_defaultTimeout.inSeconds} s')),
+        );
+        cdp = await Cdp.connect(url).timeout(_defaultTimeout);
+      } else {
+        // sh opens `in` for reading first, then `out` for writing: open
+        // both ends at once (each open waits for its other side).
+        endpoint.future.ignore();
+        cdp = Cdp.pipe(io.File('${pipes.path}/out').openRead(), io.File('${pipes.path}/in').openWrite());
+        try {
+          await cdp.browser.send('Browser.getVersion').timeout(_defaultTimeout);
+        } on TimeoutException {
+          throw BrowserException(why('Chrome did not start in ${_defaultTimeout.inSeconds} s'));
+        } on BrowserException {
+          // The pipe closed: Chrome exited. Its stderr says why once read to the end.
+          await endpoint.future.then((_) {}, onError: (Object _) {}).timeout(const Duration(seconds: 2), onTimeout: () {});
+          throw BrowserException(why('Chrome exited'));
+        }
+        await pipes.delete(recursive: true).catchError((_) => pipes); // both ends are open
+      }
     } catch (_) {
       proc.kill(io.ProcessSignal.sigkill);
       await proc.exitCode;
