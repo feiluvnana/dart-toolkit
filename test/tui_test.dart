@@ -561,6 +561,33 @@ Future<void> main() async {
       await expectLater(t2.run(), throwsStateError);
     });
 
+    test('a failed async handler started outside the redraw zone still ends, so the loop goes idle', () async {
+      // resize() fires its binding from the caller's zone, as the real loop
+      // does for every key: the failure must still count the handler done.
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen(
+          (r) => r.write('body'),
+          keys: {
+            'resize': (
+              '',
+              () async {
+                await Future<void>.delayed(Duration.zero);
+                throw Exception('late fail');
+              },
+            ),
+          },
+        ),
+        width: 30,
+        height: 5,
+      );
+      await t.pump();
+      t.resize(30, 5);
+      await t.run().timeout(const Duration(seconds: 5));
+      expect(t.row(4), contains('✗ late fail'));
+      t.close();
+    });
+
     test('idle pumps paint nothing', () async {
       final t = testSession<int>(
         0,

@@ -18,6 +18,7 @@
 
 **Fixed**
 
+- `tui`: an async key handler that fails no longer keeps the screen redrawing every 80 ms for the rest of the session (its end was never counted outside the redraw zone).
 - `fs`: two `file.lock(...)` calls in one process are granted in call order; the second one no longer wins while the first creates the lock's folder.
 - `fs`: unawaited `file.write(...)` / `> file` calls to one path land in call order, so the last one wins (they could finish in any order and keep a stale state). medialoader drops its own save chain.
 - `http`: a body with no length (SSE, NDJSON) reaches `lines()`/`stream()` as it arrives instead of after 64 KB or its end, and a paused consumer pauses the socket instead of buffering the rest of the body in memory.

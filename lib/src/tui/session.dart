@@ -1114,26 +1114,35 @@ final class _Session<S> implements term.TuiBridge {
   void _invoke(FutureOr<void> Function() action) {
     _activeH++;
     _dirtyAndWake();
-    try {
-      final r = _zone != null ? _zone!.run(action) : action();
-      if (r is Future) {
-        r.then(
-          (_) {
-            _activeH--;
-            _dirtyAndWake();
-          },
-          onError: (Object e, StackTrace st) {
-            _activeH--;
-            _handlerError(e, st);
-            _dirtyAndWake();
-          },
-        );
-      } else {
+    void run() {
+      try {
+        final r = action();
+        if (r is Future) {
+          // Listened inside the zone: an error never crosses out of it.
+          r.then(
+            (_) {
+              _activeH--;
+              _dirtyAndWake();
+            },
+            onError: (Object e, StackTrace st) {
+              _activeH--;
+              _handlerError(e, st);
+              _dirtyAndWake();
+            },
+          );
+        } else {
+          _activeH--;
+        }
+      } catch (e, st) {
         _activeH--;
+        _handlerError(e, st);
       }
-    } catch (e, st) {
-      _activeH--;
-      _handlerError(e, st);
+    }
+
+    if (_zone case final z?) {
+      z.run(run);
+    } else {
+      run();
     }
   }
 
