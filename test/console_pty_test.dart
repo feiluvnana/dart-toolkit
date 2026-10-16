@@ -330,7 +330,7 @@ void main() {
       // H16: CRLF is one line break, also across two prompts.
       expect(await run(['ask2'], 'x\r\ny\r\n'), contains('answer=x|y'));
       // A closed stdin gives each prompt its `or` (null without one, confirm false).
-      expect(await run(['eof'], ''), contains('eof=null|dflt|true|false|null|y'));
+      expect(await run(['eof'], ''), contains('eof=|dflt|true|false|null|y'));
       // An empty line gives `or`; without one the answer is empty.
       expect(await run(['empty'], '\n\n\n'), contains('empty=dflt||true'));
       try {

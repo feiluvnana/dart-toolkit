@@ -700,7 +700,7 @@ await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
 
 ```dart
 abstract final class Console {
-  static Future<String?> ask(String question, {bool secret = false, String? or, Duration? timeout}); // timeout: gives or
+  static Future<String> ask(String question, {bool secret = false, String or = '', Duration? timeout}); // empty, EOF, timeout: or
   static Future<bool> confirm(String question, {bool or = false});
   static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
   static Future<String> key({String? prompt});
@@ -718,7 +718,7 @@ final class Speed implements Pipe { Speed();  Speed add(int count);  double rate
 - Everything goes to stderr, so stdout stays clean for data.
 - Prompts are asynchronous: timers, downloads and bars keep running while one waits. Ctrl-C at a
   prompt restores the terminal and exits with 130.
-- **A closed stdin is not an error.** `ask` and `choose` give their `or` (null without one), and so
+- **A closed stdin is not an error.** `ask` gives its `or` (`''` by default) and `choose` its `or` (null without one), and so
   does an `ask` whose `timeout:` passes (its reader is stopped, so the script can still exit);
   `confirm` gives its `or` (false by default); the same goes for Escape in a Tui popup. An empty
   line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.

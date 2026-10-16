@@ -1107,7 +1107,7 @@ void main() {
       t.close();
     });
 
-    test('ask and choose; escape gives null and shows nothing', () async {
+    test('ask and choose; escape gives or (empty) and shows nothing', () async {
       String? name, pick, cancelled = 'x';
       var reached = false;
       final t = testSession<int>(
@@ -1155,7 +1155,7 @@ void main() {
       t.bytes(utf8.encode('\x1b\x1b'));
       await t.pump();
       expect(reached, isTrue);
-      expect(cancelled, isNull);
+      expect(cancelled, '');
       expect(t.row(9), isNot(contains('✗')));
       expect(t.quitRequested, isFalse);
       t.close();
@@ -1354,7 +1354,7 @@ void main() {
   });
 
   group('prompts and ctrl+c', () {
-    test('quitting answers open prompts with null so callers finish', () async {
+    test('quitting answers open prompts (ask with or, choose with null) so callers finish', () async {
       final log = <String>[];
       late App<int> app;
       final t = testSession<int>(
@@ -1385,8 +1385,8 @@ void main() {
       await t.pump();
       app.quit();
       await t.pump();
-      expect(log, ['ask=null', 'finally']);
-      expect(await Console.ask('after'), isNull);
+      expect(log, ['ask=', 'finally']);
+      expect(await Console.ask('after'), '');
       t.close();
     });
 

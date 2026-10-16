@@ -167,12 +167,12 @@ abstract final class Console {
     return 24;
   }
 
-  /// Read one line. An empty line gives [or] when it is set (shown as
-  /// `[or]` after the question) and `''` otherwise. A closed stdin gives
-  /// [or], or null without it. With [secret], echo is turned off
-  /// (passwords) and [or] is not shown. With [timeout], no answer in that
-  /// time also gives [or]: the reader is stopped, so an unanswered prompt
-  /// never keeps the script alive.
+  /// Read one line. An empty line, a closed stdin and a cancelled Tui
+  /// popup give [or] (`''` by default; a non-empty one is shown as `[or]`
+  /// after the question). With [secret], echo is turned off (passwords) and
+  /// [or] is not shown. With [timeout], no answer in that time also gives
+  /// [or]: the reader is stopped, so an unanswered prompt never keeps the
+  /// script alive.
   /// Asynchronous: timers, downloads and bars keep running while one waits.
   /// Ctrl-C restores the terminal and exits with 130. While a state-driven
   /// [Tui.run] is active, shows as a popup (Escape closes it like EOF).
@@ -181,8 +181,8 @@ abstract final class Console {
   /// instead of trusting the inherited ones: a run killed mid-menu can
   /// leave echo off, which makes typing invisible while Enter still
   /// submits. The captured modes are restored afterwards.
-  static Future<String?> ask(String question, {bool secret = false, String? or, Duration? timeout}) async {
-    final shown = or == null || secret ? question : '$question [$or]';
+  static Future<String> ask(String question, {bool secret = false, String or = '', Duration? timeout}) async {
+    final shown = or.isEmpty || secret ? question : '$question [$or]';
     final String? line;
     try {
       line = await _ask(shown, secret: secret, timeout: timeout);
@@ -191,8 +191,7 @@ abstract final class Console {
     } on TimeoutException {
       return or;
     }
-    if (line == null) return or;
-    return line.isEmpty && or != null ? or : line;
+    return line == null || line.isEmpty ? or : line;
   }
 
   /// One prompt and one line: null when the Tui popup was cancelled or
@@ -228,7 +227,7 @@ abstract final class Console {
       return await bridge.promptConfirm('$question $hint', or) ?? or;
     }
     for (;;) {
-      final answer = ((await ask('$question $hint')) ?? '').trim().toLowerCase();
+      final answer = (await ask('$question $hint')).trim().toLowerCase();
       if (answer == 'y' || answer == 'yes') return true;
       if (answer == 'n' || answer == 'no') return false;
       if (answer.isEmpty) return or;
