@@ -180,6 +180,18 @@ void main() {
       calls = 0;
       await expectLater(Pool.map([1], (x) => ++calls > 0 ? throw StateError('bug') : x, retries: 3), throwsStateError);
       expect(calls, 1); // an Error is not retried
+      // B13: bad data and TLS are final too.
+      calls = 0;
+      await expectLater(
+        Pool.map([1], (x) => ++calls > 0 ? throw ContentException('bad page') : x, retries: 3),
+        throwsA(isA<ContentException>()),
+      );
+      expect(calls, 1);
+      await expectLater(
+        Pool.map([1], (x) => ++calls > 0 ? throw const HandshakeException('bad cert') : x, retries: 3),
+        throwsA(isA<HandshakeException>()),
+      );
+      expect(calls, 2);
       final starts = <DateTime>[];
       await Pool.map([1, 2, 3], (x) => starts.add(DateTime.now()), rate: Rate(1, 150.milliseconds));
       expect(starts.last.difference(starts.first), greaterThanOrEqualTo(const Duration(milliseconds: 290)));

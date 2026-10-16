@@ -8,6 +8,8 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math';
 
+import '../core.dart' show ToolkitException;
+
 final _random = Random();
 
 /// Doubling backoff from 1 s (`attempt` 0 → 1 s, 1 → 2 s, … capped at 2^10 s)
@@ -63,3 +65,15 @@ bool isRetryable(Object e) {
   }
   return false;
 }
+
+/// True for failures another attempt of a `pool` job cannot fix: an
+/// [Error] (a bug), bad data ([FormatException], so `ContentException`),
+/// TLS, and the toolkit's own verdicts (a status error: the client's own
+/// `retries:` already resent 429 and 503). Any other exception is retried.
+bool isPermanent(Object e) =>
+    e is Error ||
+    e is FormatException ||
+    e is ToolkitException ||
+    e is io.HandshakeException ||
+    e is io.TlsException ||
+    e is io.CertificateException;
