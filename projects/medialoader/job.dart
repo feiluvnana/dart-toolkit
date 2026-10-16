@@ -123,12 +123,8 @@ final class Job {
   // Whether something posted [at] is wanted (--since).
   bool keep(DateTime at) => o.since == null || !at.isBefore(o.since!);
 
-  // A client for this job on its own [rate], counted and closed with the run.
-  Client client(Rate rate) {
-    final c = api.copy(rate: rate);
-    board.apis.add(c);
-    return c;
-  }
+  // A client for this job on its own [rate], counted and closed with its platform's.
+  Client client(Rate rate) => api.copy(rate: rate);
 
   // A profile picture's first-seen day, its file-name prefix; [change] is noted when it is new.
   String seen(String id, String change) => index.profiles[id] ??= () {

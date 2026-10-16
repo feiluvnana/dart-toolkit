@@ -429,6 +429,18 @@ Future<void> main() async {
     expect(pool.sent(), 2);
   });
 
+  test('E1: copies count in their parent\'s sent() and close with it', () async {
+    final root = Http.client();
+    final a = root.copy(retries: 0), b = a.copy(headers: {'x': '1'});
+    await a.get('$url/ua').status();
+    await b.get('$url/ua').status();
+    expect((root.sent(), a.sent(), b.sent()), (2, 2, 1));
+    await b.close(); // a closed copy leaves its count behind
+    expect(root.sent(), 2);
+    await root.close();
+    await expectLater(a.get('$url/ua'), throwsA(isA<HttpRequestException>()));
+  });
+
   test('Body.multipart: fields in memory with a length; a Reader file streams', () async {
     final c = Http.client();
     final mem = await c.post('$url/multipart', body: .multipart({'a': '1', 'q"': 'x'})).text();

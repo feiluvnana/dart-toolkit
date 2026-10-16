@@ -392,7 +392,8 @@ abstract final class Http {
 sealed class Client implements Closeable {
   /// A variant of this client: a given setting replaces this one's (null
   /// keeps it; [headers] merge by name). The copy shares the jar, the
-  /// [Rate] and the connections unless it overrides them.
+  /// [Rate] and the connections unless it overrides them, counts in this
+  /// client's [sent] and closes with it.
   Client copy({
     String? base,
     Map<String, String>? headers,
@@ -562,9 +563,12 @@ final class _Conn {
 bool _sameList(List<String> a, List<String> b) => a.length == b.length && a.indexed.every((e) => b[e.$1] == e.$2);
 
 final class _Client extends Client {
-  _Client(this._s, this._conn) {
+  _Client(this._s, this._conn, [this._parent]) {
     _conn.owners++;
   }
+
+  /// The client this one is a [copy] of.
+  final _Client? _parent;
 
   final _Settings _s;
   final _Conn _conn;
@@ -591,8 +595,12 @@ final class _Client extends Client {
 
   var _sent = 0;
 
+  /// The open clients [copy] made: counted in [sent], closed by [close]. A
+  /// copy that closes leaves its count here and drops out.
+  final _copies = <_Client>[];
+
   @override
-  int sent() => _sent;
+  int sent() => _copies.fold(_sent, (n, c) => n + c.sent());
 
   /// Until when [_Pool] skips this member after a 429.
   DateTime? _benched;
@@ -626,7 +634,7 @@ final class _Client extends Client {
             connections: connections ?? _conn.connections,
             timeout: timeout ?? _conn.timeout,
           );
-    return _Client(
+    final copy = _Client(
       _Settings(
         base: base == null ? s.base : Uri.parse(base),
         headers: headers == null ? s.headers : _merge(s.headers, headers),
@@ -642,7 +650,10 @@ final class _Client extends Client {
         limit: limit ?? s.limit,
       ),
       conn,
+      this,
     );
+    _copies.add(copy);
+    return copy;
   }
 
   @override
@@ -693,11 +704,14 @@ final class _Client extends Client {
       }
       _conn.leave();
     }
+    await Future.wait([for (final c in [..._copies]) c.close()]);
     while (_sends.isNotEmpty) {
       await Future.wait([
         for (final f in [..._sends]) f.catchError((_) {}),
       ]);
     }
+    // Every send has finished: the count is final.
+    if (_parent case final p? when p._copies.remove(this)) p._sent += sent();
   }
 
   Uri _resolve(String url, Map<String, Object?>? query) {
