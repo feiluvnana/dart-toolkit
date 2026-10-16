@@ -627,7 +627,7 @@ Future<void> main(List<String> args) async =>
       await seed();
       await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tar) > Fs.file(p('site/self.tar')));
       await (Fs.file(p('site/self.tar')) > Archive.unarchive(p('out')));
-      final names = [for (final e in await Fs.dir(p('out')).list(recursive: true)) e.name()];
+      final names = [for (final e in await Fs.dir(p('out')).list(match: '**')) e.name()];
       expect(names.where((n) => n.contains('.tmp')), isEmpty);
     });
 

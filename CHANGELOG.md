@@ -62,6 +62,7 @@
 - `video`/`image`: an ffmpeg/ffprobe failure reading a URL over the network (refused, reset, unresolved, a 5xx) is a `SocketException` instead of a `ContentException`; a pinned tool download that fails for lack of network is an `HttpException`; a 7-Zip failure from a full disk or a permission is a `FileSystemException` instead of "corrupt archive".
 
 - `chrome`: a page's waits share one bound, `open(url, timeout:)` (30 s by default): `go`, `back`, `cookie`, `click`, `fill`, `select`, `upload`, `scroll`, `wait`, `idle` and `download` (and their `Future<Page>` mirrors) no longer take `timeout:`. A hand login that may take minutes is `browser.open(url, timeout: 5.minutes).cookie('sessionid')`.
+- `fs`: `Dir.list(match:)` walks as deep as the glob reaches: each `/` is one level more, so `'*/*.jpg'`, `'*/.ins.json'` and `'alice/*'` find what they name (they silently returned nothing without a `**`); `**` still crosses any number of folders.
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
 
 **Removed**
@@ -84,6 +85,7 @@
 - `chrome`: `Page.cookies(all:)`; another site's jar is `page.go(url).cookies()`.
 - `chrome`: `Page.scroll(to:)`; `click`, `fill` and the other actions scroll their element into view, and `page.run('document.querySelector("#x").scrollIntoView()')` does it by hand. `scroll()` still goes to the bottom.
 - `fs`: `Dir.watch()`; `io.Directory(path).watch(recursive: true)` (not recursive on Linux either way).
+- `fs`: `Dir.list(recursive:)`; the whole tree is `list(match: '**')`, and a glob's own depth decides how far it walks.
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0

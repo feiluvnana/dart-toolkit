@@ -112,7 +112,7 @@ void main() {
       await (Fs.file(p('t/a.bin')).copy(p('a2.bin')) & file);
       expect((file.done(), file.total()), (3000, 3000));
       final listed = Meter();
-      final entries = await (Fs.dir(p('t')).list(recursive: true) & listed);
+      final entries = await (Fs.dir(p('t')).list(match: '**') & listed);
       expect(listed.done(), entries.length);
       final relayed = Meter();
       await (Future.value(Fs.dir(p('t'))).copy(p('t3')) & relayed);
@@ -547,7 +547,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       for (final spelled in [p('l'), '${p('l')}/', '${p('l')}/.']) {
         final d = Fs.dir(spelled);
         expect(
-          [for (final e in await d.list(recursive: true)) e.path(from: d)],
+          [for (final e in await d.list(match: '**')) e.path(from: d)],
           ['a', 'a/b', 'a-b', 'a.txt', 'z', 'z/y.txt'],
         );
         expect(
@@ -568,8 +568,12 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       ];
       expect(await names('*.{jpg,png}'), ['a.jpg', 'b.png']);
       expect(await names('**/*.{jpg,png}'), ['a.jpg', 'b.png', 'x/d.jpg', 'x/y/e.png']);
-      expect(await names('x/?.gif'), isEmpty, reason: 'without ** the listing is one level');
-      expect([for (final e in await shots.list(recursive: true, match: 'x/?.gif')) e.name()], ['f.gif']);
+      // E3: each / walks one level deeper (these returned nothing).
+      expect(await names('x/?.gif'), ['x/f.gif']);
+      expect(await names('*/*.jpg'), ['x/d.jpg']);
+      expect(await names('x/*'), ['x/d.jpg', 'x/f.gif', 'x/y']);
+      expect(await names('*/*/*'), ['x/y/e.png']);
+      expect(await names('*'), ['a.jpg', 'b.png', 'c.txt', 'x'], reason: 'no / stays at the top');
     });
 
     test('file/dir navigate without I/O', () {
@@ -589,14 +593,14 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       await Fs.file(p('o/a/b')).write('1');
       await Fs.file(p('o/a-b')).write('2');
       await Fs.file(p('o/a.c')).write('3');
-      final names = [for (final e in await Fs.dir(p('o')).list(recursive: true)) e.path().substring(p('o').length + 1)];
+      final names = [for (final e in await Fs.dir(p('o')).list(match: '**')) e.path().substring(p('o').length + 1)];
       expect(names, ['a', 'a/b', 'a-b', 'a.c']);
     });
 
     test('recursive list never goes through links', () async {
       await Fs.file(p('r/a.txt')).write('a');
       await io.Link(p('r/loop')).create(p('r'));
-      final entries = await Fs.dir(p('r')).list(recursive: true);
+      final entries = await Fs.dir(p('r')).list(match: '**');
       expect(entries.whereType<Link>().map((e) => e.name()), ['loop']);
       expect(entries.whereType<File>().map((e) => e.name()), ['a.txt']);
     });

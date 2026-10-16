@@ -481,17 +481,20 @@ final class Dir extends Entry {
   /// A folder handle under this folder. No I/O.
   Dir dir(String name) => Dir._(p.join(_path, name));
 
-  /// Typed children, sorted by relative path (depth-first when [recursive]).
-  /// Never descends through links. [match] keeps the entries whose path
-  /// relative to this folder matches a glob: `*` and `?` stay within one
-  /// folder, `**` crosses folders (and implies [recursive]), `{jpg,png}`
-  /// picks alternatives: `list(match: '**/*.{jpg,png}')`. A [Task] that
-  /// counts the entries found (`& Console.bar('scan')`).
-  Task<List<Entry>> list({bool recursive = false, String? match}) => task((run) => _list(recursive, match, run));
+  /// Typed entries, sorted by relative path (depth-first). Never descends
+  /// through links. Without [match], the children; [match] keeps the
+  /// entries whose path relative to this folder matches a glob, and its
+  /// shape sets the depth: `*` and `?` stay within one folder, each `/`
+  /// goes one level deeper (`'*/*.jpg'` is the jpgs one folder down), and
+  /// `**` crosses any number (`'**'` is the whole tree, `'**/*.{jpg,png}'`
+  /// every image). A [Task] that counts the entries found
+  /// (`& Console.bar('scan')`).
+  Task<List<Entry>> list({String? match}) => task((run) => _list(match, run));
 
-  Future<List<Entry>> _list(bool recursive, String? match, Run run) async {
+  Future<List<Entry>> _list(String? match, Run run) async {
     final pattern = match == null ? null : glob(match);
-    if (match != null && match.contains('**')) recursive = true;
+    // Levels to walk: one per path segment, any number for `**`.
+    final depth = match == null ? 1 : (match.contains('**') ? null : '/'.allMatches(match).length + 1);
     final t = await io.FileSystemEntity.type(_path, followLinks: false);
     if (t != io.FileSystemEntityType.directory) {
       throw io.FileSystemException('not a directory', _path);
@@ -501,7 +504,26 @@ final class Dir extends Entry {
     // a relative path; 25x slower than the listing itself).
     final cut = _path.endsWith('/') || _path.endsWith(r'\') ? _path.length : _path.length + 1;
     final found = <(String, Entry)>[];
-    await for (final e in io.Directory(_path).list(recursive: recursive, followLinks: false)) {
+    // The whole tree in one OS walk, or level by level down to [depth].
+    final Stream<io.FileSystemEntity> walk;
+    if (depth == null || depth == 1) {
+      walk = io.Directory(_path).list(recursive: depth == null, followLinks: false);
+    } else {
+      walk = () async* {
+        var level = [io.Directory(_path)];
+        for (var d = 1; d <= depth && level.isNotEmpty; d++) {
+          final next = <io.Directory>[];
+          for (final dir in level) {
+            await for (final e in dir.list(followLinks: false)) {
+              if (e is io.Directory && d < depth) next.add(e);
+              yield e;
+            }
+          }
+          level = next;
+        }
+      }();
+    }
+    await for (final e in walk) {
       final rel = (e.path.startsWith(_path) ? e.path.substring(cut) : p.relative(e.path, from: _path)).replaceAll(
         r'\',
         '/',
@@ -768,8 +790,7 @@ extension DirFuture on Future<Dir> {
   Task<Dir> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
-  Task<List<Entry>> list({bool recursive = false, String? match}) =>
-      task((run) async => (await this).list(recursive: recursive, match: match) & relay(run));
+  Task<List<Entry>> list({String? match}) => task((run) async => (await this).list(match: match) & relay(run));
   Future<({int files, int bytes})> size({String? match}) async => (await this).size(match: match);
   Future<Dir> create() async => (await this).create();
 }

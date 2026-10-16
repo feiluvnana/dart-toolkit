@@ -166,7 +166,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | switch the current state               | `go(state)`                                                             | `App`                                                                        |
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
-`path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
+`path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env`
 `json` `pretty` `limit` `max` `retries` `check` `short` `or` `rate` `cookies` `csrf`
 `isolates` `match` `dotenv` `sep` `resume`
 `required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
@@ -519,7 +519,7 @@ final class File extends Entry with Reader, Writer {
 }
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
-  Task<List<Entry>> list({bool recursive = false, String? match});  Future<Dir> create();   // list counts entries
+  Task<List<Entry>> list({String? match});  Future<Dir> create();   // list counts entries; match sets the depth
   Future<({int files, int bytes})> size({String? match});   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
@@ -545,9 +545,11 @@ final class Link extends Entry {
   `delete()` is a no-op when nothing is there, removes a link (never its target), and throws
   `FileSystemException` on the wrong kind (`Dir.delete()` on a file).
 - `resolve()` returns a handle at the final target, or `null` when the link is broken.
-- `list()` is typed and sorted by relative path (depth-first when `recursive`), and `recursive` never follows links.
-  `match: '**/*.{jpg,png}'` keeps the paths (relative to the folder) that match a glob: `*` and
-  `?` stay in one folder, `**` crosses folders and implies `recursive`, `{a,b}` and `[abc]` pick.
+- `list()` is typed, sorted by relative path (depth-first), and never follows links. Without
+  `match:` it lists the children. `match: '**/*.{jpg,png}'` keeps the paths (relative to the
+  folder) that match a glob, and walks as deep as the glob reaches: `*` and `?` stay in one
+  folder, each `/` is one level more (`'*/*.jpg'`), `**` crosses any number (`'**'` is the whole
+  tree), `{a,b}` and `[abc]` pick.
 - `text(or: '')` answers a missing file; any other failure (a folder, permissions) still throws.
   A `File` is a `Writer` whose `origin()` reports its path, which is how a `resume: true` download skips and resumes.
 - `Fs.tempDir((dir) async {…})` runs the body with a fresh temp folder and deletes it after (Ctrl-C
