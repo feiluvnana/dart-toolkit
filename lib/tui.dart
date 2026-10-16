@@ -20,7 +20,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Tui], [App], [Screen], [Binding],
-/// [Pick], [Field], [Scroll], [Region], [Color], [Style],
+/// [Pick], [Field], [Scroll], [Region], [Color], [Style], [Pixels],
 /// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
 /// (applied to [Region] on import).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
@@ -35,8 +35,10 @@
 ///   and `Console.log` goes to the status row.
 ///
 /// {@canonicalFor terminal.Color}
+/// {@canonicalFor pixels.Pixels}
 library;
 
 export 'src/tui.dart'
     show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, RegionDiff, Style;
 export 'src/terminal.dart' show Color;
+export 'src/pixels.dart' show Pixels;

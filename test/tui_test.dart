@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
-import 'package:dart_toolkit/src/pixels.dart';
 import 'package:dart_toolkit/src/terminal.dart' as term;
 import 'package:dart_toolkit/src/tui.dart' show TestSession, testSession;
 import 'package:dart_toolkit/tui.dart';

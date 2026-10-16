@@ -8,7 +8,8 @@
 /// r.picture(await photo.pixels());                             // draw it in a Tui
 /// ```
 ///
-/// Public surface is exactly: [Image], [ImageFormat], and `compress`'s
+/// Public surface is exactly: [Image], [ImageFormat], [Pixels] (what
+/// `pixels()` returns), and `compress`'s
 /// [Compression] ([Compressed] or [Kept] with a [KeptReason]).
 /// - `Reader.image()` reads any reader: a file in place (never copied into
 ///   memory), bytes (`Reader.of(bytes).image()`) or a stream spooled once.
@@ -34,6 +35,7 @@ import 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 import 'src/pixels.dart';
 export 'core.dart';
 export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
+export 'src/pixels.dart' show Pixels;
 
 /// Images over this many pixels are refused (from the header, before
 /// anything decodes): 16384 × 16384.
