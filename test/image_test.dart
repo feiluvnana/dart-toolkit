@@ -293,5 +293,12 @@ void main() {
       await io.File(heic).writeAsBytes([0, 0, 0, 16, ...'ftypheic'.codeUnits, 0, 0, 0, 0]);
       expect(await Image.compress(heic), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.lossy));
     });
+
+    test('E7: a JPEG that does not decode is Kept(broken), not a throw', () async {
+      final junk = '${tmp.path}/junk.jpg';
+      await io.File(junk).writeAsBytes([0xff, 0xd8, 0xff, 0xe0, ...List.filled(200, 0x41)]);
+      expect(await Image.compress(junk), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.broken));
+      expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
+    });
   });
 }

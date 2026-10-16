@@ -136,7 +136,8 @@ final class Image {
   /// instead of another generation of loss). Returns [Compressed] with the
   /// sizes before and after, or [Kept] with the reason: not an image, one a
   /// re-encode would degrade (animated GIF/WebP/APNG, CMYK JPEG, HEIC, which
-  /// has no encoder), or no smaller. JPEGs keep their EXIF (date, camera; orientation reset)
+  /// has no encoder), one that does not decode, or no smaller (a disk or
+  /// ffmpeg start failure still throws). JPEGs keep their EXIF (date, camera; orientation reset)
   /// and colour profile; a lossless WebP stays lossless.
   static Future<Compression> compress(String path, {int quality = 80}) async {
     media.checkQuality(quality);
@@ -149,13 +150,17 @@ final class Image {
     }
     final h = media.header(bytes);
     if (h != null && (h.animated || h.components == 4)) return const Kept(KeptReason.lossy);
-    final image = await _open(path, format, bytes);
-    final lossless = format == ImageFormat.webp && _isLosslessWebp(bytes);
-    var out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));
-    if (format == ImageFormat.jpg) out = media.withMetadata(out, bytes);
+    final Uint8List out;
+    try {
+      final image = await _open(path, format, bytes);
+      final lossless = format == ImageFormat.webp && _isLosslessWebp(bytes);
+      out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));
+    } on ContentException {
+      return const Kept(KeptReason.broken);
+    }
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     return media.deletedOnExit(tmp, () async {
-      await io.File(tmp).writeAsBytes(out, flush: true);
+      await io.File(tmp).writeAsBytes(format == ImageFormat.jpg ? media.withMetadata(out, bytes) : out, flush: true);
       return media.replaceIfSmaller(path, tmp, by: 0.05);
     });
   }

@@ -1043,7 +1043,7 @@ extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).imag
   (read only) and `.ico` above 256 px are an `ArgumentError`.
 - `compress` re-encodes a file in its own format and replaces it atomically only when ≥ 5% smaller,
   returning `Compressed(before, after)`; `Kept(reason)` leaves it alone and says why (`KeptReason.unknown`
-  not an image, `.lossy` animated/CMYK/HEIC, `.notSmaller` no gain; `text()` in words, on the result and on `reason`). JPEG
+  not an image, `.lossy` animated/CMYK/HEIC, `.notSmaller` no gain, `.broken` does not decode; `text()` in words, on the result and on `reason`). JPEG
   EXIF and ICC survive (orientation reset), a lossless WebP stays lossless.
 - `pixels` decodes RGB for `Region.picture`: `r.picture(await img.pixels(width: 80))`.
 

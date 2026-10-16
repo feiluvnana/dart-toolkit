@@ -139,7 +139,8 @@ final class Video {
   /// MKV, VP9 for WebM; another codec is `encode(codec:)`) and replace it, atomically, only
   /// when at least 5% smaller. Audio is copied, not re-encoded. Returns
   /// [Compressed] with the sizes before and after, or [Kept] with the
-  /// reason: not a video, AVI or audio only, or no smaller. A [Task]: a
+  /// reason: not a video, AVI or audio only, one that does not decode, or
+  /// no smaller (a disk or ffmpeg start failure still throws). A [Task]: a
   /// probe shows the encode in media time (`1:12/4:30  3.4×`).
   static Task<Compression> compress(String path, {int quality = 70}) {
     media.checkQuality(quality);
@@ -153,18 +154,22 @@ final class Video {
     if (const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
       return const Kept(KeptReason.lossy);
     }
-    final video = await _open(path);
-    if (video._info.width == null) return const Kept(KeptReason.lossy);
-    final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
-    return media.deletedOnExit(tmp, () async {
-      try {
-        await video._encodeTo(tmp, format, quality: quality, onProgress: _reporter(run));
-      } catch (_) {
-        await io.File(tmp).delete().catchError((_) => io.File(tmp));
-        rethrow;
-      }
-      return media.replaceIfSmaller(path, tmp, by: 0.05);
-    });
+    try {
+      final video = await _open(path);
+      if (video._info.width == null) return const Kept(KeptReason.lossy);
+      final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
+      return await media.deletedOnExit(tmp, () async {
+        try {
+          await video._encodeTo(tmp, format, quality: quality, onProgress: _reporter(run));
+        } catch (_) {
+          await io.File(tmp).delete().catchError((_) => io.File(tmp));
+          rethrow;
+        }
+        return media.replaceIfSmaller(path, tmp, by: 0.05);
+      });
+    } on ContentException {
+      return const Kept(KeptReason.broken);
+    }
   }
 
   /// Width in pixels as displayed (rotation applied); null for audio only.

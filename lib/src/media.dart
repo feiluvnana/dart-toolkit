@@ -260,7 +260,10 @@ enum KeptReason {
   lossy('re-encoding would lose something'),
 
   /// The re-encode was not at least 5% smaller.
-  notSmaller('re-encoding would not make it smaller');
+  notSmaller('re-encoding would not make it smaller'),
+
+  /// Its format, but it does not decode (truncated, corrupt, too large).
+  broken('it does not decode');
 
   const KeptReason(this._text);
   final String _text;

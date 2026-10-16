@@ -307,6 +307,12 @@ void main() {
       expect(await Video.compress(txt), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.unknown));
     });
 
+    test('E7: an MP4 that does not decode is Kept(broken), not a throw', () async {
+      final junk = '${tmp.path}/junk.mp4';
+      await io.File(junk).writeAsBytes([0, 0, 0, 24, ...'ftypisom'.codeUnits, ...List.filled(400, 0x41)]);
+      expect(await Video.compress(junk), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.broken));
+    });
+
     test('Ctrl-C mid-compress leaves no .compress beside the file (B18)', () async {
       final path = await make('long.mp4', [
         '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:d=20:r=30', //
