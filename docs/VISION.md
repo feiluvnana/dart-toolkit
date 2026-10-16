@@ -273,7 +273,7 @@ abstract final class Http {
   static Client pool(List<Client> members);      // also a Client
 }
 sealed class Client implements Closeable {
-  Client copy({…every setting, null keeps it; headers merge…});   // shares jar, Rate and connections; counts in sent(), closes with this
+  Client copy({Map<String, String>? headers, Duration? timeout, int? retries, Rate? rate, String? proxy});   // null keeps it; headers merge; shares jar, Rate and connections; counts in sent(), closes with this
   Cookies cookies();
   int sent();                                     // requests on the wire (attempts and hops)
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});   // head, delete: the same

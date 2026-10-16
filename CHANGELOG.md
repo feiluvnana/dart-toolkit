@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Changed**
+
+- `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
+
 **Removed**
 
 - `http`: `Http.serve` and `Server`/`Request`/`Reply`; the library is not a server. An OAuth loopback redirect is a few lines of `dart:io` `HttpServer` (docs/VISION.md §4.2).

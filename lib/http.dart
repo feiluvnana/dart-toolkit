@@ -396,25 +396,12 @@ abstract final class Http {
 /// GraphQL's `variables`), null (drops the key) or an `Iterable` of those
 /// (repeats the key).
 sealed class Client implements Closeable {
-  /// A variant of this client: a given setting replaces this one's (null
-  /// keeps it; [headers] merge by name). The copy shares the jar, the
+  /// A variant of this client with other [headers] (merged by name),
+  /// [timeout], [retries], [rate] or [proxy] (null keeps this one's); any
+  /// other setting is a new [Http.client]. The copy shares the jar, and the
   /// [Rate] and the connections unless it overrides them, counts in this
   /// client's [sent] and closes with it.
-  Client copy({
-    String? base,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retries,
-    Rate? rate,
-    bool? check,
-    Cookies? cookies,
-    ({String cookie, String header})? csrf,
-    String? proxy,
-    bool? resume,
-    int? max,
-    Browser? browser,
-    List<String>? login,
-  });
+  Client copy({Map<String, String>? headers, Duration? timeout, int? retries, Rate? rate, String? proxy});
 
   /// The cookie jar: persist it with `cookies().encode()`.
   Cookies cookies();
@@ -596,39 +583,25 @@ final class _Client extends Client {
   DateTime? _benched;
 
   @override
-  Client copy({
-    String? base,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retries,
-    Rate? rate,
-    bool? check,
-    Cookies? cookies,
-    ({String cookie, String header})? csrf,
-    String? proxy,
-    bool? resume,
-    int? max,
-    Browser? browser,
-    List<String>? login,
-  }) {
+  Client copy({Map<String, String>? headers, Duration? timeout, int? retries, Rate? rate, String? proxy}) {
     final s = _s;
     final conn = _conn.sameAs(proxy: proxy, timeout: timeout)
         ? _conn
         : _Conn(proxy: proxy ?? _conn.proxy, timeout: timeout ?? _conn.timeout);
     final copy = _Client(
       _Settings(
-        base: base == null ? s.base : Uri.parse(base),
+        base: s.base,
         headers: headers == null ? s.headers : _merge(s.headers, headers),
         timeout: timeout ?? s.timeout,
         retries: retries ?? s.retries,
         rate: rate ?? s.rate,
-        check: check ?? s.check,
-        cookies: cookies ?? s.cookies,
-        csrf: csrf ?? s.csrf,
-        resume: resume ?? s.resume,
-        max: max ?? s.max,
-        browser: browser ?? s.browser,
-        login: login ?? s.login,
+        check: s.check,
+        cookies: s.cookies,
+        csrf: s.csrf,
+        resume: s.resume,
+        max: s.max,
+        browser: s.browser,
+        login: s.login,
       ),
       conn,
       this,
@@ -1017,40 +990,12 @@ final class _Pool extends Client {
   _Client? _last;
 
   @override
-  Client copy({
-    String? base,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? retries,
-    Rate? rate,
-    bool? check,
-    Cookies? cookies,
-    ({String cookie, String header})? csrf,
-    String? proxy,
-    bool? resume,
-    int? max,
-    Browser? browser,
-    List<String>? login,
-  }) {
+  Client copy({Map<String, String>? headers, Duration? timeout, int? retries, Rate? rate, String? proxy}) {
     if (proxy != null) {
       throw ArgumentError.value(proxy, 'proxy', 'a pool keeps each member\'s proxy: copy the members, then pool them');
     }
     return _Pool([
-      for (final m in _members)
-        m.copy(
-          base: base,
-          headers: headers,
-          timeout: timeout,
-          retries: retries,
-          rate: rate,
-          check: check,
-          cookies: cookies,
-          csrf: csrf,
-          resume: resume,
-          max: max,
-          browser: browser,
-          login: login,
-        ) as _Client,
+      for (final m in _members) m.copy(headers: headers, timeout: timeout, retries: retries, rate: rate) as _Client,
     ]);
   }
 
