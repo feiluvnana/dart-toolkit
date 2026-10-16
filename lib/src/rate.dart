@@ -76,7 +76,21 @@ final class _Window {
 /// Fires once; the waits that carry it end early. A closed client fires its
 /// own, so only its own requests and waits stop.
 final class Halt {
+  Halt();
+
+  /// A halt that also fires when [parent] does (one call's waits under its
+  /// client's); fire it when the call ends so [parent] lets it go.
+  Halt.under(Halt parent) {
+    if (parent.fired) {
+      _done.complete();
+    } else {
+      _parent = parent;
+      parent._waits.add(fire);
+    }
+  }
+
   final _done = Completer<void>();
+  Halt? _parent;
 
   /// The waits in flight: each removes itself when its timer fires, so a
   /// long-lived halt holds nothing per finished wait.
@@ -87,6 +101,8 @@ final class Halt {
   void fire() {
     if (_done.isCompleted) return;
     _done.complete();
+    _parent?._waits.remove(fire);
+    _parent = null;
     for (final end in [..._waits]) {
       end();
     }

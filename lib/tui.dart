@@ -24,7 +24,9 @@
 /// plus the [RegionWidgets] and [RegionMarkdown] extensions
 /// (applied to [Region] on import).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
-///   the screen for a state and never blocks.
+///   the screen for a state and never blocks. `work:` is the job the screen
+///   watches: started once shown, cancelled by quitting, run with Console
+///   when there is no terminal.
 /// - [App] supports `state` `go` `status` `quit` (notifications and the
 ///   clipboard are `Console.notify`/`copy`, which route here while it runs).
 /// - Widget state lives in [Pick], [Field] and [Scroll]

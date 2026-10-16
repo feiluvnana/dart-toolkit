@@ -555,9 +555,10 @@ final class SetupException extends ToolkitException {
 /// call, a pool lane, a prompt, a pipeline): every such wait fails with
 /// this, so the script's `finally` blocks run before it exits with 130.
 /// Waits started after it fail at once; file work still runs, so a
-/// `finally` can save state. `pool` never retries it.
+/// `finally` can save state. `pool` never retries it. A `Tui.run` that quits
+/// fails its own work's waits with it the same way, and the script goes on.
 final class InterruptedException extends ToolkitException {
-  const InterruptedException() : super('interrupted (Ctrl-C)');
+  const InterruptedException() : super('interrupted');
 
   @override
   String toString() => 'InterruptedException: $message';

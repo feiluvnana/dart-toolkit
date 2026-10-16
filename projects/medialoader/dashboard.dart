@@ -2,7 +2,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show exitCode, stdout;
+import 'dart:io' show exitCode;
 
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
@@ -17,11 +17,11 @@ final class Board {
   final started = DateTime.now();
   final users = <User>[];
   final usersScroll = Scroll(follow: false), transfersScroll = Scroll(follow: false), log = Scroll();
-  final apis = <Client>[]; // the platform clients: counted, and closed when the run ends
+  final apis = <Client>[]; // the platform clients, counted
   final meter = Meter(); // every CDN byte
   String? pause; // why a platform's calls are on hold
   Timer? _pauseTimer;
-  var done = false, crashed = false, failuresOnly = false, retrying = 0, active = 0; // active: files downloading
+  var done = false, failuresOnly = false, retrying = 0, active = 0; // active: files downloading
   final failures = <Failure>[]; // what r retries
   bool get finished => done && retrying == 0;
   int get requests => apis.fold(0, (n, c) => n + c.sent());
@@ -102,43 +102,25 @@ final class Part {
   String get counts => '$added new · $had had${failed > 0 ? ' · $failed failed' : ''} · ${bytes.size()}';
 }
 
-// Runs [work] under the dashboard until q, then calls [close] (so downloads
-// stop and nothing keeps the process alive) and prints the summary. Without
-// a terminal, Console prints the log and the bars as they go, and failures
-// are retried once.
-// Sets exitCode: 1 when something failed, 130 when quit before the end.
-Future<void> watch(Future<void> Function() work, {required Future<void> Function() close}) async {
-  if (!stdout.hasTerminal) {
-    try {
-      await work();
-      await board.retryAll();
-    } finally {
-      board.clearPause();
-      await close();
-      summary();
-    }
-    if (board.failures.isNotEmpty) exitCode = 1;
-    return;
-  }
+// Runs [work] under the dashboard (without a terminal, Console prints the
+// log and the bars), retries its failures once, then prints the summary.
+// q before the end stops the downloads. Sets exitCode: 1 when something
+// failed, 130 when quit before the end.
+Future<void> watch(Future<void> Function() work) async {
   try {
-    await Tui.run(board, accent: Color.orange, (b, app) {
-      return Screen(
+    await Tui.run(
+      board,
+      accent: Color.orange,
+      work: () async {
+        await work();
+        await board.retryAll();
+        board.done = true;
+      },
+      (b, app) => Screen(
         draw,
         title: title(b),
         status: b.finished ? 'done: press q to leave' : (b.retrying > 0 ? 'retrying ${b.retrying}…' : b.pause),
         keys: {
-          'show': (
-            '',
-            () => work()
-                .then(
-                  (_) {},
-                  onError: (Object e, _) {
-                    b.crashed = true;
-                    b.note('✗ $e', failed: true);
-                  },
-                )
-                .whenComplete(() => b.done = true),
-          ),
           'l': ('save log', () async => app.status('✓ log saved: ${await saveLog()}')),
           'f': (b.failuresOnly ? 'all lines' : 'failures only', () => b.failuresOnly = !b.failuresOnly),
           if (b.failures.isNotEmpty) 'r': ('retry ${b.failures.length} failed', b.retryAll),
@@ -151,14 +133,13 @@ Future<void> watch(Future<void> Function() work, {required Future<void> Function
             },
           ),
         },
-      );
-    });
+      ),
+    );
   } finally {
     board.clearPause();
-    await close();
+    summary();
   }
-  summary();
-  exitCode = !board.finished ? 130 : (board.failures.isNotEmpty || board.crashed ? 1 : 0);
+  exitCode = !board.finished ? 130 : (board.failures.isNotEmpty ? 1 : 0);
 }
 
 // Each platform's tag colour: the known ones fixed, a new one the next

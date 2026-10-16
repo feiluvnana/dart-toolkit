@@ -25,8 +25,8 @@
 // failed, size, what its explorer is doing), every file in flight with its
 // speed, and a log. Keys: r retries every failure, l saves the log to
 // .medialoader.log next to this script, f shows only failures and rate
-// limits, q quits; drag to select and copy. A table per user prints after. Without a terminal the log prints line by
-// line and failures are retried once.
+// limits, q quits; drag to select and copy. A table per user prints after. Failures are retried
+// once at the end; without a terminal the log and bars print line by line.
 //
 // Files go to downloads/<platform>/<user>/<category>/ next to this script:
 // posts, photos, videos and stories by month, highlights/<title>/,

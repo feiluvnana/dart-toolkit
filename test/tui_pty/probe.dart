@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dart_toolkit/console.dart';
+import 'package:dart_toolkit/shell.dart';
 import 'package:dart_toolkit/tui.dart';
 
 const _watched = [
@@ -161,9 +162,12 @@ Future<void> main(List<String> args) async {
                 Console.log('logged');
               }(),
             ),
-            'q': ('', () async {
-              if (await Console.confirm('Stop?')) app.quit();
-            }),
+            'q': (
+              '',
+              () async {
+                if (await Console.confirm('Stop?')) app.quit();
+              },
+            ),
           },
         ),
       );
@@ -183,6 +187,63 @@ Future<void> main(List<String> args) async {
       // its trace must land on the normal screen, after the Tui left.
       Timer(const Duration(milliseconds: 500), () => throw StateError('root boom'));
       await Tui.run<int>(0, (s, app) => Screen((r) => r.write('drawn')));
+    case 'work':
+      // work starts once the screen is shown and the screen stays after it.
+      var drawn = false, text = 'waiting';
+      await Tui.run<int>(
+        0,
+        (s, app) => Screen((r) {
+          drawn = true;
+          r.write(text);
+        }, keys: {'q': ('', app.quit)}),
+        work: () async {
+          seen.add('drawn=$drawn');
+          await Shell.run(['true']);
+          text = 'worked';
+          seen.add('work ended');
+        },
+      );
+      seen.add('returned');
+    case 'workquit':
+      // q cancels the work and a pending handler; the script goes on.
+      await Tui.run<int>(
+        0,
+        (s, app) => Screen(
+          (r) => r.write('busy'),
+          keys: {
+            'h': ('', () => Shell.run(['sleep', '30']).then((_) => seen.add('handler slept'))),
+            'q': ('', app.quit),
+          },
+        ),
+        work: () async {
+          try {
+            await Shell.run(['sleep', '30']);
+            seen.add('slept');
+          } on InterruptedException {
+            seen.add('interrupted');
+          } finally {
+            seen.add('finally');
+          }
+        },
+      );
+      seen.add('returned');
+      seen.add('after ${(await Shell.run(['echo', 'ok'])).code()}');
+    case 'workthrow':
+      try {
+        await Tui.run<int>(0, (s, app) => Screen((r) => r.write('x')), work: () async => throw StateError('work boom'));
+      } on StateError catch (e) {
+        seen.add('caught ${e.message}');
+      }
+    case 'workpiped':
+      await Tui.run<int>(
+        0,
+        (s, app) => Screen((r) => r.write('never drawn')),
+        work: () async {
+          Console.log('from work');
+          seen.add('work ran');
+        },
+      );
+      seen.add('returned');
     case 'dumb':
       try {
         await Tui.run<int>(0, (s, app) => Screen((r) => r.write('drawn')));

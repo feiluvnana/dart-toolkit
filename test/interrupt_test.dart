@@ -8,6 +8,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/src/exit.dart' as exit;
 import 'package:dart_toolkit/src/retry.dart' show isPermanent;
 import 'package:dart_toolkit/shell.dart';
 import 'package:test/test.dart';
@@ -308,5 +310,47 @@ Future<void> main() async {
   test('pool never retries an InterruptedException', () {
     expect(isPermanent(const InterruptedException()), isTrue);
     expect(const InterruptedException(), isA<ToolkitException>());
+  });
+
+  // A cancelled scope (a Tui quitting) is Ctrl-C for its own work only.
+  group('Scope', () {
+    test('cancel fails its Shell.run at once; one outside runs on; nothing is interrupted outside', () async {
+      final scope = exit.Scope();
+      final sw = Stopwatch()..start();
+      final inside = runZoned(() => Shell.run(['sleep', '20']), zoneValues: scope.values);
+      final outside = Shell.run(['sh', '-c', 'sleep 0.4; echo ok']);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      scope.cancel();
+      await expectLater(inside, throwsA(isA<InterruptedException>()));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+      expect((await (await outside).text()).trim(), 'ok');
+      expect(exit.interrupted, isFalse);
+      // Later waits in the scope fail at once.
+      await expectLater(
+        runZoned(() => Shell.run(['true']), zoneValues: scope.values),
+        throwsA(isA<InterruptedException>()),
+      );
+    });
+
+    test('cancel aborts only its own request on a shared client', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) async {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        req.response.write('ok');
+        await req.response.close();
+      });
+      final client = Http.client();
+      addTearDown(client.close);
+      final url = 'http://127.0.0.1:${server.port}/';
+      final scope = exit.Scope();
+      final inside = runZoned(() => client.get(url).text(), zoneValues: scope.values);
+      final outside = client.get(url).text();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      scope.cancel();
+      await expectLater(inside, throwsA(isA<InterruptedException>()));
+      expect(await outside, 'ok');
+      expect(await client.get(url).text(), 'ok');
+    });
   });
 }

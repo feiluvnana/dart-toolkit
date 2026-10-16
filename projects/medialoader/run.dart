@@ -34,18 +34,13 @@ Future<void> run(Map<Target, Set<Kind>> wants, Dir root, Options o) async {
     if (!await Console.confirm(question)) throw UsageException('--reset cancelled, nothing deleted.');
   }
   board.apis.addAll(apis.values);
-  await watch(
-    () async {
-      final added = await Future.wait([
-        for (final MapEntry(key: t, value: kinds) in wants.entries)
-          Job(t, kinds, apis[t.platform]!, root.dir(t.platform.code), o).run(),
-      ]);
-      Console.notify('medialoader: ${o.dry ? 'dry run' : 'done'}, ${added.fold(0, (a, b) => a + b)} new files');
-    },
-    close: () => Future.wait([
-      for (final c in [...board.apis, cdn]) c.close(),
-    ]),
-  );
+  await watch(() async {
+    final added = await Future.wait([
+      for (final MapEntry(key: t, value: kinds) in wants.entries)
+        Job(t, kinds, apis[t.platform]!, root.dir(t.platform.code), o).run(),
+    ]);
+    Console.notify('medialoader: ${o.dry ? 'dry run' : 'done'}, ${added.fold(0, (a, b) => a + b)} new files');
+  });
 }
 
 // Every user downloaded into [root] before (it has a .<code>.json), with

@@ -882,11 +882,12 @@ final class Bar with Probe implements Closeable { Bar update(int done, int? tota
 ```dart
 abstract final class Tui {
   static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen,
-      {Color? accent});   // null = monochrome (bold/dim/reverse only); an accent adds colour
+      {Color? accent,     // null = monochrome (bold/dim/reverse only); an accent adds colour
+      Future<void> Function()? work});   // the job the screen watches; no terminal: runs with Console
 }
 final class App<S> {
   void go(S state);  void status(String message);
-  void quit();                                     // run() returns the state; never exit() (raw tty under ssh -t)
+  void quit();                                     // run() returns the state, cancelling work and handlers; never exit() (raw tty under ssh -t)
 }
 final class Screen {
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}});
@@ -952,6 +953,13 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   stream event) delivers, since handlers run in a zone. Spinners animate at 80 ms while visible.
   An idle app uses no CPU.
 - **Alternate screen only.** `Tui` owns the whole terminal and captures the mouse; for scrollback output use `Console`.
+- **A screen over a job.** `Tui.run(state, screen, work: job)` starts `job` once the screen is
+  shown; when it ends the screen stays until the app quits (the job sets the state the screen
+  shows as done). Quitting cancels what the app still has in flight, the job and pending
+  handlers: their toolkit waits fail with `InterruptedException` (as on Ctrl-C, §5, but the script
+  goes on), their `finally` runs, and `run` returns once the job has ended. An error from the job
+  leaves the screen and is rethrown from `run`. With no terminal (piped, `TERM=dumb`) the job runs
+  with no screen, `Console` printing its bars and log, so one call serves both.
 - **One `Binding` map for every event**, in `Screen(keys:)` and `Region.on`: key names (below, plus
   `shift+enter`/`ctrl+enter` where the terminal reports them), `click` `doubleclick` `rightclick`
   `middleclick` `wheelup` `wheeldown`, and `show` `resize` `focus` `blur`. A name may list
@@ -1152,7 +1160,7 @@ keeps catching it. None is an `Error`: an `Error` is a bug.
 | `BrowserException`          | a tab action the page itself fails (click, PDF, download); a `ToolkitException`                                                                                                                                                                                                                       |
 | `SetupException`            | this machine lacks what a call needs: ffmpeg, 7-Zip or Chrome not on PATH and not downloadable here (a compiled exe, an ABI with no pinned build), no `HOME` for the cache; `pool` never retries it |
 | `UsageException` (cli)      | a handler rejects its input, giving exit 64                                                                                                                                                                                                                                                           |
-| `InterruptedException`      | Ctrl-C arrived while the toolkit waited: a program, a request or a body being read, a Chrome call, a pool lane, a prompt, a `>` run or an unpack in flight; `pool` never retries it, `Command.run` gives 130 |
+| `InterruptedException`      | Ctrl-C arrived while the toolkit waited: a program, a request or a body being read, a Chrome call, a pool lane, a prompt, a `>` run or an unpack in flight (or a `Tui.run` quit while its work waited); `pool` never retries it, `Command.run` gives 130 |
 | `ToolkitException`          | the base of the ones above                                                                                                                                                                                                                                                                             |
 | SDK types (kept on purpose) | engine failures pass through (`SocketException`, `TlsException`, `ProcessException`, `FileSystemException`, `StdinException`/`StdoutException`); Dart-idiom guards stay (`ArgumentError`/`RangeError` for bad arguments, `StateError` for protocol misuse, `TimeoutException` for waits that run out) |
 
@@ -1170,7 +1178,7 @@ restore the terminal; plain `dart:io` or timer work in a `finally` gets only tho
 second Ctrl-C stops waiting:
 the hooks run and the process exits 130; a third exits at once. With nothing of the toolkit
 pending, Ctrl-C ends the process as Dart does. Inside `Tui.run` Ctrl-C is a key (it quits the app
-unless bound). `SIGTERM` and `SIGHUP` run the hooks and exit (143, 129) without a `finally`.
+unless bound, which cancels its `work:` the same way without ending the script). `SIGTERM` and `SIGHUP` run the hooks and exit (143, 129) without a `finally`.
 
 ```dart
 try {

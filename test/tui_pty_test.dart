@@ -227,7 +227,54 @@ void main() {
       final t = Term(80, 24)..feed(out.substring(0, out.indexOf('\x1b[?1049l')));
       expect(t.row(0).trimRight(), 'loaded');
     }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('work: starts once shown, the screen stays after it ends, run returns on quit', () async {
+      final (log, bytes, code) = await _pty(mode: 'work', feeds: const [(1.5, 'q')]);
+      expect(log.split('\n'), ['drawn=true', 'work ended', 'returned']);
+      final out = utf8.decode(bytes, allowMalformed: true);
+      final t = Term(80, 24)..feed(out.substring(0, out.indexOf('\x1b[?1049l')));
+      expect(t.row(0).trimRight(), 'worked');
+      expect(code, 0);
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('work: quitting cancels it and a pending handler; the script goes on', () async {
+      final sw = Stopwatch()..start();
+      final (log, _, code) = await _pty(mode: 'workquit', feeds: const [(1.0, 'h'), (1.5, 'q')]);
+      expect(log.split('\n'), ['interrupted', 'finally', 'returned', 'after 0']);
+      expect(code, 0);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 25)), reason: 'nothing waited for sleep 30');
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('work: its error leaves the screen and is rethrown from run', () async {
+      final (log, bytes, code) = await _pty(mode: 'workthrow', feeds: const []);
+      expect(log, 'caught work boom');
+      expect(utf8.decode(bytes, allowMalformed: true), contains('\x1b[?1049l'));
+      expect(code, 0);
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('work: TERM=dumb runs it with Console instead of the screen', () async {
+      final (log, bytes, code) = await _pty(mode: 'workpiped', feeds: const [], env: const {'TERM': 'dumb'});
+      expect(log.split('\n'), ['work ran', 'returned']);
+      final out = utf8.decode(bytes, allowMalformed: true);
+      expect(out, contains('from work'));
+      expect(out, isNot(contains('\x1b[?1049h')));
+      expect(code, 0);
+    }, timeout: const Timeout(Duration(seconds: 60)));
   }, skip: noPty);
+
+  test('work: piped stdout runs it with Console instead of the screen', () async {
+    final root = Directory.current.path;
+    final log = tempFile('tui-workpiped.log');
+    final res = await Process.run(Platform.resolvedExecutable, [
+      '$root/test/tui_pty/probe.dart',
+      log.path,
+      'workpiped',
+    ], workingDirectory: root);
+    expect(res.exitCode, 0, reason: '${res.stderr}');
+    expect((await log.readAsString()).trim().split('\n'), ['work ran', 'returned']);
+    expect('${res.stdout}${res.stderr}', contains('from work'));
+    expect('${res.stdout}', isNot(contains('\x1b[')));
+  }, timeout: const Timeout(Duration(seconds: 60)));
 }
 
 /// Run the probe helper under a real pty; return (log text, terminal bytes).

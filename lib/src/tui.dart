@@ -9,7 +9,7 @@ import 'dart:io' as io;
 import 'dart:isolate';
 import 'dart:math' as math;
 
-import '../core.dart' show ToolkitException;
+import '../core.dart' show InterruptedException, ToolkitException;
 import 'exit.dart' as exit;
 import 'format.dart' as fmt;
 import 'keys.dart' as keys;

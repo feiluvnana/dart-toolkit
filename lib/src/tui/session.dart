@@ -50,7 +50,9 @@ final class App<S> {
   /// A status-row message until the next [status] or error.
   void status(String message) => _s._say(message);
 
-  /// Return the state from [Tui.run] (pending handlers keep running).
+  /// Return the state from [Tui.run]. What the app still has in flight (its
+  /// `work`, handlers) fails its pending toolkit waits with
+  /// `InterruptedException`, as on Ctrl-C, and the script goes on.
   void quit() => _s._quit();
 }
 
@@ -81,11 +83,24 @@ abstract final class Tui {
   /// `go`/`status` and resize; spinners tick every 80 ms. Returns
   /// the state once [App.quit] is called. A second [run] while
   /// one is active throws [StateError]. Throws `StdoutException` when stdout
-  /// is not a terminal. Leave with [App.quit] (and `exitCode` for a status),
+  /// is not a terminal (or `TERM=dumb`). Leave with [App.quit] (and `exitCode` for a status),
   /// never `exit()` in a handler: where dart leads the terminal's session
   /// (`ssh -t host dart app.dart`) the session ends before the terminal is
   /// restored, and it stays raw.
-  static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color? accent}) {
+  ///
+  /// [work] starts once the screen is shown; when it ends the screen stays
+  /// until the app quits. Quitting first cancels it (its pending toolkit
+  /// waits fail with `InterruptedException`, so its `finally` runs) and
+  /// [run] returns once it has ended. An error it throws leaves the screen
+  /// and is rethrown here. With no terminal (piped, `TERM=dumb`) [work]
+  /// runs without a screen, Console printing its bars and log, and [run]
+  /// returns when it ends.
+  static Future<S> run<S>(
+    S state,
+    Screen Function(S state, App<S> app) screen, {
+    Color? accent,
+    Future<void> Function()? work,
+  }) {
     if (_active) throw StateError('Tui.run is already active');
     _active = true;
     final session = _Session<S>(
@@ -94,6 +109,7 @@ abstract final class Tui {
       out: io.stdout.write,
       size: () => (io.stdout.terminalColumns, io.stdout.terminalLines),
       accent: accent,
+      work: work,
     );
     return session._run().whenComplete(() => _active = false);
   }
@@ -144,14 +160,22 @@ final class _WheelEv extends _Ev {
 }
 
 final class _Session<S> implements term.TuiBridge {
-  _Session(this._state, this._screenFn, {required this.out, required this.size, required this.accent});
+  _Session(this._state, this._screenFn, {required this.out, required this.size, required this.accent, this.work});
 
   S _state;
   final Screen Function(S state, App<S> app) _screenFn;
   final void Function(String) out;
   final (int, int) Function() size;
   final Color? accent;
+  final Future<void> Function()? work;
   late final App<S> app = App<S>._(this);
+
+  /// What the app starts (handlers, [work]) runs in this scope: quitting
+  /// cancels its toolkit waits.
+  final _scope = exit.Scope();
+
+  /// [work] running, never failing (its error becomes [_fatal]).
+  Future<void>? _working;
 
   var _w = 80;
   var _h = 24;
@@ -300,15 +324,20 @@ final class _Session<S> implements term.TuiBridge {
   // --- run loop ----------------------------------------------------------
 
   Future<S> _run() async {
-    if (!io.stdout.hasTerminal) {
-      throw const io.StdoutException('no terminal for the TUI: stdout is piped or redirected (use Console for that output, or run in a terminal)');
-    }
-    if (term.TerminalCaps.isDumb(io.Platform.environment)) {
-      throw const io.StdoutException('TERM=dumb takes no escape sequences: no TUI (use Console)');
+    final refused = !io.stdout.hasTerminal
+        ? 'no terminal for the TUI: stdout is piped or redirected (use Console for that output, or run in a terminal)'
+        : term.TerminalCaps.isDumb(io.Platform.environment)
+        ? 'TERM=dumb takes no escape sequences: no TUI (use Console)'
+        : null;
+    if (refused != null) {
+      final work = this.work;
+      if (work == null) throw io.StdoutException(refused);
+      await work();
+      return _state;
     }
     // Handlers run in the redraw zone; the loop itself stays outside it, or
     // its own timers and awaits would wake it forever and starve I/O.
-    runZoned(() => _zone = Zone.current, zoneSpecification: _spec());
+    runZoned(() => _zone = Zone.current, zoneSpecification: _spec(), zoneValues: _scope.values);
     // An error no handler owns (a timer the script started earlier) would
     // print on the alternate screen and vanish with it: it fails the run
     // instead, so its trace lands after the screen is left.
@@ -325,19 +354,42 @@ final class _Session<S> implements term.TuiBridge {
     await _enter();
     try {
       await _loop();
-      return _state;
     } finally {
       Isolate.current
         ..removeErrorListener(uncaught.sendPort)
         ..setErrorsFatal(true);
       uncaught.close();
+      _scope.cancel();
       await _leave();
+      await _working;
     }
+    // The work failed while it wound down.
+    if (_fatal case final e?) Error.throwWithStackTrace(e, _fatalStack ?? StackTrace.empty);
+    return _state;
+  }
+
+  /// Start [work] in the redraw zone, once the screen is shown.
+  void _startWork() {
+    final work = this.work;
+    if (work == null) return;
+    // Listened inside the zone: an error never crosses out of it.
+    _working = _zone!.run(
+      () => Future.sync(work).then(
+        (_) => _dirtyAndWake(),
+        onError: (Object e, StackTrace st) {
+          if (e is InterruptedException && _scope.cancelled) return;
+          _fatal ??= e;
+          _fatalStack ??= st;
+          _wake();
+        },
+      ),
+    );
   }
 
   Future<void> _loop() async {
     _draw();
     _paint();
+    _startWork();
     while (!_quitFlag) {
       if (_fatal != null) {
         final e = _fatal!;
@@ -1086,6 +1138,7 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   void _handlerError(Object e, StackTrace st) {
+    if (e is InterruptedException && _scope.cancelled) return; // quit while it waited
     if (e is Exception) {
       _failStatus(e, st);
     } else {

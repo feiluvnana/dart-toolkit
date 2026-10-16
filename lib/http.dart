@@ -524,6 +524,25 @@ final class _Conn {
       (timeout == null || timeout == this.timeout) && (proxy == null || proxy == this.proxy);
 }
 
+/// One send's own backoffs, rate waits and requests: Ctrl-C or a cancelled
+/// scope stops only these (the send fails with [InterruptedException]),
+/// never the client's other calls; a body being read fails on its own.
+final class _Call {
+  _Call(rate.Halt client) : halt = rate.Halt.under(client);
+
+  final rate.Halt halt;
+  final requests = <HttpClientRequest>{};
+
+  void stop() {
+    halt.fire();
+    for (final req in [...requests]) {
+      try {
+        req.abort(const InterruptedException());
+      } catch (_) {}
+    }
+  }
+}
+
 final class _Client extends Client {
   _Client(this._s, this._conn, [this._parent]) {
     _conn.owners++;
@@ -680,13 +699,15 @@ final class _Client extends Client {
     final uri = _resolve(url, query);
     if (signals.interrupted) return Future.error(const InterruptedException());
     final done = Completer<void>();
+    final call = _Call(_halt);
     final future = signals.interruptible(
-      _run(method, uri, body, headers, check: check, retry429: retry429),
-      stop: _interrupt,
+      _run(method, uri, body, headers, call, check: check, retry429: retry429),
+      stop: call.stop,
     );
     _sends.add(done.future);
     _inFlight++;
     return future.whenComplete(() {
+      call.halt.fire();
       _inFlight--;
       _sends.remove(done.future);
       done.complete();
@@ -695,17 +716,6 @@ final class _Client extends Client {
 
   HttpRequestException _aborted(String method, Uri uri) =>
       HttpRequestException(method, names.redact(uri), RequestFailure.aborted);
-
-  /// Ctrl-C: end the backoffs and the requests in flight (their sends fail
-  /// with [InterruptedException]); a body being read fails on its own.
-  void _interrupt() {
-    _halt.fire();
-    for (final req in [..._requests]) {
-      try {
-        req.abort(const InterruptedException());
-      } catch (_) {}
-    }
-  }
 
   /// Stop before sending again: closed, or interrupted.
   void _stopped(String method, Uri uri) {
@@ -717,7 +727,8 @@ final class _Client extends Client {
     String method,
     Uri uri,
     Body? body,
-    Map<String, String>? headers, {
+    Map<String, String>? headers,
+    _Call call, {
     required bool check,
     required bool retry429,
   }) async {
@@ -735,17 +746,17 @@ final class _Client extends Client {
         final wait = banned && pace != null
             ? rate.ban(pace, server, host: uri.host)
             : retry.backoff(attempt - 1, server);
-        await rate.sleep(wait, _halt);
+        await rate.sleep(wait, call.halt);
         _stopped(method, uri);
       }
       if (pace != null) {
-        await rate.take(pace, _halt, host: uri.host);
+        await rate.take(pace, call.halt, host: uri.host);
         _stopped(method, uri);
       }
       retryAfter = null;
       banned = false;
       try {
-        final res = await _attempt(method, uri, body, sent);
+        final res = await _attempt(method, uri, body, sent, call);
         final code = res.status();
         final again = code == 429 && retry429 || code == 503 || (idempotent && (code == 502 || code == 504));
         if (resendable && again && attempt < _s.retries) {
@@ -779,7 +790,7 @@ final class _Client extends Client {
 
   /// One send plus manual redirect following. Network failures arrive as
   /// [_Failed]; a redirect that cannot be followed throws as-is.
-  Future<Response> _attempt(String method, Uri first, Body? body, Map<String, String> headers) async {
+  Future<Response> _attempt(String method, Uri first, Body? body, Map<String, String> headers, _Call call) async {
     final client = _conn.retain();
     var delivered = false;
     try {
@@ -788,7 +799,7 @@ final class _Client extends Client {
       var currentBody = body;
       var currentHeaders = headers;
       for (var hop = 0; ; hop++) {
-        final resp = await _single(client, currentMethod, uri, currentBody, currentHeaders);
+        final resp = await _single(client, currentMethod, uri, currentBody, currentHeaders, call);
         final setCookie = resp.headers[HttpHeaders.setCookieHeader];
         if (setCookie != null) jar.storeSetCookies(_s.cookies, uri, setCookie);
         final raw = _isRedirect(resp.statusCode) ? resp.headers.value('location') : null;
@@ -851,6 +862,7 @@ final class _Client extends Client {
     Uri uri,
     Body? body,
     Map<String, String> headers,
+    _Call call,
   ) async {
     final limit = _s.timeout;
     TimeoutException noHeaders() => Timeout('no headers for ${limit.human()}', limit);
@@ -865,6 +877,7 @@ final class _Client extends Client {
       throw _aborted(method, uri);
     }
     _requests.add(req);
+    call.requests.add(req);
     _sent++;
     try {
       req.followRedirects = false;
@@ -954,6 +967,7 @@ final class _Client extends Client {
       }
     } finally {
       _requests.remove(req);
+      call.requests.remove(req);
     }
   }
 
@@ -1054,7 +1068,12 @@ final class _Pool extends Client {
       // sending into its ban at once.
       final bench = m._benched?.difference(DateTime.now());
       if (bench != null && bench > Duration.zero) {
-        await signals.interruptible(rate.sleep(bench, m._halt));
+        final halt = rate.Halt.under(m._halt);
+        try {
+          await signals.interruptible(rate.sleep(bench, halt), stop: halt.fire);
+        } finally {
+          halt.fire();
+        }
         if (m._closed) throw m._aborted(method, m._resolve(url, query));
       }
       final res = await m._send(method, url, body: body, query: query, headers: headers, check: false, retry429: false);

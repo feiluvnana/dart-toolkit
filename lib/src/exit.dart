@@ -26,6 +26,11 @@
 /// while the predicate holds, `SIGINT` is delivered to the app's own
 /// handler instead.
 ///
+/// A [Scope] is the same interruption for one piece of work: waits
+/// registered in a zone carrying it fail with [InterruptedException] once it
+/// is cancelled, and new ones there fail at once; the script goes on (`tui`
+/// cancels what a `Tui.run` started when it quits).
+///
 /// Resize (`SIGWINCH`) is not an exit: [onResize] multiplexes the single
 /// `SIGWINCH` subscription. No other file may call `ProcessSignal.watch`.
 library;
@@ -38,7 +43,7 @@ import '../core.dart' show InterruptedException;
 import 'progress.dart' show runGuard;
 
 final _hooks = <Object, (FutureOr<void> Function(), bool)>{};
-final _stops = <Object, void Function()>{};
+final _stops = <Object, (void Function(), Scope?)>{};
 final _resizeCbs = <Object, void Function()>{};
 StreamSubscription<io.ProcessSignal>? _sigintSub;
 StreamSubscription<io.ProcessSignal>? _sigtermSub;
@@ -56,8 +61,48 @@ DateTime? _echoUntil;
 /// How long the toolkit must sit idle after Ctrl-C before the process exits.
 const _quiet = Duration(milliseconds: 50);
 
-/// True once Ctrl-C interrupted the script: outside waits fail at once.
-bool get interrupted => _interrupted;
+/// True once Ctrl-C interrupted the script, or the current zone's [Scope]
+/// was cancelled: outside waits fail at once.
+bool get interrupted => _interrupted || (_scope?.cancelled ?? false);
+
+final _scopeKey = Object();
+
+Scope? get _scope => Zone.current[_scopeKey] as Scope?;
+
+/// Toolkit waits that can be cancelled together, as Ctrl-C cancels all:
+/// run the work in a zone with [values] (a scope made inside another is
+/// cancelled with it too).
+final class Scope {
+  Scope() : _parent = _scope;
+
+  final Scope? _parent;
+  var _cancelled = false;
+
+  /// The zone values that put work in this scope.
+  late final Map<Object?, Object?> values = {_scopeKey: this};
+
+  bool get cancelled => _cancelled || (_parent?.cancelled ?? false);
+
+  bool _within(Scope scope) => identical(this, scope) || (_parent?._within(scope) ?? false);
+
+  /// Fail every wait registered in this scope with [InterruptedException];
+  /// later ones in it fail at once. The rest of the script is untouched.
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    final mine = [
+      for (final MapEntry(:key, value: (_, scope)) in _stops.entries)
+        if (scope != null && scope._within(this)) key,
+    ];
+    for (final token in mine) {
+      final stop = _stops.remove(token);
+      try {
+        stop?.$1();
+      } catch (_) {}
+    }
+    _maybeUninstall();
+  }
+}
 
 /// True when this process shares a terminal, so the terminal's Ctrl-C
 /// reaches its children too. (`stdin.hasTerminal` says yes for any
@@ -98,7 +143,7 @@ void offExit(Object token) {
 /// [interrupted] first: once interrupted, a new wait fails at once.
 Object onInterrupt(void Function() stop) {
   final token = Object();
-  _stops[token] = stop;
+  _stops[token] = (stop, _scope);
   _install();
   return token;
 }
@@ -113,7 +158,7 @@ void offInterrupt(Object token) {
 /// (after [stop], which ends the work; its later outcome is dropped). Once
 /// interrupted, fails at once.
 Future<T> interruptible<T>(Future<T> work, {void Function()? stop}) {
-  if (_interrupted) {
+  if (interrupted) {
     work.ignore();
     try {
       stop?.call();
@@ -144,7 +189,7 @@ Future<T> interruptible<T>(Future<T> work, {void Function()? stop}) {
 /// on Ctrl-C while it is read. Listened after Ctrl-C, an [outside] source
 /// (a program) fails at once; any other (a write saving state) runs.
 Stream<T> guard<T>(Stream<T> source, {bool outside = false}) {
-  if (_interrupted && !outside) return source;
+  if (interrupted && !outside) return source;
   late final StreamController<T> out;
   StreamSubscription<T>? sub;
   Object? token;
@@ -157,7 +202,7 @@ Stream<T> guard<T>(Stream<T> source, {bool outside = false}) {
   out = StreamController<T>(
     sync: true,
     onListen: () {
-      if (_interrupted) {
+      if (interrupted) {
         if (!outside) {
           sub = source.listen(out.add, onError: out.addError, onDone: out.close);
           return;
@@ -304,7 +349,7 @@ void _interrupt() {
   _interrupted = true;
   io.exitCode = 130;
   _quietUncaught();
-  final stops = List<void Function()>.of(_stops.values);
+  final stops = [for (final (stop, _) in _stops.values) stop];
   _stops.clear();
   for (final stop in stops) {
     try {
