@@ -249,7 +249,9 @@ void main() {
       });
       final b = await Chrome.connect('ws://127.0.0.1:${proxy.port}/');
       final page = await b.open(dataUrl('<a id="d" href="$base/file">get it</a>'));
-      final folder = Directory((await page.download('#d')).origin().path()!).parent;
+      final download = await page.download('#d');
+      await download.bytes(); // the path is known once the browser finishes
+      final folder = Directory(download.origin().path()!).parent;
       await b.close();
       expect(
         [
@@ -415,10 +417,17 @@ void main() {
       final c = await captured;
       expect((c.status(), c.header('X-Kind')), (200, 'data'));
       expect(c.url(), '$base/api/graphql/query?q=1');
+      expect(c.name(), 'query', reason: "named like a Response: the URL's last segment");
       expect(await c.text(), '{"user":{"pk":42}}');
       expect(await page.cookie('sid', timeout: 5.seconds), 'late');
       await expectLater(page.cookie('never', timeout: 300.milliseconds), throwsA(isA<TimeoutException>()));
       await page.close();
+    });
+
+    test('BrowserException is an Exception and a ToolkitException, never an Error', () {
+      final e = BrowserException('click missed', selector: '#a');
+      expect(e, isA<Exception>().having((x) => x, 'is Error', isNot(isA<Error>())));
+      expect(e, isA<ToolkitException>().having((x) => x.message, 'message', 'click missed'));
     });
 
     test('closing the tab during cookie() or wait() is BrowserException', () async {
@@ -718,8 +727,10 @@ void main() {
       expect(await download.text(), 'download-me');
       final dir = await Directory.systemTemp.createTemp('chrome_dl');
       try {
-        await (download > Fs.file('${dir.path}/${download.name()}'));
+        final m = Meter();
+        await (download & m > Fs.file('${dir.path}/${download.name()}'));
         expect(await Fs.file('${dir.path}/hello.txt').text(), 'download-me');
+        expect((m.done(), m.total()), (11, 11), reason: "a probe hears the browser's bytes");
       } finally {
         await dir.delete(recursive: true);
       }
@@ -761,13 +772,13 @@ void main() {
       );
       await expectLater(
         page.click('#off'),
-        throwsA(isA<StateError>().having((e) => e.message, 'message', contains('#off'))),
+        throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('#off'))),
       );
       await page.close();
       final sw = Stopwatch()..start();
       await expectLater(
         page.wait('#x', timeout: const Duration(seconds: 20)),
-        throwsA(isA<StateError>().having((e) => e.message, 'message', contains('#x'))),
+        throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('#x'))),
       );
       expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
     });

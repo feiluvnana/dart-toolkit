@@ -396,17 +396,18 @@ Future<void> main() async {
       expect(jar.headerFor(c, Uri.parse('https://me.github.io/')), 'mine=1');
     });
 
-    test('Cookies.load reads a session file with its user-agent; a missing file is empty', () async {
+    test('reader.cookies() reads a session file with its user-agent; or: answers a missing one', () async {
       final dir = await temp();
       final f = '${dir.path}/.session';
       await File(f).writeAsString(
         '# Netscape HTTP Cookie File\nuser-agent: Mozilla/5.0 Test\n127.0.0.1\tFALSE\t/\tFALSE\t0\tsid\tS1\n',
       );
-      final session = await Cookies.load(_File(f));
+      final session = await _File(f).cookies(or: Cookies());
       expect([session['sid'], session.agent()], ['S1', 'Mozilla/5.0 Test']);
       expect(Cookies.parse(session.encode()).agent(), 'Mozilla/5.0 Test');
-      final none = await Cookies.load(_File('${dir.path}/missing'));
+      final none = await _File('${dir.path}/missing').cookies(or: Cookies());
       expect([none.agent(), none.encode().split('\n').length], [null, 1]);
+      await expectLater(_File('${dir.path}/missing').cookies(), throwsA(isA<PathNotFoundException>()));
       // The client sends the jar's user-agent unless a header names one.
       expect(await Http.client(cookies: session).get('$url/ua').text(), 'Mozilla/5.0 Test');
       expect(await Http.client(cookies: session, headers: {'User-Agent': 'mine'}).get('$url/ua').text(), 'mine');

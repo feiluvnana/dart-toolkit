@@ -23,10 +23,6 @@ final class Twitter extends Platform {
   @override
   final kinds = const [Kind.posts, Kind.profiles];
 
-  // Runs before categories were shared kept tweets in tweets/.
-  @override
-  final renamed = const {'tweets': Kind.posts};
-
   @override
   final loginCookies = const {'auth_token'};
 
@@ -136,8 +132,8 @@ Future<Profile> profile(Client api, String name) async {
     api.get(
       '/i/api/graphql/ck5KkZ8t5cOmoLssopN99Q/UserByScreenName',
       query: {
-        'variables': Json.encode({'screen_name': name, 'withSafetyModeUserFields': true}),
-        'features': Json.encode({
+        'variables': {'screen_name': name, 'withSafetyModeUserFields': true},
+        'features': {
           'hidden_profile_subscriptions_enabled': true,
           'rweb_tipjar_consumption_enabled': true,
           'responsive_web_graphql_exclude_directive_enabled': true,
@@ -149,8 +145,8 @@ Future<Profile> profile(Client api, String name) async {
           'creator_subscriptions_tweet_preview_api_enabled': true,
           'responsive_web_graphql_skip_user_profile_image_extensions_enabled': false,
           'responsive_web_graphql_timeline_navigation_enabled': true,
-        }),
-        'fieldToggles': Json.encode({'withAuxiliaryUserLabels': true}),
+        },
+        'fieldToggles': {'withAuxiliaryUserLabels': true},
       },
     ),
   );
@@ -199,7 +195,7 @@ Future<Page> mediaTimeline(Client api, String userId, String? cursor) async {
     api.get(
       '/i/api/graphql/jCRhbOzdgOHp6u9H4g2tEg/UserMedia',
       query: {
-        'variables': Json.encode({
+        'variables': {
           'userId': userId,
           'count': 20,
           'cursor': ?cursor,
@@ -207,9 +203,9 @@ Future<Page> mediaTimeline(Client api, String userId, String? cursor) async {
           'withClientEventToken': false,
           'withBirdwatchNotes': false,
           'withVoice': true,
-        }),
-        'features': Json.encode(_features),
-        'fieldToggles': Json.encode({'withArticlePlainText': false}),
+        },
+        'features': _features,
+        'fieldToggles': {'withArticlePlainText': false},
       },
     ),
   );
@@ -225,13 +221,8 @@ Future<Json> tweet(Client api, String id) async {
     api.get(
       '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
       query: {
-        'variables': Json.encode({
-          'tweetId': id,
-          'withCommunity': false,
-          'includePromotedContent': false,
-          'withVoice': false,
-        }),
-        'features': Json.encode(_features),
+        'variables': {'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false},
+        'features': _features,
       },
     ),
   );

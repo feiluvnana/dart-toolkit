@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import '../shell.dart';
 import 'cache.dart' as cache;
 import 'posix.dart' as posix;
+import 'quiet.dart';
 import 'tool.dart';
 
 // ── running ───────────────────────────────────────────────────────────────
@@ -52,23 +53,30 @@ Future<List<int>> ffmpeg(
   void Function(int done, int? total)? onProgress,
 }) async {
   final exe = await tool(Tool.ffmpeg, needs: needs);
+  final command = [exe, '-hide_banner', '-nostdin', '-loglevel', 'error'];
   return _slot(() async {
-    final progress = onProgress == null ? const <String>[] : const ['-progress', 'pipe:1', '-stats_period', '0.25'];
-    final out = await Shell.run(
-      [exe, '-hide_banner', '-nostdin', '-loglevel', 'error', ...progress, ...args],
-      onLine: onProgress == null
-          ? null
-          : (line) {
-              if (line.startsWith('out_time_us=')) {
-                final us = int.tryParse(line.substring(12));
-                if (us != null && us >= 0) onProgress(total == null ? us : math.min(us, total), total);
-              } else if (line == 'progress=end' && total != null) {
-                onProgress(total, total);
-              }
-            },
-    );
-    if (!out.ok()) throw ContentException('ffmpeg failed: ${toolTail(out.err())}');
-    return out.bytes();
+    if (onProgress == null) {
+      final out = await Shell.run([...command, ...args]);
+      if (!out.ok()) throw ContentException('ffmpeg failed: ${toolTail(out.err())}');
+      return out.bytes();
+    }
+    // Progress lines on stdout as ffmpeg writes them; its stderr is kept
+    // for the error, never shown.
+    final read = Shell.read([...command, '-progress', 'pipe:1', '-stats_period', '0.25', ...args]);
+    quiet[read] = true;
+    try {
+      await for (final line in read.lines()) {
+        if (line.startsWith('out_time_us=')) {
+          final us = int.tryParse(line.substring(12));
+          if (us != null && us >= 0) onProgress(total == null ? us : math.min(us, total), total);
+        } else if (line == 'progress=end' && total != null) {
+          onProgress(total, total);
+        }
+      }
+    } on ExitException catch (e) {
+      throw ContentException('ffmpeg failed: ${toolTail(e.message.replaceFirst(RegExp(r'^exit -?\d+: '), ''))}');
+    }
+    return const <int>[];
   });
 }
 

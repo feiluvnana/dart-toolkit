@@ -44,7 +44,7 @@ final class Queue {
     } catch (e) {
       part
         ..failed += 1
-        ..bytes -= t.done;
+        ..stored -= t.meter.done();
       board.fail('✗ @${j.u.name} ${t.path}: $e', () async {
         part
           ..failed -= 1
@@ -64,13 +64,14 @@ final class Queue {
     }
     if (f.text case final text?) {
       await f.to.write(text);
-      t.part.bytes += utf8.encode(text).length;
+      t.part.stored += utf8.encode(text).length;
     } else {
       var shown = '';
       try {
         await _lanes.run(() {
           board.transfers.add(t);
-          return cdn.get(f.url!, headers: {'referer': '${j.platform.site}/'}) | board.speed | t.speed | Pipe.tap(t.update) > f.to;
+          return cdn.get(f.url!, headers: {'referer': '${j.platform.site}/'}) & board.meter & t.part.meter & t.meter >
+              f.to;
         });
         shown = await _compress(f, t);
       } finally {
@@ -88,15 +89,18 @@ final class Queue {
     final path = f.to.path();
     final video = const {'mp4', 'mov', 'webm', 'mkv'}.contains(path.split('.').last.toLowerCase());
     final quality = video ? o.video : o.image;
-    final downloaded = t.done.size();
+    final downloaded = t.meter.done().size();
     if (quality == null) return downloaded;
-    t.status = 'compressing';
+    // A video shows its encode in the transfer's row; an image is quick.
+    if (!video) t.status = 'compressing';
     try {
-      switch (video ? await Video.compress(path, quality: quality) : await Image.compress(path, quality: quality)) {
+      switch (video
+          ? await (Video.compress(path, quality: quality) & (t.meter = Meter()))
+          : await Image.compress(path, quality: quality)) {
         case Kept(:final reason):
           return '$downloaded (kept: ${reason.text})';
         case Compressed(:final before, :final after):
-          t.part.bytes += after - before;
+          t.part.stored += after - before;
           return '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
       }
     } on ToolkitException catch (e) {

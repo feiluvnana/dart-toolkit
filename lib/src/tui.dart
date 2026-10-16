@@ -14,6 +14,8 @@ import 'exit.dart' as exit;
 import 'format.dart' as fmt;
 import 'keys.dart' as keys;
 import 'pixels.dart';
+import 'progress.dart' show Meter;
+import 'progress.dart' as progress show paceOf, unitOf;
 import 'terminal.dart' as term;
 import 'terminal.dart' show Color;
 

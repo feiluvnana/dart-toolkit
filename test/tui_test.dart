@@ -608,7 +608,7 @@ void main() {
           final top = r.tabs(tabs, (x) => x);
           final [a, b] = top.rows([0, 2]);
           a.table(rows, (v) => ['n$v', 'v$v'], header: ['#', 'v']);
-          b.bar(3, 10, label: 'up');
+          b.bar(Meter()..update(3, 10), label: 'up');
           r.spin('work');
         }),
         width: 30,
@@ -621,15 +621,17 @@ void main() {
       expect(t.row(9), contains('up'));
     });
 
-    test('bar(bytes: true) shows sizes', () async {
+    test('bar of a meter watching bytes shows sizes', () async {
+      final m = Meter();
+      await (Reader.of(List<int>.filled(1536, 0)) & m > null);
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) => r.bar(1536, 4096, label: 'f', bytes: true)),
+        (s, app) => Screen((r) => r.bar(m, label: 'f')),
         width: 50,
         height: 4,
       );
       await t.pump();
-      expect(t.row(0), contains('1.5 KB/4.0 KB'));
+      expect(t.row(0), contains('1.5 KB/1.5 KB'));
     });
 
     test('say shows until the next error', () async {
@@ -1009,7 +1011,7 @@ void main() {
   });
 
   group('Console inside run (in-memory)', () {
-    test('spin and bar draw in the status row, several at once', () async {
+    test('a watched future and a bar draw in the status row, several at once', () async {
       final done = Completer<void>();
       Bar? bar;
       final t = testSession<int>(
@@ -1017,11 +1019,11 @@ void main() {
         (s, app) => Screen(
           (r) {},
           keys: {
-            'a': ('', () => Console.spin('searching', done.future)),
+            'a': ('', () => done.future & Console.bar('searching')),
             'b': (
               '',
               () {
-                bar = Console.bar(4, label: '↓ ch.1')..tick();
+                bar = Console.bar('↓ ch.1', total: 4)..tick();
               },
             ),
           },
@@ -1043,11 +1045,11 @@ void main() {
       t.close();
     });
 
-    test('a failing spin shows ✗ label', () async {
+    test('a failing watched future shows ✗ label', () async {
       final t = testSession<int>(
         0,
         (s, app) =>
-            Screen((r) {}, keys: {'a': ('', () => Console.spin('loading', Future<void>.error(Exception('down'))))}),
+            Screen((r) {}, keys: {'a': ('', () => Future<void>.error(Exception('down')) & Console.bar('loading'))}),
         width: 40,
         height: 3,
       );
@@ -1124,7 +1126,7 @@ void main() {
             'c': (
               '',
               () async {
-                pick = await Console.choose('which?', ['one', 'two']);
+                pick = await Console.choose('which?', ['one', 'two'], (s) => s);
               },
             ),
             'e': (
@@ -1299,7 +1301,7 @@ void main() {
             'c': (
               '',
               () async {
-                picks.add((await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i']))!);
+                picks.add((await Console.choose<String>('which?', [for (var i = 0; i < n; i++) 'item$i'], (s) => s))!);
               },
             ),
           },
@@ -2256,7 +2258,7 @@ void main() {
           (s, app) => Screen((r) {
             final [a, b] = r.rows([3, 0]);
             a.box('t');
-            b.bar(1, 2).spin('w');
+            b.bar(Meter()..update(1, 2)).spin('w');
           }),
           width: 12,
           height: 6,
@@ -2555,8 +2557,8 @@ void main() {
             (r) {},
             keys: {
               'e': ('', () => throw Exception('boom')),
-              's': ('', () => Console.spin('working', done.future)),
-              'b': ('', () => Console.bar(3, label: 'dl')),
+              's': ('', () => done.future & Console.bar('working')),
+              'b': ('', () => Console.bar('dl', total: 3)),
             },
           );
         },
@@ -2594,7 +2596,7 @@ void main() {
       Bar? bar;
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.bar(4, label: '↓ ch')..tick(2))}),
+        (s, app) => Screen((r) {}, keys: {'b': ('', () => bar = Console.bar('↓ ch', total: 4)..tick(2))}),
         width: 60,
         height: 3,
       );
@@ -2759,13 +2761,15 @@ void main() {
       t.close();
     });
 
-    test('bar keeps to one row in a narrow region; rate: shows the rate', () async {
+    test('bar keeps to one row in a narrow region; a counted meter shows its rate', () async {
+      final bytes = Meter();
+      await (Reader.of(List<int>.filled(4096, 0)) & bytes > null);
       final t = testSession<int>(
         0,
         (s, app) => Screen((r) {
-          r.bar(5, 10, label: 'a label far too long for the row');
+          r.bar(Meter()..update(5, 10), label: 'a label far too long for the row');
           r.write('below');
-          r.bar(2048, 4096, bytes: true, rate: 1024);
+          r.bar(bytes);
         }),
         width: 30,
         height: 4,

@@ -405,7 +405,7 @@ void main() {
       final doc = Html.parse('<div><p><a href="/x">t</a></p></div>');
       final f = Future.value(doc.$('div')[0]);
       expect((await f.$('a')).length, 1);
-      expect(await f.html(), '<div><p><a href="/x">t</a></p></div>');
+      expect(await f.markup(), '<div><p><a href="/x">t</a></p></div>');
       expect(await f.text(), contains('t'));
       expect(await f.$('a').attr('href'), '/x');
       expect(await f.parent(), isNull);
@@ -697,14 +697,14 @@ void main() {
         '<div class="a&quot;b" id=x>1 &lt; 2 &amp; 3 <br><script>if (a < b) {}</script><img src=i.png></div>',
       );
       expect(
-        doc.$('div')[0].html(),
+        doc.$('div')[0].markup(),
         '<div class="a&quot;b" id="x">1 &lt; 2 &amp; 3&nbsp;<br><script>if (a < b) {}</script><img src="i.png"></div>',
       );
-      expect(doc.$('br').html(), '<br>');
-      expect(doc.$('nope').html(), '');
-      expect(Html.parse('loose <b>t</b>').html(), 'loose <b>t</b>');
+      expect(doc.$('br').markup(), '<br>');
+      expect(doc.$('nope').markup(), '');
+      expect(Html.parse('loose <b>t</b>').markup(), 'loose <b>t</b>');
       final deep = Html.parse('${'<i>' * 20000}x');
-      expect(deep.$('i')[0].html(), hasLength(20000 * 7 + 1));
+      expect(deep.$('i')[0].markup(), hasLength(20000 * 7 + 1));
     });
 
     test('html exports json: chains reach Json with one import', () async {

@@ -2,7 +2,7 @@
 /// isolates for CPU work; results in input order. Pure `dart:isolate`.
 ///
 /// ```dart
-/// await Pool.map(urls, fetchPage, onDone: bar.tick);                     // 4 lanes, fail fast
+/// await (Pool.map(urls, fetchPage) & Console.bar('pages'));             // 4 lanes, fail fast; 12/40
 /// final done = await Pool.settle(files, (f) => cdn.get(f.url) > f.to);   // never throws
 /// for (final Failed(:item, :error) in done.failures()) Console.log('✗ $item: $error');
 /// final thumbs = await Pool.map(paths, makeThumb, isolates: true);       // CPU work
@@ -14,7 +14,8 @@
 /// - `Pool.map()` fails fast: the first error is rethrown with its type and
 ///   stack once the jobs in flight finish.
 /// - `Pool.settle()` never throws: one [Outcome] per item, in input order.
-/// - Both take `limit` `retries` `rate` `isolates` `onDone`.
+/// - Both take `limit` `retries` `rate` `isolates`, and return a [Task]
+///   that counts the items done: watch it with `&`.
 /// - `Pool(limit:)` holds lanes that any number of calls share:
 ///   `pool.run(job)` waits for a free lane, first come first served.
 /// Nothing stays running between calls, so nothing needs closing.
@@ -28,6 +29,8 @@ import 'dart:io' as io;
 import 'dart:isolate';
 
 import 'core.dart';
+import 'src/format.dart' show Unit;
+import 'src/progress.dart' show Run, task;
 import 'src/rate.dart' as rate;
 import 'src/retry.dart' as retry;
 
@@ -45,8 +48,8 @@ import 'src/retry.dart' as retry;
 ///   function or a closure over plain data). A value that cannot cross is an
 ///   [ArgumentError] naming the item; an `ArgumentError` the job itself
 ///   throws stays as it is.
-/// - [onDone] runs after every job, success or failure, so a bar's
-///   `onDone: bar.tick` tear-off fits.
+/// - Both return a [Task] counting the items done, success or failure:
+///   `Pool.map(urls, fetch) & Console.bar('pages')`.
 ///
 /// A held `Pool(limit: n)` is the same limit across calls that start at
 /// different times (a download queue fed by several crawlers): [run] waits
@@ -81,16 +84,15 @@ final class Pool {
   /// Run [job] over every item, results in input order. The first error
   /// stops new jobs, waits for those in flight, and is rethrown with its
   /// original type and stack.
-  static Future<List<R>> map<T, R>(
+  static Task<List<R>> map<T, R>(
     Iterable<T> items,
     FutureOr<R> Function(T item) job, {
     int? limit,
     int retries = 0,
     Rate? rate,
     bool isolates = false,
-    void Function()? onDone,
-  }) async {
-    final out = await _run(items, job, limit, retries, rate, isolates, onDone, failFast: true);
+  }) => task((run) async {
+    final out = await _run(items, job, limit, retries, rate, isolates, run, failFast: true);
     return [
       for (final o in out)
         switch (o) {
@@ -98,20 +100,19 @@ final class Pool {
           Failed(:final error, :final stack) => Error.throwWithStackTrace(error, stack),
         },
     ];
-  }
+  });
 
   /// Run [job] over every item and never throw: one [Outcome] per item, in
   /// input order, each carrying its item, because "which one failed" is the
   /// first question.
-  static Future<List<Outcome<T, R>>> settle<T, R>(
+  static Task<List<Outcome<T, R>>> settle<T, R>(
     Iterable<T> items,
     FutureOr<R> Function(T item) job, {
     int? limit,
     int retries = 0,
     Rate? rate,
     bool isolates = false,
-    void Function()? onDone,
-  }) => _run(items, job, limit, retries, rate, isolates, onDone, failFast: false);
+  }) => task((run) => _run(items, job, limit, retries, rate, isolates, run, failFast: false));
 
   static Future<List<Outcome<T, R>>> _run<T, R>(
     Iterable<T> items,
@@ -120,10 +121,12 @@ final class Pool {
     int retries,
     Rate? pace,
     bool isolates,
-    void Function()? onDone, {
+    Run run, {
     required bool failFast,
   }) async {
     final list = items.toList();
+    var finished = 0;
+    run.report(0, list.length, Unit.items);
     if (list.isEmpty) return []; // before the checks: `limit: items.length` is fine on an empty batch
     if (limit != null && limit < 1) throw ArgumentError.value(limit, 'limit', 'must be at least 1');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
@@ -177,7 +180,7 @@ final class Pool {
           failed = true;
           if (failFast) halt.fire();
         }
-        onDone?.call();
+        run.report(++finished, list.length, Unit.items);
       }
     }
 

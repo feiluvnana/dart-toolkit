@@ -3,8 +3,8 @@
 **Write the script you would write in a shell, in Dart, with types.** dart_toolkit is sixteen
 small modules (plus `core`) for command-line automation: fetch, drive a browser, move files, run
 programs, archive, hash, prompt, and draw a terminal UI. Each module is a thin facade over its
-engine (`dart:io`, a pinned native tool, or an in-house parser), and every module speaks the same four interfaces, so the bytes flow between them like a
-pipe in a shell.
+engine (`dart:io`, a pinned native tool, or an in-house parser), and every module speaks the same five interfaces, so the bytes flow between them like a
+pipe in a shell, and everything that takes time can be watched the same way.
 
 ```dart
 final http = Http.client(retries: 3, check: true);
@@ -12,9 +12,10 @@ final title = await http.get('https://example.com').html().$('title').text();
 final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 await (Fs.file('photo.jpg').image().resize(width: 800).encode(.jpg) > Fs.file('thumb.jpg'));
 
-final iso = await http.get(isoUrl), hash = Hash.sha256();
-await (iso | Console.bar(iso.size(), label: iso.name()) | hash > Fs.file(iso.name()));
+final hash = Hash.sha256();
+await (http.get(isoUrl) & Console.bar('ubuntu.iso') | hash > Fs.file('ubuntu.iso'));   // the bar learns the size
 await http.post(api, body: .json({'sha256': hash.hex()}));
+await (Pool.map(urls, fetch) & Console.bar('pages'));                                // anything long: & a probe
 
 final page = await Chrome.launch().open('https://example.com/report').click('#accept').idle();
 await (page.pdf() > Fs.file('report.pdf'));
@@ -24,6 +25,11 @@ await (page.pdf() > Fs.file('report.pdf'));
 release scripts, file shufflers, terminal apps. These are not servers or Flutter apps. The bar for
 the library is set by real scripts (`projects/`): every workaround a script needs is a gap in the
 library.
+
+**Four patterns are the whole style.** READ: `source.reading()` (`get(u).json()`). FLOW:
+`reader | pipe & probe > writer`: `|` changes bytes, `&` watches, `>` stores. WATCH: `work &
+probe` on a `Task` or any future. ACT: `receiver.action(…)` with named options. Every member
+below is one of these.
 
 **Priorities, in order:** correct → fast (startup and throughput) → short at the call site (fewer steps, not clipped names) → small
 surface. A member stays only when a real script needs it, and an addition must delete more code
@@ -35,7 +41,7 @@ at its call sites than it adds to the surface.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type.                                                                                                                                                                                                                                                 |
 | 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. The exceptions are the unit literals `3.seconds`, `1.5.minutes` (`Durations` on `num`), which spell a constant, and `DateTime.format(…)` / `Duration.human()` (`Times`, `Spans`), which render a value for a person; none reads toolkit state. Sealed results and exceptions (`Compressed`, `Kept`, `Outcome`, `HttpStatusException`) carry public final fields on purpose: they are matched with patterns (`case Kept(:final reason)`). Each library doc says `Public surface is exactly: …`.                          |
-| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). |
+| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through), `&` (watch) and `>` (pipe into). |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name.                                                                                                                                                                                                                         |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                                                                                                                                                                                                                                                                   |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                                                                                                                                                                                                                                                                   |
@@ -47,8 +53,15 @@ at its call sites than it adds to the surface.
 | 12  | **`close()` releases a resource and is idempotent.** Whatever holds a process, socket, terminal or isolate cleans up on `close()`, on an error, and on Ctrl-C. Nothing keeps a finished script alive.                                                                                                                                                                                                                                                                                       |
 | 13  | **Engines stay private and swappable.** An engine type never appears in a public signature, and engine exceptions are rethrown as Dart's own (§5). Tests use real servers, files, browsers and pseudo-terminals, never the engine, so a swap is proven by the same suite.                                                                                                                                                                                                                   |
 | 14  | **No code generation, no linked native code.** Native tools (ffmpeg) are downloaded on first use, pinned by sha256, and run as processes. Dart 3.10+ (dot shorthands: `encode(.jpg)`, `archive(paths, format: .tgz)`). |
+| 15  | **Watching is `&`, never a parameter.** Long work returns a `Task` (`Pool.map`, `Dir.copy`, `Video.compress`, `Shell.run`); a reader is watched as it flows; any other future shows a spinner. A probe shows the whole run it is in, so where it sits never matters. |
+| 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onItem`, `onError`, `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
+| 17  | **Content moves with `>`; in-memory values use a method** (`file.write('text')`, `hash.add('text')`, `Body.json(v)`). Entries move with `copy`/`move` (modes and times kept); content with `>`. |
+| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `Csv`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source; streaming ones (`lines` `rows` `ndjson`) do not. |
+| 19  | **A check is `check()` on the value** (`Response`, `Output`); `check:` is only a client-wide policy. One door in per value: content becomes a value through a reading; a static `open` is only for what has no bytes (an HLS URL). |
+| 20  | **The main input is positional, and the text a call shows is a main input** (`ask(question)`, `bar(label)`, `key(prompt)`). A function that renders an item is positional after the items (`choose(q, items, (u) => u.name)`, `Region.list(pick, (u) => u.name)`). Calls of one kind take the same options: every prompt takes `or:` and `timeout:`. |
+| 21  | **Failures are `Exception`s; `Error`s are bugs.** No toolkit failure extends an `Error`. |
 
-## 2. Core: Reader, Writer, Pipe, Closeable
+## 2. Core: Reader, Writer, Pipe, Probe, Closeable
 
 `core.dart` is re-exported by every module except `cli` and `tui`, which use only `ToolkitException` from it.
 
@@ -58,7 +71,9 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   Future<List<int>> bytes();
   Future<String> text();                          // UTF-8, malformed bytes replaced
   Stream<String> lines();                         // the same, line by line as it arrives
+  Future<Cookies> cookies({Cookies? or});         // a cookies.txt session; or: when missing
   Reader operator |(Pipe? pipe);                   // lazy; null = skip
+  Reader operator &(Probe? probe);                 // watched; null = skip
   Future<void> operator >(Writer? w);              // run; null = discard
   Origin origin();                                // where the bytes came from (the base for `html()`)
   static Reader of(List<int> bytes);
@@ -66,26 +81,28 @@ abstract mixin class Reader {                     // bytes you can read; impleme
 abstract mixin class Writer { Future<void> consume(Stream<List<int>> input);  Origin origin(); }   // origin: a File's path
 final class Cookies {                             // the jar chrome produces and http consumes
   Cookies({String? agent});  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line)
-  static Future<Cookies> load(Reader source);     // a session file; missing = empty jar
   String? operator [](String name);  String? header(String url);  String? agent();  Cookies set(String name, String value, {required String url});
 }
 final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait, bool perHost = false});  Future<void> wait(); }
 extension Durations on num { Duration get milliseconds, seconds, minutes, hours, days; }   // 3.seconds, 1.5.minutes
-abstract mixin class Pipe { Stream<List<int>> transform(Stream<List<int>> input);  void abort(Object error) {}
-  static Pipe tap(void Function(int done, int? total) onProgress); }   // pass-through progress probe; resumable
+abstract mixin class Pipe { Stream<List<int>> transform(Stream<List<int>> input);  void abort(Object error) {} }
+abstract mixin class Probe { void update(int done, int? total); }   // watches; attach with &
+final class Task<T> implements Future<T> { Task<T> operator &(Probe? probe); }   // a future that counts
+extension Watch<T> on Future<T> { Future<T> operator &(Probe? probe); }       // any future: a spinner
+final class Meter with Probe { Meter();  int done();  int? total();  double rate(); }   // a probe to draw by hand
 abstract interface class Closeable { Future<void> close(); }
-final class Origin { const Origin({String? url, int? status, String? name, String? path});  String? url();  int? status();  String? name();  String? path(); }
+final class Origin { const Origin({String? url, int? status, String? name, String? path, int? size});  String? url();  int? status();  String? name();  String? path();  int? size(); }
 ```
 
 | Type                                                               | Reader | Writer | Pipe | Closeable |
 | ------------------------------------------------------------------ | :----: | :----: | :--: | :-------: |
 | `Response` (http)                                                  |   ✓    |        |      |     ✓     |
 | `File` (fs)                                                        |   ✓    |   ✓    |      |           |
-| `Output` (shell), `Download` `Capture` (chrome), `Request` (http)  |   ✓    |        |      |           |
+| `Output` `Shell.read()` (shell), `Download` `Capture` (chrome), `Request` (http), `Console.input()` |   ✓    |        |      |           |
 | `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` |   ✓    |        |      |           |
-| `Archive.unarchive(dir)`                                           |        |   ✓    |      |           |
+| `Archive.unarchive(dir)`, `Console.out()`                           |        |   ✓    |      |           |
 | `Hasher`                                                           |        |   ✓    |  ✓   |           |
-| `Bar` (console)                                                    |        |        |  ✓   |     ✓     |
+| `Bar` (console; a `Probe`)                                         |        |        |      |     ✓     |
 | `Archive.gzip()` `gunzip()`, `Shell.filter()`                      |        |        |  ✓   |           |
 | `Browser`, `Page`                                                  |        |        |      |     ✓     |
 
@@ -96,7 +113,19 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 - `a | p` builds a new `Reader`; nothing flows yet. `a > w` runs everything and completes when
   `w` has stored the last byte.
 - `a | p | q > w` groups like a shell; wrap the chain in `await (…)`.
-- Null stages make optional steps inline: `res | (quiet ? null : bar) | (verify ? hash : null) > (dry ? null : file)`.
+- Null stages make optional steps inline: `res & (quiet ? null : bar) | (verify ? hash : null) > (dry ? null : file)`.
+- **Probes (`&`).** A probe shows the run it is in, wherever it sits: the source's bytes against
+  the source's length (`Origin.size()`, or a file's stat: learned, never passed), still after a
+  transforming pipe (a bar after gzip reaches 100%); the work a source reports before its bytes
+  exist (an encode in media time, a 7z built by 7-Zip); then the work a writer reports after its
+  input (7-Zip extracting a big 7z). Counting happens once at the root, so probes cost nothing
+  per chunk. One probe used by many runs sums them. Units (bytes, items, media time) stay
+  private; a hand-written `Probe` hears `(done, total)`.
+- **`Task`s.** Long work that is not a flow returns a `Task`: `Pool.map`/`settle` count items,
+  `copy`/`move` bytes, `Dir.list` entries, `Video.compress` media time, `Shell.run` nothing (a
+  spinner). Probes attached in the same expression are known before the work starts (a watched
+  `Dir.copy` streams so it can count; an unwatched one is one `cp`). Any other future takes `&`
+  too and shows a spinner; a future of a reader is watched as a flow.
 - Backpressure is the stream's, so memory stays at a few chunks whatever the size.
 - A response can be streamed once. Everything else (`File`, `Output`, `Download`, lazy readers)
   re-reads.
@@ -104,7 +133,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
   source is cancelled, a `File` keeps its old content, a `Bar` prints `✗`, a `Hasher` refuses
   `hex()`, and the error is rethrown from `>`.
 - Extending takes one class with one member: `with Reader` + `stream()`, `with Writer` +
-  `consume()`, `with Pipe` + `transform()`.
+  `consume()`, `with Pipe` + `transform()`, `with Probe` + `update()`.
 - `Cookies` and `Rate` live in core because two modules share them: chrome produces a jar and
   http consumes it; http and pool both pace with a `Rate`.
 
@@ -118,52 +147,54 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | query a tree / typed read, null if not | `$` / `value<T>()`, `run()`                                             | `Elements`, `Element`, `Json` / `Json`, `Page`                               |
 | an attribute / every match's attribute | `attr` / `attrs`                                                        | `Element(s)`                                                                 |
 | a tree without some parts              | `not(selector)`                                                         | `Element(s)`                                                                 |
-| feed data / count progress             | `add(data)` / `tick(n)`                                                 | `Hasher` / `Bar`                                                             |
+| feed data / watch progress / count by hand | `add(data)` / `work & probe` / `tick(n)`, `update(done, total)`     | `Hasher` / every reader, `Task`, future / `Bar`, `Meter`                     |
 | release / remove from disk / make      | `close()` / `delete()` / `create()`                                     | `Closeable` / `Entry` / `Dir`, `Link`                                        |
 | final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`                                           | `Response` (`Page` has `url()`)                                              |
-| a file name / a size in bytes          | `name()` / `size()`                                                     | `Entry`, `Download`, `Response` / `File`, `Response`                         |
+| a file name / a size in bytes          | `name()` / `size()`                                                     | `Entry`, `Download`, `Response`, `Capture` / `File`, `Response`, `Origin`    |
 | run a program, an app, a CLI / jobs    | `run` / `map`, `settle`                                                 | `Shell`, `Tui`, `Command` / `Pool`                                           |
-| download to a file (skip, resume)      | `get(u) \| … > file` with `resume: true`                                | `Client`                                                                     |
+| download to a file (skip, resume)      | `get(u) & bar > file` with `resume: true`                               | `Client`                                                                     |
+| parse / write HTML back out            | `html()` / `markup()`                                                   | `Reader`, `Page` / `Element(s)`                                              |
+| check a result                         | `check()`                                                               | `Response`, `Output`                                                         |
 | run a body with a resource, then free  | `tempDir((dir) …)` / `lock(() …)`                                        | `Fs` / `File`                                                                |
 | a variant with other settings          | `copy(...)`                                                             | `Client`                                                                     |
 | a key                                  | `press(key)` sends, a `keys:` binding handles; one key-name set (§4.12) | `Page`, `Screen`                                                             |
 | draw or store into                     | `write`                                                                 | `File`, `Region`                                                             |
 | dimensions                             | `width()` `height()` / `width:` `height:`                               | `Image`, `Region` / `open`, `resize`, `popup`                                |
 | the function that does the work        | `handler`                                                               | `Command(handler:)`                                                          |
-| a notification / a bound event         | `on…:` / `on(events)`, `keys:`                                          | `onDone:`, `onWait:` / `Region`, `Screen`                                    |
+| a notification / a bound event         | `on…:` / `on(events)`, `keys:`                                          | `onWait:`, `onSubmit:` / `Region`, `Screen`                                  |
 | a value when the source is missing     | `or:`                                                                   | `File.text/bytes`, `json()`, `Opt`, `Json.or`                                |
 | switch the current state               | `go(state)`                                                             | `App`                                                                        |
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
-`json` `pretty` `limit` `max` `retries` `insecure` `check` `onDone` `short` `or` `rate` `cookies` `csrf` `cache` `ttl`
+`json` `pretty` `limit` `max` `retries` `insecure` `check` `short` `or` `rate` `cookies` `csrf` `cache` `ttl`
 `idle` `connections` `isolates` `match` `dotenv` `sep` `resume`
 `required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
-`empty` `header` `prompt` `onSubmit` `since` `history` `query` `live` `onLine`
+`empty` `header` `onSubmit` `since` `history` `query` `live` `total` `keep`
 `password` `format` `expect` `from`.
 
 ## 4. Modules
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Closeable` `Origin` · `Cookies` `parse` `load` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
-| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `html` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `html` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
+| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
+| `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `HttpStatusException` `HttpRequestException` `RequestFailure` | `dart:io`                           |
-| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
+| `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
-| `csv`     | `Csv.parse` `records` `encode` · `Reader.csv` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
+| `csv`     | `Csv.parse` `records` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create`                                                                                                                | `dart:io`, `path`                   |
-| `shell`   | `Shell.run` `which` `filter` `open` · `Output` `code` `ok` `err` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
+| `shell`   | `Shell.run` `read` `which` `filter` `open` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
-| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` · `Bar` `tick` `update` · `Speed`                                                                                                                                                                                                                                                                         | in-house                            |
-| `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style`                                                                                                                                                                                                                                                       | in-house                            |
+| `console` | `Console.ask` `confirm` `choose` `key` `bar` `log` `table` `notify` `copy` `out` `input` · `Bar` `tick` `update`                                                                                                                                                                                                                                                                         | in-house                            |
+| `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style` · `Meter` (core's)                                                                                                                                                                                                                                                       | in-house                            |
 | `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
-| `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
+| `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `format` `codec` `audioCodec` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
 
 A module imports only core and its engine. The exceptions are `video`, which imports `image` for `frame()`, `chrome`, which imports `html`
 for `Elements` and `json` for `run`'s `Json` result, and `html`, which imports `json` for
@@ -178,13 +209,13 @@ abstract final class Html { static Elements parse(String html, {String? base}); 
 extension on Reader { Future<Elements> html(); }     // base = the response's final URL or the file's URI
 final class Elements extends Iterable<Element> {
   Elements $(String selector);  Element operator [](int i);  Elements not(String selector);
-  String text();  List<String> texts();  String html();  String? attr(String name);  List<String> attrs(String name);
+  String text();  List<String> texts();  String markup();  String? attr(String name);  List<String> attrs(String name);
   Json json();                                      // <script type=application/json|ld+json>, __NEXT_DATA__
   List<Map<String, String>> table();                // the first table: header → cell text
   ({String action, String method, Map<String, List<String>> fields})? form();   // the first form, hidden fields included
 }
 final class Element {
-  Elements $(String selector);  String text();  String html();  String? attr(String name);  Element? parent();
+  Elements $(String selector);  String text();  String markup();  String? attr(String name);  Element? parent();
 }
 ```
 
@@ -213,7 +244,7 @@ final class Element {
   one space, and a run that holds a newline becomes one newline. The result is trimmed, and
   `<pre>` keeps its whitespace.
 - `not` returns a new tree (one O(n) clone, table parts included); the receiver is
-  unchanged. `html()` is the outer markup (`outerHTML`; on `Elements`, the first match's).
+  unchanged. `markup()` is the outer markup (`outerHTML`; on `Elements`, the first match's); `html()` always parses.
 - `json()` parses every embedded-data script into one `Json` list (invalid ones skipped), so
   `page.json().$('**.user')` searches them all (`; charset=…` types too). `table()` keys rows by
   the first row (`colspan` repeats across, `rowspan` down). `form()` gives what a login without a
@@ -261,6 +292,7 @@ final class Response with Reader implements Closeable {
 }
 ```
 
+- `query:` values are `String`, `num`, `bool`, a `Map` (sent as JSON: GraphQL's `variables`), null (dropped) or an `Iterable` (the key repeats).
 - **Settings live on the client**, stated once; a request passes only `query`, `headers` and
   `body`. `Http.client()` with no arguments is a new, isolated client (its own jar and sockets);
   an idle client releases its sockets after `idle`, so a finished script exits. `copy(...)` is a
@@ -274,7 +306,7 @@ final class Response with Reader implements Closeable {
   and 307/308 keep the method and resend an in-memory body. `url()` is the final URL. A
   cross-origin hop drops credential headers; an https → http hop warns on stderr.
 - **User-Agent**: a current desktop Chrome unless a `user-agent` header is given or the jar has
-  an `agent()` (`Cookies.load` reads it from the session file's `user-agent:` line).
+  an `agent()` (`reader.cookies()` reads it from the session file's `user-agent:` line).
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws what `check()` throws, so an
   error page is never saved. The readings (`text()`, `lines()`, `json()`, `html()`) work on any
   status.
@@ -291,7 +323,7 @@ final class Response with Reader implements Closeable {
 - `rate: Rate(75, 11.minutes, pause: 3.seconds)` paces every send of the clients that share it;
   `Rate(1, 1.seconds, perHost: true)` keeps one window per host.
 - **Downloads respect the pipe.** With `resume: true`, a GET piped into a file
-  (`cdn.get(u) | Console.bar(null) | Hash.sha256(expect: s) > Fs.file(f)`):
+  (`cdn.get(u) & Console.bar(name) | Hash.sha256(expect: s) > Fs.file(f)`):
   - skips a complete file (same `content-length`, or any file when the server sends none);
   - resumes a `.part` with `Range` when the server answers 206 (anything else restarts), and
     finishes a complete one on a 416; a changed file reuses the first GET;
@@ -329,7 +361,7 @@ final shop = Http.client(base: 'https://shop.example/', headers: {'accept-langua
 final page = await shop.get('list.php', query: {'page': p}).html();
 final me = await api.get('me').check().json();
 final ig = Http.client(base: _ig, cookies: session, csrf: (cookie: 'csrftoken', header: 'x-csrftoken'));
-await (cdn.get(url) | Console.bar(null, label: name) > Fs.dir('imgs').file(name));   // skip, resume, atomic
+await (cdn.get(url) & Console.bar(name) > Fs.dir('imgs').file(name));   // skip, resume, atomic
 final server = await Http.serve((r) => Reply.text('code ${r.query('code')}'));
 ```
 
@@ -362,8 +394,8 @@ final class Page implements Closeable {
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
   Future<Download> download(String selector, {Duration? timeout});
 }
-final class Download with Reader { String name(); }
-final class Capture with Reader { int status();  String url();  String? header(String name); }
+final class Download with Reader { String name(); }   // returned when the download begins; reading waits for the file
+final class Capture with Reader { int status();  String url();  String? header(String name);  String name(); }
 ```
 
 - `chrome` speaks the DevTools protocol itself over a `dart:io` WebSocket (no engine package).
@@ -381,8 +413,12 @@ final class Capture with Reader { int status();  String url();  String? header(S
   selector. `fill` clears the field (an input, a textarea or a `contenteditable`), types the value,
   and fires `input`/`change`.
 - `idle` waits for 500 ms with no request in flight. `download` credits a download started in the
-  tab or any of its frames; downloads share one folder per browser, told apart by their DevTools
-  guid, so concurrent downloads don't clash.
+  tab or any of its frames and returns once the browser names the file; reading the `Download`
+  waits for the browser to finish it, and a probe on it (`d & Console.bar(d.name()) >
+  Fs.file(d.name())`) shows the browser's own progress. Downloads share one folder per browser,
+  told apart by their DevTools guid, so concurrent downloads don't clash. A first-use Chrome for
+  Testing download (like ffmpeg's and 7-Zip's) shows a live progress line on stderr, or in the
+  status row while a `Tui.run` is active.
 - `run` evaluates an expression or statements once (a function result is called once), awaits
   promises, throws `BrowserException` when the script throws, and returns the result as `Json`:
   `await page.run('document.title').or('')`, `.value<int>()`, `.$('a.b')`, `.asList<String>()`. `press` takes the key names of §4.12;
@@ -460,17 +496,17 @@ sealed class Entry {
   Future<DateTime> modified();
   String path({Dir? from});  String name();  Dir parent();   // path(from: dir) is relative to dir
   Future<bool> exists();  Future<void> delete();
-  Future<Entry> copy(String to);  Future<Entry> move(String to);   // subtypes narrow the return type
+  Task<Entry> copy(String to);  Task<Entry> move(String to);   // subtypes narrow the return type; a probe counts bytes
 }
 final class File extends Entry with Reader, Writer {
   Future<File> write(String text);  Future<File> append(String text);  Future<int> size();
   Future<File> touch([DateTime? time]);   // set the mtime (now by default); creates an empty file, as touch does
-  Future<T> lock<T>(Future<T> Function() body, {Duration? wait});   // exclusive OS lock for the body
+  Future<T> lock<T>(Future<T> Function() body, {Duration? timeout});   // exclusive OS lock for the body
   Future<String> text({String? or});  Future<List<int>> bytes({List<int>? or});   // or: when it does not exist
 }
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
-  Future<List<Entry>> list({bool recursive = false, String? match});  Stream<File> watch();  Future<Dir> create();
+  Task<List<Entry>> list({bool recursive = false, String? match});  Stream<File> watch();  Future<Dir> create();   // list counts entries
   Future<({int files, int bytes})> size({String? match});   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
@@ -487,7 +523,9 @@ final class Link extends Entry {
 - Future mirrors (`EntryFuture`, `FileFuture`, `DirFuture`, `LinkFuture`) repeat every member on
   their respective `Future`s per Rule 4.
 - **`copy`/`move`:**
-  - They keep modes and timestamps (folders too) and create parents.
+  - They move an entry (`>` moves content). They keep modes and timestamps (folders too) and create parents.
+  - They are `Task`s: `Fs.dir('photos').copy(backup) & Console.bar('backup')` counts the bytes
+    against the tree's size. Watched, the copy streams in-process; unwatched, a fresh folder is one `cp -pPR`.
   - `move` renames, and falls back to copy-then-delete only across devices.
   - A missing source, or a destination inside the source, throws before anything is written.
 - `exists()` checks the handle's kind, following links for `File`/`Dir` (`Link` checks itself).
@@ -501,7 +539,7 @@ final class Link extends Entry {
 - `text(or: '')` answers a missing file; any other failure (a folder, permissions) still throws.
   A `File` is a `Writer` whose `origin()` reports its path, which is how a `resume: true` download skips and resumes.
 - `Fs.tempDir((dir) async {…})` runs the body with a fresh temp folder and deletes it after (Ctrl-C
-  too); `file.lock(() async {…}, wait:)` holds an exclusive OS lock for the body, so a second
+  too); `file.lock(() async {…}, timeout:)` holds an exclusive OS lock for the body, so a second
   cron run fails at once with a `LockedException` (`locked by another process`). Both are scopes, not handles: nothing
   to forget, nothing keeps the script alive. `Fs.homeDir()` is `HOME`/`USERPROFILE`;
   `Fs.scriptDir()` is the running script's folder; `modified()` is the mtime and `touch(t)` sets it.
@@ -513,12 +551,13 @@ final class Link extends Entry {
 
 ```dart
 abstract final class Shell {
-  static Future<Output> run(List<String> command, {String? dir, Map<String, String?>? env, bool live = false, bool check = false, Duration? timeout, Future<void>? cancel, void Function(String line)? onLine}); // onLine: stdout and stderr lines as they arrive
+  static Task<Output> run(List<String> command, {String? dir, Map<String, String?>? env, Duration? timeout, Future<void>? cancel});
+  static Reader read(List<String> command, {String? dir, Map<String, String?>? env});   // stdout as it prints
   static Future<String?> which(String program);   // where PATH (+ PATHEXT) resolves it, or null; starts nothing
   static Pipe filter(List<String> command, {String? dir, Map<String, String?>? env});
   static Future<void> open(String target);    // URL or path, in the default app
 }
-final class Output with Reader { int code();  bool ok();  String err(); }   // Reader = stdout
+final class Output with Reader { int code();  bool ok();  String err();  Output check(); }   // Reader = stdout
 ```
 
 - `timeout:` kills a run that takes longer, with everything it started, and throws a
@@ -534,11 +573,17 @@ final class Output with Reader { int code();  bool ok();  String err(); }   // R
   can be read many times.
 - `filter`: the stream goes to stdin and stdout comes out. A non-zero exit fails the run with an
   `ExitException` (a `ProcessException` and a `ToolkitException`: `errorCode`, the last 64 KB of
-  stderr in `message`), as `run(check: true)` does. A child that stops reading early (`head`, `grep -m`) is not an error.
+  stderr in `message`), as `Output.check()` does. A child that stops reading early (`head`, `grep -m`) is not an error.
+- Three verbs, three behaviours: `run` to the end (an `Output`, a `Task` a probe shows as a
+  spinner), `read` while it prints (a `Reader`: `Shell.read(cmd) > Console.out()` shows it live,
+  `.lines()` reads it line by line; its stderr passes through to ours, a non-zero exit fails it
+  like a filter), `filter` in the middle of a flow.
 - `open` uses `open`/`xdg-open`/`rundll32 url.dll,FileProtocolHandler` (no shell parsing) and returns once the program has launched.
 
 ```dart
-final head = await Shell.run(['git', 'rev-parse', 'HEAD'], check: true).text(); // a non-zero exit throws
+final head = await Shell.run(['git', 'rev-parse', 'HEAD']).check().text(); // a non-zero exit throws
+await (Shell.run(['make', '-j8']) & Console.bar('build'));                   // a spinner
+await for (final line in Shell.read(['yt-dlp', url]).lines()) { … }
 await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
 ```
 
@@ -605,10 +650,10 @@ final class Hasher with Writer implements Pipe { Hasher add(String text);  Hashe
 final class Pool {
   Pool({int limit = 4});   // held lanes, shared by every run() on this pool
   Future<R> run<R>(FutureOr<R> Function() job);   // waits for a free lane, first come first served
-  static Future<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, int retries = 0, Rate? rate, bool isolates = false, void Function()? onDone});   // fail fast
-  static Future<List<Outcome<T, R>>> settle<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, int retries = 0, Rate? rate, bool isolates = false, void Function()? onDone});   // never throws
+  static Task<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
+      {int? limit, int retries = 0, Rate? rate, bool isolates = false});   // fail fast
+  static Task<List<Outcome<T, R>>> settle<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
+      {int? limit, int retries = 0, Rate? rate, bool isolates = false});   // never throws
 }
 sealed class Outcome<T, R> { T get item; }
 final class Done<T, R> extends Outcome<T, R> { R get value; }
@@ -625,7 +670,8 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
   the item, while an `ArgumentError` from the job itself stays as it is.
 - `retries:` re-runs a failing job with the shared jittered backoff; `rate:` paces job starts.
   Together they replace hand-written retry loops around shells, browsers and flaky I/O.
-- `onDone` runs after every job, success or failure: `onDone: bar.tick`.
+- Both are `Task`s counting the jobs done, success or failure: `Pool.map(urls, fetch) &
+  Console.bar('pages')`. Probes nest: a bar per file inside the job, one over the pool outside.
 - A held `Pool(limit: 8)` is one limit across calls that start at different times (a download
   queue fed by several crawlers): `lanes.run(() => save(f))` waits for a lane and frees it on
   success or failure. Inside `Pool.settle(files, (f) => lanes.run(…), limit: files.length)` the
@@ -633,7 +679,7 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
 - Nothing stays running between calls, and an idle pool holds nothing, so there is nothing to close.
 
 ```dart
-final done = await Pool.settle(files, (f) => cdn.get(f.url) > f.to, onDone: bar.tick);
+final done = await (Pool.settle(files, (f) => cdn.get(f.url) > f.to) & Console.bar('files'));
 for (final Failed(:item, :error) in done.failures()) Console.log('✗ ${item.to.name()}: $error');
 final thumbs = await Pool.map(paths, makeThumb, isolates: true);
 ```
@@ -702,18 +748,17 @@ await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
 ```dart
 abstract final class Console {
   static Future<String> ask(String question, {bool secret = false, String or = '', Duration? timeout}); // empty, EOF, timeout: or
-  static Future<bool> confirm(String question, {bool or = false});
-  static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
-  static Future<String> key({String? prompt});
-  static Future<T> spin<T>(String label, Future<T> work);
-  static Bar bar(int? total, {String? label, bool keep = true});   // null = unknown; keep: false vanishes when done
+  static Future<bool> confirm(String question, {bool or = false, Duration? timeout});
+  static Future<T?> choose<T>(String question, List<T> items, String Function(T item) label, {T? or, Map<String, T>? keys, Duration? timeout});
+  static Future<String> key(String prompt, {String? or, Duration? timeout});   // '' = no prompt
+  static Bar bar(String label, {int? total, bool keep = true});   // a probe: work & Console.bar('build'); keep: false vanishes when done
+  static Writer out();  static Reader input();                    // our stdout and stdin, so a script can be a filter
   static void log(String line);                    // prints above a live spinner or bar
   static void table(List<List<Object?>> rows, {List<String>? header});   // aligned columns on stdout
   static void notify(String message);              // OSC 9/777 + bell; through the app inside Tui.run (silent while focused)
   static void copy(String text);                   // OSC 52; through the app inside Tui.run
 }
-final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total); }
-final class Speed implements Pipe { Speed();  Speed add(int count);  double rate(); }   // per second over the last 5 s
+final class Bar with Probe implements Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total); }
 ```
 
 - Everything goes to stderr, so stdout stays clean for data.
@@ -726,24 +771,31 @@ final class Speed implements Pipe { Speed();  Speed add(int count);  double rate
   line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.
 - `confirm` takes y/yes/n/no, and Enter gives `or`. On a terminal, `choose` uses the arrow keys,
   scrolling when the choices outnumber the rows. Piped, it reads a number.
-- **Live lines** (any number of `spin`s and `bar`s at once, stacked one row each; a finished one
+- **Every prompt takes `or:` and `timeout:`**: no answer in time gives `or`, and the reader stops,
+  so an unattended script never hangs on a `confirm`.
+- **Live lines** (any number of bars at once, stacked one row each; a finished one
   prints its final `✓`/`✗` line above the rest):
   - It always fits the terminal width, which is re-read on resize. The label is cut with `…`, the
     bar shrinks, and every redraw clears to the end of the line.
   - It redraws at most every 80 ms.
 - A prompt or `table` erases the live lines while it writes, and they come back after it.
-- **A bar as a `Pipe`** counts bytes and shows sizes and a rate over the last 5 s (`12.1/40 MB  1.2 MB/s`);
-  bytes a resumed download replays from its `.part` fill the bar but not the rate. Used with
-  `tick()`, it counts items (`12/40  3.1/s`). A `null` total shows a count and a rate, with no
-  bar, so `Console.bar(res.size())` just works. The bar renders as a clean line track (`━━╸──`),
-  matching the `tui` aesthetic. `close()` prints the final line.
-- A bar takes the live line on first use and gives it back when it closes, or when its pipeline
-  fails at any point.
+- **A bar is a probe.** `work & Console.bar('label')` shows the run: a flow in sizes and a rate
+  (`12.1/40 MB  1.2 MB/s`, the total learned from the source), an encode in media time
+  (`1:12/4:30  3.4×`), a `Task` in items (`12/40  3.1/s`), and a plain future as a spinner until it
+  completes (`✓ label`). Bytes a resumed download replays from its `.part` fill the bar but not the
+  rate. The rate is the speed now: 100 ms steps smoothed over about a second, not a long average.
+  Used by hand, `tick()`/`update()` count items towards `total:`. The bar renders as a clean line
+  track (`━━╸──`), matching the `tui` aesthetic. It closes itself when the runs it watches end (✗
+  when one failed) or a hand count reaches its total; `close()` prints the final line early.
+- A bar takes the live line when made and gives it back when it closes, or when its run fails at
+  any point.
 - Without a terminal, or with `NO_COLOR` set, there is no animation: each bar or spinner prints
   one final line.
-- **`Speed`** is that rate on its own, for progress drawn by hand: `get(u) | speed | Pipe.tap(t.update) > file`,
-  then `'${speed.rate().size()}/s'`. One meter may serve many pipelines; negative `add`s and replayed
-  resume bytes are left out.
+- **`Console.out()` and `Console.input()`** are stdout as a `Writer` and stdin as a `Reader`:
+  `await (Console.input() | Shell.filter(['sort']) > Console.out())`. Live bars step aside while
+  `out()` writes to the same terminal.
+- Progress drawn by hand (a Tui) uses core's `Meter`: `get(u) & meter > file`, then
+  `r.bar(meter)`.
 
 ### 4.12 tui
 
@@ -786,7 +838,7 @@ final class Region {
   Region table<T>(Pick<T> selection, List<String> Function(T item) cells, {List<String>? header, String empty = '', Color? highlight});
   Region input(Field field, {String hint = '', int lines = 1, FutureOr<List<String>> Function(String word)? suggest, FutureOr<void> Function()? onSubmit});
   Region button(String label, FutureOr<void> Function() action);
-  Region bar(int done, int? total, {String? label, bool bytes = false, double? rate});   // rate: per second, e.g. a Speed's
+  Region bar(Meter meter, {String? label});   // its count, total and rate in its unit; Meter()..update(done, total) for a count
   Region spin(String label, {DateTime? since});
 }
 final class Color {                            // black red green yellow blue magenta cyan white gray orange
@@ -852,7 +904,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
   error, the `app.status` message, running spinners and bars, or else the screen's `status`; on the right, the key
   help from `keys:` (`enter send · esc interrupt`), with empty labels and mouse/lifecycle bindings
   hidden. A narrow row cuts the help first.
-- **Console inside the Tui.** While `run` is active, `Console.spin`/`bar` draw in the status row
+- **Console inside the Tui.** While `run` is active, `Console.bar` (and a probe on any work) draws in the status row
   (several at once), `Console.log` goes to the status row, and
   `Console.ask`/`confirm`/`choose` open a modal popup, where `escape` answers like a closed stdin.
 - **Drawing.**
@@ -908,7 +960,7 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
       body.list(s.hits, (h) => h.title, empty: 'type a title, press enter');
       foot.box('query').input(s.query);
     }, keys: {
-      'enter': ('search', () async => s.hits.set(await Console.spin('searching', search(s.query.text())))),
+      'enter': ('search', () async => s.hits.set(await (search(s.query.text()) & Console.bar('searching')))),
       'ctrl+o': ('open', () => app.go(Series(s, s.hits.selected()!))),
       'escape': ('quit', app.quit),
     }),
@@ -954,13 +1006,13 @@ extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).imag
 enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }   // avi read only; m4a/mp3/opus audio only
 enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
-  static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // path or URL, HLS/DASH
+  static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // a URL (HLS/DASH); a file is file.video()
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
-  static Future<Compression> compress(String path, {int quality = 70, VideoCodec? codec});
+  static Task<Compression> compress(String path, {int quality = 70, VideoCodec? codec});   // a probe sees media time
   int? width();  int? height();  Duration duration();  double fps();
-  String? codec();  String? audio();  int? bitrate();
+  VideoFormat? format();  String? codec();  String? audioCodec();  int? bitrate();
   Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,
-      Duration? start, Duration? end, void Function(int done, int? total)? onProgress});
+      Duration? start, Duration? end});   // a probe on it sees the encode in media time
   Future<Image> frame({Duration at = Duration.zero});
 }
 extension on Reader { Future<Video> video(); }
@@ -971,9 +1023,12 @@ extension on Reader { Future<Video> video(); }
 - `encode` with no `quality`/`width`/`height`/`codec` **copies** the streams into the new container
   when it holds them (seconds, lossless; `start`/`end` cut at keyframes); otherwise it encodes (default
   h264, VP9 for WebM; `quality` 1–100 maps to the codec's CRF). Audio is copied when the container takes
-  it, else AAC (Opus for WebM). `onProgress` hears microseconds written of the total.
+  it, else AAC (Opus for WebM). `encode(…) & Console.bar('encode') > file` shows the encode itself
+  (`1:12/4:30  3.4×`), not the copy that follows it.
 - `compress` follows `Image.compress`: own container, audio copied, replaced only when ≥ 5% smaller.
-- `open(url, audio:, headers:)` reads HLS/DASH manifests and joins a separate audio source.
+- `open(url, audio:, headers:)` reads HLS/DASH manifests and joins a separate audio source; a path
+  is an `ArgumentError` (read a file with `Fs.file(path).video()`). `format()` is the container
+  read (null for a live stream).
 
 ### Native tools
 
@@ -991,7 +1046,7 @@ abstract final class Csv {
   static List<Map<String, String>> records(String text, {String sep = ','});   // header row → keys
   static String encode(List<List<Object?>> rows, {String sep = ','});
 }
-extension on Reader { Future<List<List<String>>> csv({String sep = ','});  Stream<List<String>> rows({String sep = ','}); }
+extension on Reader { Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or});  Stream<List<String>> rows({String sep = ','}); }
 ```
 
 - RFC 4180: quoted fields, `""` escapes, CRLF or LF, embedded newlines, a leading BOM; a blank
@@ -1017,9 +1072,9 @@ extension on Reader { Future<Json> yaml({Json? or}); }
 Failures the toolkit itself detects are one family rooted at `ToolkitException`
 (`message` plus the engine error as `cause`, null when detected alone), so
 scripts match the specific type — or the base for all of them — instead of
-parsing message strings. Each custom type extends the SDK type it replaces,
-so an existing `on HttpException` / `on FormatException` / `on StateError`
-keeps catching it.
+parsing message strings. Each custom type extends the SDK exception it replaces,
+so an existing `on HttpException` / `on FormatException` / `on ProcessException`
+keeps catching it. None is an `Error`: an `Error` is a bug.
 
 | Thrown                      | When                                                                                                                                                                                                                                                                                                  |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1027,8 +1082,8 @@ keeps catching it.
 | `HttpRequestException`      | a request aborted by `close()` or a redirect that cannot be followed (`method` `url` `reason`); extends `HttpException`                                                                                                                                                                               |
 | `ContentException`          | invalid content the toolkit rejects (JSON, selectors, archives, images, checksums); extends `FormatException`                                                                                                                                                                                         |
 | `PasswordException`         | an encrypted archive with no or the wrong password; extends `ContentException`                                                                                                                                                                                                                        |
-| `ExitException` (shell), `LockedException` (fs) | a program that exited non-zero under `check:` or as a filter; a lock another holder keeps |
-| `BrowserException`          | a tab action the page itself fails (click, PDF, download); extends `StateError`                                                                                                                                                                                                                       |
+| `ExitException` (shell), `LockedException` (fs) | a program that exited non-zero under `check()`, as a read or as a filter; a lock another holder keeps |
+| `BrowserException`          | a tab action the page itself fails (click, PDF, download); a `ToolkitException`                                                                                                                                                                                                                       |
 | `UsageException` (cli)      | a handler rejects its input, giving exit 64                                                                                                                                                                                                                                                           |
 | `ToolkitException`          | the base of the ones above                                                                                                                                                                                                                                                                             |
 | SDK types (kept on purpose) | engine failures pass through (`SocketException`, `TlsException`, `ProcessException`, `FileSystemException`, `StdinException`/`StdoutException`); Dart-idiom guards stay (`ArgumentError`/`RangeError` for bad arguments, `StateError` for protocol misuse, `TimeoutException` for waits that run out) |

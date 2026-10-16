@@ -122,11 +122,10 @@ Future<String> _testingChrome({required bool headless}) async {
   try {
     await lock.lock(io.FileLock.blockingExclusive);
     if (io.File(exe).existsSync()) return exe; // another process fetched it
-    io.stderr.writeln('dart_toolkit: downloading $kind for $platform (once per machine)');
     final String? failed;
     try {
       final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
-      failed = await fetchInIsolate('chrome_fetch.dart', [url, _sha256['$kind $platform']!, dir]);
+      failed = await fetchInIsolate('chrome_fetch.dart', [url, _sha256['$kind $platform']!, dir], label: '$kind for $platform');
     } on UnsupportedError catch (e) {
       throw BrowserException(
         'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '

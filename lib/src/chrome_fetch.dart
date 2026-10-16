@@ -18,10 +18,11 @@ import '../archive.dart';
 import '../fs.dart';
 import '../hash.dart';
 import '../http.dart';
+import 'progress.dart' show portProbe;
 
 Future<void> main(List<String> args, SendPort reply) async {
   try {
-    await fetch(args[0], args[1], args[2]);
+    await fetch(args[0], args[1], args[2], progress: portProbe(reply));
     reply.send('ok');
   } catch (e) {
     reply.send('$e');
@@ -29,11 +30,11 @@ Future<void> main(List<String> args, SendPort reply) async {
 }
 
 /// Download [url], check [sha256], unpack it into [dir].
-Future<void> fetch(String url, String sha256, String dir) async {
+Future<void> fetch(String url, String sha256, String dir, {Probe? progress}) async {
   final http = Http.client(retries: 3, check: true, resume: true, timeout: const Duration(minutes: 2));
   final zip = '$dir.zip';
   await io.Directory(p.dirname(dir)).create(recursive: true);
-  await (http.get(url) | Hash.sha256(expect: sha256) > Fs.file(zip));
+  await (http.get(url) & progress | Hash.sha256(expect: sha256) > Fs.file(zip));
   final tmp = (await io.Directory(p.dirname(dir)).createTemp('${p.basename(dir)}.tmp-')).path;
   try {
     await (Fs.file(zip) > Archive.unarchive(tmp)); // keeps modes and the app bundle's links

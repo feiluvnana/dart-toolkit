@@ -97,6 +97,26 @@ void main() {
       expect(await Fs.entry(p('sub')), isNull);
     });
 
+    test('copy, move and list are tasks a probe watches; a Future mirror relays', () async {
+      await Fs.file(p('t/a.bin')).write('a' * 3000);
+      await Fs.file(p('t/sub/b.bin')).write('b' * 2000);
+      final dir = Meter();
+      await (Fs.dir(p('t')).copy(p('t2')) & dir);
+      expect((dir.done(), dir.total()), (5000, 5000));
+      expect(await Fs.file(p('t2/sub/b.bin')).text(), 'b' * 2000);
+      final file = Meter();
+      await (Fs.file(p('t/a.bin')).copy(p('a2.bin')) & file);
+      expect((file.done(), file.total()), (3000, 3000));
+      final listed = Meter();
+      final entries = await (Fs.dir(p('t')).list(recursive: true) & listed);
+      expect(listed.done(), entries.length);
+      final relayed = Meter();
+      await (Future.value(Fs.dir(p('t'))).copy(p('t3')) & relayed);
+      expect(relayed.total(), 5000);
+      await Fs.dir(p('t')).copy(p('t4')); // unwatched: the OS copy
+      expect(await Fs.file(p('t4/a.bin')).size(), 3000);
+    });
+
     test('copy and move keep the type and make parents', () async {
       await Fs.file(p('a.txt')).write('x');
       final c = await Fs.file(p('a.txt')).copy(p('d/e.txt'));
@@ -464,7 +484,7 @@ Future<void> main() async {
       }
 
       final lock = Fs.file(p('one.lock'));
-      expect(await Future.wait([for (var i = 0; i < 3; i++) lock.lock(() => hold(i), wait: 5.seconds)]), [0, 1, 2]);
+      expect(await Future.wait([for (var i = 0; i < 3; i++) lock.lock(() => hold(i), timeout: 5.seconds)]), [0, 1, 2]);
       expect(most, 1);
       final held = lock.lock(() => hold(9));
       await expectLater(
@@ -490,7 +510,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
         Fs.file(lock).lock(() async => 1),
         throwsA(isA<LockedException>().having((e) => e.message, 'message', 'locked by another process')),
       );
-      final waited = Fs.file(lock).lock(() async => 2, wait: 5.seconds);
+      final waited = Fs.file(lock).lock(() async => 2, timeout: 5.seconds);
       await Future<void>.delayed(const Duration(milliseconds: 100));
       await holder.stdin.close();
       expect(await waited, 2);

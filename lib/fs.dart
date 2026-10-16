@@ -16,7 +16,9 @@
 ///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
 ///   an untrusted string a safe file name; `Fs.tempDir()` runs a body with a
 ///   fresh folder; `Fs.homeDir()` and `Fs.scriptDir()` name the usual places.
-/// - [Entry] supports `path` `name` `parent` `exists` `modified` `delete` `copy` `move`.
+/// - [Entry] supports `path` `name` `parent` `exists` `modified` `delete` `copy` `move`
+///   (`copy`, `move` and `Dir.list` are [Task]s: `dir.copy(to) & Console.bar('backup')`).
+///   `copy`/`move` move an entry with its modes and times; `>` moves content.
 /// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
 /// - [Dir] supports `file` `dir` `list` `size` `watch` `create`.
 /// - [Link] supports `target` `resolve` `create`.
@@ -34,9 +36,11 @@ import 'core.dart';
 export 'core.dart';
 
 import 'src/exit.dart' as exit;
+import 'src/format.dart' show Unit;
 import 'src/glob.dart';
 import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
+import 'src/progress.dart' show Run, relay, task;
 import 'src/tree.dart' as tree;
 
 /// What [File.lock] throws when another holder keeps the lock: tell it
@@ -145,12 +149,15 @@ sealed class Entry {
 
   /// Filesystem copy to [to]: keeps metadata, creates parents, recursive for
   /// folders (links inside as links). A [File] or [Dir] handle on a link
-  /// copies what the link points at. Returns a handle of the same type at [to].
-  Future<Entry> copy(String to);
+  /// copies what the link points at. Returns a handle of the same type at
+  /// [to], as a [Task] that counts the bytes copied when watched
+  /// (`& Console.bar('backup')`).
+  Task<Entry> copy(String to);
 
-  /// Rename to [to], falling back to copy-then-delete across devices. A link
-  /// moves as the link. Returns a handle of the same type at [to].
-  Future<Entry> move(String to);
+  /// Rename to [to], falling back to copy-then-delete across devices (then
+  /// counted like [copy]). A link moves as the link. Returns a handle of
+  /// the same type at [to].
+  Task<Entry> move(String to);
 
   /// When the content last changed (links followed). A missing entry
   /// throws [io.PathNotFoundException].
@@ -183,18 +190,18 @@ final class File extends Entry with Reader, Writer {
   Future<void> delete() => _delete(_path, io.FileSystemEntityType.file);
 
   @override
-  Future<File> copy(String to) async {
+  Task<File> copy(String to) => task((run) async {
     await _checkSource(_path, to, io.FileSystemEntityType.file);
     await _ensureParent(to);
     await _removeDestLink(to);
     // `File.copy` and the stat behind preserveFileMeta follow a source link.
-    await io.File(_path).copy(to);
+    await tree.copyFile(_path, to, onBytes: await _counter(run, () => io.File(_path).length()));
     await tree.preserveFileMeta(_path, to);
     return File._(to);
-  }
+  });
 
   @override
-  Future<File> move(String to) async {
+  Task<File> move(String to) => task((run) async {
     if (await _checkSource(_path, to, io.FileSystemEntityType.file) == io.FileSystemEntityType.link) {
       await Link._(_path).move(to);
       return File._(to);
@@ -207,12 +214,12 @@ final class File extends Entry with Reader, Writer {
       // Rename across devices; anything else (missing source, occupied
       // destination, permissions) must surface.
       if (!posix.isCrossDevice(e)) rethrow;
-      await io.File(_path).copy(to);
+      await tree.copyFile(_path, to, onBytes: await _counter(run, () => io.File(_path).length()));
       await tree.preserveFileMeta(_path, to);
       await io.File(_path).delete();
     }
     return File._(to);
-  }
+  });
 
   /// Replace the content with UTF-8 [text], atomically. Creates missing
   /// parents. Returns this file. Bytes go through the one [Writer] path:
@@ -273,15 +280,15 @@ final class File extends Entry with Reader, Writer {
   /// Run [body] holding an exclusive OS lock on this file (created when
   /// missing), then release it, and return what [body] returned: one cron
   /// run at a time. Another holder fails at once with
-  /// [LockedException] `locked by another process`, or, with [wait],
+  /// [LockedException] `locked by another process`, or, with [timeout],
   /// after retrying that long. The OS drops the lock if the process dies;
   /// the file itself stays (deleting it would race the next run).
-  Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async {
+  Future<T> lock<T>(Future<T> Function() body, {Duration? timeout}) async {
     await _ensureParent(_path);
     // OS locks never conflict within one process, so holders here are
     // tracked too: two lock() bodies in one script exclude each other.
     final key = p.canonicalize(_path);
-    final until = wait == null ? null : DateTime.now().add(wait);
+    final until = timeout == null ? null : DateTime.now().add(timeout);
     Future<void> retry(String holder) async {
       if (until == null || DateTime.now().isAfter(until)) {
         throw LockedException('locked by $holder', _path);
@@ -462,8 +469,11 @@ final class Dir extends Entry {
   /// Never descends through links. [match] keeps the entries whose path
   /// relative to this folder matches a glob: `*` and `?` stay within one
   /// folder, `**` crosses folders (and implies [recursive]), `{jpg,png}`
-  /// picks alternatives: `list(match: '**/*.{jpg,png}')`.
-  Future<List<Entry>> list({bool recursive = false, String? match}) async {
+  /// picks alternatives: `list(match: '**/*.{jpg,png}')`. A [Task] that
+  /// counts the entries found (`& Console.bar('scan')`).
+  Task<List<Entry>> list({bool recursive = false, String? match}) => task((run) => _list(recursive, match, run));
+
+  Future<List<Entry>> _list(bool recursive, String? match, Run run) async {
     final pattern = match == null ? null : glob(match);
     if (match != null && match.contains('**')) recursive = true;
     final t = await io.FileSystemEntity.type(_path, followLinks: false);
@@ -489,6 +499,7 @@ final class Dir extends Entry {
         _ => Dir._(e.path),
       };
       found.add((rel.replaceAll('/', '\x00'), entry)); // separators sort lowest: a/b before a-b
+      if (run.watched) run.report(found.length, null, Unit.items);
     }
     found.sort((a, b) => a.$1.compareTo(b.$1));
     return [for (final (_, e) in found) e];
@@ -555,7 +566,7 @@ final class Dir extends Entry {
   Future<void> delete() => _delete(_path, io.FileSystemEntityType.directory);
 
   @override
-  Future<Dir> copy(String to) async {
+  Task<Dir> copy(String to) => task((run) async {
     final kind = await _checkSource(_path, to, io.FileSystemEntityType.directory);
     // A handle on a link copies the folder it points at (`cp -P` and the
     // walk below would copy the link itself).
@@ -566,15 +577,17 @@ final class Dir extends Entry {
     // only matches the merge semantics for a fresh destination (into an
     // existing tree `cp` would nest instead), so an existing target, a
     // missing `cp`, or Windows falls back to the in-process loop below.
-    if (await io.FileSystemEntity.type(to, followLinks: false) == io.FileSystemEntityType.notFound) {
+    // Watched, the copy streams in-process instead, so it can count.
+    final onBytes = await _counter(run, () => tree.treeBytes(from));
+    if (onBytes == null && await io.FileSystemEntity.type(to, followLinks: false) == io.FileSystemEntityType.notFound) {
       if (await posix.copyTreeWithCp(from, to)) return Dir._(to);
     }
-    await tree.copyTree(from, to);
+    await tree.copyTree(from, to, onBytes: onBytes);
     return Dir._(to);
-  }
+  });
 
   @override
-  Future<Dir> move(String to) async {
+  Task<Dir> move(String to) => task((run) async {
     if (await _checkSource(_path, to, io.FileSystemEntityType.directory) == io.FileSystemEntityType.link) {
       await Link._(_path).move(to);
       return Dir._(to);
@@ -593,11 +606,21 @@ final class Dir extends Entry {
       if (destType != io.FileSystemEntityType.notFound) {
         throw io.FileSystemException('Destination already exists', to);
       }
-      await tree.copyTree(_path, to);
+      await tree.copyTree(_path, to, onBytes: await _counter(run, () => tree.treeBytes(_path)));
       await io.Directory(_path).delete(recursive: true);
     }
     return Dir._(to);
-  }
+  });
+}
+
+/// When [run] is watched, report 0 of the [total] and return what counts
+/// each copied chunk; null when nothing watches (the fast OS copy).
+Future<void Function(int bytes)?> _counter(Run run, Future<int> Function() total) async {
+  if (!run.watched) return null;
+  final all = await total();
+  var done = 0;
+  run.report(0, all, Unit.bytes);
+  return (int n) => run.report(done += n, all, Unit.bytes);
 }
 
 /// A symlink.
@@ -675,13 +698,13 @@ final class Link extends Entry {
   Future<void> delete() => _delete(_path, io.FileSystemEntityType.link);
 
   @override
-  Future<Link> copy(String to) async {
+  Task<Link> copy(String to) => task((_) async {
     await _checkSource(_path, to, io.FileSystemEntityType.link);
     return Link._(to).create(await target());
-  }
+  });
 
   @override
-  Future<Link> move(String to) async {
+  Task<Link> move(String to) => task((_) async {
     await _checkSource(_path, to, io.FileSystemEntityType.link);
     await _ensureParent(to);
     try {
@@ -693,7 +716,7 @@ final class Link extends Entry {
       await io.Link(_path).delete();
     }
     return Link._(to);
-  }
+  });
 }
 
 /// Future mirrors (rule 4). The extension name is import-only; never reference it. Sync members come back as Futures.
@@ -705,23 +728,23 @@ extension EntryFuture on Future<Entry> {
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Future<Entry> copy(String to) async => (await this).copy(to);
-  Future<Entry> move(String to) async => (await this).move(to);
+  Task<Entry> copy(String to) => task((run) async => (await this).copy(to) & relay(run));
+  Task<Entry> move(String to) => task((run) async => (await this).move(to) & relay(run));
 }
 
 /// Future mirrors for [File].
 extension FileFuture on Future<File> {
   Future<DateTime> modified() async => (await this).modified();
   Future<String> text({String? or}) async => (await this).text(or: or);
-  Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async => (await this).lock(body, wait: wait);
+  Future<T> lock<T>(Future<T> Function() body, {Duration? timeout}) async => (await this).lock(body, timeout: timeout);
   Future<List<int>> bytes({List<int>? or}) async => (await this).bytes(or: or);
   Future<String> path({Dir? from}) async => (await this).path(from: from);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Future<File> copy(String to) async => (await this).copy(to);
-  Future<File> move(String to) async => (await this).move(to);
+  Task<File> copy(String to) => task((run) async => (await this).copy(to) & relay(run));
+  Task<File> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<File> write(String text) async => (await this).write(text);
   Future<File> append(String text) async => (await this).append(text);
   Future<int> size() async => (await this).size();
@@ -736,12 +759,12 @@ extension DirFuture on Future<Dir> {
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Future<Dir> copy(String to) async => (await this).copy(to);
-  Future<Dir> move(String to) async => (await this).move(to);
+  Task<Dir> copy(String to) => task((run) async => (await this).copy(to) & relay(run));
+  Task<Dir> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
-  Future<List<Entry>> list({bool recursive = false, String? match}) async =>
-      (await this).list(recursive: recursive, match: match);
+  Task<List<Entry>> list({bool recursive = false, String? match}) =>
+      task((run) async => (await this).list(recursive: recursive, match: match) & relay(run));
   Future<({int files, int bytes})> size({String? match}) async => (await this).size(match: match);
   Stream<File> watch() => Stream.fromFuture(this).asyncExpand((d) => d.watch());
   Future<Dir> create() async => (await this).create();
@@ -755,8 +778,8 @@ extension LinkFuture on Future<Link> {
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Future<Link> copy(String to) async => (await this).copy(to);
-  Future<Link> move(String to) async => (await this).move(to);
+  Task<Link> copy(String to) => task((run) async => (await this).copy(to) & relay(run));
+  Task<Link> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<String> target() async => (await this).target();
   Future<Entry?> resolve() async => (await this).resolve();
   Future<Link> create(String target) async => (await this).create(target);

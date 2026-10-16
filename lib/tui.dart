@@ -20,7 +20,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Tui], [App], [Screen], [Binding],
-/// [Pick], [Field], [Scroll], [Region], [Color], [Style], [Pixels],
+/// [Pick], [Field], [Scroll], [Region], [Color], [Style], [Pixels], [Meter],
 /// plus the [RegionWidgets], [RegionMarkdown] and [RegionDiff] extensions
 /// (applied to [Region] on import).
 /// - `Tui.run()` owns the loop and redraws on events; `screen` describes
@@ -30,9 +30,11 @@
 /// - Widget state lives in [Pick], [Field] and [Scroll]
 ///   objects held by the app's state, so focus, selection and scroll survive
 ///   `go` and back.
-/// - While `run` is active, `Console.spin`/`bar` draw in the
-///   status row and `Console.ask`/`confirm`/`choose` open a popup
-///   and `Console.log` goes to the status row.
+/// - `Region.bar` draws a [Meter] (core's, re-exported here): attach it
+///   with `&` to the work it should count.
+/// - While `run` is active, `Console.bar` draws in the status row,
+///   `Console.ask`/`confirm`/`choose`/`key` open a popup and `Console.log`
+///   goes to the status row.
 ///
 /// {@canonicalFor terminal.Color}
 /// {@canonicalFor pixels.Pixels}
@@ -42,3 +44,4 @@ export 'src/tui.dart'
     show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, RegionDiff, Style;
 export 'src/terminal.dart' show Color;
 export 'src/pixels.dart' show Pixels;
+export 'src/progress.dart' show Meter;

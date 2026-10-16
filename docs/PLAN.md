@@ -6,7 +6,7 @@ Setup: `git pull`, `dart pub get`. After each step run `dart analyze` and the na
 
 ### W1. H18 check: Esc and arrows (code shipped, unverified)
 1. In the VS Code terminal and in Windows Terminal, run `dart run tool/keylog.dart`. Press ↑ ↓ Esc. Expected bytes: `1b 5b 41`, `1b 5b 42`, `1b`.
-2. Run a script with `print(await Console.choose('pick', ['a', 'b', 'c']));`. ↑/↓ move the selection, Enter picks, Esc cancels.
+2. Run a script with `print(await Console.choose('pick', ['a', 'b', 'c'], (s) => s));`. ↑/↓ move the selection, Enter picks, Esc cancels.
 3. If step 1 never shows a `e0 ..` pair, delete the `if (b == 0xe0)` branch and `windowsKey` in `lib/src/terminal.dart`, plus their tests in `test/terminal_keys_test.dart` (the M2 Windows half).
 4. Run `dart test test/console_test.dart -n "piped choose"` (H16, CRLF input).
 

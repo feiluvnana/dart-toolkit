@@ -44,7 +44,9 @@ export 'core.dart';
 
 import 'shell.dart' show ExitException, Shell;
 import 'src/exit.dart' as exit;
+import 'src/format.dart' show Unit;
 import 'src/posix.dart' as posix;
+import 'src/progress.dart' show Run, working, writing;
 import 'src/rar.dart' as rarlib;
 import 'src/sevenzip.dart' as sevenzip;
 import 'src/tool.dart';
@@ -131,7 +133,9 @@ const _inMemoryMax = 32 << 20;
 const _stageName = '.dart_toolkit_7z~';
 
 final class _Packed with Reader {
-  _Packed(this._paths, this._from, this._format, this._password);
+  _Packed(this._paths, this._from, this._format, this._password) {
+    working[this] = _pack;
+  }
 
   final List<String> _paths;
   final String _from;
@@ -139,16 +143,32 @@ final class _Packed with Reader {
   final String? _password;
 
   @override
-  Stream<List<int>> stream() async* {
+  Stream<List<int>> stream() => _pack(null);
+
+  /// Watched, a probe hears the input bytes packed against the total input
+  /// size: the archive's own bytes say nothing about how far it is.
+  Stream<List<int>> _pack(Run? run) async* {
+    final members = await _members();
+    void Function(int bytes)? packed;
+    void Function(int pct)? percent;
+    if (run != null) {
+      var total = 0, done = 0;
+      for (final m in members) {
+        if (!m.dir && m.link == null) total += (await _stat(m)).$2;
+      }
+      run.report(0, total, Unit.bytes);
+      packed = (n) => run.report(done = done + n > total ? total : done + n, total, Unit.bytes);
+      percent = (pct) => run.report(total * pct ~/ 100, total, Unit.bytes);
+    }
     switch (_format) {
       case ArchiveFormat.zip:
-        yield* zip.zipStream(_zipSources(), password: _password);
+        yield* zip.zipStream(_zipSources(members, packed), password: _password);
       case ArchiveFormat.sevenzip:
-        yield* _sevenzip();
+        yield* _sevenzip(members, percent);
       case ArchiveFormat.tar:
-        yield* _tarStream();
+        yield* _tarStream(members, packed);
       case ArchiveFormat.tgz:
-        yield* _tarStream().transform(io.gzip.encoder);
+        yield* _tarStream(members, packed).transform(io.gzip.encoder);
     }
   }
 
@@ -215,26 +235,31 @@ final class _Packed with Reader {
     return (mode, m.dir ? 0 : st.size, st.modified);
   }
 
-  Stream<zip.ZipSource> _zipSources() async* {
-    for (final m in await _members()) {
+  Stream<zip.ZipSource> _zipSources(List<_Member> members, void Function(int)? packed) async* {
+    for (final m in members) {
       final (mode, size, mtime) = await _stat(m);
       yield (
         name: m.name,
         mode: mode,
         mtime: mtime,
         size: size,
-        open: size == 0 ? null : () => io.File(m.path).openRead(0, size + 1),
+        open: size == 0 ? null : () => _counted(io.File(m.path).openRead(0, size + 1), packed),
         link: m.link,
       );
     }
   }
 
+  static Stream<List<int>> _counted(Stream<List<int>> bytes, void Function(int)? packed) =>
+      packed == null ? bytes : bytes.map((c) {
+        packed(c.length);
+        return c;
+      });
+
   /// 7-Zip writes it (LZMA2 on every core, links kept, AES with the
   /// names hidden when a password is set) into a temp file, since 7z's
   /// header sits after the data; then the file streams out. The members are
   /// ours: files, links and empty folders, so temps never slip in.
-  Stream<List<int>> _sevenzip() async* {
-    final members = await _members();
+  Stream<List<int>> _sevenzip(List<_Member> members, void Function(int pct)? percent) async* {
     final names = <String>[];
     for (final m in members) {
       final name = m.dir ? m.name.substring(0, m.name.length - 1) : m.name;
@@ -262,14 +287,15 @@ final class _Packed with Reader {
         '-snl',
         '-scsUTF-8',
         '-bso0',
-        '-bsp0',
+        percent == null ? '-bsp0' : '-bsp1',
         '-y',
         if (pw != null) ...['-p', '-mhe=on'],
         out,
         '@$list',
       ], dir: base);
       try {
-        await make.transform(Stream.value(pw == null ? const <int>[] : utf8.encode('$pw\n$pw\n'))).drain<void>();
+        final progress = make.transform(Stream.value(pw == null ? const <int>[] : utf8.encode('$pw\n$pw\n')));
+        await (percent == null ? progress.drain<void>() : _percents(progress, percent));
       } on ExitException catch (e) {
         throw io.FileSystemException('7-Zip failed: ${e.message}', base);
       }
@@ -282,8 +308,8 @@ final class _Packed with Reader {
   /// Streams a tar: one 512-byte header per member, file bytes straight
   /// from disk, two zero blocks at the end. Holds one member at a time,
   /// never the archive.
-  Stream<List<int>> _tarStream() async* {
-    for (final m in await _members()) {
+  Stream<List<int>> _tarStream(List<_Member> members, void Function(int)? packed) async* {
+    for (final m in members) {
       final (mode, size, mtime) = await _stat(m);
       // Streamed from disk: the stat size goes in the header, exactly that
       // many bytes follow (a file that shrinks mid-pack is an error).
@@ -301,6 +327,7 @@ final class _Packed with Reader {
       var sent = 0;
       await for (final chunk in io.File(m.path).openRead(0, size)) {
         sent += chunk.length;
+        packed?.call(chunk.length);
         yield chunk;
       }
       if (sent != size) {
@@ -469,14 +496,27 @@ final class _Extraction {
         await sink.close();
       }
       final exe = await tool(Tool.sevenzip);
+      final run = this.run;
+      // Watched: the extraction itself, as 7-Zip's percent of the archive.
+      final size = run == null ? 0 : await src.length();
+      final heard = _Percents((pct) => run?.report(size * pct ~/ 100, size, Unit.bytes));
       // A password goes on stdin, never in the process list; without one a
       // bare `-p` (the empty password) keeps 7-Zip from asking.
-      final unpack = Shell.filter([exe, 'x', '-y', '-bso0', '-bsp0', if (password == null) '-p', '-o$out', src.path]);
+      final unpack = Shell.filter([
+        exe,
+        'x',
+        '-y',
+        '-bso0',
+        run == null ? '-bsp0' : '-bsp1',
+        if (password == null) '-p',
+        '-o$out',
+        src.path,
+      ]);
       final done = Completer<void>();
       final sub = unpack
           .transform(Stream.value(password == null ? const <int>[] : utf8.encode('$password\n')))
           .listen(
-            null,
+            run == null ? null : heard.add,
             onError: (Object e, StackTrace st) {
               if (!done.isCompleted) done.completeError(e, st);
             },
@@ -525,6 +565,9 @@ final class _Extraction {
 
   /// Completes to stop a running 7-Zip.
   Completer<void>? _cancel;
+
+  /// The watched run this unpack reports its own work to, if any.
+  Run? run;
 
   /// Stops the decoding isolate, if any, and waits until it is gone.
   Future<void> stop() async {
@@ -885,13 +928,19 @@ _Format _sniff(List<int> head) {
 }
 
 final class _Unpacker with Writer {
-  _Unpacker(this._dir, this._password);
+  _Unpacker(this._dir, this._password) {
+    writing[this] = _consume;
+  }
 
   final String _dir;
   final String? _password;
 
   @override
-  Future<void> consume(Stream<List<int>> input) async {
+  Future<void> consume(Stream<List<int>> input) => _consume(input, null);
+
+  /// Watched, an archive 7-Zip extracts after reading it reports that
+  /// extraction too.
+  Future<void> _consume(Stream<List<int>> input, Run? run) async {
     // Sniff the format from the magic bytes without consuming them: peek
     // one tar block, then hand on the chunks as they came.
     final it = StreamIterator(input);
@@ -916,7 +965,7 @@ final class _Unpacker with Writer {
       // never inside it. Use the absolute path so '.' (whose dirname is
       // '.') still gets a sibling outside itself.
       final d = p.normalize(_dir);
-      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))));
+      final x = _Extraction(io.Directory(tree.tmpPath(p.normalize(p.absolute(d)))))..run = run;
       // An interrupt skips `finally`: the exit hook stops the decoder, then
       // removes the temp folder.
       final token = exit.onExit(() async {
@@ -1654,3 +1703,21 @@ final class _GzipPipe implements Pipe {
   Stream<List<int>> transform(Stream<List<int>> input) =>
       compress ? input.transform(io.gzip.encoder) : _gunzipChecked(input);
 }
+
+/// 7-Zip's `-bsp1` progress (`  42% 3 - name`, redrawn with backspaces)
+/// as percentages.
+final class _Percents {
+  _Percents(this._on);
+
+  final void Function(int pct) _on;
+  static final _pct = RegExp(r'(\d{1,3})%');
+
+  void add(List<int> chunk) {
+    final last = _pct.allMatches(latin1.decode(chunk, allowInvalid: true)).lastOrNull;
+    if (last != null) _on(int.parse(last[1]!).clamp(0, 100));
+  }
+}
+
+/// [output]'s percentages to [on], until it ends.
+Future<void> _percents(Stream<List<int>> output, void Function(int pct) on) =>
+    output.forEach(_Percents(on).add);

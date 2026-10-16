@@ -5,22 +5,23 @@
 /// ```dart
 /// final clip = await Fs.file('in.mkv').video();                 // probes; the file is read in place
 /// await (clip.encode(.mp4) > Fs.file('out.mp4'));                // remux: copies the streams, seconds
-/// await (clip.encode(.mp4, quality: 70, height: 720, start: 10.seconds, onProgress: bar.update)
-///     > Fs.file('small.mp4'));
+/// await (clip.encode(.mp4, quality: 70, height: 720, start: 10.seconds) & Console.bar('encode')
+///     > Fs.file('small.mp4'));                                     // encode  1:12/4:30  3.4×
 /// await (clip.frame(at: 5.seconds).encode(.jpg) > Fs.file('thumb.jpg'));
-/// final saved = await Video.compress('in.mp4', quality: 70);     // Compressed(before, after) or Kept(reason)
+/// final saved = await (Video.compress('in.mp4', quality: 70) & Console.bar('compress'));  // Compressed or Kept
 /// final live = await Video.open('https://…/master.m3u8');        // HLS/DASH, or split video + audio
 /// ```
 ///
 /// Public surface is exactly: [Video], [VideoFormat], [VideoCodec], and
 /// `compress`'s [Compression] ([Compressed] or [Kept] with a [KeptReason]).
 /// - `Reader.video()` reads any reader (a file in place, bytes or a stream
-///   spooled once), `Video.open()` a path or URL (HLS/DASH manifests, a separate `audio:`).
+///   spooled once), `Video.open()` a URL (HLS/DASH manifests, a separate `audio:`).
 /// - `Video.sniff()` names the format from the header bytes.
 /// - `Video.compress()` re-encodes a file in its own container, replacing
-///   it only when smaller.
-/// - [Video] supports `width` `height` `duration` `fps` `codec` `audio`
-///   `bitrate` `encode` `frame`.
+///   it only when smaller (a [Task]: watch it with `&`).
+/// - [Video] supports `width` `height` `duration` `fps` `format` `codec`
+///   `audioCodec` `bitrate` `encode` (a reader that reports its encode to a
+///   probe) `frame`.
 /// Everything else is private.
 library;
 
@@ -30,8 +31,10 @@ import 'dart:io' as io;
 import 'package:path/path.dart' as p;
 
 import 'image.dart';
+import 'src/format.dart' show Unit;
 import 'src/media.dart' as media;
 import 'src/media_proxy.dart' as proxy;
+import 'src/progress.dart' show Run, task, working;
 
 export 'core.dart';
 export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
@@ -99,13 +102,21 @@ final class Video {
     return null;
   }
 
-  /// Probe [source], a path or a URL (`.m3u8`/`.mpd` manifests included);
-  /// [audio] adds a separate audio source (DASH serves them apart), and
-  /// [headers] (cookies, referer, a token) go with ffmpeg's requests to
-  /// the source's own origins only, through a loopback proxy: never in the
-  /// process list, never to a CDN or redirect on another host.
-  static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) =>
-      _open(source, audio: audio, headers: headers);
+  /// Probe [source], a URL ffmpeg reads itself (`.m3u8`/`.mpd` manifests
+  /// included, which have no bytes to read); a file is a reading:
+  /// `Fs.file(path).video()`, a path here an [ArgumentError]. [audio] adds
+  /// a separate audio source (DASH serves them apart), and [headers]
+  /// (cookies, referer, a token) go with ffmpeg's requests to the source's
+  /// own origins only, through a loopback proxy: never in the process
+  /// list, never to a CDN or redirect on another host.
+  static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) {
+    if (!_url.hasMatch(source)) {
+      throw ArgumentError.value(source, 'source', 'a URL; read a file with Fs.file(path).video()');
+    }
+    return _open(source, audio: audio, headers: headers);
+  }
+
+  static final _url = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]+://');
 
   static Future<Video> _open(String source, {String? audio, Map<String, String>? headers, media.Temp? temp}) async {
     final inputs = [source, ?audio];
@@ -114,8 +125,9 @@ final class Video {
       headers,
       (mapped) async => [for (final i in mapped) _Info.of(await media.ffprobe(i))],
     );
-    final info = infos.length == 1 ? infos.first : infos.first.withAudio(infos.last);
+    var info = infos.length == 1 ? infos.first : infos.first.withAudio(infos.last);
     if (info.width == null && info.audio == null) throw const ContentException('no video or audio stream found');
+    if (!_url.hasMatch(source)) info = info.withFormat(sniff(await _head(source)));
     return Video._(inputs, headers, info, temp);
   }
 
@@ -123,20 +135,25 @@ final class Video {
   /// MKV, VP9 for WebM; [codec] overrides) and replace it, atomically, only
   /// when at least 5% smaller. Audio is copied, not re-encoded. Returns
   /// [Compressed] with the sizes before and after, or [Kept] with the
-  /// reason: not a video, AVI or audio only, or no smaller.
-  static Future<Compression> compress(String path, {int quality = 70, VideoCodec? codec}) async {
+  /// reason: not a video, AVI or audio only, or no smaller. A [Task]: a
+  /// probe shows the encode in media time (`1:12/4:30  3.4×`).
+  static Task<Compression> compress(String path, {int quality = 70, VideoCodec? codec}) {
     media.checkQuality(quality);
+    return task((run) => _compress(path, quality, codec, run));
+  }
+
+  static Future<Compression> _compress(String path, int quality, VideoCodec? codec, Run run) async {
     final head = await _head(path);
     final format = sniff(head);
     if (format == null) return const Kept(KeptReason.unknown);
     if (const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
       return const Kept(KeptReason.lossy);
     }
-    final video = await open(path);
+    final video = await _open(path);
     if (video._info.width == null) return const Kept(KeptReason.lossy);
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     try {
-      await video._encodeTo(tmp, format, quality: quality, codec: codec);
+      await video._encodeTo(tmp, format, quality: quality, codec: codec, onProgress: _reporter(run));
     } catch (_) {
       await io.File(tmp).delete().catchError((_) => io.File(tmp));
       rethrow;
@@ -161,7 +178,11 @@ final class Video {
   String? codec() => _info.codec;
 
   /// The audio codec (`aac`, `opus`, `mp3`), or null when there is no audio.
-  String? audio() => _info.audio;
+  String? audioCodec() => _info.audio;
+
+  /// The container it was read as (a file's magic bytes, else ffprobe's
+  /// name for a URL), or null when none of [VideoFormat] (a live HLS stream).
+  VideoFormat? format() => _info.format;
 
   /// Overall bits per second, or null when unknown.
   int? bitrate() => _info.bitrate;
@@ -176,7 +197,8 @@ final class Video {
   /// the codec's CRF, [width]/[height] scale keeping the aspect ratio when
   /// one is given, [codec] picks the encoder (default: h264, VP9 for WebM).
   /// Audio is copied when the container takes it, else AAC (Opus for WebM).
-  /// [onProgress] hears microseconds written and the total.
+  /// A probe on the reader (`encode(…) & Console.bar('encode')`) shows the
+  /// encode in media time, not the copy that follows it.
   ///
   /// A bad quality or size, or [VideoFormat.avi], is an [ArgumentError]
   /// here, not when the reader is read.
@@ -188,7 +210,6 @@ final class Video {
     VideoCodec? codec,
     Duration? start,
     Duration? end,
-    void Function(int done, int? total)? onProgress,
   }) {
     _checkEncode(format, quality, width, height, codec);
     return _Encoded(
@@ -200,7 +221,6 @@ final class Video {
       codec: codec,
       start: start,
       end: end,
-      onProgress: onProgress,
     );
   }
 
@@ -364,7 +384,7 @@ bool _fitsAudio(VideoFormat format, String? codec) => switch (format) {
 
 /// The facts [Video] reports, from ffprobe's JSON.
 final class _Info {
-  _Info(this.width, this.height, this.duration, this.fps, this.codec, this.audio, this.bitrate);
+  _Info(this.width, this.height, this.duration, this.fps, this.codec, this.audio, this.bitrate, [this.format]);
 
   factory _Info.of(Map<String, Object?> json) {
     final streams = ((json['streams'] as List?) ?? const []).cast<Map<String, Object?>>();
@@ -389,7 +409,19 @@ final class _Info {
       v?['codec_name'] as String?,
       a?['codec_name'] as String?,
       int.tryParse('${format['bit_rate'] ?? ''}'),
+      _container('${format['format_name'] ?? ''}'),
     );
+  }
+
+  /// ffprobe's demuxer names → ours; a file's magic bytes refine this.
+  static VideoFormat? _container(String name) {
+    final names = name.split(',');
+    if (names.contains('mp4')) return VideoFormat.mp4;
+    if (names.contains('matroska')) return VideoFormat.mkv;
+    if (names.contains('avi')) return VideoFormat.avi;
+    if (names.contains('mp3')) return VideoFormat.mp3;
+    if (names.contains('ogg')) return VideoFormat.opus;
+    return null;
   }
 
   final int? width;
@@ -399,8 +431,12 @@ final class _Info {
   final String? codec;
   final String? audio;
   final int? bitrate;
+  final VideoFormat? format;
 
-  _Info withAudio(_Info other) => _Info(width, height, duration, fps, codec, other.audio, bitrate);
+  _Info withAudio(_Info other) => _Info(width, height, duration, fps, codec, other.audio, bitrate, format);
+
+  _Info withFormat(VideoFormat? sniffed) =>
+      _Info(width, height, duration, fps, codec, audio, bitrate, sniffed ?? format);
 
   static double? _rate(String s) {
     final parts = s.split('/');
@@ -442,7 +478,7 @@ extension ReaderVideo on Reader {
   /// to a temp file once (never held in memory).
   Future<Video> video() async {
     final path = origin().path();
-    if (path != null && await io.File(path).exists()) return Video.open(path);
+    if (path != null && await io.File(path).exists()) return Video._open(path);
     final first = <int>[];
     final spooled = await media.spool(
       stream().map((chunk) {
@@ -472,7 +508,8 @@ extension VideoFuture on Future<Video> {
   Future<Duration> duration() async => (await this).duration();
   Future<double> fps() async => (await this).fps();
   Future<String?> codec() async => (await this).codec();
-  Future<String?> audio() async => (await this).audio();
+  Future<String?> audioCodec() async => (await this).audioCodec();
+  Future<VideoFormat?> format() async => (await this).format();
   Future<int?> bitrate() async => (await this).bitrate();
   Future<Image> frame({Duration at = Duration.zero}) async => (await this).frame(at: at);
 
@@ -485,7 +522,6 @@ extension VideoFuture on Future<Video> {
     VideoCodec? codec,
     Duration? start,
     Duration? end,
-    void Function(int done, int? total)? onProgress,
   }) {
     _checkEncode(format, quality, width, height, codec);
     return _Encoded(
@@ -497,7 +533,6 @@ extension VideoFuture on Future<Video> {
       codec: codec,
       start: start,
       end: end,
-      onProgress: onProgress,
     );
   }
 }
@@ -512,8 +547,9 @@ final class _Encoded with Reader {
     this.codec,
     this.start,
     this.end,
-    this.onProgress,
-  });
+  }) {
+    working[this] = _watched;
+  }
 
   final Future<Video> Function() _video;
   final VideoFormat _format;
@@ -523,10 +559,14 @@ final class _Encoded with Reader {
   final VideoCodec? codec;
   final Duration? start;
   final Duration? end;
-  final void Function(int done, int? total)? onProgress;
 
   @override
-  Stream<List<int>> stream() async* {
+  Stream<List<int>> stream() => _stream(null);
+
+  /// Watched: the probe hears the encode, in media time.
+  Stream<List<int>> _watched(Run run) => _stream(_reporter(run));
+
+  Stream<List<int>> _stream(void Function(int done, int? total)? onProgress) async* {
     final video = await _video();
     // mp4/mov need a seekable output (faststart), so encode to a temp file.
     final out = await media.tempOut(_format.name);
@@ -549,3 +589,8 @@ final class _Encoded with Reader {
     yield* media.readAndDelete(out);
   }
 }
+
+/// [run]'s report for an encode's `(microseconds written, total)`, or null
+/// when nothing watches it (no `-progress` pass then).
+void Function(int done, int? total)? _reporter(Run run) =>
+    run.watched ? (done, total) => run.report(done, total, Unit.time) : null;

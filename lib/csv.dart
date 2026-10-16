@@ -15,6 +15,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io' show PathNotFoundException;
 
 import 'core.dart';
 export 'core.dart';
@@ -66,8 +67,18 @@ abstract final class Csv {
 /// `reader.csv()`: the rows of any [Reader] (`Fs.file`, an http response);
 /// `reader.rows()` streams them as they arrive, in constant memory.
 extension ReaderCsv on Reader {
-  /// Every row, split on [sep] (quotes and CRLF handled).
-  Future<List<List<String>>> csv({String sep = ','}) async => Csv.parse(await text(), sep: sep);
+  /// Every row, split on [sep] (quotes and CRLF handled); [or] when the
+  /// source does not exist.
+  Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or}) async {
+    final String body;
+    try {
+      body = await text();
+    } on PathNotFoundException {
+      if (or != null) return or;
+      rethrow;
+    }
+    return Csv.parse(body, sep: sep);
+  }
 
   /// The CSV rows one at a time as the bytes arrive: a multi-gigabyte
   /// export reads in constant memory. Same rules as [Csv.parse].
@@ -90,7 +101,8 @@ extension ReaderCsv on Reader {
 
 /// The Future mirror (rule 4).
 extension ReaderFutureCsv on Future<Reader> {
-  Future<List<List<String>>> csv({String sep = ','}) async => (await this).csv(sep: sep);
+  Future<List<List<String>>> csv({String sep = ',', List<List<String>>? or}) async =>
+      (await this).csv(sep: sep, or: or);
   Stream<List<String>> rows({String sep = ','}) => Stream.fromFuture(this).asyncExpand((r) => r.rows(sep: sep));
 }
 

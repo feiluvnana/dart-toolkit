@@ -12,7 +12,8 @@ Pass this file to every subagent: the repo has no CLAUDE.md, so the review agent
 - Prefer deleting to adding: an addition must remove more call-site code than the surface it adds.
 
 ## API shape
-- Every module works alone and composes: `Reader | Pipe > Writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
+- Every module works alone and composes: `reader | pipe & probe > writer`, Future mirrors (no inner `await`), actions return the receiver, readings are methods, named params over chains.
+- Four patterns are the whole style (VISION.md §1, rules 15–21): read, flow, watch (`work & probe`; long work returns a `Task`, never a progress callback), act. One way per idea: `check()` on values, `X.parse(text)`/`reader.x(or:)` per format, prompts all take `or:`/`timeout:`, item renderers positional.
 - Names: short, one word when it reads one way, the same word for the same idea in every module (docs/VISION.md §1).
 - Type safety: no `Object`/`dynamic` params, sealed results over exceptions where callers branch, records for multi-returns.
 - Pure Dart plus pub packages; no native code, no codegen, no sync twins. No backward compatibility: rename, merge or delete freely.

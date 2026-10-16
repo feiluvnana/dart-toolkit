@@ -11,6 +11,8 @@ import 'dart:io' as io;
 import 'dart:isolate';
 
 import 'format.dart';
+
+export 'bridge.dart';
 import 'winconsole.dart' as win;
 
 import 'sanitize.dart';
@@ -52,6 +54,10 @@ var _input = _makeInput();
 io.Process? _tty;
 StreamSubscription<List<int>>? _ttySub;
 Stream<List<int>>? _stdinFallback;
+
+/// Piped stdin's bytes (`Console.input()`), shared with the prompts that
+/// read it after: one subscription per process is all `dart:io` allows.
+Stream<List<int>> stdinBytes() => _stdinFallback ??= io.stdin.asBroadcastStream();
 
 /// True while no listener has taken stdin itself (the piped fallback), so a
 /// synchronous `readLineSync` is still allowed and loses nothing.
@@ -247,31 +253,6 @@ final class TermFocus extends TermEvent {
   TermFocus(this.gained);
 
   final bool gained;
-}
-
-/// Console-in-Tui routing: while a state-driven [Tui.run] is active,
-/// `Console.spin`/`bar` draw in the status row (several at once) and
-/// `ask`/`confirm`/`choose` open modal popups. The active session publishes
-/// itself here; `console.dart` delegates when it is non-null.
-abstract class TuiBridge {
-  static TuiBridge? current;
-
-  Object spinStarted(String label);
-  void spinEnded(Object id, bool ok);
-  Object barStarted(int? total, String? label);
-  void barMode(Object id, bool bytes);
-  void barTick(Object id, int count, int fresh); // fresh: what counts towards the rate
-  void barEnded(Object id, bool ok);
-  void barTotal(Object id, int? total);
-  void log(String line);
-  void notify(String message);
-  void copy(String text);
-
-  /// Prompts resolve null when the popup is cancelled (Escape, Ctrl-C) or
-  /// [timeout] passes with no answer.
-  Future<String?> promptAsk(String question, {required bool secret, Duration? timeout});
-  Future<bool?> promptConfirm(String question, bool or);
-  Future<String?> promptChoose(String question, List<String> choices, int initial);
 }
 
 /// How long a lone ESC waits for the rest of a sequence before it counts
@@ -1762,22 +1743,21 @@ int displayWidth(String text) {
 /// `Console.bar` and `Region.bar` draw it. The bar takes what the rest
 /// leaves (at most 20 cells); when that is nothing, the label is cut with
 /// `…`, then dropped, then the line is cut. An unknown [total] draws no
-/// bar. With [bytes] the counts and [rate] are sizes; a null [rate] shows
-/// none.
+/// bar. Counts and [rate] read in [unit] (sizes, items, media time); a
+/// null [rate] shows none.
 String barLine(
   int cols, {
   String? label,
   required int done,
   int? total,
-  bool bytes = false,
+  Unit unit = Unit.items,
   double? rate,
   required bool ascii,
 }) {
   if (cols <= 0) return '';
   final known = total != null && total > 0;
-  String n(int v) => bytes ? fmtSize(v) : '$v';
-  final counts = known ? '${n(done)}/${n(total)}' : n(done);
-  final tail = rate == null ? counts : '$counts  ${bytes ? fmtRate(rate) : '${fmtCount(rate)}/s'}';
+  final counts = fmtCounts(done, total, unit);
+  final tail = rate == null ? counts : '$counts  ${fmtPace(rate, unit)}';
   final lab = label ?? '';
   final labW = lab.isEmpty ? 0 : displayWidth(lab) + 1;
   final tailW = displayWidth(tail);

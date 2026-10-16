@@ -4,8 +4,8 @@
 /// final api = Http.client(base: 'https://api.example.com/', headers: {'authorization': token}, check: true);
 /// final me = await api.get('me').json();
 /// final cdn = Http.client(resume: true);
-/// await (cdn.get(isoUrl) | Console.bar(null) > Fs.file('d.iso'));   // skips, resumes, renames atomically
-/// await api.put('upload', body: .stream(Fs.file('d.iso')));
+/// await (cdn.get(isoUrl) & Console.bar('d.iso') > Fs.file('d.iso'));   // skips, resumes, renames atomically
+/// await api.put('upload', body: .stream(Fs.file('d.iso') & Console.bar('upload')));
 /// ```
 ///
 /// Public surface is exactly: [Http], [Client], [Response], [Body],
@@ -279,14 +279,14 @@ abstract final class Http {
   ///   its subdomains), on every redirect hop.
   /// - [idle]: an idle client releases its sockets after this, so a
   ///   finished script exits; [connections] caps the sockets per host.
-  /// - [resume]: a GET piped into a file (`get(u) | bar > Fs.file(f)`)
+  /// - [resume]: a GET piped into a file (`get(u) & bar > Fs.file(f)`)
   ///   skips a complete file (same `content-length`, or any file when the
   ///   server sends none), resumes a `.part` with `Range` and `If-Range` (its
   ///   ETag or Last-Modified, kept in `.part.tag`; a 206 for exactly the
   ///   missing bytes, anything else restarts), and renames the finished
   ///   file into place. Stored
   ///   bytes are replayed through the pipes, so a bar counts the whole file
-  ///   and a hash verifies it; a pipe that is not a pass-through (gzip, a
+  ///   (and its rate only the new bytes) and a hash verifies it; a pipe that is not a pass-through (gzip, a
   ///   filter) downloads from scratch. A transport failure keeps the `.part`
   ///   for the next run, any other failure deletes it. The GET is sent at
   ///   the end of the current synchronous block unless such a pipeline
@@ -384,8 +384,9 @@ abstract final class Http {
 /// a POST become a GET (the body is dropped); 307/308 keep the method and
 /// resend an in-memory body. A cross-origin hop drops credential headers;
 /// an https → http hop is followed with a warning on stderr.
-/// [query] values may be `String`, `num`, `bool`, null (drops the key) or an
-/// `Iterable` of those (repeats the key).
+/// [query] values may be `String`, `num`, `bool`, a `Map` (sent as JSON, as
+/// GraphQL's `variables`), null (drops the key) or an `Iterable` of those
+/// (repeats the key).
 sealed class Client implements Closeable {
   /// A variant of this client: a given setting replaces this one's (null
   /// keeps it; [headers] merge by name). The copy shares the jar, the
@@ -1359,8 +1360,8 @@ Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch
 /// `content-range: bytes */<length>` of a 416.
 final _unsatisfied = RegExp(r'^bytes\s+\*/(\d+)$', caseSensitive: false);
 
-/// The query string for [values]: `num`/`bool` as text, null drops the key,
-/// an `Iterable` repeats it.
+/// The query string for [values]: `num`/`bool` as text, a `Map` as JSON,
+/// null drops the key, an `Iterable` repeats it.
 String _encodePairs(Map<String, Object?> values) {
   final out = StringBuffer();
   void add(String key, Object? value) {
@@ -1373,7 +1374,8 @@ String _encodePairs(Map<String, Object?> values) {
         Uri.encodeQueryComponent(switch (value) {
           String() => value,
           num() || bool() => '$value',
-          _ => throw ArgumentError.value(value, key, 'must be a String, num, bool, null or an Iterable of those'),
+          Map() => jsonEncode(value),
+          _ => throw ArgumentError.value(value, key, 'must be a String, num, bool, Map, null or an Iterable of those'),
         }),
       );
   }

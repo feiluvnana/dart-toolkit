@@ -10,23 +10,9 @@ import 'package:dart_toolkit/http.dart';
 import 'dashboard.dart';
 import 'job.dart';
 
-/// The kinds of media every platform shares: the `--category` values and
-/// the folders under each user. A platform offers the ones it has.
-enum Kind {
-  posts('the feed: photos, videos, carousels, tweets'),
-  stories('what is up now'),
-  highlights('saved stories'),
-  photos('the photos tab'),
-  videos('the videos and reels tabs'),
-  albums('photo albums'),
-  profiles('profile pictures, banners and covers');
-
-  const Kind(this.about);
-  final String about;
-
-  /// The folder under the user: the kind's name.
-  String get folder => name;
-}
+/// The kinds of media every platform shares: the `--category` values and,
+/// by name, the folders under each user. A platform offers the ones it has.
+enum Kind { posts, stories, highlights, photos, videos, albums, profiles }
 
 /// A user (or, with [post], one post of theirs) on [platform].
 final class Target {
@@ -63,9 +49,6 @@ abstract class Platform {
   /// What it offers, in the order the dashboard shows them.
   List<Kind> get kinds;
 
-  /// Folders older runs used, renamed into a kind's on the next run.
-  Map<String, Kind> get renamed => const {};
-
   /// Whether [input] is one of its URLs.
   bool matches(String input);
 
@@ -84,7 +67,7 @@ abstract class Platform {
   /// The client from `.<code>.session` (a cookies.txt export plus a
   /// "user-agent: …" line), or null without a login.
   Future<Client?> login() async {
-    final jar = await Cookies.load(Fs.scriptDir().file('.$code.session'));
+    final jar = await Fs.scriptDir().file('.$code.session').cookies(or: Cookies());
     return loginCookies.any((c) => jar[c] != null) ? client(jar) : null;
   }
 

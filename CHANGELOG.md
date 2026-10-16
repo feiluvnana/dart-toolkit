@@ -1,26 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.0.6
 
 **Added**
 
+- `core`: progress is one pattern, `reader | pipe & probe > writer`. `&` attaches a `Probe` to a reader, a `Task` or any future (`Watch`), and the probe shows the whole run: a flow's source bytes against its length (learned from `Origin.size()` or a file's stat, never passed; still right after gzip or a filter), the work a source or writer reports (an encode in media time, a 7z built or extracted by 7-Zip), a `Task`'s count, or a spinner. Counted once at the root, so probes cost nothing per chunk; one probe watching many runs sums them. `Meter` (`done` `total` `rate`) is a probe to draw by hand; `Task<T>` is a future that counts; `Probe` takes one member, `update(done, total)`.
+- Long work returns a `Task`: `Pool.map`/`settle` (items), `File`/`Dir`/`Link` `copy`/`move` (bytes; watched, a folder copy streams so it can count), `Dir.list` (entries), `Video.compress` (media time), `Shell.run` (a spinner). `Video.encode` and `Archive.archive` report their work to a probe on their reader; `page.download` returns when the browser names the file and its `Download` streams with the browser's progress. First-use downloads of ffmpeg, 7-Zip and Chrome for Testing show a live line on stderr (the status row inside a `Tui.run`).
+- `shell`: `Shell.read(cmd)`, a program's stdout as a live `Reader` (stderr passes through; a non-zero exit fails it); `Output.check()`.
+- `console`: `Console.out()` and `Console.input()` (stdout as a `Writer`, stdin as a `Reader`); `timeout:` on `confirm`, `choose` and `key`, and `or:` on `key`.
+- `core`: `Origin.size()`; `reader.cookies(or:)`. `csv`: `reader.csv(or:)`. `chrome`: `Capture.name()`. `video`: `Video.format()`.
+- `http`: a `Map` in `query:` is sent as JSON (GraphQL's `variables`/`features`), so `Json.encode(…)` wrappers go.
 - `shell`: `ExitException` (a `ProcessException` and a `ToolkitException`) for a program that exits non-zero under `check:` or as a filter; one that cannot start stays a plain `ProcessException`.
 - `core`: `PasswordException` (a `ContentException`) for a missing or wrong archive password; `fs`: `LockedException` when `File.lock` is held elsewhere.
-- `image`/`video`: `compress` returns `Compressed(before, after)` or `Kept(reason)` (`KeptReason.unknown`, `.lossy`, `.notSmaller`, with `text`).
+- `image`/`video`: `compress` returns `Compressed(before, after)` or `Kept(reason)` (`KeptReason.unknown`, `.lossy`, `.notSmaller`, with `text`); `Video.compress` is a `Task`.
 - `image`/`tui`: `Pixels` is exported (what `image.pixels()` returns and `Region.picture` takes).
 - `image`: now runs on ffmpeg (package:image is gone; import startup 892 → ~330 ms). Reads HEIC (tile grids included) and AVIF, writes WebP and AVIF; `image()` on a file reads it in place, other readers go to a temp file once, never memory. `resize`/`crop` record steps and `encode` runs them in one ffmpeg call. `Image.compress(path, quality:)` re-encodes in the same format and replaces the file only when ≥ 5% smaller (returns `(before, after)` or null); animated, CMYK and HEIC files are left alone, JPEG EXIF/ICC survive. `image.pixels(width:)` for `Region.picture`; `format()`.
-- `video`: `Video.open(path or URL, audio:, headers:)` (HLS/DASH, a separate audio source); `encode` copies streams when no quality/size/codec is asked (remux), `codec:` (`h264` `h265` `av1` `vp9`), `start:`/`end:`, `onProgress:`; audio-only `m4a`/`mp3`/`opus`; `frame(at:)` → `Image`; `codec()` `audio()` `bitrate()`; `Video.compress(path, quality:, codec:)`.
+- `video`: `Video.open(URL, audio:, headers:)` (HLS/DASH, a separate audio source; a file is `Fs.file(path).video()`); `encode` copies streams when no quality/size/codec is asked (remux), `codec:` (`h264` `h265` `av1` `vp9`), `start:`/`end:`, and a probe on it sees the encode; audio-only `m4a`/`mp3`/`opus`; `frame(at:)` → `Image`; `format()` `codec()` `audioCodec()` `bitrate()`; `Video.compress(path, quality:, codec:)`.
 - ffmpeg/ffprobe 9.0.2: a PATH copy is used when it has the encoders a call needs, else a static build pinned by sha256 is downloaded once into the user cache (native arm64 on Apple silicon), one process at a time; encodes share a limit of half the cores and run through `shell`, so Ctrl-C ends them.
 - `core`: `bytes.size()` (`12.1 MB`).
-- `http`: `Body.multipart(fields, files: {name: reader})` (files stream); `Rate(perHost: true)`; ETag/Last-Modified revalidation in `cache:`; `socks5://`/`socks5h://` proxies; `client.sent()`; `Cookies.load(reader)`, `Cookies.agent()`, `Cookies(agent:)`; `Http.serve(max:)` (413 over 64 MB).
+- `http`: `Body.multipart(fields, files: {name: reader})` (files stream); `Rate(perHost: true)`; ETag/Last-Modified revalidation in `cache:`; `socks5://`/`socks5h://` proxies; `client.sent()`; `reader.cookies(or:)`, `Cookies.agent()`, `Cookies(agent:)`; `Http.serve(max:)` (413 over 64 MB).
 - `fs`: `Dir.size({match})` → `(files, bytes)`, skipping partial and temp files; `File.touch([time])`.
 - `pool`: `Pool(limit:)` with `run(job)`: shared FIFO lanes.
 - `shell`: `Shell.run(cancel:)`.
 - `chrome`: `page.cookies(all: true)`; `run` takes a function source; Chrome for Testing downloads with resume (chrome-headless-shell for headless runs); `connect` takes an `http://` URL.
-- `console`: `Console.ask(timeout:)` returns `or` and stops its reader, so the script can exit; `Speed` (`add`, `rate`, and a `Pipe`): a 5 s rate that ignores negative counts and bytes a resumed download replays.
-- `tui`: `Region.write(inline: true)` spans measured in cells; `Region.bar(rate:)` shows a rate (a `Speed`'s).
+- `console`: `Console.ask(timeout:)` returns `or` and stops its reader, so the script can exit.
+- `tui`: `Region.write(inline: true)` spans measured in cells; `Region.bar(meter)` draws a `Meter` in its unit, with its rate.
 - `cli`: `Opt(min:, max:)` (usage shows `[1-100]`); `Command(version:)` answers `--version` at any depth.
-- `html`: `:scope` and a leading `>`/`+`/`~` relative to the receiver (`ul.$('> li')`); `Element`/`Elements.html()`; `srcset`/`data-srcset`/`<meta content>` paths resolve against the base.
+- `html`: `:scope` and a leading `>`/`+`/`~` relative to the receiver (`ul.$('> li')`); `Element`/`Elements.markup()`; `srcset`/`data-srcset`/`<meta content>` paths resolve against the base.
 - `json`: negative indexes (`items.-1`); `asList<Json>()`/`asMap<Json>()` wrap their values; `Reader.ndjson()`.
 - `csv`: `Reader.rows()` streams records.
 - `hash`: `Hasher.base64()`/`bytes()`; `key:` (HMAC) on every algorithm.
@@ -30,11 +36,16 @@
 
 **Changed**
 
+- Removed, one way each instead: `Pipe.tap` and `Speed` (→ `Meter`), `Console.spin` (→ `work & Console.bar('label')`), `Pool.map/settle(onDone:)` and `Video.encode(onProgress:)` (→ `& probe`), `Shell.run(live:, onLine:)` (→ `Shell.read`), `Shell.run(check:)` (→ `.check()`), `Cookies.load` (→ `reader.cookies(or:)`). A `Bar` is a `Probe`, no longer a `Pipe`: `reader & bar`, not `reader | bar`.
+- `console`: `Console.bar(label, {total, keep})`: the label is the one positional and the total is learned from the run; `Console.key(prompt)` and `choose(question, items, label)` take their text and item function positionally.
+- Rates (`Console.bar`, `Meter`, the status row) are the speed now: 100 ms steps smoothed with a 1 s time constant, not a 5 s average.
+- `html`: `Element(s).html()` is `markup()`; `html()` only parses. `video`: `audio()` is `audioCodec()`. `fs`: `lock(wait:)` is `lock(timeout:)`.
+- `chrome`: `BrowserException` is a `ToolkitException` (an `Exception`), no longer a `StateError`.
 - `http`: the byte cap is `max:` (`Http.client`, `copy`, `Http.serve`); `limit:` always means how many at once, as in `Pool`. A `copy()` counts in its parent's `sent()` and closes with it.
 - `http`: `Body.multipart(fields, files: {name: reader})` replaces the mixed map.
 - `chrome`: `Page.run(js)` returns `Json` (`.or('')`, `.value<int>()`, `.asList<T>()`) and runs its source once (a function result ran twice). `open(block:)` takes a `Set<Resource>` (`{.image, .font}`). Chrome for Testing is pinned to 155.0.8059.84 and checked by sha256 (downloaded again once into a versioned folder).
 - `console`: `Console.ask` returns `String`: an empty line, a closed stdin, a cancelled popup or a timeout give `or` (`''` by default).
-- `tui`: `Region.bar(rate:)` takes a per-second rate (a `Speed`'s) instead of `since:`. A run without a terminal says to use `Console`; one whose terminal input closes ends with an error instead of hanging.
+- `tui`: `Region.bar` takes a `Meter` instead of counts and `since:`. A run without a terminal says to use `Console`; one whose terminal input closes ends with an error instead of hanging.
 - `pool`: `retries:` no longer re-runs bad data (`ContentException`), TLS failures or HTTP status errors.
 - `cli`: a failing handler prints every line of its error.
 - no `HOME` (or `LOCALAPPDATA`) is an error for the native tools and media spooling, never a shared temp folder.
@@ -44,7 +55,7 @@
 - `pool`: `Pool` is a `final class` you can hold.
 - `fs`: atomic writes fsync the file before the rename.
 - `chrome`: an in-house DevTools client over `dart:io` WebSocket replaces puppeteer (import startup +1352 → +307 ms); a cached or installed Chrome is used before downloading; `scroll(to:, timeout:)`; downloads use `allowAndName`; a script throwing in `run` is a `BrowserException`.
-- `console`/`tui`: one key-hold rule: a lone ESC is Escape after 50 ms (was 30 ms in the Tui, 150 ms in Console), a split sequence waits up to 1 s; bars show a 5 s rate; `Region.bar` keeps to one row; fenced code renders plain in the accent colour.
+- `console`/`tui`: one key-hold rule: a lone ESC is Escape after 50 ms (was 30 ms in the Tui, 150 ms in Console), a split sequence waits up to 1 s; `Region.bar` keeps to one row; fenced code renders plain in the accent colour.
 - `archive`: `ArchiveFormat.sevenZip` is `ArchiveFormat.sevenzip`.
 - `json`: `|` separates whole paths (`$('a.b|c')` is `a.b`, else `c`); wildcards flatten; `or<String>` reads any scalar as text; `Reader.json` decodes bytes directly (10–30% faster).
 - `html`: re-exports json's names; `form().fields` is `Map<String, List<String>>`.

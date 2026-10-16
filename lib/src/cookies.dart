@@ -6,14 +6,12 @@ library;
 import 'dart:convert';
 import 'dart:io' as io;
 
-import '../core.dart' show Reader;
-
 /// A cookie jar: domain, path, expiry and `secure` per cookie, which a
 /// `Cookie:` header string loses, plus the session's `User-Agent`.
 ///
 /// ```dart
 /// await file.write(cookies.encode());               // persist a session
-/// final jar = await Cookies.load(Fs.file('.session'));
+/// final jar = await Fs.file('.session').cookies(or: Cookies());
 /// final client = Http.client(cookies: jar);         // sends jar.agent() too
 /// ```
 final class Cookies {
@@ -55,22 +53,6 @@ final class Cookies {
       );
     }
     return jar;
-  }
-
-  /// [parse] of a session file (a `cookies.txt` export, optionally with a
-  /// `user-agent: …` line). A missing file is an empty jar.
-  ///
-  /// ```dart
-  /// final jar = await Cookies.load(Fs.file('.ins.session'));
-  /// if (jar['sessionid'] == null) return null;      // not logged in
-  /// final ig = Http.client(cookies: jar);           // and its user-agent
-  /// ```
-  static Future<Cookies> load(Reader source) async {
-    try {
-      return parse(await source.text());
-    } on io.PathNotFoundException {
-      return Cookies();
-    }
   }
 
   String? _agent;

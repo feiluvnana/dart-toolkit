@@ -175,7 +175,7 @@ Future<void> main(List<String> args) async {
         (s, app) => Screen((r) {
           final [a, b] = r.rows([3, 0]);
           a.box('t');
-          b.bar(1, 2).write('x', color: Color.red);
+          b.bar(Meter()..update(1, 2)).write('x', color: Color.red);
         }, keys: {'escape': ('', () => quitOnEscape(app))}),
       );
   }

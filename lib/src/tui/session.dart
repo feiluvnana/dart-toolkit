@@ -122,17 +122,6 @@ final class _WheelEv extends _Ev {
   final int dir;
 }
 
-/// A Console progress bar mirrored into the status row.
-final class _CBridge {
-  _CBridge(this.total, this.label);
-
-  int? total;
-  final String? label;
-  var done = 0;
-  var bytes = false;
-  final meter = fmt.Meter();
-}
-
 final class _Session<S> implements term.TuiBridge {
   _Session(this._state, this._screenFn, {required this.out, required this.size, required this.accent});
 
@@ -196,8 +185,7 @@ final class _Session<S> implements term.TuiBridge {
   final _suggests = <Field, _Suggest>{};
   _Suggest? _activeSg;
   final _prompts = <_Prompt>[];
-  final _cSpinners = <Object, String>{};
-  final _cBars = <Object, _CBridge>{};
+  final _cBars = <Object, term.BarState Function()>{};
   var _termFocused = true;
   var _focusReported = false; // set by the first focus event
   var _statusY = 23;
@@ -312,7 +300,7 @@ final class _Session<S> implements term.TuiBridge {
         _fatal = null;
         Error.throwWithStackTrace(e, st);
       }
-      final active = _activeH > 0 || _spinVisible || _cSpinners.isNotEmpty || _cBars.isNotEmpty;
+      final active = _activeH > 0 || _spinVisible || _cBars.isNotEmpty;
       _waker ??= Completer<void>();
       final w = _waker!;
       // Wake on an event, or: when a redraw waits out the 60 fps gap, when
@@ -444,9 +432,9 @@ final class _Session<S> implements term.TuiBridge {
   // --- term.TuiBridge (Console-in-Tui routing) -----------------------------
 
   @override
-  Object spinStarted(String label) {
+  Object barStarted(term.BarState Function() state) {
     final id = Object();
-    _cSpinners[id] = label;
+    _cBars[id] = state;
     // New work replaces a stale message, so its progress shows.
     _sayMsg = _error = null;
     _dirtyAndWake();
@@ -454,43 +442,7 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   @override
-  void spinEnded(Object id, bool ok) {
-    final label = _cSpinners.remove(id);
-    if (!ok && label != null) _error = '$_failMark $label'.trimRight();
-    _dirtyAndWake();
-  }
-
-  @override
-  Object barStarted(int? total, String? label) {
-    final id = Object();
-    _cBars[id] = _CBridge(total, label);
-    _sayMsg = _error = null;
-    _dirtyAndWake();
-    return id;
-  }
-
-  @override
-  void barMode(Object id, bool bytes) {
-    final bar = _cBars[id];
-    if (bar != null) bar.bytes = bytes;
-  }
-
-  @override
-  void barTick(Object id, int count, int fresh) {
-    final bar = _cBars[id];
-    if (bar == null || count <= 0) return;
-    bar.done += count;
-    bar.meter.add(fresh);
-    final total = bar.total;
-    if (total != null && total > 0 && bar.done > total) bar.done = total;
-    _dirtyAndWake();
-  }
-
-  @override
-  void barTotal(Object id, int? total) {
-    _cBars[id]?.total = total;
-    _dirtyAndWake();
-  }
+  void barChanged(Object id) => _dirtyAndWake();
 
   @override
   void log(String line) {
@@ -500,45 +452,44 @@ final class _Session<S> implements term.TuiBridge {
   @override
   void barEnded(Object id, bool ok) {
     final bar = _cBars.remove(id);
-    if (!ok && bar != null) _error = '$_failMark ${bar.label ?? ''}'.trimRight();
+    if (!ok && bar != null) _error = '$_failMark ${bar().label ?? ''}'.trimRight();
     _dirtyAndWake();
   }
 
   @override
   Future<String?> promptAsk(String question, {required bool secret, Duration? timeout}) {
     final p = _Ask(question, secret: secret);
-    if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
-    _prompts.add(p);
-    _dirtyAndWake();
-    if (timeout == null || p.done.isCompleted) return p.done.future;
-    final timer = Timer(timeout, () {
-      if (p.done.isCompleted) return;
-      _prompts.remove(p);
-      p.cancel();
-      _dirtyAndWake();
-    });
-    return p.done.future.whenComplete(timer.cancel);
+    return _open(p, p.done, timeout);
   }
 
   @override
-  Future<bool?> promptConfirm(String question, bool or) {
+  Future<bool?> promptConfirm(String question, bool or, {Duration? timeout}) {
     final p = _Confirm(question, or);
-    if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
-    _prompts.add(p);
-    _dirtyAndWake();
-    return p.done.future;
+    return _open(p, p.done, timeout);
   }
 
   @override
-  Future<String?> promptChoose(String question, List<String> choices, int initial) {
+  Future<String?> promptChoose(String question, List<String> choices, int initial, {Duration? timeout}) {
     if (choices.isEmpty) {
       throw ArgumentError.value(choices, 'choices', 'must not be empty');
     }
     final p = _Choose(question, choices, initial);
+    return _open(p, p.done, timeout);
+  }
+
+  /// Show prompt [p]; after [timeout] with no answer it closes like Escape.
+  Future<T?> _open<T>(_Prompt p, Completer<T?> done, Duration? timeout) {
     if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on
     _prompts.add(p);
     _dirtyAndWake();
-    return p.done.future;
+    if (timeout == null || done.isCompleted) return done.future;
+    final timer = Timer(timeout, () {
+      if (done.isCompleted) return;
+      _prompts.remove(p);
+      p.cancel();
+      _dirtyAndWake();
+    });
+    return done.future.whenComplete(timer.cancel);
   }
 
   /// One identity per key set, so a `Region.on` region is the same
@@ -1241,7 +1192,7 @@ final class _Session<S> implements term.TuiBridge {
       leftStyle = accent == null ? _pack(null, null, {Style.bold}) : _pack(Color.red, null, {});
     } else if (_sayMsg != null) {
       left = _sayMsg!;
-    } else if (_cSpinners.isNotEmpty || _cBars.isNotEmpty) {
+    } else if (_cBars.isNotEmpty) {
       left = _consoleStatus();
     } else if (_statusLine != null) {
       left = _statusLine!;
@@ -1272,32 +1223,23 @@ final class _Session<S> implements term.TuiBridge {
     }
   }
 
-  /// The running Console spinners and bars for the status row.
+  /// The running Console bars for the status row: a spinner until one
+  /// counts, then `label ━━━╸── counts  rate`.
   String _consoleStatus() {
     final frames = fmt.spinFrames(ascii: _caps.ascii);
     final parts = <String>[];
-    for (final label in _cSpinners.values) {
-      parts.add('${frames[_spinTick % frames.length]} $label');
-    }
-    for (final bar in _cBars.values) {
+    for (final state in _cBars.values) {
+      final bar = state();
       final lab = bar.label == null ? '' : '${bar.label} ';
-      final rate = bar.meter.rate();
+      if (bar.spinning) {
+        parts.add('${frames[_spinTick % frames.length]} ${bar.label ?? ''}'.trimRight());
+        continue;
+      }
       final total = bar.total;
-      final counts = total == null || total <= 0
-          ? (bar.bytes ? fmt.fmtSize(bar.done) : '${bar.done}')
-          : bar.bytes
-          ? '${fmt.fmtSize(bar.done)}/${fmt.fmtSize(total)}'
-          : '${bar.done}/$total';
-      final rateText = bar.bytes ? fmt.fmtRate(rate) : '${fmt.fmtCount(rate)}/s';
-      parts.add('$lab${_barGlyphs(bar.done, total)}$counts  $rateText');
+      final glyphs = total == null || total <= 0 ? '' : '${fmt.barGlyphs(bar.done, total, 10, ascii: _caps.ascii)} ';
+      parts.add('$lab$glyphs${fmt.fmtCounts(bar.done, total, bar.unit)}  ${fmt.fmtPace(bar.rate, bar.unit)}');
     }
     return parts.join(' · ');
-  }
-
-  /// `━━━╸──── ` for a known total (like `Console.bar`), else nothing.
-  String _barGlyphs(int done, int? total) {
-    if (total == null || total <= 0) return '';
-    return '${fmt.barGlyphs(done, total, 10, ascii: _caps.ascii)} ';
   }
 
   void _writeRaw(int row, int from, int end, String text, int style) {

@@ -43,24 +43,18 @@ final class Job {
   Dir get dir => _dir!;
   Index get index => _index!;
 
-  // Who this is, once the platform looked it up: its folder (old folder
-  // names renamed, the kinds of --reset deleted), its index, and what is
-  // on disk. Without [track] (one post) the index is read, never written.
+  // Who this is, once the platform looked it up: its folder (the kinds of
+  // --reset deleted), its index, and what is on disk. Without [track] (one post) the index is read, never written.
   Future<void> open(String name, {String? id, bool track = true}) async {
     u
       ..name = name
       ..id = id ?? name;
     _dir = root.dir(Fs.sanitize(name));
-    if (!o.dry) {
-      for (final MapEntry(key: old, value: kind) in platform.renamed.entries) {
-        if (await dir.dir(old).exists() && !await folder(kind).exists()) await dir.dir(old).move(folder(kind).path());
-      }
-    }
     if (o.reset && track) await _reset();
     _index = await Index.load(dir, code, dry: o.dry || !track);
     final parts = [
       for (final k in platform.kinds)
-        if (kinds.contains(k)) u.parts[k.folder] = Part(k.folder),
+        if (kinds.contains(k)) u.parts[k.name] = Part(k.name),
     ];
     await Future.wait([
       for (final p in parts)
@@ -71,7 +65,7 @@ final class Job {
               (s) => p
                 ..had = s.files
                 ..queued = s.files
-                ..bytes = s.bytes,
+                ..stored = s.bytes,
             ),
     ]);
   }
@@ -85,23 +79,23 @@ final class Job {
     ];
     if (gone.isEmpty) return;
     if (o.dry) {
-      return board.note('@${u.name}: --reset would delete ${gone.map((k) => k.folder).join(', ')}', platform: code);
+      return board.note('@${u.name}: --reset would delete ${gone.map((k) => k.name).join(', ')}', platform: code);
     }
     for (final k in gone) {
       await folder(k).delete();
       if (await cursor(k).exists()) await cursor(k).delete();
     }
-    board.note('@${u.name}: deleted ${gone.map((k) => k.folder).join(', ')}', platform: code);
+    board.note('@${u.name}: deleted ${gone.map((k) => k.name).join(', ')}', platform: code);
   }
 
   bool wants(Kind k) => kinds.contains(k);
 
-  Dir folder(Kind k) => dir.dir(k.folder);
+  Dir folder(Kind k) => dir.dir(k.name);
 
-  Part? part(Kind k) => u.parts[k.folder];
+  Part? part(Kind k) => u.parts[k.name];
 
   // Where a listing of [k] stopped: `.<code>-cursor-<folder>`.
-  File cursor(Kind k) => dir.file('.$code-cursor-${k.folder}');
+  File cursor(Kind k) => dir.file('.$code-cursor-${k.name}');
 
   void phase(Kind k, String what, {bool done = false}) {
     final p = part(k);
@@ -112,7 +106,7 @@ final class Job {
 
   void log(Kind k, String line) {
     phase(k, line);
-    board.note('@${u.name} ${k.folder}: $line', platform: code);
+    board.note('@${u.name} ${k.name}: $line', platform: code);
   }
 
   void changed(String change) {

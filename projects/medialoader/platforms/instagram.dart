@@ -198,7 +198,7 @@ Future<Page> posts(Client api, String user, String? cursor) async {
       body: .form({
         'doc_id': '28975909992013618', // PolarisProfilePostsTabContentQuery
         'server_timestamps': true,
-        'variables': Json.encode({
+        'variables': {
           'after': ?cursor,
           'data': {
             'count': 12,
@@ -213,7 +213,7 @@ Future<Page> posts(Client api, String user, String? cursor) async {
           '__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider': true,
           '__relay_internal__pv__PolarisShortDramaEnabledrelayprovider': false,
           '__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider': false,
-        }),
+        },
       }),
     ),
   );
@@ -240,7 +240,7 @@ Future<List<String>> highlights(Client api, Profile p) async {
       '/graphql/query/',
       query: {
         'query_hash': 'd4d88dc1500312af6f937f7b804c68c3',
-        'variables': Json.encode({'user_id': p.id, 'include_highlight_reels': true}),
+        'variables': {'user_id': p.id, 'include_highlight_reels': true},
       },
       headers: {'referer': '$web/${p.name}/'},
     ),

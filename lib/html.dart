@@ -11,10 +11,11 @@
 /// everything `json` exports, since `json()` returns a [Json]).
 /// - `Html.parse()` parses HTML and returns [Elements]; `Reader.html()`
 ///   parses a body (`http.get(u).html()`), its URL the base.
-/// - [Elements] supports `$` `[]` `not` `text` `texts` `html` `attr` `attrs`
+/// - [Elements] supports `$` `[]` `not` `text` `texts` `markup` `attr` `attrs`
 ///   `json` (embedded data) `table` (rows as maps) `form` (fields to post)
 ///   (plus [Iterable] helpers).
-/// - [Element] supports `$` `text` `html` `attr` `parent`.
+/// - [Element] supports `$` `text` `markup` `attr` `parent`.
+/// `html()` always parses (a reader, a page); `markup()` writes HTML back out.
 /// A selector the engine rejects is a [ContentException] naming the selector.
 /// Everything else is private.
 library;
@@ -180,8 +181,8 @@ final class Elements extends Iterable<Element> {
   List<String> texts() => [for (final e in _items) e.text()];
 
   /// The first match's markup, itself included (`''` when there is none);
-  /// see [Element.html].
-  String html() => _items.firstOrNull?.html() ?? '';
+  /// see [Element.markup].
+  String markup() => _items.firstOrNull?.markup() ?? '';
 
   /// The first match's attribute, or `null` when nothing matched or the
   /// attribute is absent. Case-insensitive; links resolve with the base (see
@@ -348,7 +349,7 @@ final class Element {
   /// The element's markup, itself included (`outerHTML`): attributes in
   /// source order, text escaped, raw text (`script`, `style`) as it is, void
   /// elements without an end tag.
-  String html() => _serialize(_el);
+  String markup() => _serialize(_el);
 
   /// Text like `innerText`, so scraped text needs no `.trim()`. Runs of
   /// spaces collapse to one space, and a run that holds a newline becomes one
@@ -719,7 +720,7 @@ extension ElementsFuture on Future<Elements> {
   Future<Elements> not(String selector) async => (await this).not(selector);
   Future<String> text() async => (await this).text();
   Future<List<String>> texts() async => (await this).texts();
-  Future<String> html() async => (await this).html();
+  Future<String> markup() async => (await this).markup();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<List<String>> attrs(String name) async => (await this).attrs(name);
   Future<Json> json() async => (await this).json();
@@ -731,7 +732,7 @@ extension ElementsFuture on Future<Elements> {
 extension ElementFuture on Future<Element> {
   Future<Elements> $(String selector) async => (await this).$(selector);
   Future<String> text() async => (await this).text();
-  Future<String> html() async => (await this).html();
+  Future<String> markup() async => (await this).markup();
   Future<String?> attr(String name) async => (await this).attr(name);
   Future<Element?> parent() async => (await this).parent();
 }

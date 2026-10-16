@@ -349,6 +349,21 @@ void main() {
       expect((await Directory(p('out')).stat()).mode & 0x1ff, 0x1c0); // the '.' member never re-modes the target
     });
 
+    test('a probe on archive() sees the input packed; on unarchive() the archive read', () async {
+      await Fs.file(p('src/a.txt')).write('x' * 5000);
+      await Fs.file(p('src/b/c.txt')).write('y' * 3000);
+      for (final format in [ArchiveFormat.zip, ArchiveFormat.tar, ArchiveFormat.tgz, ArchiveFormat.sevenzip]) {
+        final packed = Meter();
+        await (Archive.archive(['.'], dir: p('src'), format: format) & packed > Fs.file(p('w.${format.name}')));
+        expect((packed.done(), packed.total()), (8000, 8000), reason: format.name);
+        final read = Meter();
+        await (Fs.file(p('w.${format.name}')) & read > Archive.unarchive(p('w-${format.name}')));
+        final size = await Fs.file(p('w.${format.name}')).size();
+        expect((read.done(), read.total()), (size, size), reason: format.name);
+        expect(await Fs.file(p('w-${format.name}/b/c.txt')).text(), 'y' * 3000);
+      }
+    });
+
     test('our 7z round-trips, with and without a password, and bsdtar reads it', () async {
       await Fs.file(p('src/a.txt')).write('seven ' * 4000);
       await Fs.file(p('src/d/run.sh')).write('#!/bin/sh\n');
@@ -1643,7 +1658,11 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       await Fs.file(p('src/small.txt')).write('aaaa' * 1000);
       await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip) > Fs.file(p('big.7z')));
       expect(await io.File(p('big.7z')).length(), greaterThan(32 << 20));
-      await (Fs.file(p('big.7z')) > Archive.unarchive(p('out')));
+      // Watched: the read, then 7-Zip's own extraction, end at the archive's size.
+      final watched = Meter();
+      await (Fs.file(p('big.7z')) & watched > Archive.unarchive(p('out')));
+      final size = await io.File(p('big.7z')).length();
+      expect((watched.done(), watched.total()), (size, size));
       expect((await Fs.file(p('out/big.bin')).bytes()).length, big.length);
       expect(await Fs.file(p('out/small.txt')).text(), 'aaaa' * 1000);
       if (await has('7zz')) {

@@ -30,33 +30,33 @@ Future<void> main(List<String> args) async {
   final mode = args[1];
   switch (mode) {
     case 'bar':
-      final bar = Console.bar(100, label: 'a very long label that must be cut somewhere along the way');
+      final bar = Console.bar('a very long label that must be cut somewhere along the way', total: 100);
       for (var i = 0; i < 5; i++) {
         bar.tick(20);
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
       await bar.close();
     case 'keep':
-      Console.bar(2, label: 'kept').tick(2);
-      Console.bar(2, label: 'gone', keep: false).tick(2);
+      Console.bar('kept', total: 2).tick(2);
+      Console.bar('gone', total: 2, keep: false).tick(2);
       try {
-        await (Reader.of([1, 2, 3]) | Console.bar(null, label: 'broken', keep: false) > _Failing());
+        await (Reader.of([1, 2, 3]) & Console.bar('broken', keep: false) > _Failing());
       } catch (_) {}
       await Future<void>.delayed(const Duration(milliseconds: 50));
       stdout.writeln('done');
     case 'short':
-      final bar = Console.bar(40, label: 'Pages');
+      final bar = Console.bar('Pages', total: 40);
       bar.tick(12);
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await bar.close();
     case 'spin':
-      await Console.spin('working', Future<void>.delayed(const Duration(milliseconds: 400)));
+      await (Future<void>.delayed(const Duration(milliseconds: 400)) & Console.bar('working'));
       stdout.writeln('spun');
     case 'stack':
-      final bar = Console.bar(4, label: 'files');
+      final bar = Console.bar('files', total: 4);
       final spins = Future.wait([
-        Console.spin('alpha', Future<void>.delayed(const Duration(milliseconds: 500))),
-        Console.spin('beta', Future<void>.delayed(const Duration(milliseconds: 250))),
+        Future<void>.delayed(const Duration(milliseconds: 500)) & Console.bar('alpha'),
+        Future<void>.delayed(const Duration(milliseconds: 250)) & Console.bar('beta'),
       ]);
       for (var i = 0; i < 4; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -98,21 +98,21 @@ Future<void> main(List<String> args) async {
       }
       throw StateError('crash');
     case 'leak':
-      Console.bar(10).tick(3);
+      Console.bar('', total: 10).tick(3);
       stdout.writeln('ready-leak');
     case 'total':
-      final bar = Console.bar(null, label: 'T');
+      final bar = Console.bar('T');
       bar.update(2, 4);
       Console.log('logged above');
       await bar.close();
     case 'over':
-      final bar = Console.bar(3);
+      final bar = Console.bar('', total: 3);
       bar.tick(5).tick(-2);
       await bar.close();
     case 'evil':
-      await Console.choose('Pick', ['a\x1b[31mb\nc']);
+      await Console.choose('Pick', ['a\x1b[31mb\nc'], (s) => s);
     case 'choose':
-      final pick = await Console.choose('Pick', ['red', 'green', 'blue'], or: 'red');
+      final pick = await Console.choose('Pick', ['red', 'green', 'blue'], (s) => s, or: 'red');
       await log.writeAsString('pick=$pick\n');
     case 'ask':
       final answer = await Console.ask('Name?');
@@ -126,8 +126,8 @@ Future<void> main(List<String> args) async {
       final b = await Console.ask('B?', or: 'dflt');
       final c = await Console.confirm('C?', or: true);
       final d = await Console.confirm('D?');
-      final e = await Console.choose('E', ['x', 'y']);
-      final f = await Console.choose('F', ['x', 'y'], or: 'y');
+      final e = await Console.choose('E', ['x', 'y'], (s) => s);
+      final f = await Console.choose('F', ['x', 'y'], (s) => s, or: 'y');
       await log.writeAsString('eof=$a|$b|$c|$d|$e|$f\n');
     case 'empty':
       final a = await Console.ask('A?', or: 'dflt');
@@ -135,7 +135,7 @@ Future<void> main(List<String> args) async {
       final c = await Console.confirm('C?', or: true);
       await log.writeAsString('empty=$a|$b|$c\n');
     case 'park':
-      final work = Console.spin('working', Future<void>.delayed(const Duration(seconds: 3)));
+      final work = Future<void>.delayed(const Duration(seconds: 3)) & Console.bar('working');
       await Future<void>.delayed(const Duration(milliseconds: 300));
       final answer = await Console.ask('Name?');
       await log.writeAsString('answer=$answer\n');

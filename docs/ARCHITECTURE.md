@@ -5,29 +5,31 @@ Structure, not features: module edges, startup cost, dependencies and the seams 
 ## Import graph
 
 ```
-core ─────────────── src/resume, src/cookies, src/format, src/rate, src/time
+core ─────────────── src/resume, src/cookies, src/format, src/progress, src/rate, src/time
 json ─────────────── core, src/names
 hash ─────────────── core, src/resume (+crypto)
 csv ──────────────── core
 yaml ─────────────── json, src/names, src/yaml_parser
-pool ─────────────── core, src/rate, src/retry
-fs ───────────────── core, src/exit, src/glob, src/names, src/posix, src/tree (+path)
-shell ────────────── core, src/exit, src/names, src/timeout
-archive ──────────── core, shell, src/exit, src/posix, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
+pool ─────────────── core, src/format, src/progress, src/rate, src/retry
+fs ───────────────── core, src/exit, src/format, src/glob, src/names, src/posix, src/progress, src/tree (+path)
+shell ────────────── core, src/exit, src/names, src/progress, src/quiet, src/timeout
+archive ──────────── core, shell, src/exit, src/format, src/posix, src/progress, src/tree, src/tool, src/unpack, src/zip, src/sevenzip, src/rar, src/xz (+path)
 http ─────────────── core, src/charset, src/cookies, src/origin, src/posix, src/rate, src/resume, src/retry, src/timeout
 html ─────────────── json, src/dom, src/html_parser, src/selector
 image ────────────── core, src/media, src/pixels (+path)
 cli ──────────────── core, src/sanitize
-console ──────────── core, src/exit, src/format, src/keys, src/resume, src/terminal
-tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/pixels, src/terminal
-video ────────────── image, src/media, src/media_proxy (+path)
-chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/glob, src/keys, src/names (+path)
+console ──────────── core, src/exit, src/format, src/keys, src/progress, src/terminal
+tui ──────────────── src/tui (part files) → core, src/exit, src/format, src/keys, src/pixels, src/progress, src/terminal
+video ────────────── image, src/format, src/media, src/media_proxy, src/progress (+path)
+chrome ───────────── core, html, src/cdp, src/chrome_find, src/cookies, src/exit, src/format, src/glob, src/keys, src/names, src/origin, src/progress (+path)
 
-src/media ── shell, src/cache, src/posix, src/tool        src/tool ── shell, src/cache, src/names, src/posix (+path)
-src/chrome_find ── src/cache, src/cdp        src/cache ── SDK only (+path): the user cache and fetchInIsolate
+src/media ── shell, src/cache, src/posix, src/quiet, src/tool        src/tool ── shell, src/cache, src/names, src/posix (+path)
+src/chrome_find ── src/cache, src/cdp        src/cache ── src/download_line (+path): the user cache and fetchInIsolate
+src/download_line ── src/bridge, src/format: a first-use download's live line or status-row bar
+src/progress ── src/format: Probe, Task, Meter and the private run that feeds them
 src/tool_fetch, src/chrome_fetch ── archive, http, hash (+fs): spawned by URI, never imported
 src/unpack ── names (+path): member checks and link placement shared by every extraction
-src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── sanitize, winconsole
+src/posix ── SDK only        src/tree ── posix (+path)        src/terminal ── bridge, format, sanitize, winconsole
 src/zip, src/xz ── aes, bcj, crc32, lzma (+crypto)   src/sevenzip, src/rar ── aes, bcj, budget, crc32, lzma, ppmd, zip (+crypto)
 ```
 
@@ -63,7 +65,7 @@ Archives (zip, 7z, RAR, xz), AES, the HTTP client and SOCKS, the HTML5 parser wi
 ## Rules
 
 - **One lifecycle owner.** Only `src/exit.dart` watches signals and calls `exit`. Only `src/terminal.dart` reads stdin and sets its modes (capture, raw, line, restore). Child processes outside `shell` are named here: the tty reader (`terminal`), the Tui exit guard (`tui/session`), Chromium (talking CDP over two FIFOs on POSIX), its watchdog and the macOS `xattr` call (`chrome`), and the `chmod`/`touch` batches (`src/posix`). ffmpeg, ffprobe and 7-Zip go through `shell`, so Ctrl-C ends them.
-- **One shared model.** `Reader`/`Writer`/`Pipe`/`Closeable`/`Origin` cross modules; no module has a lookalike. Stopping is `src/rate.dart`'s `Halt`: http and pool end their waits through it.
+- **One shared model.** `Reader`/`Writer`/`Pipe`/`Probe`/`Closeable`/`Origin` cross modules; no module has a lookalike. Progress has one path: a run (`src/progress.dart`) counts at a flow's root or takes the work a source, writer or `Task` reports, and feeds every probe; sources and writers register their work in the `working`/`writing` Expandos and built-in probes their watcher in `watchers`, so none of it is public. Stopping is `src/rate.dart`'s `Halt`: http and pool end their waits through it.
 - **Engines stay behind private interfaces.** `Region.picture` draws through `src/pixels.dart`, so the TUI never loads the image engine. `html` never loads `charset`: decoding belongs to the `Reader`.
 - **Big files follow seams.** These are data or state machines: `charset.dart` (tables), `entities.dart`, `html_parser.dart` (tokenizer, tree builder), the archive decoders. The rest are facades: `http.dart` (client, pool, `Response`, send and redirect, cache), `terminal.dart` (decoder, caps, widths), `tui/session.dart` (loop, input, prompts bridge).
 - **SDK-only helpers stay SDK-only.** `src/posix.dart` imports no package, so a module that needs a `chmod` (http's cache) pays nothing for it. Path-shaped helpers (`tmpPath`, `sortByRelative`) live in `src/tree.dart`, next to their only users.

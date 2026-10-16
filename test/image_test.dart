@@ -144,7 +144,7 @@ void main() {
       final jpg = '${tmp.path}/grid.jpg';
       await io.File(jpg).writeAsBytes(await draw('testsrc2=s=1200x900', 'jpg'));
       final heic = '${tmp.path}/grid.heic';
-      await Shell.run([sips, '-s', 'format', 'heic', jpg, '--out', heic], check: true);
+      await Shell.run([sips, '-s', 'format', 'heic', jpg, '--out', heic]).check();
       final img = await Fs.file(heic).image();
       expect((img.width(), img.height(), img.format()), (1200, 900, ImageFormat.heic));
       final png = await _image(await img.resize(width: 400).encode(ImageFormat.png).bytes());

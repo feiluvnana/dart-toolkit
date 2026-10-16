@@ -796,7 +796,13 @@ Future<void> main() async {
             },
           )
           .status();
-      expect(seen, ['q=a+b%26c&page=2&on=true', 'x=1&y=%C3%A9', 'k=v&id=a&id=b']);
+      await http.get(u, query: {'variables': {'id': 7, 'tags': ['a']}}).status();
+      expect(seen, [
+        'q=a+b%26c&page=2&on=true',
+        'x=1&y=%C3%A9',
+        'k=v&id=a&id=b',
+        'variables=%7B%22id%22%3A7%2C%22tags%22%3A%5B%22a%22%5D%7D', // a Map goes as JSON (GraphQL)
+      ]);
     });
 
     test('a sequential loop that awaits between requests keeps one connection', () async {
@@ -1123,11 +1129,11 @@ Future<void> main() async {
   final url = 'http://127.0.0.1:${server.port}/f';
   await Fs.tempDir((dir) async {
     final to = dir.file('f.bin');
-    await (cdn.get(url) | Console.bar(null, label: 'fresh') > to);
-    await (cdn.get(url) | Console.bar(null, label: 'skipped') > to);
+    await (cdn.get(url) & Console.bar('fresh') > to);
+    await (cdn.get(url) & Console.bar('skipped') > to);
     await to.delete();
     await dir.file('f.bin.part').write('x' * 400);
-    await (cdn.get(url) | Console.bar(null, label: 'resumed') > to);
+    await (cdn.get(url) & Console.bar('resumed') > to);
   });
   await server.close(force: true);
 }
@@ -1138,14 +1144,14 @@ Future<void> main() async {
       }
     });
 
-    test('Pipe.tap hears the bytes and the full length of a resumed download', () async {
+    test('a probe hears the bytes and the full length of a resumed download', () async {
       final dir = await Directory.systemTemp.createTemp('tap');
       addTearDown(() => dir.delete(recursive: true));
       final c = Http.client(resume: true);
       final to = _Path('${dir.path}/f.bin');
       await File('${to.path}.part').writeAsBytes(List.filled(600, 0));
       final heard = <(int, int?)>[];
-      await (c.get('$url/file') | Pipe.tap((done, total) => heard.add((done, total))) > to);
+      await (c.get('$url/file') & _Heard(heard) > to);
       expect(heard.last, (1000, 1000)); // the 600 stored bytes replay through it
       expect(heard.map((h) => h.$1), orderedEquals([...heard.map((h) => h.$1)]..sort()));
     });
@@ -1592,4 +1598,11 @@ final class _Broken with Pipe {
       throw StateError('pipe broke');
     }
   }
+}
+
+final class _Heard with Probe {
+  _Heard(this._heard);
+  final List<(int, int?)> _heard;
+  @override
+  void update(int done, int? total) => _heard.add((done, total));
 }

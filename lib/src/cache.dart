@@ -12,6 +12,8 @@ import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 
+import 'download_line.dart';
+
 /// The OS user cache directory. Throws when no home or cache variable names
 /// one (cron, systemd, containers): a shared temp folder would let another
 /// user plant the binaries this toolkit runs.
@@ -45,7 +47,7 @@ String userCacheDir() {
 /// text. Returns null on success, else why it failed (an isolate that dies
 /// without a reply is a failure). Throws [UnsupportedError] when it cannot
 /// spawn: a compiled exe has no package sources.
-Future<String?> fetchInIsolate(String library, List<String> args) async {
+Future<String?> fetchInIsolate(String library, List<String> args, {required String label}) async {
   final reply = ReceivePort();
   try {
     final entry = await Isolate.resolvePackageUri(Uri.parse('package:dart_toolkit/src/$library'));
@@ -62,14 +64,26 @@ Future<String?> fetchInIsolate(String library, List<String> args) async {
     reply.close();
     throw UnsupportedError('$e');
   }
+  // The isolate posts `[done, total]` while it downloads, then its answer.
+  final line = DownloadLine(label);
+  String? failed;
   try {
-    return switch (await reply.first) {
-      'ok' => null,
-      [final error, _] => 'the download isolate failed: $error',
-      null => 'the download isolate exited without a reply',
-      final other => '$other',
-    };
+    await for (final m in reply) {
+      if (m case [final int done, final int? total]) {
+        line.update(done, total);
+        continue;
+      }
+      failed = switch (m) {
+        'ok' => null,
+        [final error, _] => 'the download isolate failed: $error',
+        null => 'the download isolate exited without a reply',
+        final other => '$other',
+      };
+      break;
+    }
+    return failed;
   } finally {
+    line.end(ok: failed == null);
     reply.close();
   }
 }

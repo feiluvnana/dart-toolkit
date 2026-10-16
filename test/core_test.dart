@@ -65,11 +65,24 @@ void main() {
   });
 
   group('pipelines', () {
-    test('Pipe.tap passes bytes unchanged and counts them', () async {
+    test('a probe passes bytes unchanged and counts them against the learned length', () async {
       final heard = <(int, int?)>[];
-      final out = await (Reader.of([1, 2, 3]) | Pipe.tap((done, total) => heard.add((done, total)))).bytes();
+      final out = await (Reader.of([1, 2, 3]) & _Heard(heard)).bytes();
       expect(out, [1, 2, 3]);
-      expect(heard, [(3, null)]);
+      expect(heard.last, (3, 3));
+    });
+
+    test('& on a pipe chain: the probe sees the source through every stage', () async {
+      final m = Meter();
+      final out = await (Reader.of([1, 2, 3, 4]) & m | _Tap(() {})).bytes();
+      expect(out, [1, 2, 3, 4]);
+      expect((m.done(), m.total()), (4, 4));
+    });
+
+    test('a failing run ends its probes with the error', () async {
+      final heard = <(int, int?)>[];
+      await expectLater(Reader.of([1]) & _Heard(heard) > _Refuse(), throwsStateError);
+      expect(heard, isNotEmpty);
     });
 
     test('ordering: bytes flow through stages in order', () async {
@@ -345,4 +358,16 @@ void timeTests() {
       ['850 ms', '4.2 s', '3 s', '11 min 5 s', '11 min', '2 h 3 min', '3 d 4 h', '-2 s'],
     );
   });
+}
+
+final class _Heard with Probe {
+  _Heard(this._heard);
+  final List<(int, int?)> _heard;
+  @override
+  void update(int done, int? total) => _heard.add((done, total));
+}
+
+final class _Refuse with Writer {
+  @override
+  Future<void> consume(Stream<List<int>> input) async => throw StateError('no');
 }

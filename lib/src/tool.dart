@@ -198,7 +198,6 @@ Future<void> _download(Tool t, String target) async {
 /// Download [build] in `tool_fetch.dart`'s isolate (see
 /// [cache.fetchInIsolate]); a compiled exe asks for the tool on PATH.
 Future<void> _fetch(_Build build, String dir, String name) async {
-  io.stderr.writeln('dart_toolkit: downloading ${p.basename(build.url)} (once per machine)');
   final String? failed;
   try {
     failed = await cache.fetchInIsolate('tool_fetch.dart', [
@@ -207,7 +206,7 @@ Future<void> _fetch(_Build build, String dir, String name) async {
       build.member == null ? 'raw' : 'zip',
       dir,
       name,
-    ]);
+    ], label: p.basename(build.url));
   } on UnsupportedError catch (e) {
     throw UnsupportedError('$name is not on PATH and can only be downloaded from a `dart run` script: install it (${e.message})');
   }

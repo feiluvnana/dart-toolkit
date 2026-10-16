@@ -120,7 +120,8 @@ void main() {
   group('probe', () {
     test('a file is probed in place', () async {
       final v = await Fs.file(clip).video();
-      expect((v.width(), v.height(), v.codec(), v.audio()), (640, 360, 'h264', 'aac'));
+      expect((v.width(), v.height(), v.codec(), v.audioCodec()), (640, 360, 'h264', 'aac'));
+      expect(v.format(), VideoFormat.mp4);
       expect(v.fps(), closeTo(30, 0.01));
       expect(v.duration().inMilliseconds, closeTo(2000, 100));
       expect(v.bitrate(), greaterThan(0));
@@ -144,16 +145,22 @@ void main() {
       expect((v.width(), v.height()), (360, 640));
     });
 
+    test('open takes URLs; a path is a reading instead', () async {
+      expect(() => Video.open(clip), throwsArgumentError);
+      final v = await Video.open(Uri.file(clip).toString());
+      expect((v.width(), v.format()), (640, VideoFormat.mp4));
+    });
+
     test('open joins a separate audio source (DASH)', () async {
-      final video = await make('v.mp4', ['-i', clip, '-an', '-c', 'copy']);
+      final video = Uri.file(await make('v.mp4', ['-i', clip, '-an', '-c', 'copy'])).toString();
       final audio = await make('a.m4a', ['-i', clip, '-vn', '-c', 'copy']);
-      expect((await Video.open(video)).audio(), isNull);
+      expect((await Video.open(video)).audioCodec(), isNull);
       final joined = await Video.open(video, audio: audio);
-      expect(joined.audio(), 'aac');
+      expect(joined.audioCodec(), 'aac');
       final out = '${tmp.path}/joined.mp4';
       await (joined.encode(VideoFormat.mp4) > Fs.file(out));
       final back = await Fs.file(out).video();
-      expect((back.codec(), back.audio()), ('h264', 'aac'));
+      expect((back.codec(), back.audioCodec()), ('h264', 'aac'));
     });
   });
 
@@ -162,25 +169,20 @@ void main() {
       final out = '${tmp.path}/copy.mkv';
       await (Fs.file(clip).video().encode(VideoFormat.mkv) > Fs.file(out));
       final v = await Fs.file(out).video();
-      expect((v.codec(), v.audio(), v.width()), ('h264', 'aac', 640));
+      expect((v.codec(), v.audioCodec(), v.width()), ('h264', 'aac', 640));
     });
 
-    test('quality, scale, trim and progress', () async {
+    test('quality, scale, trim, and a probe that hears the encode in media time', () async {
       final seen = <(int, int?)>[];
       final out = '${tmp.path}/small.webm';
-      await (Fs.file(clip).video().encode(
-            VideoFormat.webm,
-            quality: 40,
-            height: 180,
-            start: 500.milliseconds,
-            onProgress: (d, t) => seen.add((d, t)),
-          ) >
+      await (Fs.file(clip).video().encode(VideoFormat.webm, quality: 40, height: 180, start: 500.milliseconds) &
+              _Heard(seen) >
           Fs.file(out));
       final v = await Fs.file(out).video();
-      expect((v.width(), v.height(), v.codec(), v.audio()), (320, 180, 'vp9', 'opus'));
+      expect((v.width(), v.height(), v.codec(), v.audioCodec()), (320, 180, 'vp9', 'opus'));
       expect(v.duration().inMilliseconds, closeTo(1500, 150));
-      expect(seen, isNotEmpty);
-      expect(seen.last, (1500000, 1500000));
+      expect(seen.where((s) => s.$2 == 1500000), isNotEmpty);
+      expect(seen.last, (1500000, 1500000), reason: 'the copy after the encode adds nothing');
     });
 
     test('codec: h265 in mp4', () async {
@@ -195,7 +197,7 @@ void main() {
         await (Fs.file(clip).video().encode(f) > Fs.file(out));
         final v = await Fs.file(out).video();
         expect(v.width(), isNull, reason: f.name);
-        expect(v.audio(), {VideoFormat.m4a: 'aac', VideoFormat.mp3: 'mp3', VideoFormat.opus: 'opus'}[f]);
+        expect(v.audioCodec(), {VideoFormat.m4a: 'aac', VideoFormat.mp3: 'mp3', VideoFormat.opus: 'opus'}[f]);
       }
     });
 
@@ -217,10 +219,12 @@ void main() {
   group('Video.compress', () {
     test('replaces only when smaller, then keeps the file', () async {
       final path = await make('big.mp4', ['-i', clip, '-c:v', 'libx264', '-crf', '5', '-c:a', 'copy']);
-      final saved = await Video.compress(path, quality: 50) as Compressed;
+      final m = Meter();
+      final saved = await (Video.compress(path, quality: 50) & m) as Compressed;
+      expect(m.total(), closeTo(2000000, 100000), reason: 'a watched compress counts media time');
       expect(saved.after, lessThan(saved.before));
       expect(await io.File(path).length(), saved.after);
-      expect(await Fs.file(path).video().audio(), 'aac');
+      expect(await Fs.file(path).video().audioCodec(), 'aac');
       expect(await Video.compress(path, quality: 50), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller));
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
@@ -233,4 +237,11 @@ void main() {
       expect(await Video.compress(txt), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.unknown));
     });
   });
+}
+
+final class _Heard with Probe {
+  _Heard(this._heard);
+  final List<(int, int?)> _heard;
+  @override
+  void update(int done, int? total) => _heard.add((done, total));
 }

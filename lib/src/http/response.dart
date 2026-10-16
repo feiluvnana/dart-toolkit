@@ -181,7 +181,7 @@ final class Response with Reader implements Closeable {
 
   /// Where the body came from: final URL, status and file name.
   @override
-  Origin origin() => Origin(url: _url, status: _status, name: name());
+  Origin origin() => Origin(url: _url, status: _status, name: name(), size: size());
 
   /// The body as text (see the class doc for the charset rules); cached.
   @override

@@ -1,20 +1,23 @@
-/// Run programs, or use one as a filter. Thin facade over `dart:io`.
+/// Run programs, read one as it prints, or use one as a filter. Thin
+/// facade over `dart:io`.
 ///
 /// ```dart
-/// final head = await Shell.run(['git', 'rev-parse', 'HEAD'], check: true).text();
+/// final head = await Shell.run(['git', 'rev-parse', 'HEAD']).check().text();
 /// if (!await Shell.run(['git', 'diff', '--quiet']).ok()) print('dirty');
+/// await (Shell.run(['make', '-j8']) & Console.bar('build'));            // a spinner
 /// await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
-/// // A long-running program, line by line as it prints:
-/// await for (final line in (Reader.of(const []) | Shell.filter(['yt-dlp', url])).lines()) { … }
+/// await (Shell.read(['make']) > Console.out());                         // live
+/// await for (final line in Shell.read(['yt-dlp', url]).lines()) { … }
 /// ```
 ///
 /// Public surface is exactly: [Shell], [Output], [ExitException].
-/// - `Shell.run()` runs a program, `Shell.filter()` makes a process a [Pipe],
-///   `Shell.open()` opens a URL or path with the OS, `Shell.which()` finds an
-///   installed program.
-/// - [Output] supports `code` `ok` `err` (plus [Reader] over stdout).
-/// - [ExitException]: a program that ran and exited non-zero (`check:`, a
-///   filter); a program that cannot start is a plain `ProcessException`.
+/// - `Shell.run()` runs a program to the end (a [Task] of its [Output]),
+///   `Shell.read()` reads one's stdout as it prints, `Shell.filter()` makes
+///   a process a [Pipe], `Shell.open()` opens a URL or path with the OS,
+///   `Shell.which()` finds an installed program.
+/// - [Output] supports `code` `ok` `err` `check` (plus [Reader] over stdout).
+/// - [ExitException]: a program that ran and exited non-zero (`check()`, a
+///   read, a filter); a program that cannot start is a plain `ProcessException`.
 /// Everything else is private.
 library;
 
@@ -27,6 +30,8 @@ import 'core.dart';
 
 import 'src/exit.dart' as exit;
 import 'src/names.dart' as names;
+import 'src/progress.dart' show task;
+import 'src/quiet.dart';
 import 'src/timeout.dart';
 export 'core.dart';
 
@@ -45,38 +50,41 @@ final class ExitException extends io.ProcessException implements ToolkitExceptio
 /// The only OS branch in this facade is which launcher [open]
 /// uses; launching itself is per-OS by nature.
 abstract final class Shell {
-  /// Run [command] directly (no shell), with stdin closed. Waits for the exit
-  /// and returns an [Output]. A program that can't start throws
-  /// [io.ProcessException]. A non-zero exit is an [Output], never a throw.
+  /// Run [command] directly (no shell), with stdin closed, to its exit: a
+  /// [Task] of its [Output] (watch it with `& Console.bar('build')`). A
+  /// program that can't start throws [io.ProcessException]. A non-zero
+  /// exit is an [Output], never a throw: `.check()` makes it one.
   ///
-  /// With [live], the child's stdout/stderr tee to ours while it runs (for
-  /// build steps a human watches); the output is still captured and returned
-  /// as the [Output]. [env] overlays the parent environment; a null value
-  /// unsets the variable for the child. [onLine] gets each line of stdout
-  /// and stderr as it arrives (a dashboard pane, a log), and the [Output]
-  /// still holds both. With [check] a non-zero exit throws
-  /// [ExitException] carrying the exit code and the last 64 KB of stderr
-  /// (as `check:` does for a non-2xx response). With [timeout] a
-  /// run that takes longer is killed with everything it started and throws
-  /// [TimeoutException] naming the command. When [cancel] completes first
-  /// (with a value or an error), the program and everything it started are
-  /// killed and the run returns what was captured, as an [Output] with the
-  /// kill's exit code (`-9` on POSIX): the caller asked, so nothing throws
-  /// unless [check] does.
-  static Future<Output> run(
+  /// [env] overlays the parent environment; a null value unsets the
+  /// variable for the child. With [timeout] a run that takes longer is
+  /// killed with everything it started and throws [TimeoutException]
+  /// naming the command. When [cancel] completes first (with a value or an
+  /// error), the program and everything it started are killed and the run
+  /// returns what was captured, as an [Output] with the kill's exit code
+  /// (`-9` on POSIX): the caller asked, so nothing throws.
+  ///
+  /// To see the output while it runs, read it instead: `Shell.read`.
+  static Task<Output> run(
     List<String> command, {
     String? dir,
     Map<String, String?>? env,
-    bool live = false,
-    bool check = false,
     Duration? timeout,
     Future<void>? cancel,
-    void Function(String line)? onLine,
-  }) async {
+  }) {
     _checkCommand(command);
-    // Listened to before the first await, so an error-completed cancel is
-    // a cancel, never an unhandled error.
+    // Listened to now, before the task starts: an error-completed cancel
+    // is a cancel, never an unhandled error.
     final cancelled = cancel?.then((_) {}, onError: (Object _) {});
+    return task((_) => _run(command, dir, env, timeout, cancelled));
+  }
+
+  static Future<Output> _run(
+    List<String> command,
+    String? dir,
+    Map<String, String?>? env,
+    Duration? timeout,
+    Future<void>? cancelled,
+  ) async {
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -106,14 +114,13 @@ abstract final class Shell {
       } catch (_) {}
       final out = BytesBuilder(copy: false);
       final err = BytesBuilder(copy: false);
-      // With [live] each chunk also tees to our stdout/stderr.
       // Subscriptions, not `await for`: a timeout cancels them, so a
       // descendant that still holds the pipes cannot keep the VM alive.
       final subs = <StreamSubscription<List<int>>>[];
       try {
         final work = Future.wait([
-          _collect(proc.stdout, out, live ? io.stdout : null, onLine, subs),
-          _collect(proc.stderr, err, live ? io.stderr : null, onLine, subs),
+          _collect(proc.stdout, out, subs),
+          _collect(proc.stderr, err, subs),
           proc.exitCode,
         ], eagerError: true);
         // A cancel kills the tree, then lets the pipes drain briefly: a
@@ -151,22 +158,10 @@ abstract final class Shell {
       } catch (_) {
         await _killTree(proc, io.ProcessSignal.sigkill);
         rethrow;
-      } finally {
-        if (live) {
-          try {
-            await io.stdout.flush();
-          } catch (_) {}
-          try {
-            await io.stderr.flush();
-          } catch (_) {}
-        }
       }
       final code = await proc.exitCode;
       final stderr = utf8.decode(err.takeBytes(), allowMalformed: true);
-      if (check && code != 0) {
-        throw ExitException(command[0], _shown(command).sublist(1), 'exit $code: ${_tail(stderr).trim()}', code);
-      }
-      return Output._(code, out.takeBytes(), stderr);
+      return Output._(command, code, out.takeBytes(), stderr);
     } finally {
       exit.offExit(token);
     }
@@ -188,6 +183,16 @@ abstract final class Shell {
       }
     });
     return merged;
+  }
+
+  /// [command]'s stdout as it prints: a [Reader], so it flows
+  /// (`Shell.read(cmd) > Console.out()`) and reads (`.lines()`) like any
+  /// other. Nothing starts until it is read. Its stderr passes through to
+  /// ours, as in a shell pipeline; a non-zero exit fails the read with an
+  /// [ExitException] carrying the last 64 KB of it. Stdin is closed.
+  static Reader read(List<String> command, {String? dir, Map<String, String?>? env}) {
+    _checkCommand(command);
+    return _Program(command, dir, env);
   }
 
   /// A process as a [Pipe]: the stream goes to its stdin, stdout comes out.
@@ -330,8 +335,9 @@ abstract final class Shell {
 
 /// A finished program: a [Reader] of stdout.
 final class Output with Reader {
-  Output._(this._code, this._out, this._err);
+  Output._(this._command, this._code, this._out, this._err);
 
+  final List<String> _command;
   final int _code;
   final Uint8List _out;
   final String _err;
@@ -344,6 +350,17 @@ final class Output with Reader {
 
   /// Stderr, decoded as UTF-8.
   String err() => _err;
+
+  /// This output when the exit code is 0; otherwise throws [ExitException]
+  /// with the code and the last 64 KB of stderr (as `Response.check()`
+  /// does for a non-2xx answer).
+  Output check() {
+    if (_code == 0) return this;
+    throw ExitException(_command[0], _shown(_command).sublist(1), 'exit $_code: ${_tail(_err).trim()}', _code);
+  }
+
+  @override
+  Origin origin() => Origin(size: _out.length);
 
   @override
   Stream<List<int>> stream() => Stream.value(_out.asUnmodifiableView());
@@ -371,48 +388,29 @@ extension OutputFuture on Future<Output> {
   Future<int> code() async => (await this).code();
   Future<bool> ok() async => (await this).ok();
   Future<String> err() async => (await this).err();
+  Future<Output> check() async => (await this).check();
 }
 
-/// Gather [src] into [buf] (teed to [tee]), each line to [onLine]; the
-/// subscription joins [subs] so a timeout or cancel can drop it. Completes
-/// when [src] ends; fails with [src]'s error, or with [onLine]'s (then the
-/// subscription is cancelled: the caller kills the tree).
-Future<void> _collect(
-  Stream<List<int>> src,
-  BytesBuilder buf,
-  io.IOSink? tee,
-  void Function(String line)? onLine,
-  List<StreamSubscription<List<int>>> subs,
-) {
-  final lines = onLine == null
-      ? null
-      : const Utf8Decoder(allowMalformed: true)
-            .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
+/// Gather [src] into [buf]; the subscription joins [subs] so a timeout or
+/// cancel can drop it. Completes when [src] ends; fails with its error.
+Future<void> _collect(Stream<List<int>> src, BytesBuilder buf, List<StreamSubscription<List<int>>> subs) {
   final done = Completer<void>();
-  late final StreamSubscription<List<int>> sub;
-  subs.add(
-    sub = src.listen(
-      (chunk) {
-        buf.add(chunk);
-        tee?.add(chunk);
-        try {
-          lines?.add(chunk);
-        } catch (e, st) {
-          // [onLine] threw: the run fails with its error (the tree is
-          // killed by the caller), never an uncaught error in this listener.
-          unawaited(sub.cancel());
-          if (!done.isCompleted) done.completeError(e, st);
-        }
-      },
-      onError: done.completeError,
-      onDone: () {
-        lines?.close();
-        done.complete();
-      },
-      cancelOnError: true,
-    ),
-  );
+  subs.add(src.listen(buf.add, onError: done.completeError, onDone: done.complete, cancelOnError: true));
   return done.future;
+}
+
+/// `Shell.read`: a program as a source, run when read; its stderr shows
+/// unless the toolkit marked the reader [quiet].
+final class _Program with Reader {
+  _Program(this._command, this._dir, this._env);
+
+  final List<String> _command;
+  final String? _dir;
+  final Map<String, String?>? _env;
+
+  @override
+  Stream<List<int>> stream() =>
+      _Filter(_command, dir: _dir, env: _env, showErr: !(quiet[this] ?? false)).transform(const Stream.empty());
 }
 
 /// Which started processes have exited (and been reaped), for [_killTree].
@@ -455,11 +453,15 @@ Future<void> _killTree(io.Process proc, io.ProcessSignal signal) async {
 }
 
 final class _Filter implements Pipe {
-  _Filter(this._command, {this._dir, this._env});
+  _Filter(this._command, {this._dir, this._env, this._showErr = false});
 
   final List<String> _command;
   final String? _dir;
   final Map<String, String?>? _env;
+
+  /// Pass stderr through to ours as it arrives (`Shell.read`); it is kept
+  /// for the error either way.
+  final bool _showErr;
 
   @override
   void abort(Object error) {
@@ -504,6 +506,7 @@ final class _Filter implements Pipe {
     final stderrDone = () async {
       try {
         await for (final chunk in proc.stderr) {
+          if (_showErr) io.stderr.add(chunk);
           stderrBuf.add(chunk);
           if (stderrBuf.length > 2 * _errCap) {
             final all = stderrBuf.takeBytes();
@@ -614,15 +617,6 @@ String _tail(String err) {
   final nl = err.indexOf('\n', from);
   if (nl != -1 && nl + 1 < err.length) from = nl + 1;
   return '…${err.substring(from)}';
-}
-
-final class _LineSink implements Sink<String> {
-  _LineSink(this._onLine);
-  final void Function(String line) _onLine;
-  @override
-  void add(String line) => _onLine(line);
-  @override
-  void close() {}
 }
 
 /// [args] fit for an error message: URL credentials and token values,

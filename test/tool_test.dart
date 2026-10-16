@@ -72,10 +72,14 @@ void main() {
     test('A3: the isolate reports a failure as text, success as null', () async {
       final dir = await fresh('iso');
       expect(
-        await cache.fetchInIsolate('tool_fetch.dart', ['$url/missing', '0' * 64, 'raw', dir.path, 'tool']),
+        await cache.fetchInIsolate('tool_fetch.dart', ['$url/missing', '0' * 64, 'raw', dir.path, 'tool'], label: 'tool'),
         contains('404'),
       );
-      expect(await cache.fetchInIsolate('tool_fetch.dart', ['$url/raw', sha(served['/raw']!), 'raw', dir.path, 't']), isNull);
+      expect(
+        await cache.fetchInIsolate('tool_fetch.dart', ['$url/raw', sha(served['/raw']!), 'raw', dir.path, 't'], label: 't'),
+        isNull,
+        reason: 'progress messages come first, then the answer',
+      );
     });
   });
 

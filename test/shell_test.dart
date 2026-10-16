@@ -43,32 +43,55 @@ void main() {
       expect(await out.text(), contains('here'));
     });
 
-    test('onLine gets stdout and stderr lines as they arrive', () async {
-      final seen = <String>[];
-      final out = await Shell.run(['sh', '-c', 'echo one; echo two >&2; sleep 0.2; echo three'], onLine: seen.add);
-      expect(seen..sort(), ['one', 'three', 'two']);
-      expect(await out.text(), 'one\nthree');
-      expect(out.err().trim(), 'two');
+    test('read streams stdout as it prints; nothing starts until read', () async {
+      final dir = await Directory.systemTemp.createTemp('read');
+      addTearDown(() => dir.delete(recursive: true));
+      final mark = '${dir.path}/ran';
+      final reader = Shell.read(['sh', '-c', 'touch "$mark"; echo one; sleep 0.2; echo three']);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(await Fs.file(mark).exists(), isFalse);
+      expect(await reader.lines().toList(), ['one', 'three']);
     });
 
-    test('check: a non-zero exit throws with the code and stderr', () async {
+    test('read: a non-zero exit fails it with the stderr; stderr shows as it runs', () async {
+      final r = await runDart(r'''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  try {
+    await (Shell.read(['sh', '-c', 'echo out; echo shown >&2; exit 5']) > null);
+  } on ExitException catch (e) {
+    print('code=${e.errorCode} ${e.message.contains('shown')}');
+  }
+}
+''');
+      expect(r.stdout, 'code=5 true\n');
+      expect(r.stderr, 'shown\n');
+    }, testOn: '!windows');
+
+    test('run is a Task: a probe watches it', () async {
+      final m = Meter();
+      final out = await (Shell.run(['echo', 'hi']) & m);
+      expect(await out.text(), 'hi');
+    });
+
+    test('check(): a non-zero exit throws with the code and stderr', () async {
       await expectLater(
-        Shell.run(['sh', '-c', 'echo bad >&2; exit 4'], check: true),
+        Shell.run(['sh', '-c', 'echo bad >&2; exit 4']).check(),
         throwsA(
           isA<ProcessException>()
               .having((e) => e.errorCode, 'code', 4)
               .having((e) => e.message, 'message', contains('bad')),
         ),
       );
-      expect(await Shell.run(['echo', 'ok'], check: true).text(), 'ok');
+      expect(await Shell.run(['echo', 'ok']).check().text(), 'ok');
     });
 
-    test('check: keeps only the last 64 KB of stderr (regression: unbounded message)', () async {
+    test('check() keeps only the last 64 KB of stderr (regression: unbounded message)', () async {
       final e = await Shell.run([
         'sh',
         '-c',
         'i=0; while [ \$i -lt 4000 ]; do echo "noise line \$i ................................" >&2; i=\$((i+1)); done; echo LAST >&2; exit 3',
-      ], check: true).then<Object?>((_) => null, onError: (Object e) => e);
+      ]).check().then<Object?>((_) => null, onError: (Object e) => e);
       final message = (e as ProcessException).message;
       expect(message.length, lessThan(66 * 1024));
       expect(message, startsWith('exit 3: …noise line'));
@@ -83,18 +106,22 @@ void main() {
       expect(await kept.text(), '[here]');
     });
 
-    test('live tees to our stdout/stderr while capturing', () async {
+    test('read into Console.out() shows a program as it runs', () async {
       final r = await runDart('''
 import 'dart:io';
+import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
-  final out = await Shell.run(['sh', '-c', 'echo live-out; echo live-err >&2'], live: true);
-  stdout.writeln('[\${await out.text()}|\${out.err().trim()}]');
-  exitCode = (await Shell.run(['sh', '-c', 'exit 3'], live: true)).code();
+  await (Shell.read(['sh', '-c', 'echo live-out; echo live-err >&2']) > Console.out());
+  try {
+    await (Shell.read(['sh', '-c', 'exit 3']) > Console.out());
+  } on ExitException catch (e) {
+    exitCode = e.errorCode;
+  }
 }
 ''');
       expect(r.exitCode, 3);
-      expect(r.stdout, 'live-out\n[live-out|live-err]\n');
+      expect(r.stdout, 'live-out\n');
       expect(r.stderr, 'live-err\n');
     });
 
@@ -141,9 +168,10 @@ Future<void> main() => Shell.open('https://example.com');
     test('a SIGTERM that ends the script ends its running child and grandchildren', () async {
       if (Platform.isWindows) markTestSkipped('POSIX signals');
       final p = await startDart('''
+import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
-  await Shell.run(['sh', '-c', r'sleep 20 & echo \$!; wait'], live: true);
+  await (Shell.read(['sh', '-c', r'sleep 20 & echo \$!; wait']) > Console.out());
 }
 ''');
       final first = await p.stdout.transform(const SystemEncoding().decoder).first;
@@ -172,13 +200,13 @@ Future<void> main() async {
       await Fs.file(fake).write('#!/bin/sh\nexit 2\n');
       await Process.run('chmod', ['+x', fake]);
       await expectLater(
-        Shell.run([fake, 'x', '-pSECRET', 'a.7z'], check: true),
+        Shell.run([fake, 'x', '-pSECRET', 'a.7z']).check(),
         throwsA(isA<ProcessException>().having((e) => '$e', 'text', allOf(contains('-p***'), isNot(contains('SECRET'))))),
       );
     }, testOn: '!windows');
 
-    test('E5: a non-zero exit with check: is an ExitException, a toolkit error', () async {
-      final e = await Shell.run(['sh', '-c', 'echo boom >&2; exit 3'], check: true).then<Object>((_) => 'ran', onError: (Object e) => e);
+    test('E5: a non-zero exit with check() is an ExitException, a toolkit error', () async {
+      final e = await Shell.run(['sh', '-c', 'echo boom >&2; exit 3']).check().then<Object>((_) => 'ran', onError: (Object e) => e);
       expect(e, isA<ExitException>().having((x) => x.errorCode, 'code', 3));
       expect(e, isA<ToolkitException>().having((x) => x.message, 'message', contains('boom')));
       await expectLater(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isNot(isA<ExitException>())));
@@ -326,7 +354,7 @@ Future<void> main() async {
         'exit 3',
         'sh',
         ...args,
-      ], check: true).then<Object?>((_) => null, onError: (Object e) => e);
+      ]).check().then<Object?>((_) => null, onError: (Object e) => e);
       final timedOut = await Shell.run([
         'sh',
         '-c',
@@ -354,38 +382,35 @@ Future<void> main() async {
 
     test('cancel kills the run and its grandchildren and returns what was captured', () async {
       if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      final dir = await Directory.systemTemp.createTemp('cancel');
+      addTearDown(() => dir.delete(recursive: true));
+      final pidFile = Fs.file('${dir.path}/pid');
       final stop = Completer<void>();
-      String? pid;
       final sw = Stopwatch()..start();
-      final run = Shell.run(
-        ['sh', '-c', r'sleep 20 & echo $!; wait'],
-        cancel: stop.future,
-        onLine: (line) {
-          pid = line;
-          stop.complete();
-        },
-      );
+      final run = Shell.run(['sh', '-c', 'sleep 20 & echo \$! > "${pidFile.path()}"; echo \$!; wait'], cancel: stop.future);
+      expect(await eventually(() async => (await pidFile.text(or: '')).trim().isNotEmpty), isTrue);
+      final pid = (await pidFile.text()).trim();
+      stop.complete();
       final out = await run.timeout(const Duration(seconds: 5));
       expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
       expect(out.code(), -9);
       expect(await out.text(), pid);
-      expect(await eventually(() async => !await alive(pid!)), isTrue, reason: 'sleep $pid outlived the cancel');
+      expect(await eventually(() async => !await alive(pid)), isTrue, reason: 'sleep $pid outlived the cancel');
     });
 
-    test('B2: an onLine that throws fails the run, kills the tree, and stays catchable', () async {
+    test('B2: a read left early kills the tree', () async {
       if (Platform.isWindows) markTestSkipped('POSIX process tree');
       final r = await runDart(r'''
 import 'dart:io';
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
   String? pid;
-  try {
-    await Shell.run(['sh', '-c', r'sleep 20 & echo $!; echo boom; wait'], onLine: (l) {
-      pid ??= l;
-      if (l == 'boom') throw StateError('bad line');
-    });
-  } on StateError catch (e) {
-    print('caught ${e.message}');
+  await for (final l in Shell.read(['sh', '-c', r'sleep 20 & echo $!; echo boom; wait']).lines()) {
+    pid ??= l;
+    if (l == 'boom') {
+      print('caught bad line');
+      break;
+    }
   }
   await Future<void>.delayed(const Duration(milliseconds: 300));
   final ps = await Process.run('ps', ['-p', pid!, '-o', 'pid=']);

@@ -15,7 +15,6 @@ import 'package:dart_toolkit/pool.dart';
 const site = 'https://key.visualarts.gr.jp/key20th/';
 const soundtrack = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
 const scans = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
-const formats = ['mp3'];
 final http = Http.client(
   headers: {
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -46,7 +45,7 @@ final class Disc {
   final String name;
   final Map<int, String> tracks;
   Dir get folder => box.dir(name);
-  File track(int number, String title, String format) => folder.dir(format).file('$number. $title.$format');
+  File track(int number, String title) => folder.dir('mp3').file('$number. $title.mp3');
 }
 
 Future<void> main(List<String> args) => Command(
@@ -56,10 +55,9 @@ Future<void> main(List<String> args) => Command(
 ).run(args);
 
 Future<void> download() async {
-  final (keyBox, messagePage, topicsPage) = await Console.spin(
-    'reading the Key 20th site',
-    (page('${site}key_box.html'), page('${site}message.html'), page('${site}topics.html')).wait,
-  );
+  final (keyBox, messagePage, topicsPage) =
+      await ((page('${site}key_box.html'), page('${site}message.html'), page('${site}topics.html')).wait &
+          Console.bar('reading the Key 20th site'));
   final discs = readDiscs(keyBox);
   final assets = [
     ...discArtwork(keyBox, discs),
@@ -69,14 +67,14 @@ Future<void> download() async {
     ...await songs(discs),
   ];
 
-  final bar = Console.bar(assets.length, label: 'files done');
-  await Pool.map(assets, (a) async {
-    final (url, to) = a;
-    if (await to.exists()) return;
-    await (http.get(url) | Console.bar(null, label: '  ${to.name()}', keep: false) > to);
-  }, onDone: bar.tick);
+  await (Pool.map(assets, (a) async {
+        final (url, to) = a;
+        if (await to.exists()) return;
+        await (http.get(url) & Console.bar('  ${to.name()}', keep: false) > to);
+      }) &
+      Console.bar('files done'));
   final zip = Fs.file('${box.path()}.zip');
-  await Console.spin('zipping into ${zip.path()}', Archive.archive(['.'], dir: box.path()) > zip);
+  await (Archive.archive(['.'], dir: box.path()) & Console.bar('zipping into ${zip.path()}') > zip);
   Console.log('done: ${discs.length} discs and ${assets.length} files in "${box.path()}", zipped to "${zip.path()}"');
 }
 
@@ -179,8 +177,8 @@ List<Asset> topics(Elements page) => [
 
 // khinsider has one page per song; the actual file link is on that page.
 Future<List<Asset>> songs(Map<int, Disc> discs) async {
-  final doc = await Console.spin('reading the soundtrack list', page(soundtrack));
-  final wanted = <(String, Map<String, File>)>[];
+  final doc = await (page(soundtrack) & Console.bar('reading the soundtrack list'));
+  final wanted = <Asset>[]; // (the song's page, its file)
   for (final row in doc.$('#songlist tr')) {
     final cells = row.$('td').toList();
     if (cells.length < 4) continue;
@@ -190,24 +188,16 @@ Future<List<Asset>> songs(Map<int, Disc> discs) async {
     final disc = discs[numberIn(path, discInLink, orIn: cells[1].text())];
     if (disc == null) continue;
     final track = numberIn(path, trackInLink, orIn: cells[2].text());
-    final title = disc.tracks[track] ?? Fs.sanitize(cells[3].text());
-    final missing = <String, File>{};
-    for (final format in formats) {
-      final to = disc.track(track, title, format);
-      if (!await to.exists()) missing[format] = to;
-    }
-    if (missing.isNotEmpty) wanted.add((song, missing));
+    final to = disc.track(track, disc.tracks[track] ?? Fs.sanitize(cells[3].text()));
+    if (!await to.exists()) wanted.add((song, to));
   }
-  final bar = Console.bar(wanted.length, label: 'finding song files');
-  return [for (final files in await Pool.map(wanted, songFiles, onDone: bar.tick)) ...files];
+  final found = await (Pool.map(wanted, songFile) & Console.bar('finding song files'));
+  return found.nonNulls.toList();
 }
 
-Future<List<Asset>> songFiles((String, Map<String, File>) song) async {
-  final doc = await page(song.$1);
-  return [
-    for (final MapEntry(key: format, value: to) in song.$2.entries)
-      if (doc.$('a[href*=".$format"]').attr('href') case final url?) (url, to),
-  ];
+Future<Asset?> songFile(Asset song) async {
+  final url = (await page(song.$1)).$('a[href*=".mp3"]').attr('href');
+  return url == null ? null : (url, song.$2);
 }
 
 int numberIn(String path, RegExp pattern, {required String orIn}) =>

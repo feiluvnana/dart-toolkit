@@ -1,5 +1,4 @@
 // What a run is doing, drawn as a full-screen dashboard while it runs.
-// Import with `as dashboard`.
 library;
 
 import 'dart:async';
@@ -20,7 +19,7 @@ final class Board {
   final events = <Event>[];
   final usersScroll = Scroll(follow: false), transfersScroll = Scroll(follow: false), log = Scroll();
   final apis = <Client>[]; // the platform clients: counted, and closed when the run ends
-  final speed = Speed(); // every CDN byte
+  final meter = Meter(); // every CDN byte
   String? pause; // why a platform's calls are on hold
   Timer? _pauseTimer;
   var done = false, crashed = false, failuresOnly = false, live = false, retrying = 0;
@@ -92,7 +91,9 @@ final class Part {
   final String name;
   String phase = 'waiting', note = '';
   bool busy = true; // still listing
-  var queued = 0, added = 0, had = 0, failed = 0, bytes = 0;
+  var queued = 0, added = 0, had = 0, failed = 0, stored = 0;
+  final meter = Meter(); // this folder's downloads, as they arrive
+  int get bytes => stored + meter.done();
   int get done => added + had + failed;
   bool get finished => !busy && done >= queued && failed == 0;
   String get counts => '$added new · $had had${failed > 0 ? ' · $failed failed' : ''} · ${bytes.size()}';
@@ -103,16 +104,8 @@ final class Transfer {
   final User user;
   final Part part;
   final String path;
-  final speed = Speed(); // this file's bytes, for its rate
-  var done = 0;
-  int? total;
+  var meter = Meter(); // this file's bytes, then its video encode
   String? status;
-
-  void update(int done, int? total) {
-    part.bytes += done - this.done;
-    this.done = done;
-    this.total = total;
-  }
 }
 
 // Runs [work] under the dashboard until q, then calls [close] (so downloads
@@ -195,7 +188,7 @@ String title(Board b) => [
   '${b.sum((p) => p.added)} new',
   if (b.sum((p) => p.failed) case final n when n > 0) '$n failed',
   b.sum((p) => p.bytes).size(),
-  '${b.speed.rate().size()}/s',
+  '${b.meter.rate().size()}/s',
   '${b.requests} API calls',
   DateTime.now().difference(b.started).human(),
   if (b.finished) 'done',
@@ -231,7 +224,10 @@ void users(Region r, Board b) {
     if (b.users.length > 1)
       (r) {
         r.write('all'.padRight(13), inline: true, style: {.bold});
-        r.bar(b.sum((p) => p.done), b.sum((p) => p.queued), color: b.sum((p) => p.failed) > 0 ? bad : flow);
+        r.bar(
+          Meter()..update(b.sum((p) => p.done), b.sum((p) => p.queued)),
+          color: b.sum((p) => p.failed) > 0 ? bad : flow,
+        );
       },
     if (b.users.length > 1) (r) {},
     for (final u in b.users) ...[
@@ -257,7 +253,7 @@ void users(Region r, Board b) {
           r.write('  ${p.name}'.padRight(13), inline: true, style: {.bold});
           p.finished
               ? r.write('✓ ${p.counts} · ${p.note}', color: good)
-              : r.bar(p.done, p.queued, color: p.failed > 0 ? bad : flow);
+              : r.bar(Meter()..update(p.done, p.queued), color: p.failed > 0 ? bad : flow);
         },
         if (!p.finished)
           (r) {
@@ -288,7 +284,7 @@ void transfers(Region r, Board b) {
     } else if (t.status case final status?) {
       row.write('  $status', color: busy, style: {.bold});
     } else {
-      row.bar(t.done, t.total, bytes: true, rate: t.speed.rate(), color: flow);
+      row.bar(t.meter, color: flow);
     }
   });
 }

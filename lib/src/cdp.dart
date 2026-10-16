@@ -18,16 +18,16 @@ import '../core.dart';
 
 /// What a tab action throws when the page itself fails it: a click that
 /// misses, a PDF that never renders, a download the site cancels, a
-/// protocol call the browser rejects. Extends [StateError], so an existing
-/// `on StateError` keeps catching it.
-final class BrowserException extends StateError implements ToolkitException {
-  BrowserException(super.message, {this.selector, this.cause});
+/// protocol call the browser rejects. An [Exception] like every toolkit
+/// failure (a `Command` prints its message, never a stack trace).
+final class BrowserException extends ToolkitException {
+  BrowserException(super.message, {this.selector, super.cause});
 
   /// The selector in use, when the failure names one.
   final String? selector;
 
   @override
-  final Object? cause;
+  String toString() => 'BrowserException: $message';
 }
 
 typedef Msg = Map<String, Object?>;

@@ -944,18 +944,14 @@ extension RegionWidgets on Region {
     return this;
   }
 
-  /// A static progress snapshot laid out like `Console.bar`; with [bytes],
-  /// the counts are sizes (`1.2 MB/4.0 MB`). With [rate] (per second, as a
-  /// `Speed` from console measures it), it follows (`1.2 MB/s`, or `3.1/s`
-  /// for items). It
-  /// keeps to one row: the bar shrinks, then the label is cut with `…`.
-  /// [color], [background], [style] and [on] as in `write`.
+  /// [meter]'s progress laid out like `Console.bar`: its count, total
+  /// and rate, read in its unit (`1.2/4.0 MB  1.2 MB/s`, `12/40  3.1/s`,
+  /// `1:12/4:30  3.4×`). A count kept by hand is `Meter()..update(done,
+  /// total)` (no rate until it steps). It keeps to one row: the bar shrinks, then the label is cut
+  /// with `…`. [color], [background], [style] and [on] as in `write`.
   Region bar(
-    int done,
-    int? total, {
+    Meter meter, {
     String? label,
-    bool bytes = false,
-    double? rate,
     Color? color,
     Color? background,
     Set<Style> style = const {},
@@ -964,10 +960,10 @@ extension RegionWidgets on Region {
     final line = term.barLine(
       _w - _col,
       label: label,
-      done: done,
-      total: total,
-      bytes: bytes,
-      rate: rate,
+      done: meter.done(),
+      total: meter.total(),
+      unit: progress.unitOf(meter),
+      rate: progress.paceOf(meter),
       ascii: _s._caps.ascii,
     );
     write(line, color: color, background: background, style: style, on: on);

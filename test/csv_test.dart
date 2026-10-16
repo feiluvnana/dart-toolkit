@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io' show Directory, PathNotFoundException;
 
 import 'package:dart_toolkit/csv.dart';
+import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -46,6 +48,12 @@ void main() {
       ['a', 'b'],
       ['1', '2'],
     ]);
+  });
+
+  test('csv(or:) answers a missing source; without it a missing one throws', () async {
+    final missing = Fs.file('${Directory.systemTemp.path}/no-such-dir-x9/seen.csv');
+    expect(await missing.csv(or: const []), isEmpty);
+    await expectLater(missing.csv(), throwsA(isA<PathNotFoundException>()));
   });
 }
 

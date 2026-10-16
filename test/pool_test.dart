@@ -59,10 +59,10 @@ void main() {
       expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 600)));
     });
 
-    test('onDone runs on the caller after every job', () async {
-      var done = 0;
-      await Pool.map([1, 2, 3], slowDouble, isolates: true, onDone: () => done++);
-      expect(done, 3);
+    test('a probe counts every job on the caller', () async {
+      final m = Meter();
+      await (Pool.map([1, 2, 3], slowDouble, isolates: true) & m);
+      expect((m.done(), m.total()), (3, 3));
     });
 
     test('workers are long-lived: one isolate serves many items', () async {
@@ -162,10 +162,15 @@ void main() {
       }
     });
 
-    test('onDone runs after every job, failures included', () async {
-      var done = 0;
-      await Pool.settle([1, 2, 3], (x) => x == 2 ? throw StateError('x') : x, onDone: () => done++);
-      expect(done, 3);
+    test('a probe counts every job, failures included; nested probes stack', () async {
+      final outer = Meter(), inner = Meter();
+      await (Pool.settle([1, 2, 3], (x) async {
+            await (Reader.of([x]) & inner > null);
+            return x == 2 ? throw StateError('x') : x;
+          }) &
+          outer);
+      expect((outer.done(), outer.total()), (3, 3));
+      expect((inner.done(), inner.total()), (3, 3));
     });
 
     test('the first error keeps its type and stack', () async {

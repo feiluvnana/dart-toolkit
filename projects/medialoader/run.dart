@@ -28,7 +28,7 @@ Future<void> run(Map<Target, Set<Kind>> wants, Dir root, Options o) async {
   }
   if (o.reset && !o.dry) {
     final what = [
-      for (final MapEntry(key: t, value: k) in wants.entries) '@${t.user} (${k.map((k) => k.folder).join(', ')})',
+      for (final MapEntry(key: t, value: k) in wants.entries) '@${t.user} (${k.map((k) => k.name).join(', ')})',
     ];
     final question =
         'Delete ${what.join(', ')} and download again? Removed posts and expired stories cannot be downloaded back.';
@@ -51,7 +51,7 @@ Future<void> run(Map<Target, Set<Kind>> wants, Dir root, Options o) async {
 }
 
 // Every user downloaded into [root] before (it has a .<code>.json), with
-// the kinds it has folders for (old folder names count).
+// the kinds it has folders for.
 Future<Map<Target, Set<Kind>>> discover(Dir root) async {
   final out = <Target, Set<Kind>>{};
   for (final p in platforms) {
@@ -60,9 +60,7 @@ Future<Map<Target, Set<Kind>>> discover(Dir root) async {
       if (d is! Dir || !await d.file('.${p.code}.json').exists()) continue;
       out[Target(p, d.name())] = {
         for (final k in p.kinds)
-          if (await d.dir(k.folder).exists()) k,
-        for (final MapEntry(key: old, value: k) in p.renamed.entries)
-          if (await d.dir(old).exists()) k,
+          if (await d.dir(k.name).exists()) k,
       };
     }
   }

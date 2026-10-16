@@ -16,9 +16,9 @@
 ///   `cookies` `cookie` `responses` `click` `fill` `press` `select` `upload`
 ///   `scroll` `wait` `idle`
 ///   `screenshot` `pdf` `download` `close`.
-/// - [Download] supports `name` (plus [Reader]).
+/// - [Download] supports `name` (plus [Reader]; a probe shows the browser's progress).
 /// - [Capture] is an XHR/fetch response the page received: `status` `url`
-///   `header` (plus [Reader]).
+///   `header` `name` (plus [Reader]).
 /// - `page.cookies()` is a core [Cookies] jar, ready for `Http.client(cookies:)`.
 /// - [BrowserException] is what a tab action throws when the page fails it.
 /// Everything else is private.
@@ -35,9 +35,12 @@ import 'src/cdp.dart';
 import 'src/chrome_find.dart';
 import 'src/cookies.dart' as jar;
 import 'src/exit.dart' as exit;
+import 'src/format.dart' show Unit;
 import 'src/glob.dart';
 import 'src/keys.dart' as keys;
 import 'src/names.dart' as names;
+import 'src/origin.dart' as origins;
+import 'src/progress.dart' show Run, working;
 
 export 'core.dart';
 export 'html.dart';
@@ -1083,11 +1086,13 @@ function(value) {
   Reader pdf() => _Shot(() async => base64Decode((await _s.send('Page.printToPDF'))['data']! as String));
 
   /// Click [selector] and wait for the download it starts, in this tab or
-  /// any of its frames, to finish. Returns a [Download]: a [Reader] of the
-  /// file plus the name the site suggested. Downloads share one folder per
-  /// browser, told apart by their DevTools `guid`, so concurrent downloads
-  /// don't clash. The whole call shares one [timeout] deadline. The
-  /// browser's copies are removed when the browser closes.
+  /// any of its frames, to begin. Returns a [Download]: the name the site
+  /// suggested, and a [Reader] of the file that waits for it to finish
+  /// (`d & Console.bar(d.name()) > Fs.file(d.name())` shows the browser's
+  /// progress). Downloads share one folder per browser, told apart by their
+  /// DevTools `guid`, so concurrent downloads don't clash. Beginning and
+  /// finishing share one [timeout] deadline. The browser's copies are
+  /// removed when the browser closes.
   Future<Download> download(String selector, {Duration? timeout}) async {
     final limit = timeout ?? _defaultTimeout;
     final sw = Stopwatch()..start();
@@ -1099,9 +1104,11 @@ function(value) {
     Map<String, Object?>? begun;
     final String dir;
     // Heard from before the click: a small file can finish before
-    // `downloadWillBegin` is handled.
+    // `downloadWillBegin` is handled, and its progress goes to its Download.
     final ended = <Object?, Map<String, Object?>>{};
+    final heard = <Object?, Download>{};
     final stopHearing = events.on('Browser.downloadProgress', (e) {
+      heard[e['guid']]?._progress(e);
       if (e['state'] == 'completed' || e['state'] == 'canceled') ended[e['guid']] = e;
     });
     try {
@@ -1131,23 +1138,30 @@ function(value) {
     }
     final guid = begun!['guid']! as String;
     final suggested = begun!['suggestedFilename'] as String? ?? '';
-    final Map<String, Object?> end;
-    try {
-      end =
-          ended[guid] ??
-          await events.once(
-            'Browser.downloadProgress',
-            where: (e) => e['guid'] == guid && (e['state'] == 'completed' || e['state'] == 'canceled'),
-            timeout: left(),
-          );
-    } on TimeoutException {
-      throw _Timeout('download never finished', limit, suggested);
-    } finally {
-      stopHearing();
-    }
-    if (end['state'] != 'completed') throw BrowserException('download ${end['state']}: $suggested');
     final safe = names.stripPath(suggested);
-    return Download._(io.File(end['filePath'] as String? ?? p.join(dir, guid)), safe.isEmpty ? 'download' : safe);
+    Future<io.File> finish() async {
+      final Map<String, Object?> end;
+      try {
+        end =
+            ended[guid] ??
+            await events.once(
+              'Browser.downloadProgress',
+              where: (e) => e['guid'] == guid && (e['state'] == 'completed' || e['state'] == 'canceled'),
+              timeout: left(),
+            );
+      } on TimeoutException {
+        throw _Timeout('download never finished', limit, suggested);
+      } finally {
+        stopHearing();
+      }
+      if (end['state'] != 'completed') throw BrowserException('download ${end['state']}: $suggested');
+      return io.File(end['filePath'] as String? ?? p.join(dir, guid));
+    }
+
+    final download = Download._(safe.isEmpty ? 'download' : safe);
+    heard[guid] = download;
+    download._finish(finish());
+    return download;
   }
 
   /// Close this tab. Idempotent.
@@ -1296,21 +1310,60 @@ typedef _Key = (String, String, int, String?);
 /// What [Page._ready] waits for.
 enum _Ready { attached, visible, actionable }
 
-/// A finished browser download: a [Reader] of the file.
+/// A browser download: the name the site suggested, and a [Reader] of the
+/// file that waits for the browser to finish it. A probe on it
+/// (`d & Console.bar(d.name())`) shows the browser's progress.
 final class Download with Reader {
-  Download._(this._file, this._name);
+  Download._(this._name) {
+    working[this] = _watched;
+  }
 
-  final io.File _file;
   final String _name;
+  final _done = Completer<io.File>();
+  io.File? _file;
+  (int, int?) _seen = (0, null);
+  final _runs = <Run>[];
 
   /// The file name the site suggested, made safe like `Response.name()`.
   String name() => _name;
 
+  void _finish(Future<io.File> file) {
+    file.then((f) => _done.complete(_file = f), onError: _done.completeError);
+    _done.future.ignore(); // a failure surfaces when the download is read
+  }
+
+  void _progress(Map<String, Object?> e) {
+    final received = (e['receivedBytes'] as num?)?.toInt() ?? 0;
+    final total = (e['totalBytes'] as num?)?.toInt();
+    _seen = (received, total == null || total <= 0 ? null : total);
+    for (final run in _runs) {
+      run.report(_seen.$1, _seen.$2, Unit.bytes);
+    }
+  }
+
+  /// The path once the browser has finished the file (a reader of paths
+  /// never sees half of it).
   @override
-  Origin origin() => Origin(name: _name, path: _file.path);
+  Origin origin() => Origin(name: _name, path: _file?.path);
 
   @override
-  Stream<List<int>> stream() => _file.openRead();
+  Stream<List<int>> stream() async* {
+    yield* (await _done.future).openRead();
+  }
+
+  /// Watched: the browser's bytes as they arrive, then the file.
+  Stream<List<int>> _watched(Run run) async* {
+    _runs.add(run);
+    run.report(_seen.$1, _seen.$2, Unit.bytes);
+    try {
+      final file = await _done.future;
+      final size = await file.length();
+      run.report(size, size, Unit.bytes);
+      yield* file.openRead();
+    } finally {
+      _runs.remove(run);
+    }
+  }
 }
 
 /// An XHR/fetch response the page received ([Page.responses]). The body is
@@ -1335,8 +1388,12 @@ final class Capture with Reader {
   /// Response header [name] (case-insensitive), or null.
   String? header(String name) => _headers[name.toLowerCase()];
 
+  /// A file name for the body, as `Response.name()` gives one: the
+  /// `content-disposition` filename, else the URL's last segment.
+  String name() => origins.fileName(url: _url, contentDisposition: header('content-disposition'));
+
   @override
-  Origin origin() => Origin(url: _url, status: _status);
+  Origin origin() => Origin(url: _url, status: _status, name: name());
 
   @override
   Stream<List<int>> stream() => Stream.fromFuture(_body);

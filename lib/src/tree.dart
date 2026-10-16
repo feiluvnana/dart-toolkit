@@ -25,11 +25,14 @@ Future<void> preserveFileMeta(String from, String to) async {
 /// In-process tree copy: the Windows path (no `cp -pPR`, no POSIX modes)
 /// and the fallback when `cp` is missing or the destination already exists
 /// (merging would nest under `cp`, so an existing tree merges here).
-Future<void> copyTree(String from, String to) async {
+///
+/// [onBytes] hears each chunk copied (a watched copy); files are then
+/// streamed instead of copied by the OS, so the count moves within a file.
+Future<void> copyTree(String from, String to, {void Function(int bytes)? onBytes}) async {
   // Throws-before-writes for file<->dir collisions: one walk up front.
   await _checkDirCollisions(from, to);
   final dirs = <(String, io.FileStat)>[];
-  await _copyTree(from, to, dirs);
+  await _copyTree(from, to, dirs, onBytes);
   // Folders keep modes AND mtimes, applied after every child is written
   // (writing children bumps them) and batched: one `chmod` per distinct
   // mode and one `touch` per distinct mtime instead of two forks a folder.
@@ -43,7 +46,7 @@ Future<void> copyTree(String from, String to) async {
   await posix.chmodBatched(byMode);
 }
 
-Future<void> _copyTree(String from, String to, List<(String, io.FileStat)> dirs) async {
+Future<void> _copyTree(String from, String to, List<(String, io.FileStat)> dirs, void Function(int)? onBytes) async {
   await io.Directory(to).create(recursive: true);
   // Files in one folder copy concurrently once the folder is listed (a
   // future started mid-walk could fail with no listener yet); `list` with
@@ -68,22 +71,48 @@ Future<void> _copyTree(String from, String to, List<(String, io.FileStat)> dirs)
       // A dest link where a folder goes is replaced, never followed: the
       // copy must not write (or chmod) outside the destination tree.
       if (await io.FileSystemEntity.isLink(dest)) await io.Link(dest).delete();
-      await _copyTree(e.path, dest, dirs);
+      await _copyTree(e.path, dest, dirs, onBytes);
     } else if (e is io.File) {
       files.add((e.path, dest));
     }
   }
-  await Future.wait([for (final (from, to) in files) _copyFile(from, to)]);
+  await Future.wait([for (final (from, to) in files) _copyFile(from, to, onBytes)]);
   try {
     dirs.add((to, await io.FileStat.stat(from)));
   } catch (_) {}
 }
 
-Future<void> _copyFile(String from, String to) async {
+Future<void> _copyFile(String from, String to, void Function(int)? onBytes) async {
   // Replace a dest link, never follow it outside the tree.
   if (await io.FileSystemEntity.isLink(to)) await io.Link(to).delete();
-  await io.File(from).copy(to);
+  await copyFile(from, to, onBytes: onBytes);
   await preserveFileMeta(from, to);
+}
+
+/// The OS copy of [from] to [to], or with [onBytes] a streamed one that
+/// reports each chunk.
+Future<void> copyFile(String from, String to, {void Function(int bytes)? onBytes}) async {
+  if (onBytes == null) {
+    await io.File(from).copy(to);
+    return;
+  }
+  await io.File(from)
+      .openRead()
+      .map((chunk) {
+        onBytes(chunk.length);
+        return chunk;
+      })
+      .pipe(io.File(to).openWrite());
+}
+
+/// The bytes of every file under [dir], links not followed: a watched
+/// folder copy's total.
+Future<int> treeBytes(String dir) async {
+  var n = 0;
+  await for (final e in io.Directory(dir).list(recursive: true, followLinks: false)) {
+    if (e is io.File) n += await e.length();
+  }
+  return n;
 }
 
 /// Throw before any writes when a source file would land on a dest dir
