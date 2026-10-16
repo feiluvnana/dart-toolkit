@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Fixed**
+
+- `fs`: two `file.lock(...)` calls in one process are granted in call order; the second one no longer wins while the first creates the lock's folder.
+
 **Changed**
 
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.

@@ -494,6 +494,15 @@ Future<void> main() async {
       expect(await held, 9);
     });
 
+    test('lock: the first caller holds it, in call order, even while its folder is made', () async {
+      for (var i = 0; i < 40; i++) {
+        final lock = Fs.file(p('d$i/a/b/c/one.lock'));
+        final held = lock.lock(() => Future<int>.delayed(const Duration(milliseconds: 5), () => 1));
+        await expectLater(lock.lock(() async => 2), throwsA(isA<LockedException>()));
+        expect(await held, 1);
+      }
+    });
+
     test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
       final lock = p('run.lock');
       // A child script holds the lock until its stdin closes.

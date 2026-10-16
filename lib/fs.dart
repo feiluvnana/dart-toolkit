@@ -284,9 +284,9 @@ final class File extends Entry with Reader, Writer {
   /// after retrying that long. The OS drops the lock if the process dies;
   /// the file itself stays (deleting it would race the next run).
   Future<T> lock<T>(Future<T> Function() body, {Duration? timeout}) async {
-    await _ensureParent(_path);
     // OS locks never conflict within one process, so holders here are
-    // tracked too: two lock() bodies in one script exclude each other.
+    // tracked too: two lock() bodies in one script exclude each other, in
+    // call order (claimed before the first await).
     final key = p.canonicalize(_path);
     final until = timeout == null ? null : DateTime.now().add(timeout);
     Future<void> retry(String holder) async {
@@ -300,6 +300,7 @@ final class File extends Entry with Reader, Writer {
       await retry('this process');
     }
     try {
+      await _ensureParent(_path);
       final raf = await io.File(_path).open(mode: io.FileMode.append);
       try {
         while (true) {
