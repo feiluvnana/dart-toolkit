@@ -107,23 +107,46 @@ Future<Map<String, Object?>> ffprobe(String input) async {
 // ── sources ───────────────────────────────────────────────────────────────
 
 /// Where spooled readers go: in the user cache, owner-only (never a shared
-/// temp folder another user can read or plant names in). Files older than
-/// a day are swept on the next spool (a script that ends normally cannot
-/// delete its own).
+/// temp folder another user can read or plant names in), one folder per
+/// run that a watchdog child removes when this VM ends for any reason
+/// (POSIX). Files older than a day, from runs without one (Windows), are
+/// swept on the next run's first spool.
 final _spoolDir = p.join(cache.userCacheDir(), 'dart_toolkit', 'media');
-var _swept = false;
 
-/// The spool folder, made owner-only once per process.
+/// This run's spool folder, made (with its watchdog) on first use.
 Future<io.Directory> _spool() => _made ??= () async {
-  final dir = await io.Directory(_spoolDir).create(recursive: true);
-  if (!io.Platform.isWindows) await posix.chmod(dir.path, 0x1c0); // 0700
+  final root = await io.Directory(_spoolDir).create(recursive: true);
+  if (!io.Platform.isWindows) await posix.chmod(root.path, 0x1c0); // 0700
+  unawaited(_sweep(root));
+  final dir = await root.createTemp('run-');
+  if (!io.Platform.isWindows) await posix.chmod(dir.path, 0x1c0);
+  if (await _watchdog(dir.path) case final dog?) _dogs.add(dog);
   return dir;
 }();
 Future<io.Directory>? _made;
 
+/// Held for the run: its stdin hits EOF when this VM dies, then it removes
+/// the run's spool folder. Detached with piped stdin, it never holds the
+/// script open. The path is an argument, never interpolated.
+final _dogs = <io.Process>[];
+
+Future<io.Process?> _watchdog(String dir) async {
+  if (io.Platform.isWindows) return null;
+  try {
+    return await io.Process.start('/bin/sh', [
+      '-c',
+      'cat >/dev/null; rm -rf -- "\$1"',
+      '_',
+      dir,
+    ], mode: io.ProcessStartMode.detachedWithStdio);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// A spooled temp file, deleted once nothing holds this token (an
-/// [Image]/Video and every value derived from it keep it), or after a day
-/// by the sweep when the VM exits first.
+/// [Image]/Video and every value derived from it keep it), or with the
+/// run's spool folder when the VM exits first.
 final class Temp {
   Temp(this.path) {
     _gone.attach(this, path);
@@ -138,35 +161,40 @@ final class Temp {
   });
 }
 
-/// Write [chunks] to a fresh temp file and return its path.
+/// Write [chunks] to a fresh temp file and return its path; a source that
+/// fails leaves no partial file.
 Future<String> spool(Stream<List<int>> chunks, {String ext = 'bin'}) async {
   final dir = await _spool();
-  if (!_swept) {
-    _swept = true;
-    unawaited(_sweep(dir));
+  final file = io.File(p.join(dir.path, '${DateTime.now().microsecondsSinceEpoch}-${_n++}.$ext'));
+  try {
+    await posix.writeAll(file, chunks);
+  } catch (_) {
+    await file.delete().catchError((_) => file);
+    rethrow;
   }
-  final file = io.File(p.join(dir.path, '${DateTime.now().microsecondsSinceEpoch}-${io.pid}-${_n++}.$ext'));
-  await posix.writeAll(file, chunks);
   return file.path;
 }
 
 var _n = 0;
 
-Future<void> _sweep(io.Directory dir) async {
+/// Delete files older than a day under [root], then the run folders they
+/// leave empty (a run folder younger than a day may still be in use).
+Future<void> _sweep(io.Directory root) async {
   final old = DateTime.now().subtract(const Duration(days: 1));
   try {
-    await for (final e in dir.list()) {
+    await for (final e in root.list(recursive: true)) {
       if (e is io.File && (await e.stat()).modified.isBefore(old)) await e.delete().catchError((_) => e);
+    }
+    await for (final e in root.list()) {
+      if (e is io.Directory && (await e.stat()).modified.isBefore(old)) await e.delete().catchError((_) => e);
     }
   } catch (_) {}
 }
 
-/// A temp output path next to the spool, for encodes that need a seekable
-/// output (mp4 `faststart`, image muxers).
-Future<String> tempOut(String ext) async {
-  await _spool();
-  return p.join(_spoolDir, '${DateTime.now().microsecondsSinceEpoch}-${io.pid}-${_n++}.out.$ext');
-}
+/// A temp output path in this run's spool folder, for encodes that need a
+/// seekable output (mp4 `faststart`, image muxers).
+Future<String> tempOut(String ext) async =>
+    p.join((await _spool()).path, '${DateTime.now().microsecondsSinceEpoch}-${_n++}.out.$ext');
 
 /// Stream [path] and delete it after.
 Stream<List<int>> readAndDelete(String path) async* {

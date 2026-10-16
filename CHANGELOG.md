@@ -17,6 +17,7 @@
 - `image`/`video`: the shared encode limit (half the cores) is a held `Pool`, so a job arriving as another finishes no longer takes the slot handed to a waiter and runs one encode too many.
 - `csv`: `response.rows()` decodes the body's charset like `csv()` does; it always read UTF-8 (`café` from a windows-1252 export came out as `caf�`).
 - `http`: a header the server sends as raw UTF-8 reads as UTF-8: a non-ASCII `location` redirect goes to the right URL (`/файл`, not `/%C3%91%C2%84…`), and `name()`/`header()` no longer give mojibake.
+- `image`/`video`: spooled sources (`reader.image()`, `reader.video()`) and encode temps no longer pile up in the user cache: a source that fails mid-spool leaves no partial file, and each run spools into its own folder that a watchdog removes when the script ends (POSIX; Windows keeps the one-day sweep).
 
 **Performance**
 
