@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../pool.dart' show Pool;
 import '../shell.dart';
 import 'cache.dart' as cache;
 import 'posix.dart' as posix;
@@ -22,24 +23,10 @@ import 'tool.dart';
 
 /// Encodes at once: each ffmpeg already uses several cores, so eight
 /// download lanes compressing together queue here instead of thrashing.
-final _limit = math.max(1, io.Platform.numberOfProcessors ~/ 2);
-var _running = 0;
-final _queue = <Completer<void>>[];
+final _encodes = Pool(limit: math.max(1, io.Platform.numberOfProcessors ~/ 2));
 
-Future<T> _slot<T>(Future<T> Function() job) async {
-  if (_running >= _limit) {
-    final turn = Completer<void>();
-    _queue.add(turn);
-    await turn.future;
-  }
-  _running++;
-  try {
-    return await job();
-  } finally {
-    _running--;
-    if (_queue.isNotEmpty) _queue.removeAt(0).complete();
-  }
-}
+/// Run [job] in one of the shared encode lanes.
+Future<T> encode<T>(Future<T> Function() job) => _encodes.run(job);
 
 /// Run ffmpeg with [args] (inputs and outputs included) under the shared
 /// limit. [needs] are the encoders used. [total] (microseconds of output)
@@ -54,7 +41,7 @@ Future<List<int>> ffmpeg(
 }) async {
   final exe = await tool(Tool.ffmpeg, needs: needs);
   final command = [exe, '-hide_banner', '-nostdin', '-loglevel', 'error'];
-  return _slot(() async {
+  return encode(() async {
     if (onProgress == null) {
       final out = await Shell.run([...command, ...args]);
       if (!out.ok()) throw ContentException('ffmpeg failed: ${toolTail(out.err())}');

@@ -4,6 +4,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/fs.dart';
@@ -93,6 +94,22 @@ void main() {
       expect(Video.sniff(heic), isNull);
       expect(Image.sniff(heic), ImageFormat.heic);
     });
+  });
+
+  test('the shared encode limit hands a freed slot to the next waiter, never to a newcomer (B12)', () async {
+    final limit = math.max(1, io.Platform.numberOfProcessors ~/ 2);
+    var running = 0, peak = 0;
+    Future<void> job() => media.encode(() async {
+      peak = math.max(peak, ++running);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      running--;
+    });
+    final jobs = [for (var i = 0; i <= limit; i++) job()]; // the last one waits
+    // A newcomer that arrives as the first job frees its slot, before the
+    // waiter it was handed to resumes.
+    final late = jobs.first.then((_) => job());
+    await Future.wait([...jobs, late]);
+    expect(peak, limit);
   });
 
   group('Reader.of(bytes).image()', () {

@@ -13,6 +13,7 @@
 - `chrome`: `Chrome.connect` to an endpoint that accepts and never answers fails with a `BrowserException` after 30 s instead of hanging.
 - `image`/`video`/`archive`/`chrome`: a source that fails while it is spooled to a temp file (`reader.image()`, `reader.video()`, a 7-Zip unarchive, a page upload) surfaces its own error instead of `FileSystemException: File closed` naming a hidden temp.
 - `http`: `Feed.run` no longer reports success when page work failed: it is `false` unless the end was reached with every `page.add(work)` true, and a work that threw fails the run with the first error once every page's work is done (it was mapped to `false` and dropped). medialoader drops its own `ok` flag.
+- `image`/`video`: the shared encode limit (half the cores) is a held `Pool`, so a job arriving as another finishes no longer takes the slot handed to a waiter and runs one encode too many.
 
 **Changed**
 
