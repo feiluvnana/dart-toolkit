@@ -1395,6 +1395,42 @@ void serveTests() {
     expect(jar.headerFor(c, Uri.parse('https://shop.example.com/')), 'p=2; d=3');
   });
 
+  test('S6: plain http cannot overwrite a Secure cookie', () {
+    final c = Cookies();
+    jar.storeSetCookies(c, Uri.parse('https://bank.example/'), ['sid=REAL; Secure; Path=/']);
+    jar.storeSetCookies(c, Uri.parse('http://bank.example/'), ['sid=TOSSED; Path=/', 'other=1']);
+    jar.storeSetCookies(c, Uri.parse('http://www.bank.example/'), ['sid=TOSSED; Domain=bank.example; Path=/a']);
+    expect(jar.headerFor(c, Uri.parse('https://bank.example/a')), 'sid=REAL; other=1');
+    jar.storeSetCookies(c, Uri.parse('https://bank.example/'), ['sid=NEW; Path=/']); // https may
+    expect(jar.headerFor(c, Uri.parse('https://bank.example/')), 'sid=NEW; other=1');
+  });
+
+  test('S6: Domain= on a shared host or a registry name is refused', () {
+    for (final (setter, domain, victim) in [
+      ('https://evil.blogspot.de/', 'blogspot.de', 'https://victim.blogspot.de/'),
+      ('https://evil.blogspot.co.uk/', 'blogspot.co.uk', 'https://victim.blogspot.co.uk/'),
+      ('https://evil.city.tokyo.jp/', 'tokyo.jp', 'https://shop.tokyo.jp/'),
+      ('https://evil.s3.eu-west-1.amazonaws.com/', 's3.eu-west-1.amazonaws.com', 'https://victim.s3.eu-west-1.amazonaws.com/'),
+      ('https://evil.uk.com/', 'uk.com', 'https://victim.uk.com/'),
+      ('https://evil.example.com.br/', 'com.br', 'https://victim.com.br/'),
+      ('https://evil.shop.za/', 'shop.za', 'https://victim.shop.za/'),
+    ]) {
+      final k = Cookies();
+      jar.storeSetCookies(k, Uri.parse(setter), ['sid=TOSSED; Domain=$domain; Path=/']);
+      expect(jar.headerFor(k, Uri.parse(victim)), isNull, reason: domain);
+    }
+    final ok = Cookies();
+    for (final (setter, domain) in [
+      ('https://www.nicovideo.jp/', 'nicovideo.jp'),
+      ('https://www.spiegel.de/', 'spiegel.de'),
+      ('https://mail.example.co.uk/', 'example.co.uk'),
+      ('https://a.mybucket.s3.amazonaws.com.example/', 'amazonaws.com.example'),
+    ]) {
+      jar.storeSetCookies(ok, Uri.parse(setter), ['d=1; Domain=$domain']);
+      expect(jar.headerFor(ok, Uri.parse('https://other.$domain/')), 'd=1', reason: domain);
+    }
+  });
+
   test('a transport error names the request without its credentials or tokens', () async {
     final raw = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     raw.listen((s) async {

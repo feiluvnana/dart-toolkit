@@ -184,14 +184,35 @@ void addCookie(
 }
 
 /// A public suffix no site may set cookies for: a country-code registry
-/// (`co.uk`, `com.au`, `ac.jp`), or a shared host where every subdomain is
-/// someone else's site (`github.io`, `vercel.app`). A short stand-in for
-/// the Public Suffix List.
+/// (`co.uk`, `com.au`, `ac.jp`, `tokyo.jp`, any `x.za`), or a shared host
+/// where every subdomain is someone else's site (`github.io`,
+/// `blogspot.de`, `s3.eu-west-1.amazonaws.com`, `uk.com`). A heuristic
+/// stand-in for the Public Suffix List.
 bool isPublicSuffix(String domain) {
   if (_suffixes.contains(domain)) return true;
   final parts = domain.split('.');
-  return parts.length == 2 && parts[1].length == 2 && _registries.contains(parts[0]);
+  if (parts.first == 'blogspot') return true;
+  if (parts.length >= 2 && parts[parts.length - 2] == 'amazonaws' && parts.last == 'com') {
+    return parts.length <= 3 || _awsShared.hasMatch(parts.first);
+  }
+  if (parts.length != 2 || parts[1].length != 2) return false;
+  return _registries.contains(parts[0]) || _thirdLevelOnly.contains(parts[1]) || parts[1] == 'jp' && _prefectures.contains(parts[0]);
 }
+
+/// The first label of an AWS name shared by every customer's site.
+final _awsShared = RegExp(r'^(s3|compute|execute-api|elb|elasticbeanstalk)\b');
+
+/// Country codes registering only below a category (`co.za`, `com.br`).
+const _thirdLevelOnly = {'br', 'za', 'th', 'bd', 'ck', 'er', 'fk', 'jm', 'kh', 'mm', 'np', 'pg'};
+
+/// Japan's geographic registries (`tokyo.jp`).
+const _prefectures = {
+  'aichi', 'akita', 'aomori', 'chiba', 'ehime', 'fukui', 'fukuoka', 'fukushima', 'gifu', 'gunma', 'hiroshima', //
+  'hokkaido', 'hyogo', 'ibaraki', 'ishikawa', 'iwate', 'kagawa', 'kagoshima', 'kanagawa', 'kochi', 'kumamoto', //
+  'kyoto', 'mie', 'miyagi', 'miyazaki', 'nagano', 'nagasaki', 'nara', 'niigata', 'oita', 'okayama', 'okinawa', //
+  'osaka', 'saga', 'saitama', 'shiga', 'shimane', 'shizuoka', 'tochigi', 'tokushima', 'tokyo', 'tottori', //
+  'toyama', 'wakayama', 'yamagata', 'yamaguchi', 'yamanashi',
+};
 
 const _registries = {
   'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'ne', 'or', 'go', 'gob', 'mil', 'nic', 'ltd', 'plc', 'me', //
@@ -204,7 +225,11 @@ const _suffixes = {
   'vercel.app', 'netlify.app', 'pages.dev', 'workers.dev', 'r2.dev', 'trycloudflare.com', 'appspot.com', //
   'web.app', 'firebaseapp.com', 'cloudfront.net', 'azurewebsites.net', 'azureedge.net', 's3.amazonaws.com', //
   'elasticbeanstalk.com', 'fly.dev', 'onrender.com', 'deno.dev', 'glitch.me', 'repl.co', 'ngrok.io', //
-  'ngrok-free.app', 'surge.sh', 'neocities.org', 'duckdns.org', 'dyndns.org', 'no-ip.org',
+  'ngrok-free.app', 'surge.sh', 'neocities.org', 'duckdns.org', 'dyndns.org', 'no-ip.org', //
+  // CentralNic's country-like names, each sold by subdomain.
+  'uk.com', 'us.com', 'eu.com', 'de.com', 'br.com', 'cn.com', 'ru.com', 'sa.com', 'za.com', 'kr.com', 'jpn.com', //
+  'gr.com', 'it.com', 'mex.com', 'no.com', 'qc.com', 'gb.net', 'uk.net', 'hu.net', 'se.net', 'in.net', 'jp.net', //
+  'us.org', 'ae.org',
 };
 
 /// One `set-cookie` value, parsed leniently as browsers do (RFC 6265
@@ -315,8 +340,9 @@ void storeSetCookies(Cookies jar, Uri url, List<String> values) {
     } else if (ip || !domain.contains('.') || !host.endsWith('.$domain') || isPublicSuffix(domain)) {
       continue; // not this host's to set
     }
-    // A Secure cookie from plain http could overwrite the https one.
-    if (c.secure && url.scheme != 'https') continue;
+    // A Secure cookie from plain http could overwrite the https one, and a
+    // plain one must not shadow a Secure one (RFC 6265bis §5.7).
+    if (url.scheme != 'https' && (c.secure || _shadowsSecure(jar, c.name, domain, c.path ?? '/'))) continue;
     if (ip) hostOnly = true;
     var path = c.path ?? '';
     if (!path.startsWith('/')) {
@@ -328,6 +354,18 @@ void storeSetCookies(Cookies jar, Uri url, List<String> values) {
       _Cookie(c.name, c.value, domain: domain, hostOnly: hostOnly, path: path, secure: c.secure, expires: c.expires),
     );
   }
+}
+
+/// Whether [jar] holds a Secure cookie [name] whose domain matches [domain]
+/// either way and whose path covers [path]: plain http may not replace it.
+bool _shadowsSecure(Cookies jar, String name, String domain, String path) {
+  for (final c in jar._cookies.values) {
+    if (!c.secure || c.name != name) continue;
+    final related = c.domain == domain || c.domain.endsWith('.$domain') || domain.endsWith('.${c.domain}');
+    final covers = path == c.path || path.startsWith(c.path.endsWith('/') ? c.path : '${c.path}/');
+    if (related && covers) return true;
+  }
+  return false;
 }
 
 /// The `Cookie` header for [url], longest path first, or null.
