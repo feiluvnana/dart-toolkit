@@ -1028,6 +1028,12 @@ function(value) {
     _dlGate = gate.future;
     Map<String, Object?>? begun;
     final String dir;
+    // Heard from before the click: a small file can finish before
+    // `downloadWillBegin` is handled.
+    final ended = <Object?, Map<String, Object?>>{};
+    final stopHearing = events.on('Browser.downloadProgress', (e) {
+      if (e['state'] == 'completed' || e['state'] == 'canceled') ended[e['guid']] = e;
+    });
     try {
       await prev;
       dir = await _browser._downloadFolder();
@@ -1047,6 +1053,9 @@ function(value) {
           }
         });
       });
+    } catch (_) {
+      stopHearing();
+      rethrow;
     } finally {
       gate.complete();
     }
@@ -1054,13 +1063,17 @@ function(value) {
     final suggested = begun!['suggestedFilename'] as String? ?? '';
     final Map<String, Object?> end;
     try {
-      end = await events.once(
-        'Browser.downloadProgress',
-        where: (e) => e['guid'] == guid && (e['state'] == 'completed' || e['state'] == 'canceled'),
-        timeout: left(),
-      );
+      end =
+          ended[guid] ??
+          await events.once(
+            'Browser.downloadProgress',
+            where: (e) => e['guid'] == guid && (e['state'] == 'completed' || e['state'] == 'canceled'),
+            timeout: left(),
+          );
     } on TimeoutException {
       throw _Timeout('download never finished', limit, suggested);
+    } finally {
+      stopHearing();
     }
     if (end['state'] != 'completed') throw BrowserException('download ${end['state']}: $suggested');
     final safe = origin.stripPath(suggested);
