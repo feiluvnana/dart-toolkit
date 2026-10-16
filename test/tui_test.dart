@@ -2068,6 +2068,20 @@ void main() {
       t.close();
     });
 
+    test('S14: markdown links open only http, https and mailto', () async {
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.markdown('[web](https://x.y) [mail](mailto:a@b.c) [f](file:///etc/passwd) [app](zoommtg://j)')),
+        width: 40,
+        height: 3,
+      );
+      await t.pump();
+      expect(t.output, allOf(contains('\x1b]8;;https://x.y'), contains('\x1b]8;;mailto:a@b.c')));
+      expect(t.output, allOf(isNot(contains('file:')), isNot(contains('zoommtg:'))));
+      expect(t.row(0), contains('f app'));
+      t.close();
+    });
+
     test('link targets with control characters are dropped', () async {
       final t = testSession<int>(
         0,

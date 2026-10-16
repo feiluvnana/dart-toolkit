@@ -37,6 +37,13 @@ extension RegionMarkdown on Region {
 /// The marker colour of fenced code, drawn as the accent (see `_mdStyle`).
 const _mdCode = Color.gray;
 
+/// [url] when a click on it only browses (http, https, mailto), else null:
+/// untrusted text must not hand the terminal a `file:` or app link.
+String? _safeLink(String url) {
+  final scheme = Uri.tryParse(url.trim())?.scheme.toLowerCase();
+  return const {'http', 'https', 'mailto'}.contains(scheme) ? url.trim() : null;
+}
+
 /// Inline runs for prose [text] (bold/italic/strike/code/links).
 List<_MdSeg> _mdInline(String text) {
   final out = <_MdSeg>[];
@@ -62,7 +69,7 @@ List<_MdSeg> _mdInline(String text) {
     if (m == null) continue;
     parts.replaceRange(k, k + 1, [
       part.substring(0, m.start),
-      _MdSeg(m.group(1)!, null, null, const {Style.underline}, m.group(2)),
+      _MdSeg(m.group(1)!, null, null, const {Style.underline}, _safeLink(m.group(2)!)),
       part.substring(m.end),
     ]);
   }

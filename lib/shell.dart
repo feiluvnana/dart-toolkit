@@ -225,6 +225,8 @@ abstract final class Shell {
   /// [target] is an [ArgumentError]; a launcher that cannot start or exits
   /// non-zero throws [io.ProcessException] carrying the first 4 KB of stderr.
   /// A [target] starting with `-` opens as the path `./-…`, never an option.
+  /// Any scheme the OS knows opens (`file:`, app links): check a target that
+  /// comes from untrusted text first.
   static Future<void> open(String target) async {
     if (target.isEmpty) {
       throw ArgumentError.value(target, 'target', 'must not be empty');
