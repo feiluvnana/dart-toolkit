@@ -295,7 +295,8 @@ abstract final class Console {
     final bindings = _canonicalBindings(keys);
     try {
       return await _parkedFor(() async {
-        if (!term.stdinTty || !io.stderr.hasTerminal || !term.rawModeSticks()) {
+        // TERM=dumb takes no cursor motion: the numbered list there too.
+        if (!term.stdinTty || !io.stderr.hasTerminal || !_animated || !term.rawModeSticks()) {
           return await _chooseNumbered(question, items, labels, timeout);
         }
         return await _chooseInteractive(question, items, labels, selected, bindings, or, timeout);
@@ -776,7 +777,9 @@ abstract final class Console {
         io.stderr.writeln('$row\x1b[K');
       }
     }
-    const hint = 'w/s or ↑↓ move · 1-9 jump · enter select · esc cancel';
+    final hint = _ascii
+        ? 'w/s or arrows move - 1-9 jump - enter select - esc cancel'
+        : 'w/s or ↑↓ move · 1-9 jump · enter select · esc cancel';
     final hintRow = term.truncateWidth(hint, cols > 0 ? cols : hint.length);
     widths.add(term.displayWidth(hintRow));
     if (_styled) {

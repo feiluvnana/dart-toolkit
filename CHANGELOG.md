@@ -32,6 +32,7 @@
 - `archive`: zip member names without the UTF-8 flag that are not UTF-8 read as CP437, the zip default (`caf\x82.txt` from Windows is `café.txt`, not a C1 control), and an Info-ZIP Unicode Path field wins when its CRC matches.
 - `tui`: CRLF text (a Windows file, an HTTP body) draws as lines in `write`, `markdown`, `diff` and inputs; every `\r` drew as `�`. A `Field` keeps its text with `\n` line ends.
 - `image`/`video`/`archive`/`chrome`: the first-use download of ffmpeg, 7-Zip or Chrome for Testing is shared by the isolates of one process too (`Pool(isolates: true)` on a fresh machine downloaded once per isolate, and Chrome's resumable `.part` could be written by two at once): the OS lock, which only excludes other processes, now goes with a per-process sentinel.
+- `console`: `Console.choose` under `TERM=dumb` asks with the numbered list instead of drawing the live menu (its escapes leaked), and under `LC_ALL=C` the menu hint is ASCII.
 
 **Security**
 

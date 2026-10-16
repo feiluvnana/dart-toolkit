@@ -262,6 +262,40 @@ void main() {
       expect(burst, 'pick=blue');
     }, timeout: const Timeout(Duration(seconds: 120)));
 
+    test('P8: choose under TERM=dumb is the numbered list; under LC_ALL=C its hint is ASCII', () async {
+      final root = Directory.current;
+      Future<(String, String)> run(Map<String, String> env, List<String> feeds) async {
+        final log = tempFile('probe-p8.log');
+        final res = await Process.run(
+          'python3',
+          [
+            '${root.path}/test/console_pty/drive.py',
+            '--size', '24', '80', //
+            '--ready', 'blue',
+            for (final f in feeds) ...['--feed', '1.0', f],
+            '--',
+            Platform.resolvedExecutable,
+            '${root.path}/test/console_pty/probe.dart',
+            log.path,
+            'choose',
+          ],
+          workingDirectory: root.path,
+          stdoutEncoding: null,
+          environment: {'LANG': 'en_US.UTF-8', ...env},
+        );
+        if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
+        return (utf8.decode(res.stdout as List<int>, allowMalformed: true), (await log.readAsString()).trim());
+      }
+
+      final (dumb, dumbPick) = await run({'TERM': 'dumb'}, [r'2\x0d']);
+      expect(dumbPick, 'pick=green');
+      expect(dumb, isNot(contains('\x1b[')), reason: dumb);
+      final (ascii, _) = await run({'TERM': 'xterm-256color', 'LC_ALL': 'C'}, [r'\x0d']);
+      expect(ascii, contains('enter select'));
+      expect(ascii, isNot(contains('↑↓')));
+      expect(ascii, isNot(contains('·')));
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
     test('a menu repaint after a resize clears the rows the old paint left', () async {
       final root = Directory.current;
       final res = await Process.run(
