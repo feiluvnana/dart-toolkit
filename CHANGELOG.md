@@ -28,6 +28,7 @@
 - `cli`: a duration that repeats a unit (`--wait=1m1m`) is a usage error instead of adding up to 2 minutes.
 - `html`: `:nth-child(odd of S)` takes any whitespace around `of` (a tab or newline threw), and `option:checked` follows the option `form()` posts: a single-choice select's last `selected` option, else its first enabled one.
 - `fs`: `Link.resolve()` is null only for a broken link (missing target, a loop); a permission error throws instead of reading as broken.
+- `chrome`: a DevTools reply that does not parse fails its call with a `BrowserException` instead of leaving it pending forever, and malformed UTF-8 in a reply is replaced rather than dropping the message.
 
 **Performance**
 

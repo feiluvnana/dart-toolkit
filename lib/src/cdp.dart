@@ -168,11 +168,20 @@ final class Cdp {
   /// Set by [close]: a send from then on fails at once.
   var _closing = false;
 
+  /// The id of a reply, read without parsing it.
+  static final _id = RegExp(r'^\s*\{\s*"id"\s*:\s*(\d+)');
+
   void _onMessage(Object? data) {
+    final text = data is String ? data : utf8.decode(data! as List<int>, allowMalformed: true);
     final Msg msg;
     try {
-      msg = jsonDecode(data is String ? data : utf8.decode(data! as List<int>)) as Msg;
-    } catch (_) {
+      msg = jsonDecode(text) as Msg;
+    } catch (e) {
+      // A reply that does not parse still fails its call, if its id reads.
+      final id = int.tryParse(_id.firstMatch(text)?[1] ?? '');
+      if (_pending.remove(id) case (final done, final method, _)) {
+        done.completeError(BrowserException('$method: a malformed reply', cause: e));
+      }
       return;
     }
     if (msg['id'] case final int id) {

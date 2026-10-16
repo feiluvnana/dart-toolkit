@@ -43,6 +43,12 @@ final class Fake {
     _ws!.add(jsonEncode({'method': method, 'params': params, 'sessionId': ?session}));
   }
 
+  /// Send [data] as it is (a text or binary frame), malformed or not.
+  Future<void> raw(Object data) async {
+    await _connected.future;
+    _ws!.add(data);
+  }
+
   Future<void> close() async {
     await _ws?.close();
     await _server.close(force: true);
@@ -98,6 +104,17 @@ void main() {
       cdp.browser.once('X.never', timeout: const Duration(milliseconds: 50)),
       throwsA(isA<TimeoutException>()),
     );
+  });
+
+  test('a malformed reply fails its call instead of leaving it pending (B28)', () async {
+    final cut = cdp.browser.send('Never.answer');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await fake.raw('{"id": ${fake.commands.last['id']}, "result": {"a": ');
+    await expectLater(cut.timeout(const Duration(seconds: 5)), throwsA(isA<BrowserException>()));
+    final bytes = cdp.browser.send('Never.answer');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await fake.raw([...utf8.encode('{"id": ${fake.commands.last['id']}, "result": {"v": "a'), 0xFF, ...utf8.encode('"}}')]);
+    expect((await bytes.timeout(const Duration(seconds: 5)))['v'], 'a\uFFFD');
   });
 
   test('a pending call fails when the connection drops', () async {
