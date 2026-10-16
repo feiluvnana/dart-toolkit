@@ -70,6 +70,7 @@
 - `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed` from that cursor, or the `page` function returning it as `next` when its chain ends (medialoader's photo walk does).
 - `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
 - `chrome`: `Page.reload()`; a reload is `page.go(await page.url())`.
+- `pool`: `Pool.map(rate:)` and `Pool.settle(rate:)`; a job paces itself with `await rate.wait()` first, or through its client's `rate:`.
 
 ## 0.1.0
 

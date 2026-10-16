@@ -208,18 +208,19 @@ void main() {
         throwsA(isA<ExitException>()),
       );
       expect(calls, 2);
-      final starts = <DateTime>[];
-      await Pool.map([1, 2, 3], (x) => starts.add(DateTime.now()), rate: Rate(1, 150.milliseconds));
-      expect(starts.last.difference(starts.first), greaterThanOrEqualTo(const Duration(milliseconds: 290)));
     });
 
-    test('fail-fast ends the other lanes\' rate waits instead of sitting them out', () async {
+    test('fail-fast ends the other lanes\' backoffs instead of sitting them out', () async {
       final sw = Stopwatch()..start();
       await expectLater(
-        Pool.map([1, 2, 3], (x) => x == 1 ? throw StateError('bad') : x, limit: 3, rate: Rate(1, 5.seconds)),
+        Pool.map([1, 2, 3], (x) async {
+          if (x != 1) throw const SocketException('flaky'); // retried after a 1 s backoff
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          throw StateError('bad');
+        }, limit: 3, retries: 3),
         throwsStateError,
       );
-      expect(sw.elapsed, lessThan(const Duration(seconds: 2))); // was 10 s: two lanes queued for the window
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 700)));
     });
 
     test('the first error stops new jobs and is rethrown', () async {

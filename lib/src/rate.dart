@@ -1,5 +1,5 @@
 /// [Rate] (exported by `core`) and the cancellable waits behind it, shared by
-/// `http` (paced sends, backoff) and `pool` (paced job starts).
+/// `http` (paced sends, backoff) and `pool` (backoff).
 library;
 
 import 'dart:async';
@@ -13,14 +13,18 @@ import 'dart:math';
 /// that only extends a ban. [onWait] hears every wait of a second or more,
 /// so a script can say why it went quiet. Keep one per API for the whole
 /// run: the window is its memory. With [perHost], http keeps one window
-/// per host (a crawler that is polite to each site); `wait()` and `pool`
-/// use one shared window.
+/// per host (a crawler that is polite to each site); `wait()` uses one
+/// shared window.
 ///
 /// ```dart
 /// final api = Rate(75, 11.minutes, pause: 3.seconds);
 /// final ig = Http.client(rate: api);
 /// final crawl = Http.client(rate: Rate(1, 1.seconds, perHost: true));
-/// await Pool.map(paths, convert, rate: Rate(2, 1.seconds));
+/// final two = Rate(2, 1.seconds);
+/// await Pool.map(paths, (p) async {
+///   await two.wait();
+///   return convert(p);
+/// });
 /// ```
 final class Rate {
   Rate(

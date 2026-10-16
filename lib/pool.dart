@@ -14,7 +14,7 @@
 /// - `Pool.map()` fails fast: the first error is rethrown with its type and
 ///   stack once the jobs in flight finish.
 /// - `Pool.settle()` never throws: one [Outcome] per item, in input order.
-/// - Both take `limit` `retries` `rate` `isolates`, and return a [Task]
+/// - Both take `limit` `retries` `isolates`, and return a [Task]
 ///   that counts the items done: watch it with `&`.
 /// - `Pool(limit:)` holds lanes that any number of calls share:
 ///   `pool.run(job)` waits for a free lane, first come first served.
@@ -42,8 +42,8 @@ import 'src/retry.dart' as retry;
 ///   jittered backoff (1 s, 2 s … ±25%): a shell's exit, a 5xx, a browser
 ///   or network failure. An Error (a bug, an `ArgumentError`), bad data
 ///   (`ContentException`), TLS, an HTTP 4xx (but 408 and 429), a logged-out
-///   session and a refused proxy login fail at once.
-///   [rate] paces job starts (each attempt takes a slot).
+///   session and a refused proxy login fail at once. A job paces itself
+///   with `await rate.wait()` (or a client's `rate:`).
 /// - `isolates: true` runs the jobs on `limit` long-lived worker isolates
 ///   that pull items: the job and every item must be sendable (a top-level
 ///   function or a closure over plain data). A value that cannot cross is an
@@ -94,10 +94,9 @@ final class Pool {
     FutureOr<R> Function(T item) job, {
     int? limit,
     int retries = 0,
-    Rate? rate,
     bool isolates = false,
   }) => task((run) async {
-    final out = await _run(items, job, limit, retries, rate, isolates, run, failFast: true);
+    final out = await _run(items, job, limit, retries, isolates, run, failFast: true);
     return [
       for (final o in out)
         switch (o) {
@@ -115,16 +114,14 @@ final class Pool {
     FutureOr<R> Function(T item) job, {
     int? limit,
     int retries = 0,
-    Rate? rate,
     bool isolates = false,
-  }) => task((run) => _run(items, job, limit, retries, rate, isolates, run, failFast: false));
+  }) => task((run) => _run(items, job, limit, retries, isolates, run, failFast: false));
 
   static Future<List<Outcome<T, R>>> _run<T, R>(
     Iterable<T> items,
     FutureOr<R> Function(T item) job,
     int? limit,
     int retries,
-    Rate? pace,
     bool isolates,
     Run run, {
     required bool failFast,
@@ -140,7 +137,7 @@ final class Pool {
     final workers = <_Worker>[];
     var next = 0;
     var failed = false;
-    // Fail-fast ends the other lanes' rate waits and backoffs at once.
+    // Fail-fast ends the other lanes' backoffs at once.
     final halt = rate.Halt();
 
     Future<void> lane() async {
@@ -152,7 +149,6 @@ final class Pool {
         Outcome<T, R> result;
         try {
           for (var attempt = 0; ; attempt++) {
-            if (pace != null) await rate.take(pace, failFast ? halt : null);
             if (failFast && failed) return; // the map throws the first failure
             try {
               final R value;

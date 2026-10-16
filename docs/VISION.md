@@ -666,9 +666,9 @@ final class Pool {
   Pool({int limit = 4});   // held lanes, shared by every run() on this pool
   Task<R> run<R>(FutureOr<R> Function() job);     // waits for a free lane, first come first served; & probe watches it
   static Task<List<R>> map<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, int retries = 0, Rate? rate, bool isolates = false});   // fail fast
+      {int? limit, int retries = 0, bool isolates = false});   // fail fast
   static Task<List<Outcome<T, R>>> settle<T, R>(Iterable<T> items, FutureOr<R> Function(T item) job,
-      {int? limit, int retries = 0, Rate? rate, bool isolates = false});   // never throws
+      {int? limit, int retries = 0, bool isolates = false});   // never throws
 }
 sealed class Outcome<T, R> { T get item; }
 final class Done<T, R> extends Outcome<T, R> { R get value; }
@@ -683,7 +683,8 @@ extension Outcomes<T, R> on List<Outcome<T, R>> { List<R> values(); List<Failed<
   bar). `isolates: true` runs `limit` long-lived worker isolates (the core count by default) that
   pull items: the job and items must be sendable; an unsendable one is an `ArgumentError` naming
   the item, while an `ArgumentError` from the job itself stays as it is.
-- `retries:` re-runs a failing job with the shared jittered backoff; `rate:` paces job starts.
+- `retries:` re-runs a failing job with the shared jittered backoff; a job paces itself with
+  `await rate.wait()` (or the client's `rate:`).
   A shell's exit, a 5xx, a browser or network failure is retried; a bug (`Error`), bad data
   (`ContentException`), TLS, an HTTP 4xx (but 408/429), a logged-out session or a refused proxy
   login fails at once. An exception says whose fault: data → `ContentException`, the network or
