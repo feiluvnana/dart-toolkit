@@ -45,6 +45,7 @@ export 'core.dart';
 
 import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
+import 'src/decoders.dart';
 import 'src/origin.dart' as names;
 import 'src/rate.dart' as rate;
 import 'src/resume.dart';

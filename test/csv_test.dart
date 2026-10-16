@@ -3,7 +3,10 @@ import 'dart:io' show Directory, PathNotFoundException;
 
 import 'package:dart_toolkit/csv.dart';
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/http.dart';
 import 'package:test/test.dart';
+
+import 'support/io.dart';
 
 void main() {
   streaming();
@@ -86,6 +89,23 @@ void streaming() {
       ['1', '2'],
     ]);
     await expectLater(_Chunks([utf8.encode('"open')]).rows().toList(), throwsA(isA<ContentException>()));
+  });
+
+  test('response.rows() honours the charset like csv() (regression: always UTF-8)', () async {
+    final (_, url) = await serve((r) {
+      r.response
+        ..headers.set('content-type', 'text/csv; charset=windows-1252')
+        ..add(latin1.encode('caf\u00e9,1\r\n"a\r\nb",2\r\n'))
+        ..close();
+    });
+    final http = Http.client();
+    addTearDown(http.close);
+    final want = [
+      ['caf\u00e9', '1'],
+      ['a\r\nb', '2'],
+    ];
+    expect(await http.get(url).csv(), want);
+    expect(await http.get(url).rows().toList(), want);
   });
 }
 

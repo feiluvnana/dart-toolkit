@@ -19,6 +19,7 @@ part of '../../http.dart';
 final class Response with Reader implements Closeable {
   Response._(this._resp, this._client, this._method, this._url, {required this._head}) : _status = _resp.statusCode {
     _client._responses.add(this);
+    decoders[this] = (bytes) => charset.Charset.decodeStream(bytes, contentType: header('content-type'));
   }
 
   final HttpClientResponse _resp;

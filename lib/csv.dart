@@ -18,6 +18,8 @@ import 'dart:convert';
 import 'dart:io' show PathNotFoundException;
 
 import 'core.dart';
+import 'src/decoders.dart';
+
 export 'core.dart';
 
 /// Entry point: parse and encode.
@@ -81,11 +83,14 @@ extension ReaderCsv on Reader {
   }
 
   /// The CSV rows one at a time as the bytes arrive: a multi-gigabyte
-  /// export reads in constant memory. Same rules as [Csv.parse].
+  /// export reads in constant memory. Same rules as [Csv.parse]; decoded
+  /// like [text] (a response's charset).
   Stream<List<String>> rows({String sep = ','}) async* {
     final ready = <List<String>>[];
     final rows = _Rows(sep, ready.add);
-    await for (final chunk in stream().transform(const Utf8Decoder(allowMalformed: true))) {
+    final decode = decoders[this];
+    final text = decode != null ? decode(stream()) : stream().transform(const Utf8Decoder(allowMalformed: true));
+    await for (final chunk in text) {
       rows.feed(chunk);
       for (final row in ready) {
         yield row;
