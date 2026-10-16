@@ -393,15 +393,40 @@ final class _Extraction {
     return dest;
   }
 
-  /// Zip, 7z and RAR stay in memory: zip's directory and 7z's header sit
-  /// at the end, a 7z solid folder decodes as one. The archive decodes and
-  /// lands in the temp tree on its own isolate ([_unpackBytes]).
-  Future<void> inMemory(Stream<List<int>> input, _Format format, String? password) async {
-    final acc = BytesBuilder(copy: false);
-    await for (final chunk in input) {
-      acc.add(chunk);
+  /// A zip up to [_inMemoryMax] stays in memory (its directory sits at the
+  /// end); a bigger one is spooled to a file in the temp tree and read by
+  /// offset, a member at a time. It decodes and lands in the temp tree on
+  /// its own isolate.
+  Future<void> unzip(Stream<List<int>> input, String? password) async {
+    final head = <List<int>>[];
+    var held = 0;
+    final it = StreamIterator(input);
+    while (await it.moveNext()) {
+      head.add(it.current);
+      held += it.current.length;
+      if (held <= _inMemoryMax) continue;
+      final stage = io.Directory(p.join(tmp.path, _stageName));
+      try {
+        final spool = io.File(p.join(stage.path, 'in'));
+        await spool.create(recursive: true);
+        Stream<List<int>> all() async* {
+          yield* Stream.fromIterable(head);
+          head.clear();
+          while (await it.moveNext()) {
+            yield it.current;
+          }
+        }
+
+        await posix.writeAll(spool, all());
+        _modes.addAll(await _isolated(_unzipFileJob(spool.path, password, tmp.path)));
+      } finally {
+        if (await stage.exists()) await stage.delete(recursive: true);
+      }
+      return;
     }
-    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), format, password, tmp.path)));
+    final acc = BytesBuilder(copy: false);
+    head.forEach(acc.add);
+    _modes.addAll(await _isolated(_unpackJob(acc.takeBytes(), _Format.zip, password, tmp.path)));
   }
 
   /// [work]'s result, computed on its own isolate (registered, so an
@@ -798,6 +823,42 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
 un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp) =>
     () => un.unpackEntries(_entries(bytes, format, password), tmp);
 
+/// A job unpacking the zip spooled at [path], read by offset.
+un.Modes Function() _unzipFileJob(String path, String? password, String tmp) => () {
+  final f = io.File(path).openSync();
+  try {
+    Uint8List read(int at, int n) {
+      f.setPositionSync(at);
+      final out = Uint8List(n);
+      var got = 0;
+      for (int r; got < n && (r = f.readIntoSync(out, got)) > 0;) {
+        got += r;
+      }
+      return got == n ? out : Uint8List.sublistView(out, 0, got);
+    }
+
+    return un.unpackEntries(_zipEntries(() => zip.readZipAt(f.lengthSync(), read), password), tmp);
+  } finally {
+    f.closeSync();
+  }
+};
+
+/// [members] (a zip's, read lazily) as entries; damage in the directory
+/// names the archive.
+List<un.Entry> _zipEntries(List<zip.ZipEntry> Function() members, String? pw) => un.guard(
+  'zip',
+  () => [
+    for (final f in members())
+      (
+        name: f.name,
+        mode: f.mode,
+        kind: f.isDir ? un.Kind.dir : (f.isLink ? un.Kind.symlink : un.Kind.file),
+        mtime: f.mtime,
+        data: () => f.data(password: pw),
+      ),
+  ],
+);
+
 /// The members of the [format] archive in [b]; damage in the directory
 /// names the archive.
 List<un.Entry> _entries(Uint8List b, _Format format, String? pw) {
@@ -805,19 +866,7 @@ List<un.Entry> _entries(Uint8List b, _Format format, String? pw) {
       dir ? un.Kind.dir : (link ? (hard ? un.Kind.hardlink : un.Kind.symlink) : un.Kind.file);
   switch (format) {
     case _Format.zip:
-      return un.guard(
-        'zip',
-        () => [
-          for (final f in zip.readZip(b))
-            (
-              name: f.name,
-              mode: f.mode,
-              kind: kind(dir: f.isDir, link: f.isLink),
-              mtime: f.mtime,
-              data: () => f.data(password: pw),
-            ),
-        ],
-      );
+      return _zipEntries(() => zip.readZip(b), pw);
     case _Format.sevenzip:
       return un.guard(
         '7z',
@@ -973,7 +1022,7 @@ final class _Unpacker with Writer {
         await x.start();
         switch (format) {
           case _Format.zip:
-            await x.inMemory(rest(), format, _password);
+            await x.unzip(rest(), _password);
           case _Format.sevenzip || _Format.rar:
             await x.solid(rest(), format, _password);
           case _Format.xz:

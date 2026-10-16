@@ -35,6 +35,7 @@
 - `archive`: an archive's symlinks can no longer reach outside the target folder on a filesystem that folds case or Unicode normalisation (APFS, NTFS): links are matched case-folded, and every placed symlink is resolved by the OS and refused if it lands outside.
 - `video`: the loopback proxy behind `Video.open(url, headers:)` answers only GET and HEAD, under a random per-run path, for `Host: 127.0.0.1:<port>`; another local process or a DNS-rebound page could send any request with the secret headers while ffmpeg ran.
 - `video`/`image`: `Video.open(source, audio:)` takes only http(s) URLs (`file://`, `tcp://`, `ftp://`, `concat:` read local files or opened sockets); a local file is `Fs.file(path).video()`, and local paths reach ffmpeg as `file:<absolute path>`, never parsed as another protocol.
+- `archive`: `unarchive` of a zip past 32 MiB spools it to a file in its temp folder and reads it a member at a time instead of holding the whole zip in memory (a 768 MiB body peaked at 2.7 GB).
 
 **Performance**
 

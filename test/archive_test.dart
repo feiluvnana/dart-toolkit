@@ -949,6 +949,50 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       );
     });
 
+    test('S3: a big zip is spooled to disk, not held in memory, and reads back exactly', () async {
+      await Directory(p('work')).create();
+      await runInDir(
+        p('work'),
+        """
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/src/crc32.dart';
+""",
+        r'''
+// 100 stored members of 1 MiB each, made as they are read.
+const count = 100, size = 1 << 20;
+final body = Uint8List(size)..fillRange(0, size, 7);
+final crc = crc32(body);
+List<int> le(int v, int n) => [for (var i = 0; i < n; i++) v >> 8 * i & 0xFF];
+List<int> header(int sig, String name, int offset) => [
+  ...le(sig, 4), if (sig == 0x02014b50) ...le(20, 2), ...le(20, 2), 0, 0, 0, 0, 0, 0, 0x21, 0,
+  ...le(crc, 4), ...le(size, 4), ...le(size, 4), ...le(name.length, 2), 0, 0,
+  if (sig == 0x02014b50) ...[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...le(offset, 4)],
+  ...name.codeUnits,
+];
+Stream<List<int>> zip() async* {
+  final dir = <int>[];
+  var at = 0;
+  for (var i = 0; i < count; i++) {
+    final local = header(0x04034b50, 'm$i.bin', 0);
+    dir.addAll(header(0x02014b50, 'm$i.bin', at));
+    yield local;
+    yield body;
+    at += local.length + size;
+  }
+  yield dir;
+  yield [...le(0x06054b50, 4), 0, 0, 0, 0, ...le(count, 2), ...le(count, 2), ...le(dir.length, 4), ...le(at, 4), 0, 0];
+}
+final before = ProcessInfo.maxRss;
+await Archive.unarchive('out').consume(zip());
+if (File('out/m99.bin').readAsBytesSync().any((b) => b != 7)) throw 'content';
+if (Directory('out').listSync().length != count) throw 'count ${Directory('out').listSync()}';
+if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - before}';
+''',
+      );
+    });
+
     test('H7: tar unpack handles tiny input chunks', () async {
       await seed();
       final tar = await Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tar).bytes();

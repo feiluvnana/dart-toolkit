@@ -26,7 +26,8 @@ final class ZipEntry {
   ZipEntry._(
     this.name,
     this.mode,
-    this._bytes,
+    this._read,
+    this._length,
     this._offset,
     this._method,
     this._size,
@@ -46,7 +47,8 @@ final class ZipEntry {
   /// made on unix.
   final int mode;
 
-  final Uint8List _bytes;
+  final ReadAt _read;
+  final int _length;
   final int _offset;
   final int _method;
   final int _size;
@@ -72,11 +74,12 @@ final class ZipEntry {
   /// The member's bytes, decrypted with [password], inflated and checked
   /// against the CRC-32 (an AE-2 member is checked by its MAC instead).
   Uint8List data({String? password}) {
-    final b = _bytes;
-    if (_offset + 30 > b.length || _u32(b, _offset) != 0x04034b50) _corrupt('bad local header for $name');
-    final start = _offset + 30 + _u16(b, _offset + 26) + _u16(b, _offset + 28);
-    if (start + _packed > b.length) _corrupt('member runs past the end: $name');
-    var raw = Uint8List.sublistView(b, start, start + _packed);
+    if (_offset + 30 > _length) _corrupt('bad local header for $name');
+    final h = _read(_offset, 30);
+    if (_u32(h, 0) != 0x04034b50) _corrupt('bad local header for $name');
+    final start = _offset + 30 + _u16(h, 26) + _u16(h, 28);
+    if (start + _packed > _length) _corrupt('member runs past the end: $name');
+    var raw = _read(start, _packed);
     var method = _method;
     final aes = _aes;
     if (encrypted) {
@@ -143,30 +146,46 @@ final class ZipEntry {
 }
 
 /// The members of the zip in [b], in central-directory order.
-List<ZipEntry> readZip(Uint8List b) {
+/// [n] bytes of a zip from offset [at], both inside it.
+typedef ReadAt = Uint8List Function(int at, int n);
+
+/// The members of the zip in [b].
+List<ZipEntry> readZip(Uint8List b) => readZipAt(b.length, (at, n) => Uint8List.sublistView(b, at, at + n));
+
+/// The members of a zip of [length] bytes read through [read]: only the
+/// directory is held, each member's bytes are read when it is.
+List<ZipEntry> readZipAt(int length, ReadAt read) {
   // The end-of-central-directory record: 22 bytes plus a comment of up to
   // 64 KiB, so scan back at most that far.
+  final tailAt = length - 22 - 0xFFFF < 0 ? 0 : length - 22 - 0xFFFF;
+  final tail = read(tailAt, length - tailAt);
   var eocd = -1;
-  for (var i = b.length - 22; i >= 0 && i >= b.length - 22 - 0xFFFF; i--) {
-    if (_u32(b, i) == 0x06054b50) {
+  for (var i = tail.length - 22; i >= 0; i--) {
+    if (_u32(tail, i) == 0x06054b50) {
       eocd = i;
       break;
     }
   }
   if (eocd < 0) _corrupt('no zip directory');
-  var count = _u16(b, eocd + 10);
-  var dir = _u32(b, eocd + 16);
+  var count = _u16(tail, eocd + 10);
+  var dir = _u32(tail, eocd + 16);
+  eocd += tailAt;
   if (count == 0xFFFF || dir == 0xFFFFFFFF) {
     // Zip64: a locator 20 bytes before points at the zip64 record.
     final loc = eocd - 20;
-    if (loc < 0 || _u32(b, loc) != 0x07064b50) _corrupt('missing zip64 locator');
-    final rec = _u64(b, loc + 8);
-    if (rec < 0 || rec + 56 > b.length || _u32(b, rec) != 0x06064b50) _corrupt('bad zip64 record');
-    count = _u64(b, rec + 32);
-    dir = _u64(b, rec + 48);
+    if (loc < 0 || _u32(read(loc, 20), 0) != 0x07064b50) _corrupt('missing zip64 locator');
+    final rec = _u64(read(loc, 20), 8);
+    if (rec < 0 || rec + 56 > length) _corrupt('bad zip64 record');
+    final r = read(rec, 56);
+    if (_u32(r, 0) != 0x06064b50) _corrupt('bad zip64 record');
+    count = _u64(r, 32);
+    dir = _u64(r, 48);
   }
+  if (dir < 0 || dir > eocd) _corrupt('bad central directory');
+  // The directory runs up to the end record; offsets below are into it.
+  final b = read(dir, eocd - dir);
   final out = <ZipEntry>[];
-  var at = dir;
+  var at = 0;
   for (var n = 0; n < count; n++) {
     if (at + 46 > b.length || _u32(b, at) != 0x02014b50) _corrupt('bad central directory');
     final madeBy = _u16(b, at + 4) >> 8;
@@ -217,14 +236,15 @@ List<ZipEntry> readZip(Uint8List b) {
     if (method == 99 && aes == null) _corrupt('AES member without its extra field: $name');
     // Real sizes and offsets stay under 2^48; a bigger one (or a zip64
     // value that wrapped negative) is damage.
-    if (size < 0 || packed < 0 || offset < 0 || size > 1 << 48 || offset >= b.length) {
+    if (size < 0 || packed < 0 || offset < 0 || size > 1 << 48 || offset >= length) {
       _corrupt('bad sizes for $name');
     }
     out.add(
       ZipEntry._(
         name,
         mode,
-        b,
+        read,
+        length,
         offset,
         method,
         size,
