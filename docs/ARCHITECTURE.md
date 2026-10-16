@@ -79,7 +79,7 @@ Archives (zip, 7z, RAR, xz), AES, the HTTP client and SOCKS, the HTML5 parser wi
 | A2 | Console wrote `stdin.echoMode/lineMode` itself, bypassing the terminal owner | done: 4f8effaa |
 | A3 | The SGR pattern existed twice (sanitize, Console.table) | done: 6b417248 |
 | A4 | `cli.dart` `_parseCommand` was ~280 lines: options, positionals and sub-commands in one loop | done: a `_Parse` class with one method per token kind and one value-taking helper |
-| A5 | `http.dart` was ~1,950 lines, five seams in one file | done: `Response`, the cache, `Feed` and the proxy are part files under `lib/src/http/` |
+| A5 | `http.dart` was ~1,950 lines, five seams in one file | done: `Response`, `Feed` and the proxy are part files under `lib/src/http/` |
 | A6 | `Console.ask` on a pipe reads through `Isolate.run(readLineSync)` per line: an abandoned prompt keeps the VM alive until a line arrives | done: `Console.ask(timeout:)` stops its reader |
 | A7 | `scrape` had no user in projects/ any more (plain loops + `Pool` read shorter) | done: removed |
 

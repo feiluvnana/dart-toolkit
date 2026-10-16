@@ -167,8 +167,8 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env` `recursive`
-`json` `pretty` `limit` `max` `retries` `insecure` `check` `short` `or` `rate` `cookies` `csrf`
-`idle` `connections` `isolates` `match` `dotenv` `sep` `resume`
+`json` `pretty` `limit` `max` `retries` `check` `short` `or` `rate` `cookies` `csrf`
+`isolates` `match` `dotenv` `sep` `resume`
 `required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
 `empty` `header` `onSubmit` `since` `history` `query` `live` `total` `keep`
@@ -266,8 +266,7 @@ final user = (await ig.get('/$name/').html()).json().$('**.xig_user_by_username'
 abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
-      String? proxy, List<String> insecure = const [],
-      Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false,
+      String? proxy, bool resume = false,
       int max = 256 << 20,                        // max: bytes a body read into memory may decode to
       Browser? browser,                           // .page / .api: the headers a desktop browser sends
       List<String> login = const []});            // sign-in paths: landing on one throws SessionException
@@ -306,7 +305,7 @@ final class Response with Reader implements Closeable {
   after redirects throws `SessionException` (its `url`), so a lost session is an error, not a page.
 - **Settings live on the client**, stated once; a request passes only `query`, `headers` and
   `body`. `Http.client()` with no arguments is a new, isolated client (its own jar and sockets);
-  an idle client releases its sockets after `idle`, so a finished script exits. `copy(...)` is a
+  an idle client releases its sockets after 100 ms (6 per host at most), so a finished script exits. `copy(...)` is a
   variant that stays one session.
 - `base:` resolves relative URLs. `query` values may be `String`, `num`, `bool`, null (drops the
   key) or an `Iterable` (repeats the key); `Body.form` takes the same map.

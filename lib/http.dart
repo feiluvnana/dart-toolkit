@@ -313,10 +313,6 @@ abstract final class Http {
   /// - [proxy]: `http://host:port` or `socks5://host:port` (credentials
   ///   allowed, port 1080 by default, names resolved by a SOCKS proxy); null
   ///   reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` like curl.
-  /// - [insecure] lists hosts whose bad certificate is accepted (each with
-  ///   its subdomains), on every redirect hop.
-  /// - [idle]: an idle client releases its sockets after this, so a
-  ///   finished script exits; [connections] caps the sockets per host.
   /// - [resume]: a GET piped into a file (`get(u) & bar > Fs.file(f)`)
   ///   skips a complete file (same `content-length`, or any file when the
   ///   server sends none), resumes a `.part` with `Range` and `If-Range` (its
@@ -349,9 +345,6 @@ abstract final class Http {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    List<String> insecure = const [],
-    Duration idle = const Duration(milliseconds: 100),
-    int connections = 6,
     bool resume = false,
     int max = 256 << 20,
     Browser? browser,
@@ -359,7 +352,6 @@ abstract final class Http {
   }) {
     if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
-    if (connections < 1) throw ArgumentError.value(connections, 'connections', 'must be at least 1');
     final settings = _Settings(
       base: base == null ? null : Uri.parse(base),
       headers: headers,
@@ -374,10 +366,7 @@ abstract final class Http {
       browser: browser,
       login: login,
     );
-    return _Client(
-      settings,
-      _Conn(insecure: insecure, proxy: proxy, idle: idle, connections: connections, timeout: timeout),
-    );
+    return _Client(settings, _Conn(proxy: proxy, timeout: timeout));
   }
 
   /// One [Client] over several: each request goes to the member with the
@@ -421,9 +410,6 @@ sealed class Client implements Closeable {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    List<String>? insecure,
-    Duration? idle,
-    int? connections,
     bool? resume,
     int? max,
     Browser? browser,
@@ -496,30 +482,17 @@ final class _Settings {
 
 /// One `HttpClient` with its socket settings, counted by the requests and
 /// live responses of every client that shares it. When the count reaches
-/// 0 the sockets close after [idle], so a sequential loop keeps one
+/// 0 the sockets close after [_idle], so a sequential loop keeps one
 /// connection while a finished script exits.
 final class _Conn {
-  _Conn({
-    required this.insecure,
-    required this.proxy,
-    required this.idle,
-    required this.connections,
-    required this.timeout,
-  }) : _trusted = [for (final h in insecure) h.toLowerCase()],
-       _proxy = proxy == null ? null : _Proxy.parse(proxy);
+  _Conn({required this.proxy, required this.timeout}) : _proxy = proxy == null ? null : _Proxy.parse(proxy);
 
-  final List<String> insecure;
+  static const _idle = Duration(milliseconds: 100);
+  static const _perHost = 6;
+
   final String? proxy;
-  final Duration idle;
-  final int connections;
   final Duration timeout;
-  final List<String> _trusted;
   final _Proxy? _proxy;
-
-  bool _trusts(String host) {
-    final h = host.toLowerCase();
-    return _trusted.any((t) => h == t || h.endsWith('.$t'));
-  }
 
   HttpClient? _client;
   var _active = 0;
@@ -548,7 +521,7 @@ final class _Conn {
     assert(_active >= 0, 'connection count over-released');
     if (_active == 0) {
       _closer?.cancel();
-      _closer = Timer(idle, () {
+      _closer = Timer(_idle, () {
         _closer = null;
         if (_active == 0) _shut();
       });
@@ -564,27 +537,20 @@ final class _Conn {
 
   HttpClient _build() {
     final c = HttpClient()
-      ..maxConnectionsPerHost = connections
+      ..maxConnectionsPerHost = _perHost
       ..connectionTimeout = timeout;
-    if (_trusted.isNotEmpty) c.badCertificateCallback = (cert, host, port) => _trusts(host);
     final p = _proxy;
     if (p == null) {
       c.findProxy = HttpClient.findProxyFromEnvironment;
     } else {
-      p.apply(c, _trusts, timeout);
+      p.apply(c, timeout);
     }
     return c;
   }
 
-  bool sameAs({List<String>? insecure, String? proxy, Duration? idle, int? connections, Duration? timeout}) =>
-      (timeout == null || timeout == this.timeout) &&
-      (insecure == null || _sameList(insecure, this.insecure)) &&
-      (proxy == null || proxy == this.proxy) &&
-      (idle == null || idle == this.idle) &&
-      (connections == null || connections == this.connections);
+  bool sameAs({String? proxy, Duration? timeout}) =>
+      (timeout == null || timeout == this.timeout) && (proxy == null || proxy == this.proxy);
 }
-
-bool _sameList(List<String> a, List<String> b) => a.length == b.length && a.indexed.every((e) => b[e.$1] == e.$2);
 
 final class _Client extends Client {
   _Client(this._s, this._conn, [this._parent]) {
@@ -640,24 +606,15 @@ final class _Client extends Client {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    List<String>? insecure,
-    Duration? idle,
-    int? connections,
     bool? resume,
     int? max,
     Browser? browser,
     List<String>? login,
   }) {
     final s = _s;
-    final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections, timeout: timeout)
+    final conn = _conn.sameAs(proxy: proxy, timeout: timeout)
         ? _conn
-        : _Conn(
-            insecure: insecure ?? _conn.insecure,
-            proxy: proxy ?? _conn.proxy,
-            idle: idle ?? _conn.idle,
-            connections: connections ?? _conn.connections,
-            timeout: timeout ?? _conn.timeout,
-          );
+        : _Conn(proxy: proxy ?? _conn.proxy, timeout: timeout ?? _conn.timeout);
     final copy = _Client(
       _Settings(
         base: base == null ? s.base : Uri.parse(base),
@@ -728,7 +685,9 @@ final class _Client extends Client {
       }
       _conn.leave();
     }
-    await Future.wait([for (final c in [..._copies]) c.close()]);
+    await Future.wait([
+      for (final c in [..._copies]) c.close(),
+    ]);
     while (_sends.isNotEmpty) {
       await Future.wait([
         for (final f in [..._sends]) f.catchError((_) {}),
@@ -1068,9 +1027,6 @@ final class _Pool extends Client {
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,
-    List<String>? insecure,
-    Duration? idle,
-    int? connections,
     bool? resume,
     int? max,
     Browser? browser,
@@ -1090,9 +1046,6 @@ final class _Pool extends Client {
           check: check,
           cookies: cookies,
           csrf: csrf,
-          insecure: insecure,
-          idle: idle,
-          connections: connections,
           resume: resume,
           max: max,
           browser: browser,

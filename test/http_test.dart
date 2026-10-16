@@ -321,30 +321,6 @@ void main() {
       await res.close();
     });
 
-    test('insecure trusts only the hosts it names, with their subdomains', () async {
-      final dir = await Directory.systemTemp.createTemp('tls');
-      addTearDown(() => dir.delete(recursive: true));
-      final made = await Process.run('openssl', [
-        'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', //
-        '-keyout', '${dir.path}/key.pem', '-out', '${dir.path}/cert.pem',
-      ]);
-      if (made.exitCode != 0) markTestSkipped('needs openssl');
-      final ctx = SecurityContext()
-        ..useCertificateChain('${dir.path}/cert.pem')
-        ..usePrivateKey('${dir.path}/key.pem');
-      final tls = await HttpServer.bindSecure(InternetAddress.loopbackIPv4, 0, ctx);
-      tls.listen(
-        (r) => r.response
-          ..write('secret')
-          ..close(),
-      );
-      addTearDown(() => tls.close(force: true));
-      final u = 'https://localhost:${tls.port}/';
-      expect(await Http.client(insecure: ['localhost']).get(u).text(), 'secret');
-      await expectLater(http.get(u), throwsA(isA<HandshakeException>()));
-      await expectLater(Http.client(insecure: ['example.com']).get(u), throwsA(isA<HandshakeException>()));
-    });
-
     test('piping streams without caching; reading after is StateError', () async {
       final res = await http.get('$base/hello');
       final sink = _Sink();
@@ -652,7 +628,7 @@ void edgeTests() {
     });
 
     test('HEAD keeps the connection whatever content-length says', () async {
-      final c = Http.client(idle: 2.seconds);
+      final c = Http.client();
       peers.clear();
       for (var i = 0; i < 4; i++) {
         expect(await c.head('$url/big-head').ok(), isTrue);
@@ -860,7 +836,7 @@ Future<void> main() async {
       expect(again.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
     });
 
-    test('a script with a long-idle client exits once it closes', () async {
+    test('a script exits once its client closes', () async {
       final sw = Stopwatch()..start();
       final r = await runDart(
         '''
@@ -868,7 +844,7 @@ import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/resume.dart' show PassThrough;
 Future<void> main(List<String> a) async {
-  final c = Http.client(idle: 1.hours);
+  final c = Http.client();
   print(await c.get(a[0]).text());
   await c.close();
 }

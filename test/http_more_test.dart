@@ -235,12 +235,14 @@ Future<void> main() async {
       dir = await Directory.systemTemp.createTemp('tls');
       final made = await Process.run('openssl', [
         'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', //
+        '-addext', 'subjectAltName=DNS:localhost', '-addext', 'extendedKeyUsage=serverAuth', //
         '-keyout', '${dir.path}/key.pem', '-out', '${dir.path}/cert.pem',
       ]);
       if (made.exitCode != 0) return;
       ctx = SecurityContext()
         ..useCertificateChain('${dir.path}/cert.pem')
         ..usePrivateKey('${dir.path}/key.pem');
+      SecurityContext.defaultContext.setTrustedCertificates('${dir.path}/cert.pem'); // what every client trusts
     });
     tearDownAll(() => dir.delete(recursive: true));
 
@@ -259,7 +261,7 @@ Future<void> main() async {
           ..close(),
       );
       final run = await capture(
-        () => Http.client(insecure: ['localhost']).get('https://localhost:${s.port}/x').status(),
+        () => Http.client().get('https://localhost:${s.port}/x').status(),
       );
       expect(run.value, 200);
       expect(run.err, contains('redirected from https to $url/ua'));
@@ -273,7 +275,7 @@ Future<void> main() async {
       );
       final proxy = await _Socks.start();
       addTearDown(proxy.close);
-      final c = Http.client(proxy: 'socks5://127.0.0.1:${proxy.port}', insecure: ['localhost']);
+      final c = Http.client(proxy: 'socks5://127.0.0.1:${proxy.port}');
       expect(await c.get('https://localhost:${s.port}/').text(), 'tls localhost:${s.port}');
       expect(proxy.targets, ['localhost:${s.port}']);
     });

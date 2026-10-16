@@ -38,9 +38,9 @@ final class _Proxy {
   final int port;
   final String? user, pass;
 
-  /// Route [c] through this proxy; [trusted] is the `insecure:` test, and
-  /// a SOCKS handshake that takes longer than [timeout] fails.
-  void apply(HttpClient c, bool Function(String host) trusted, Duration timeout) {
+  /// Route [c] through this proxy; a SOCKS handshake that takes longer
+  /// than [timeout] fails.
+  void apply(HttpClient c, Duration timeout) {
     if (!socks) {
       c.findProxy = (_) => 'PROXY $host:$port';
       if (user != null) c.addProxyCredentials(host, port, '', HttpClientBasicCredentials(user!, pass!));
@@ -50,19 +50,16 @@ final class _Proxy {
     c.connectionFactory = (url, _, _) async {
       final task = await Socket.startConnect(host, port);
       Socket? connected;
-      final socket = task.socket.then(
-        (s) {
-          connected = s;
-          return _socks(s, url, trusted).timeout(
-            timeout,
-            onTimeout: () {
-              s.destroy();
-              throw SocketException('SOCKS proxy $host:$port: no answer for ${timeout.inMilliseconds} ms');
-            },
-          );
-        },
-        onError: (Object e) => throw SocketException('SOCKS proxy $host:$port: $e'),
-      );
+      final socket = task.socket.then((s) {
+        connected = s;
+        return _socks(s, url).timeout(
+          timeout,
+          onTimeout: () {
+            s.destroy();
+            throw SocketException('SOCKS proxy $host:$port: no answer for ${timeout.inMilliseconds} ms');
+          },
+        );
+      }, onError: (Object e) => throw SocketException('SOCKS proxy $host:$port: $e'));
       return ConnectionTask.fromSocket(socket, () {
         task.cancel();
         connected?.destroy();
@@ -72,7 +69,7 @@ final class _Proxy {
 
   /// The SOCKS5 handshake (RFC 1928, user/pass RFC 1929) to [url]'s host,
   /// resolved by the proxy; then TLS for https.
-  Future<Socket> _socks(Socket s, Uri url, bool Function(String host) trusted) async {
+  Future<Socket> _socks(Socket s, Uri url) async {
     final input = _Input(s);
     try {
       final auth = user != null;
@@ -114,7 +111,7 @@ final class _Proxy {
     }
     input.sub.pause();
     if (url.scheme == 'https') {
-      return SecureSocket.secure(s, host: url.host, onBadCertificate: (_) => trusted(url.host));
+      return SecureSocket.secure(s, host: url.host);
     }
     return _Tunnel(s, input.sub);
   }
