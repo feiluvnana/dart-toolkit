@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
 import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
@@ -547,6 +548,27 @@ Future<void> main() async {
       expect(at.first, lessThan(200));
       expect(at.last, greaterThanOrEqualTo(400));
       await c.close();
+    });
+
+    test('M6: events() yields each event as it arrives', () async {
+      final (_, base) = await serve((req) async {
+        final res = req.response
+          ..bufferOutput = false
+          ..headers.contentType = ContentType('text', 'event-stream');
+        for (final e in ['a', 'b', 'c']) {
+          res.write('data: $e\n\n');
+          await res.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        await res.close();
+      });
+      final c = Http.client();
+      addTearDown(c.close);
+      final sw = Stopwatch()..start();
+      final got = [await for (final e in c.get(base).events()) (e, sw.elapsedMilliseconds)];
+      expect(got.map((e) => e.$1), ['a', 'b', 'c']);
+      expect(got.first.$2, lessThan(250));
+      expect(got.last.$2, greaterThanOrEqualTo(500));
     });
 
     test('a paused consumer pauses the socket (B4)', () async {

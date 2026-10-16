@@ -9,7 +9,8 @@
 /// - `Json.parse()` parses text, `Json.encode()` renders it, `Json.of()`
 ///   wraps a value you already hold.
 /// - `reader.json()` reads one document (`or:` for a missing source),
-///   `reader.ndjson()` streams one [Json] per line.
+///   `reader.ndjson()` streams one [Json] per line, `reader.events()` the
+///   data of each server-sent event.
 /// - [Json] supports `$` (dotted path, `a|b.c` alternatives) `[]` (index the
 ///   iteration) `value` (typed scalar read; `DateTime` from ISO or Unix time)
 ///   `or` (read with a default) `text` (any scalar as a string) `texts`
@@ -622,6 +623,36 @@ extension ReaderJson on Reader {
       yield Json._(v);
     }
   }
+
+  /// Server-sent events (`text/event-stream`): each event's data as it
+  /// arrives, its `data:` lines joined by `\n` (`reader.events().map(Json.parse)`
+  /// for LLM streaming APIs). Comments, `event:`, `id:` and `retry:` are
+  /// skipped, one space after the colon is dropped, and an event the source
+  /// ends before its blank line is not given, as the SSE standard says.
+  Stream<String> events() async* {
+    final data = StringBuffer();
+    var any = false, first = true;
+    await for (var line in lines()) {
+      if (first) {
+        first = false;
+        if (line.startsWith('\uFEFF')) line = line.substring(1);
+      }
+      if (line.isEmpty) {
+        if (any) yield '$data';
+        data.clear();
+        any = false;
+        continue;
+      }
+      final colon = line.indexOf(':');
+      if (colon == 0) continue;
+      if ((colon < 0 ? line : line.substring(0, colon)) != 'data') continue;
+      var value = colon < 0 ? '' : line.substring(colon + 1);
+      if (value.startsWith(' ')) value = value.substring(1);
+      if (any) data.write('\n');
+      data.write(value);
+      any = true;
+    }
+  }
 }
 
 /// How deep a parsed document may nest: `toString` and `encode` recurse,
@@ -708,6 +739,7 @@ Future<Json> _json(Reader r) async {
 extension ReaderFutureJson on Future<Reader> {
   Future<Json> json({Json? or}) => orMissing(this, or, (r) => r.json());
   Stream<Json> ndjson() => Stream.fromFuture(this).asyncExpand((r) => r.ndjson());
+  Stream<String> events() => Stream.fromFuture(this).asyncExpand((r) => r.events());
 }
 
 /// The Future mirror (rule 4). The extension name is import-only; never reference it.

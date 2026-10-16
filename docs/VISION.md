@@ -56,7 +56,7 @@ at its call sites than it adds to the surface.
 | 15  | **Watching is `&`, never a parameter.** Long work returns a `Task` (`Pool.map`, `Dir.copy`, `Video.compress`, `Shell.run`); a reader is watched as it flows; any other future shows a spinner. A probe shows the whole run it is in, so where it sits never matters. |
 | 16  | **Callbacks decide or announce an event; they never observe progress or tee output** (`onItem`, `onError`, `keys:`, `onSubmit:`, `onWait:` stay; there is no `onDone:`, `onProgress:`, `onLine:`). |
 | 17  | **Content moves with `>`; in-memory values use a method** (`file.write('text')`, `hash.add('text')`, `Body.json(v)`). Entries move with `copy`/`move` (modes and times kept); content with `>`. |
-| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source (a missing file, an HTTP 404 or 410, with or without `check:`); streaming ones (`lines` `rows` `ndjson`) do not. |
+| 18  | **Text → value is `X.parse(text)`; content → value is `reader.x()`,** one pair per format (`Json`, `Html`, `CsvUtils`, `Yaml`, `Cookies`). Every whole-value reading takes `or:` for a missing source (a missing file, an HTTP 404 or 410, with or without `check:`); streaming ones (`lines` `rows` `ndjson` `events`) do not. |
 | 19  | **A check is `check()` on the value** (`Response`, `Output`); `check:` is only a client-wide policy. One door in per value: content becomes a value through a reading; a static `open` is only for what has no bytes (an HLS URL). |
 | 20  | **The main input is positional, and the text a call shows is a main input** (`ask(question)`, `bar(label)`, `key(prompt)`). A function that renders an item is positional after the items (`choose(q, items, (u) => u.name)`, `Region.list(pick, (u) => u.name)`). Calls of one kind take the same options: every prompt takes `or:` and `timeout:`. |
 | 21  | **Failures are `Exception`s; `Error`s are bugs.** No toolkit failure extends an `Error`. |
@@ -233,7 +233,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
-| `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
+| `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` `events` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `create` · `Link` `target` `resolve`                                                                                                                | `dart:io`, `path`                   |
 | `shell`   | `Shell.run` `read` `filter` · `Output` `code` `ok` `err` `check` · `ExitException`                                                                                                                                                                                                                                                                                                                                      | `dart:io`                           |
@@ -518,7 +518,7 @@ final class Json extends Iterable<Json> {
   Json max(num Function(Json item) by);   // a null Json when empty; the smallest is max((i) => -by(i))
   List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
-extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }   // or: when the source is missing
+extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson();  Stream<String> events(); }   // or: when the source is missing; events: SSE data
 ```
 
 - `$('a.b.0')` walks dotted paths, and a numeric segment indexes an array (`items.-1` is the
@@ -543,7 +543,9 @@ extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }  
   and throws what it throws.
   Invalid JSON is a `ContentException` naming the source. `json()` decodes the bytes straight
   to a value (no `String` in between); `ndjson()` streams one `Json` per non-blank line and
-  names a bad line's number.
+  names a bad line's number. `events()` streams each server-sent event's data as it arrives
+  (`data:` lines joined by `\n`; comments, `event:`, `id:`, `retry:` skipped; an event cut
+  off before its blank line is not given): `client.post(api, …).events().map(Json.parse)`.
 
 ### 4.5 fs
 

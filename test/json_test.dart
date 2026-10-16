@@ -470,6 +470,23 @@ void valueTests() {
       expect(await Future<Reader>.value(_Page('1\n2', const Origin())).ndjson().length, 2);
     });
 
+    test('M6: events() gives each server-sent event\'s data, by the SSE rules', () async {
+      const sse =
+          '﻿: a comment\n\n'
+          'data: a\n\n'
+          'data:b\ndata:  c\n\n' // no space after the colon; only one space is dropped
+          'event: x\nid: 1\ndata: {"k":1}\nretry: 10\n\n'
+          'data\n\n' // a bare field is an empty value
+          'data: crlf\r\n\r\ndata: cr\r\r'
+          ': only a comment\n\n'
+          'data: no blank line ends this one';
+      // One byte a chunk: an event, a line, a CRLF and a multibyte character split anywhere.
+      final bytes = utf8.encode(sse);
+      final events = await _Chunks(bytes).events().toList();
+      expect(events, ['a', 'b\n c', '{"k":1}', '', 'crlf', 'cr']);
+      expect(await Future<Reader>.value(_Chunks(utf8.encode('data: é\n\n'))).events().toList(), ['é']);
+    });
+
     test('json() decodes UTF-8 bytes straight to a value, malformed bytes replaced', () async {
       expect((await Reader.of([0xEF, 0xBB, 0xBF, ...utf8.encode('{"a":"ü"}')]).json()).$('a').text(), 'ü');
       expect((await Reader.of([0x22, 0xFF, 0x22]).json()).text(), '\uFFFD');
@@ -496,6 +513,16 @@ final class _Page with Reader {
   Origin origin() => _origin;
   @override
   Stream<List<int>> stream() => Stream.value(_text.codeUnits);
+}
+
+/// A [Reader] of [bytes], one byte a chunk.
+final class _Chunks with Reader {
+  _Chunks(this._bytes);
+  final List<int> _bytes;
+  @override
+  Stream<List<int>> stream() => Stream.fromIterable([
+    for (final b in _bytes) [b],
+  ]);
 }
 
 final class _Point {
