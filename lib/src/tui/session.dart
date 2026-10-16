@@ -285,7 +285,7 @@ final class _Session<S> implements term.TuiBridge {
 
   Future<S> _run() async {
     if (!io.stdout.hasTerminal) {
-      throw const io.StdoutException('no terminal for the TUI');
+      throw const io.StdoutException('no terminal for the TUI: stdout is piped or redirected (use Console for that output, or run in a terminal)');
     }
     if (term.TerminalCaps.isDumb(io.Platform.environment)) {
       throw const io.StdoutException('TERM=dumb takes no escape sequences: no TUI (use Console)');
