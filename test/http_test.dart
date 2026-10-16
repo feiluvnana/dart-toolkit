@@ -771,9 +771,8 @@ Future<void> main() async {
       await dead.close();
       await expectLater(
         Http.client(retries: 0).get('http://127.0.0.1:$port/thing'),
-        throwsA(
-          isA<SocketException>().having((e) => e.message, 'message', contains('GET http://127.0.0.1:$port/thing')),
-        ),
+        // Refused, or reset when a parallel test took the freed port: named either way.
+        throwsA(isA<IOException>().having((e) => '$e', 'text', contains('GET http://127.0.0.1:$port/thing'))),
       );
     });
 
