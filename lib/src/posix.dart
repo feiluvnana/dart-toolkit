@@ -11,6 +11,21 @@ library;
 import 'dart:io' as io;
 import 'dart:math';
 
+/// Write [input] to [file]. A failed source (or write) surfaces as itself,
+/// never as the sink's `File closed` naming [file] on the way out.
+Future<void> writeAll(io.File file, Stream<List<int>> input) async {
+  final sink = file.openWrite();
+  try {
+    await sink.addStream(input);
+  } catch (e, st) {
+    try {
+      await sink.close();
+    } catch (_) {}
+    Error.throwWithStackTrace(e, st);
+  }
+  await sink.close();
+}
+
 /// True on macOS/Linux; false on Windows. Modes/times helpers are no-ops
 /// when false.
 bool get isPosix => !io.Platform.isWindows;

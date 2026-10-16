@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:io' as io;
 
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/src/posix.dart' as posix;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -651,6 +652,19 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
   check(await posix.copyTreeWithCp('s', '-t'), 'cp');
   check(FileSystemEntity.isFileSync('-t/a'), 'cp -t/a');''',
       );
+    });
+
+    test('writeAll rethrows a failed source as itself and keeps what came (B10)', () async {
+      final f = io.File(p('spool.bin'));
+      await expectLater(
+        posix.writeAll(f, BoomReader().stream()),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', 'reader blew up mid-write')),
+      );
+      await posix.writeAll(f, Stream.fromIterable([
+        [1],
+        [2, 3],
+      ]));
+      expect(await f.readAsBytes(), [1, 2, 3]);
     });
 
     test('chmod and touch failures throw (regression: exit codes ignored)', () async {

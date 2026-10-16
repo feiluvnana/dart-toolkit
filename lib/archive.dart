@@ -489,12 +489,7 @@ final class _Extraction {
     try {
       await io.Directory(out).create(recursive: true);
       final src = io.File(p.join(stage.path, 'in'));
-      final sink = src.openWrite();
-      try {
-        await sink.addStream(input);
-      } finally {
-        await sink.close();
-      }
+      await posix.writeAll(src, input);
       final exe = await tool(Tool.sevenzip);
       final run = this.run;
       // Watched: the extraction itself, as 7-Zip's percent of the archive.

@@ -155,6 +155,13 @@ void main() {
       expect((await Mem.bytes(tinyPng).image()).height(), 1);
     });
 
+    test('a source that fails mid-stream surfaces its own error, not the temp file closing (B10)', () async {
+      await expectLater(
+        BoomReader(tinyPng.sublist(0, 8)).image(),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', 'reader blew up mid-write')),
+      );
+    });
+
     test('a piped file is read through its pipe, not from the path (regression: the path skipped the pipe)', () async {
       final path = '${tmp.path}/small.png';
       await io.File(path).writeAsBytes(tinyPng);

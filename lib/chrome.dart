@@ -40,6 +40,7 @@ import 'src/glob.dart';
 import 'src/keys.dart' as keys;
 import 'src/names.dart' as names;
 import 'src/origin.dart' as origins;
+import 'src/posix.dart' as posix;
 import 'src/progress.dart' show Run, working;
 
 export 'core.dart';
@@ -1484,12 +1485,5 @@ final class _FileWriter with Writer {
   final io.File _file;
 
   @override
-  Future<void> consume(Stream<List<int>> input) async {
-    final sink = _file.openWrite();
-    try {
-      await sink.addStream(input);
-    } finally {
-      await sink.close();
-    }
-  }
+  Future<void> consume(Stream<List<int>> input) => posix.writeAll(_file, input);
 }

@@ -146,12 +146,7 @@ Future<String> spool(Stream<List<int>> chunks, {String ext = 'bin'}) async {
     unawaited(_sweep(dir));
   }
   final file = io.File(p.join(dir.path, '${DateTime.now().microsecondsSinceEpoch}-${io.pid}-${_n++}.$ext'));
-  final sink = file.openWrite();
-  try {
-    await sink.addStream(chunks);
-  } finally {
-    await sink.close();
-  }
+  await posix.writeAll(file, chunks);
   return file.path;
 }
 
