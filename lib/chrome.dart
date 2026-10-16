@@ -725,16 +725,13 @@ final class Page implements Closeable {
     _ => v['value'],
   };
 
-  /// The cookies the current URL would send (every cookie the browser holds
-  /// with [all]), as a [Cookies] jar with their domain, path, expiry and
-  /// `secure` flag: hand it to `Http.client(cookies:)`, or persist it with
-  /// `encode()`.
-  Future<Cookies> cookies({bool all = false}) async {
-    final r = all
-        ? await _browser._cdp.browser.send('Storage.getCookies')
-        : await _s.send('Network.getCookies', {
-            'urls': [_url],
-          });
+  /// The cookies the current URL would send, as a [Cookies] jar with their
+  /// domain, path, expiry and `secure` flag: hand it to
+  /// `Http.client(cookies:)`, or persist it with `encode()`.
+  Future<Cookies> cookies() async {
+    final r = await _s.send('Network.getCookies', {
+      'urls': [_url],
+    });
     final out = Cookies();
     for (final c in (r['cookies']! as List).cast<Map<String, Object?>>()) {
       final expires = (c['expires'] as num?) ?? -1;
@@ -755,7 +752,8 @@ final class Page implements Closeable {
 
   /// Wait until the current URL has a cookie [name] (a login that sets
   /// `sessionid`), and return its value. Throws [TimeoutException] after
-  /// the page's timeout (`open(timeout: 5.minutes)` for a hand login), and [BrowserException] when the window is closed meanwhile.
+  /// the page's timeout (`open(timeout: 5.minutes)` for a hand login), and
+  /// [BrowserException] when the window is closed meanwhile.
   Future<String> cookie(String name) {
     final limit = _timeout;
     return _whileOpen(() async {
@@ -1497,7 +1495,7 @@ extension PageFuture on Future<Page> {
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
   Future<Json> run(String js) async => (await this).run(js);
-  Future<Cookies> cookies({bool all = false}) async => (await this).cookies(all: all);
+  Future<Cookies> cookies() async => (await this).cookies();
   Future<String> cookie(String name) async => (await this).cookie(name);
   Stream<Capture> responses(String pattern) => Stream.fromFuture(this).asyncExpand((p) => p.responses(pattern));
   Future<Page> click(String selector) async => (await this).click(selector);

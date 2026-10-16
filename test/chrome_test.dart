@@ -457,11 +457,9 @@ void main() {
       await page.close();
     });
 
-    test('cookies(all: true) is every cookie, not just the current URL\'s (regression)', () async {
+    test('cookies() is the current URL\'s jar, not every cookie the browser holds', () async {
       final page = await browser.open('$base/cookie');
       expect((await page.cookies())['deep'], isNull);
-      expect((await page.cookies(all: true))['deep'], '1');
-      expect((await browser.open('$base/').cookies(all: true))['tok'], 'abc');
       await page.close();
     });
 

@@ -81,6 +81,7 @@
 - `core`: `Cookies(agent:)`, `Cookies.agent()` and `Cookies.header(url)`; http reads the jar itself. A session's user-agent is the `user-agent:` line of its cookies.txt (`Cookies.parse('# user-agent: X\n…')`, kept by `encode()`), which the client still sends unless a `user-agent` header is given.
 - `fs`: `Fs.link(path)` and `Link.create(target)`; a new link is `dart:io`'s `Link(path).create(target)`, and a `Link` handle comes from `Fs.entry(path)` or `Dir.list()` (`target()` and `resolve()` stay).
 - `chrome`: `Chrome.launch(path:, proxy:)`. `launch` takes the cached Chrome for Testing, else an installed Chrome or Chromium (on Linux the first on PATH, so a `chromium` earlier on PATH is the one used), else downloads Chrome for Testing; a browser that must reach the web through a proxy is a `Chrome.connect` to one started with `--proxy-server`.
+- `chrome`: `Page.cookies(all:)`; another site's jar is `page.go(url).cookies()`.
 - `fs`: `Dir.watch()`; `io.Directory(path).watch(recursive: true)` (not recursive on Linux either way).
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 

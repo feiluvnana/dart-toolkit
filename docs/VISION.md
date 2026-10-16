@@ -394,7 +394,7 @@ final class Browser implements Closeable {
 final class Page implements Closeable {
   Future<Page> go(String url);  Future<Page> back();                                   // wait for load; a reload is go(await url())
   Future<String> url();  Future<Elements> html();  Future<String> text();
-  Future<Json> run(String js);   Future<Cookies> cookies({bool all = false});          // the current URL's jar
+  Future<Json> run(String js);   Future<Cookies> cookies();                            // the current URL's jar
   Future<String> cookie(String name);                                                   // waits until set
   Stream<Capture> responses(String pattern);                                            // XHR/fetch matching a glob
   Future<Page> click(String selector);                                                  // auto-wait
@@ -436,7 +436,7 @@ final class Capture with Reader { int status();  String url();  String? header(S
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
 - **The session is a value:** `cookies()` is a core `Cookies` jar (domain, path, expiry kept;
-  `all: true` for every cookie the browser holds), so
+  another site's jar is `page.go(url).cookies()`), so
   `Http.client(cookies: await page.cookies())` continues the browser session, and
   `file.write(jar.encode())` / `Cookies.parse(...)` persists it. `cookie(name)` waits for a login
   to set it. Closing the window during `cookie()` or `wait()` throws `BrowserException('browser closed')`.
