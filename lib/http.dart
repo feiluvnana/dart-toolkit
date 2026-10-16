@@ -85,7 +85,10 @@ sealed class Body {
   /// `jsonEncode(value)` as `application/json`.
   const factory Body.json(Object? value) = _JsonBody;
 
-  /// Streamed from [reader]: sent once, never retried.
+  /// Streamed from [reader]: sent once, never retried. The length and
+  /// type come from its `origin()` when it knows them (a file, in-memory
+  /// bytes, a named reader), unless `headers:` give them; otherwise it
+  /// goes chunked.
   const factory Body.stream(Reader reader) = _StreamBody;
 
   /// `multipart/form-data`: [fields] as text, then [files] streamed from
@@ -877,6 +880,19 @@ final class _Client extends Client {
       Stream<List<int>> upload;
       switch (body) {
         case _StreamBody(:final _reader):
+          final o = _reader.origin();
+          final path = o.path();
+          var size = o.size();
+          if (length == null && size == null && path != null) {
+            try {
+              size = await File(path).length();
+            } on FileSystemException {
+              // not a file: chunked
+            }
+          }
+          length ??= size?.toString();
+          final type = _typeFor(o.name() ?? path?.split(RegExp(r'[\\/]')).last);
+          if (type != null && req.headers.value('content-type') == null) req.headers.set('content-type', type);
           streamed();
           upload = _reader.stream();
         case _MultipartBody():
@@ -1397,8 +1413,19 @@ String? _typeFor(String? name) {
     'ico' => 'image/x-icon',
     'pdf' => 'application/pdf',
     'wasm' => 'application/wasm',
+    'avif' => 'image/avif',
+    'bmp' => 'image/bmp',
+    'tif' || 'tiff' => 'image/tiff',
     'mp4' => 'video/mp4',
+    'webm' => 'video/webm',
+    'mov' => 'video/quicktime',
+    'mkv' => 'video/x-matroska',
+    'mp3' => 'audio/mpeg',
+    'm4a' => 'audio/mp4',
     'zip' => 'application/zip',
+    'gz' || 'tgz' => 'application/gzip',
+    'tar' => 'application/x-tar',
+    '7z' => 'application/x-7z-compressed',
     _ => null,
   };
 }

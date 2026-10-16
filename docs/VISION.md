@@ -100,6 +100,9 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 | `Browser`, `Page`                                                  |        |        |      |     ✓     |
 
 Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()` and `image()`.
+Lazy readers name what they make in `origin().name()`: `image.encode(.webp)` is `<stem>.webp`,
+`video.encode(.mp4)` `<stem>.mp4`, `Archive.archive()` `archive.zip` (`.tgz`, `.7z` …),
+`screenshot()` `screenshot.png`, `pdf()` `page.pdf`; a multipart part takes that filename and type.
 
 **Pipelines:**
 
@@ -332,7 +335,7 @@ sealed class Body {                              // stream (or multipart with fi
   const factory Body.text(String text);  const factory Body.bytes(List<int> bytes);
   const factory Body.form(Map<String, Object?> fields);  const factory Body.json(Object? value);
   const factory Body.multipart(Map<String, String> fields, {Map<String, Reader> files});   // files stream
-  const factory Body.stream(Reader reader);
+  const factory Body.stream(Reader reader);   // length and type from origin() when known, else chunked
 }
 final class Feed<T> {                            // a newest-first listing, one page at a time
   Feed(Future<({List<T> items, String? next})> Function(String? cursor) page, {String? cursor});   // cursor: a file that survives a run

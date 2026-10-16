@@ -192,6 +192,17 @@ void main() {
     test('mirror on Future<Reader>', () async {
       expect(await Future<Reader>.value(Mem.bytes(tinyPng)).image().width(), 1);
     });
+
+    test('M10: encode() is named after the source with the new extension', () async {
+      final path = '${tmp.path}/photo.png';
+      await io.File(path).writeAsBytes(tinyPng);
+      final img = await Fs.file(path).image();
+      expect(img.encode(ImageFormat.webp).origin().name(), 'photo.webp');
+      expect(img.resize(width: 1).encode(ImageFormat.jpg).origin().name(), 'photo.jpg');
+      expect((await Mem.bytes(tinyPng, const Origin(name: 'cat.png')).image()).encode(.avif).origin().name(), 'cat.avif');
+      expect((await Mem.bytes(tinyPng).image()).encode(.png).origin().name(), 'image.png');
+      expect(Fs.file(path).image().encode(.gif).origin().name(), 'image.gif');
+    });
   });
 
   group('Image', () {

@@ -153,6 +153,10 @@ final class _Packed with Reader {
   final ArchiveFormat _format;
   final String? _password;
 
+  /// `archive.zip`, `archive.tgz` …: the name a multipart part takes.
+  @override
+  Origin origin() => Origin(name: 'archive.${_format == ArchiveFormat.sevenzip ? '7z' : _format.name}');
+
   @override
   Stream<List<int>> stream() => _pack(null);
 

@@ -177,6 +177,7 @@ void main() {
       expect(v.fps(), closeTo(30, 0.01));
       expect(v.duration()!.inMilliseconds, closeTo(2000, 100));
       expect(v.bitrate(), greaterThan(0));
+      expect(v.encode(.webm).origin().name(), 'clip.webm'); // M10: a multipart part's name
     });
 
     test('bytes and streams go through a temp file', () async {
@@ -184,6 +185,8 @@ void main() {
       expect((await _video(bytes)).width(), 640);
       expect((await Mem.bytes(bytes).video()).height(), 360);
       expect(await Future<Reader>.value(Mem.bytes(bytes)).video().width(), 640);
+      expect((await _video(bytes)).encode(.mp3).origin().name(), 'video.mp3');
+      expect(Future.value(_video(bytes)).encode(.mkv).origin().name(), 'video.mkv');
     });
 
     test('unknown bytes are a ContentException', () async {
@@ -217,6 +220,7 @@ void main() {
       expect(() => Video.open(clip), throwsArgumentError);
       final v = await Video.open('${await files()}/${clip.split('/').last}');
       expect((v.width(), v.format()), (640, VideoFormat.mp4));
+      expect(v.encode(.mov).origin().name(), 'clip.mov');
     });
 
     test('S7: open refuses every other scheme ffmpeg would read (local files, raw sockets)', () {

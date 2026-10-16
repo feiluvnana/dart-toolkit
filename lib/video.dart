@@ -50,7 +50,7 @@ enum VideoCodec { h264, h265, av1, vp9 }
 
 /// A video (or audio) source and what ffprobe says about it.
 final class Video {
-  Video._(this._inputs, this._headers, this._info, [this._temp]);
+  Video._(this._inputs, this._headers, this._info, this._stem, [this._temp]);
 
   /// Inputs in order: the source, then a separate audio source.
   final List<String> _inputs;
@@ -60,6 +60,10 @@ final class Video {
   final Map<String, String>? _headers;
 
   final _Info _info;
+
+  /// The source's name without its extension (`clip`), for what [encode]
+  /// gives: `clip.webm`.
+  final String _stem;
 
   /// The spooled source, when this video owns one: held so it is deleted
   /// with the video, never before.
@@ -122,7 +126,13 @@ final class Video {
   static final _url = RegExp(r'^https?://', caseSensitive: false);
 
   /// [source] (an http(s) URL, else a local path) as ffmpeg reads it.
-  static Future<Video> _open(String source, {String? audio, Map<String, String>? headers, media.Temp? temp}) async {
+  static Future<Video> _open(
+    String source, {
+    String? audio,
+    Map<String, String>? headers,
+    media.Temp? temp,
+    String? name,
+  }) async {
     final inputs = [for (final i in [source, ?audio]) _url.hasMatch(i) ? i : media.file(i)];
     final infos = await proxy.throughProxy(
       inputs,
@@ -132,7 +142,8 @@ final class Video {
     var info = infos.length == 1 ? infos.first : infos.first.withAudio(infos.last);
     if (info.width == null && info.audio == null) throw const ContentException('no video or audio stream found');
     if (!_url.hasMatch(source)) info = info.withFormat(sniff(await _head(source)));
-    return Video._(inputs, headers, info, temp);
+    final stem = p.basenameWithoutExtension(name ?? (_url.hasMatch(source) ? Uri.parse(source).path : source));
+    return Video._(inputs, headers, info, stem.isEmpty ? 'video' : stem, temp);
   }
 
   /// Re-encode the video at [path] in its own container (h264 for MP4/MOV/
@@ -226,6 +237,7 @@ final class Video {
     return _Encoded(
       () async => this,
       format,
+      _stem,
       quality: quality,
       width: width,
       height: height,
@@ -488,7 +500,7 @@ extension ReaderVideo on Reader {
   /// to a temp file once (never held in memory).
   Future<Video> video() async {
     final path = origin().path();
-    if (path != null && await io.File(path).exists()) return Video._open(path);
+    if (path != null && await io.File(path).exists()) return Video._open(path, name: origin().name());
     final first = <int>[];
     final spooled = await media.spool(
       stream().map((chunk) {
@@ -501,7 +513,7 @@ extension ReaderVideo on Reader {
       await io.File(spooled).delete().catchError((_) => io.File(spooled));
       throw const ContentException('unknown video format');
     }
-    return Video._open(spooled, temp: media.Temp(spooled));
+    return Video._open(spooled, temp: media.Temp(spooled), name: origin().name() ?? 'video');
   }
 }
 
@@ -537,6 +549,7 @@ extension VideoFuture on Future<Video> {
     return _Encoded(
       () => this,
       format,
+      'video',
       quality: quality,
       width: width,
       height: height,
@@ -550,7 +563,8 @@ extension VideoFuture on Future<Video> {
 final class _Encoded with Reader {
   _Encoded(
     this._video,
-    this._format, {
+    this._format,
+    this._stem, {
     this.quality,
     this.width,
     this.height,
@@ -563,12 +577,16 @@ final class _Encoded with Reader {
 
   final Future<Video> Function() _video;
   final VideoFormat _format;
+  final String _stem;
   final int? quality;
   final int? width;
   final int? height;
   final VideoCodec? codec;
   final Duration? start;
   final Duration? end;
+
+  @override
+  Origin origin() => Origin(name: '$_stem.${_format.name}');
 
   @override
   Stream<List<int>> stream() => _stream(null);

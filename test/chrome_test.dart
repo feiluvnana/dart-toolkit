@@ -766,6 +766,8 @@ void main() {
     test('screenshot is a PNG Reader, captured when read', () async {
       final page = await browser.open(dataUrl(testHtml));
       final reader = page.screenshot();
+      expect((reader.origin().name(), page.pdf().origin().name()), ('screenshot.png', 'page.pdf'));
+      expect(Future.value(page).screenshot().origin().name(), 'screenshot.png');
       final dir = await Directory.systemTemp.createTemp('chrome_shot');
       try {
         await (reader > Fs.file('${dir.path}/shot.png'));

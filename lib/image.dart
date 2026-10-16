@@ -47,7 +47,17 @@ enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
 
 /// An image: a source, its size as displayed, and the steps to apply.
 final class Image {
-  Image._(this._src, this._format, this._width, this._height, this._steps, this._header, this._grid, [this._temp]);
+  Image._(
+    this._src,
+    this._format,
+    this._width,
+    this._height,
+    this._steps,
+    this._header,
+    this._grid,
+    this._stem, [
+    this._temp,
+  ]);
 
   final String _src;
   final ImageFormat _format;
@@ -62,6 +72,10 @@ final class Image {
   /// The spooled source, when this image owns one: deleted with the last
   /// image that holds it.
   final media.Temp? _temp;
+
+  /// The source's name without its extension (`photo`), for what
+  /// [encode] gives: `photo.webp`.
+  final String _stem;
 
   /// The format named by the magic bytes, or null when they are not an
   /// image. Reads the header only:
@@ -99,7 +113,7 @@ final class Image {
 
   /// [path] read once: Dart's header reader for the common formats,
   /// ffprobe for the rest (HEIC/AVIF grids, TIFF, ICO).
-  static Future<Image> _open(String path, ImageFormat format, Uint8List head, [media.Temp? temp]) async {
+  static Future<Image> _open(String path, ImageFormat format, Uint8List head, String? name, [media.Temp? temp]) async {
     final h = media.header(head);
     int w, ht;
     var grid = false;
@@ -111,7 +125,8 @@ final class Image {
     }
     if (w < 1 || ht < 1) throw ContentException('broken image header: ${w}x$ht');
     if (w * ht > _maxPixels) throw ContentException('image too large: ${w}x$ht');
-    return Image._(path, format, w, ht, const [], h, grid, temp);
+    final stem = name == null ? '' : p.basenameWithoutExtension(name);
+    return Image._(path, format, w, ht, const [], h, grid, stem.isEmpty ? 'image' : stem, temp);
   }
 
   /// The displayed size ffprobe reports, and whether it is a tile grid: a
@@ -152,7 +167,7 @@ final class Image {
     if (h != null && (h.animated || h.components == 4)) return media.kept(KeptReason.lossy);
     final Uint8List out;
     try {
-      final image = await _open(path, format, bytes);
+      final image = await _open(path, format, bytes, path);
       final lossless = format == ImageFormat.webp && _isLosslessWebp(bytes);
       out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));
     } on ContentException {
@@ -174,7 +189,8 @@ final class Image {
   /// The source format.
   ImageFormat format() => _format;
 
-  Image _with(String step, int w, int h) => Image._(_src, _format, w, h, [..._steps, step], _header, _grid, _temp);
+  Image _with(String step, int w, int h) =>
+      Image._(_src, _format, w, h, [..._steps, step], _header, _grid, _stem, _temp);
 
   /// A resized copy. Keeps the aspect ratio when only one side is given,
   /// sets the exact size when both are. Neither, or a non-positive size,
@@ -209,12 +225,13 @@ final class Image {
 
   /// A [Reader] of the encoded image, encoded when read (lazily: nothing
   /// runs until the reader is stored). Store it with `> Fs.file(…)`, hash
-  /// it, or upload it. [quality] (1–100) applies to JPEG, WebP and AVIF.
+  /// it, or upload it: its `origin().name()` is the source's with the new
+  /// extension (`photo.webp`), the name a multipart part takes. [quality] (1–100) applies to JPEG, WebP and AVIF.
   /// A bad quality, [ImageFormat.heic] (read only) or an `.ico` over 256x256
   /// is an [ArgumentError] here, not when the reader is read.
   Reader encode(ImageFormat format, {int quality = 90}) {
     _checkEncode(format, quality, this);
-    return _Encoded(() async => this, format, quality);
+    return _Encoded(() async => this, format, quality, _stem);
   }
 
   /// The pixels as 8-bit RGB, decoded now, scaled to [width]/[height] when
@@ -354,7 +371,7 @@ extension ReaderImage on Reader {
       final head = await _head(path);
       final format = Image.sniff(head);
       if (format == null) throw const ContentException('unknown image format');
-      return Image._open(path, format, head);
+      return Image._open(path, format, head, origin().name() ?? path);
     }
     // Spooled as it streams: the first 64 KiB name the format and size.
     final head = BytesBuilder(copy: false);
@@ -371,7 +388,7 @@ extension ReaderImage on Reader {
     if (format == null) throw const ContentException('unknown image format');
     // A GIF's frame count needs the whole file.
     final bytes = format == ImageFormat.gif ? await io.File(temp.path).readAsBytes() : first;
-    return Image._open(temp.path, format, bytes, temp);
+    return Image._open(temp.path, format, bytes, origin().name(), temp);
   }
 }
 
@@ -406,16 +423,20 @@ extension ImageFuture on Future<Image> {
   Future<Pixels> pixels({int? width, int? height}) async => (await this).pixels(width: width, height: height);
   Reader encode(ImageFormat format, {int quality = 90}) {
     _checkEncode(format, quality, null);
-    return _Encoded(() => this, format, quality);
+    return _Encoded(() => this, format, quality, 'image');
   }
 }
 
 final class _Encoded with Reader {
-  _Encoded(this._image, this._format, this._quality);
+  _Encoded(this._image, this._format, this._quality, this._stem);
 
   final Future<Image> Function() _image;
   final ImageFormat _format;
   final int _quality;
+  final String _stem;
+
+  @override
+  Origin origin() => Origin(name: '$_stem.${_format.name}');
 
   @override
   Stream<List<int>> stream() async* {

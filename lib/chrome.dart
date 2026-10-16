@@ -1099,8 +1099,8 @@ function(value) {
   }
 
   /// A PNG of the viewport (or the whole page with [fullPage]), captured
-  /// when read.
-  Reader screenshot({bool fullPage = false}) => _Shot(() async {
+  /// when read; named `screenshot.png` (a multipart part's filename).
+  Reader screenshot({bool fullPage = false}) => _Shot('screenshot.png', () async {
     Map<String, Object?>? clip;
     if (fullPage) {
       final size = (await _s.send('Page.getLayoutMetrics'))['cssContentSize']! as Map;
@@ -1113,8 +1113,8 @@ function(value) {
     return base64Decode(r['data']! as String);
   });
 
-  /// The page printed, captured when read.
-  Reader pdf() => _Shot(() async => base64Decode((await _s.send('Page.printToPDF'))['data']! as String));
+  /// The page printed, captured when read; named `page.pdf`.
+  Reader pdf() => _Shot('page.pdf', () async => base64Decode((await _s.send('Page.printToPDF'))['data']! as String));
 
   /// Click [selector] and wait for the download it starts, in this tab or
   /// any of its frames, to begin. Returns a [Download]: the name the site
@@ -1474,14 +1474,14 @@ extension PageFuture on Future<Page> {
   Future<Page> scroll() async => (await this).scroll();
   Future<Page> wait(String selector) async => (await this).wait(selector);
   Future<Page> idle() async => (await this).idle();
-  Reader screenshot({bool fullPage = false}) => _later((p) => p.screenshot(fullPage: fullPage));
-  Reader pdf() => _later((p) => p.pdf());
+  Reader screenshot({bool fullPage = false}) => _later('screenshot.png', (p) => p.screenshot(fullPage: fullPage));
+  Reader pdf() => _later('page.pdf', (p) => p.pdf());
 
   /// A reader on this page's [reader]; a failed page future with no reader
   /// yet never surfaces as an unhandled error (reading still gets it).
-  Reader _later(Reader Function(Page) reader) {
+  Reader _later(String name, Reader Function(Page) reader) {
     then((_) {}, onError: (_) {}).ignore();
-    return _Shot(() async => reader(await this).bytes());
+    return _Shot(name, () async => reader(await this).bytes());
   }
 
   Future<Download> download(String selector) async => (await this).download(selector);
@@ -1489,9 +1489,13 @@ extension PageFuture on Future<Page> {
 
 /// Content captured when read.
 final class _Shot with Reader {
-  _Shot(this._capture);
+  _Shot(this._name, this._capture);
 
+  final String _name;
   final Future<List<int>> Function() _capture;
+
+  @override
+  Origin origin() => Origin(name: _name);
 
   @override
   Stream<List<int>> stream() async* {

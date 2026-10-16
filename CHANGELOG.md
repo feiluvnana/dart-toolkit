@@ -9,6 +9,7 @@
 - `fs`: `dir.copy(to, match: '**/*.dart')` copies only the entries `list(match:)` gives, with the folders above them, as one byte-counted `Task` (`& Console.bar('backup')`).
 - `json`: `reader.events()` streams the data of each server-sent event (`text/event-stream`) as it arrives, by the SSE rules: multi-line `data:`, `data:` with no space, comments and `event:`/`id:`/`retry:` fields (`res.events().map(Json.parse)` for LLM streaming APIs).
 - `cli`: an `Opt<DateTime>` takes a duration with a unit as that long ago (`--since 7d`, `1h30m`) besides a date; medialoader's `--since` drops its `parse: DateTime.parse` and takes `7d`.
+- `http`/`image`/`video`/`archive`/`chrome`: `Body.stream(reader)` sends `Content-Length` and `Content-Type` from `reader.origin()` when it knows them (a file, in-memory bytes, a named reader) instead of going chunked with no type, so a presigned S3 PUT works; lazy readers carry a name (`image.encode(.webp)` is `<stem>.webp`, `video.encode` `<stem>.<ext>`, `Archive.archive()` `archive.zip`/`.tgz`/`.7z`, `screenshot()` `screenshot.png`, `pdf()` `page.pdf`), so a multipart part gets a filename and type instead of the field name and `octet-stream`.
 
 **Fixed**
 

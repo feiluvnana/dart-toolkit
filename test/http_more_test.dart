@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
@@ -16,6 +17,13 @@ import 'support/capture.dart';
 import 'support/child.dart';
 import 'support/io.dart';
 import 'support/poll.dart';
+
+/// Bytes upper-cased: a pipe, so the bytes are no longer the source's.
+final class _Upper with Pipe {
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) =>
+      input.map((c) => [for (final b in c) b >= 97 && b <= 122 ? b - 32 : b]);
+}
 
 /// A [Writer] into a file path, so the resume handshake sees a path.
 final class _File with Reader, Writer {
@@ -478,6 +486,33 @@ Future<void> main() async {
     final up = await c.post('$url/multipart', body: .multipart(const {}, files: {'file': _File('${dir.path}/cat.png')})).text();
     expect(up, contains('|-1|'));
     expect(up, contains('name="file"; filename="cat.png"\r\nContent-Type: image/png\r\n\r\nPNG!\r\n'));
+  });
+
+  test('M10: Body.stream sends the length and type its origin knows; piped bytes stay chunked', () async {
+    final c = Http.client();
+    final dir = await temp();
+    await File('${dir.path}/cat.png').writeAsString('PNG!');
+    final cat = _File('${dir.path}/cat.png');
+    expect(await c.post('$url/multipart', body: .stream(cat)).text(), 'image/png|4|PNG!');
+    expect(await c.post('$url/multipart', body: .stream(Reader.of(utf8.encode('abc')))).text(), 'null|3|abc');
+    expect(
+      await c.post('$url/multipart', body: .stream(cat), headers: {'content-type': 'x/y', 'content-length': '4'}).text(),
+      'x/y|4|PNG!',
+    );
+    expect(await c.post('$url/multipart', body: .stream(cat | _Upper())).text(), 'image/png|-1|PNG!'); // the name stays, as in a multipart
+  });
+
+  test('M10: lazy readers name their part: an archive is archive.<format>', () async {
+    final c = Http.client();
+    final dir = await temp();
+    await File('${dir.path}/a.txt').writeAsString('a');
+    final zip = Archive.archive(['a.txt'], dir: dir.path);
+    final tgz = Archive.archive(['a.txt'], dir: dir.path, format: .tgz);
+    expect((zip.origin().name(), tgz.origin().name()), ('archive.zip', 'archive.tgz'));
+    // A tar: the echo route reads the body as text.
+    final tar = Archive.archive(['a.txt'], dir: dir.path, format: .tar);
+    final up = await c.post('$url/multipart', body: .multipart(const {}, files: {'site': tar})).text();
+    expect(up, contains('name="site"; filename="archive.tar"\r\nContent-Type: application/x-tar\r\n'));
   });
 
   test('Rate(perHost: true) paces each host apart', () async {
