@@ -59,4 +59,35 @@ void main() {
     expect(rate.ban(rate.Rate(1, const Duration(seconds: 1)), const Duration(days: 365)), const Duration(minutes: 5));
     expect(rate.ban(rate.Rate(1, const Duration(hours: 1)), const Duration(seconds: 1)), const Duration(hours: 1));
   });
+
+  test('free() polled during a wait never lets the window take more than its count (B5)', () async {
+    final r = rate.Rate(2, const Duration(milliseconds: 300));
+    final poll = Timer.periodic(const Duration(milliseconds: 2), (_) => rate.free(r));
+    addTearDown(poll.cancel);
+    final sw = Stopwatch()..start();
+    final starts = <int>[];
+    Future<void> start() => rate.take(r, null).then((_) => starts.add(sw.elapsedMilliseconds));
+    await start();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // Stall the event loop across the first start's expiry, so the poll
+    // trims the window before the waiting take wakes.
+    Timer(const Duration(milliseconds: 150), () {
+      final busy = Stopwatch()..start();
+      while (busy.elapsedMilliseconds < 100) {}
+    });
+    await Future.wait([start(), start(), start()]);
+    for (var i = 2; i < starts.length; i++) {
+      expect(starts[i] - starts[i - 2], greaterThanOrEqualTo(295), reason: 'starts $starts');
+    }
+  });
+
+  test('a halted take records no start (B5)', () async {
+    final r = rate.Rate(1, const Duration(milliseconds: 600));
+    await rate.take(r, null);
+    final halt = rate.Halt();
+    Timer(const Duration(milliseconds: 200), halt.fire);
+    await rate.take(r, halt);
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    expect(rate.free(r), isTrue);
+  });
 }

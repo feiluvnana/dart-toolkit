@@ -119,15 +119,20 @@ Future<void> take(Rate rate, Halt? halt, {String? host}) {
 
 Future<void> _slot(Rate rate, _Window w, Halt? halt) async {
   if (rate._pause > Duration.zero) await sleep(rate._pause * rate._random.nextDouble(), halt);
-  final now = DateTime.now();
-  w.trim(now, rate._per);
-  if (w.sent.length >= rate._count) {
+  // Trim again after each wait: [free] may have trimmed meanwhile, so the
+  // oldest entry is not necessarily the one that expired. A halted take
+  // starts nothing, so it records nothing.
+  while (halt == null || !halt.fired) {
+    final now = DateTime.now();
+    w.trim(now, rate._per);
+    if (w.sent.length < rate._count) {
+      w.sent.addLast(now);
+      return;
+    }
     final wait = w.sent.first.add(rate._per).difference(now);
     if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
     await sleep(wait, halt);
-    if (w.sent.isNotEmpty) w.sent.removeFirst();
   }
-  w.sent.addLast(DateTime.now());
 }
 
 /// Whether [rate] would start now (for [host]) without waiting.
