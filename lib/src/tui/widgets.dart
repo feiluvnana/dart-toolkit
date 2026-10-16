@@ -719,35 +719,29 @@ extension RegionWidgets on Region {
       return true;
     }
 
+    bool moved(int to, {bool refresh = true}) {
+      field._cursor = to;
+      field._wantCol = -1;
+      if (refresh && suggest != null) _s._refreshSuggest(field, suggest);
+      _s._dirtyAndWake();
+      return true;
+    }
+
     switch (ev.name) {
       case 'backspace':
         return edited(() => _dropGrapheme(field, -1));
       case 'delete':
         return edited(() => _dropGrapheme(field, 1));
       case 'left':
-        field._cursor = _prevCluster(runes, field._cursor);
-        field._wantCol = -1;
-        if (suggest != null) _s._refreshSuggest(field, suggest);
-        _s._dirtyAndWake();
-        return true;
+        return moved(_prevCluster(runes, field._cursor));
       case 'right':
-        field._cursor = _nextCluster(runes, field._cursor);
-        field._wantCol = -1;
-        if (suggest != null) _s._refreshSuggest(field, suggest);
-        _s._dirtyAndWake();
-        return true;
+        return moved(_nextCluster(runes, field._cursor));
       case 'home':
       case 'ctrl+a':
-        field._cursor = _lineStart(runes, field._cursor);
-        field._wantCol = -1;
-        _s._dirtyAndWake();
-        return true;
+        return moved(_lineStart(runes, field._cursor), refresh: false);
       case 'end':
       case 'ctrl+e':
-        field._cursor = _lineEnd(runes, field._cursor);
-        field._wantCol = -1;
-        _s._dirtyAndWake();
-        return true;
+        return moved(_lineEnd(runes, field._cursor), refresh: false);
       case 'ctrl+w':
       case 'alt+backspace':
         return edited(() => _deleteWord(field, -1));
@@ -778,28 +772,8 @@ extension RegionWidgets on Region {
           _s._dirtyAndWake();
           return true;
         }
-        if (field._history.isEmpty) return false;
-        if (field._histAt < 0) {
-          if (!goUp) return false;
-          field._draft = field._text;
-          field._histAt = 0;
-        } else {
-          field._histAt += goUp ? 1 : -1;
-        }
-        if (field._histAt < 0) {
-          field._histAt = -1;
-          field._text = field._draft;
-        } else if (field._histAt >= field._history.length) {
-          field._histAt = field._history.length - 1;
-          field._text = field._history[field._histAt];
-        } else {
-          field._text = field._history[field._histAt];
-        }
-        field._cursor = field._text.runes.length;
-        field._wantCol = -1;
-        if (suggest != null) _s._refreshSuggest(field, suggest);
-        _s._dirtyAndWake();
-        return true;
+        if (!_recall(field, older: goUp)) return false;
+        return moved(field._text.runes.length);
       case 'enter':
         if (multi) {
           final at = field._cursor.clamp(0, runes.length);
@@ -823,22 +797,33 @@ extension RegionWidgets on Region {
         if (!multi) return false;
         return edited(() => _insertText(field, '\n'));
       default:
-        if (ev.name.endsWith('left')) {
-          field._cursor = _prevWord(runes, field._cursor);
-          field._wantCol = -1;
-          if (suggest != null) _s._refreshSuggest(field, suggest);
-          _s._dirtyAndWake();
-          return true;
-        }
-        if (ev.name.endsWith('right')) {
-          field._cursor = _nextWord(runes, field._cursor);
-          field._wantCol = -1;
-          if (suggest != null) _s._refreshSuggest(field, suggest);
-          _s._dirtyAndWake();
-          return true;
-        }
+        if (ev.name.endsWith('left')) return moved(_prevWord(runes, field._cursor));
+        if (ev.name.endsWith('right')) return moved(_nextWord(runes, field._cursor));
         return false;
     }
+  }
+
+  /// Step [field] through its history ([older] = up), keeping the draft
+  /// typed before the first step; false when there is nowhere to go.
+  bool _recall(Field field, {required bool older}) {
+    if (field._history.isEmpty) return false;
+    if (field._histAt < 0) {
+      if (!older) return false;
+      field._draft = field._text;
+      field._histAt = 0;
+    } else {
+      field._histAt += older ? 1 : -1;
+    }
+    if (field._histAt < 0) {
+      field._histAt = -1;
+      field._text = field._draft;
+    } else if (field._histAt >= field._history.length) {
+      field._histAt = field._history.length - 1;
+      field._text = field._history[field._histAt];
+    } else {
+      field._text = field._history[field._histAt];
+    }
+    return true;
   }
 
   /// Buffer row of this input's first line (for click mapping).
