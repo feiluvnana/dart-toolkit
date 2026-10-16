@@ -4,6 +4,10 @@
 
 **Added**
 
+- `shell`: `ExitException` (a `ProcessException` and a `ToolkitException`) for a program that exits non-zero under `check:` or as a filter; one that cannot start stays a plain `ProcessException`.
+- `core`: `PasswordException` (a `ContentException`) for a missing or wrong archive password; `fs`: `LockedException` when `File.lock` is held elsewhere.
+- `image`/`video`: `compress` returns `Compressed(before, after)` or `Kept(reason)` (`KeptReason.unknown`, `.lossy`, `.notSmaller`, with `text`).
+- `image`/`tui`: `Pixels` is exported (what `image.pixels()` returns and `Region.picture` takes).
 - `image`: now runs on ffmpeg (package:image is gone; import startup 892 → ~330 ms). Reads HEIC (tile grids included) and AVIF, writes WebP and AVIF; `image()` on a file reads it in place, other readers go to a temp file once, never memory. `resize`/`crop` record steps and `encode` runs them in one ffmpeg call. `Image.compress(path, quality:)` re-encodes in the same format and replaces the file only when ≥ 5% smaller (returns `(before, after)` or null); animated, CMYK and HEIC files are left alone, JPEG EXIF/ICC survive. `image.pixels(width:)` for `Region.picture`; `format()`.
 - `video`: `Video.open(path or URL, audio:, headers:)` (HLS/DASH, a separate audio source); `encode` copies streams when no quality/size/codec is asked (remux), `codec:` (`h264` `h265` `av1` `vp9`), `start:`/`end:`, `onProgress:`; audio-only `m4a`/`mp3`/`opus`; `frame(at:)` → `Image`; `codec()` `audio()` `bitrate()`; `Video.compress(path, quality:, codec:)`.
 - ffmpeg/ffprobe 9.0.2: a PATH copy is used when it has the encoders a call needs, else a static build pinned by sha256 is downloaded once into the user cache (native arm64 on Apple silicon), one process at a time; encodes share a limit of half the cores and run through `shell`, so Ctrl-C ends them.
@@ -26,6 +30,14 @@
 
 **Changed**
 
+- `http`: the byte cap is `max:` (`Http.client`, `copy`, `Http.serve`); `limit:` always means how many at once, as in `Pool`. A `copy()` counts in its parent's `sent()` and closes with it.
+- `http`: `Body.multipart(fields, files: {name: reader})` replaces the mixed map.
+- `chrome`: `Page.run(js)` returns `Json` (`.or('')`, `.value<int>()`, `.asList<T>()`) and runs its source once (a function result ran twice). `open(block:)` takes a `Set<Resource>` (`{.image, .font}`). Chrome for Testing is pinned to 155.0.8059.84 and checked by sha256 (downloaded again once into a versioned folder).
+- `console`: `Console.ask` returns `String`: an empty line, a closed stdin, a cancelled popup or a timeout give `or` (`''` by default).
+- `tui`: `Region.bar(rate:)` takes a per-second rate (a `Speed`'s) instead of `since:`. A run without a terminal says to use `Console`; one whose terminal input closes ends with an error instead of hanging.
+- `pool`: `retries:` no longer re-runs bad data (`ContentException`), TLS failures or HTTP status errors.
+- `cli`: a failing handler prints every line of its error.
+- no `HOME` (or `LOCALAPPDATA`) is an error for the native tools and media spooling, never a shared temp folder.
 - `image`: `Image.decode` is async; `Image` no longer implements the pixel interface (use `pixels()`); `ImageFormat` gains `avif`, `heic` (read only). JPEG `quality` is calibrated to the old scale by SSIM.
 - `video`: `width()`/`height()` are null for audio only; size is as displayed (rotation applied); `VideoFormat.avi` is read only; `encode(quality:)` defaults to a stream copy.
 - `http`: requests send a desktop Chrome User-Agent by default (or the jar's `agent()`); the set-cookie parser is in-house and lenient, with a small public-suffix list; `cache:` streams bodies to disk; cookie files read and write a `user-agent:` line.
@@ -41,8 +53,26 @@
 - ffmpeg and 7-Zip download in an isolate spawned by URI, so `image`, `video` and `archive` never compile http at startup; a compiled exe asks for the tool on PATH instead.
 - `cli`: a long `values:` list shows as `<value>` with the choices after the help, so one option no longer pushes every description off the screen; a `Multi` defaulting to every value shows `[default: all]`.
 
+**Security**
+
+- `archive`: 7z and RAR decode under one budget: 1 GiB of output (past it the archive goes to 7-Zip, which streams to disk), 4M members, 2^26 key rounds; a 7z encoded header over 64 MiB, a second RAR5 encryption record on a member, more than 8192 RAR5 filters (or one over 4 MiB) are refused, and a PPMd model over 256 MiB goes to 7-Zip. Archive passwords reach 7-Zip on stdin, never its argv.
+- `http`: secret client `headers:` (`authorization`, `cookie`, names with token/key/auth …) go only to the `base:` origin, or the first request's without one. The `cache:` key covers every secret header and a hit must match its stored request. A loopback `Http.serve` answers only loopback `Host` names (421 otherwise: DNS rebinding). SOCKS fields over 255 bytes are refused; proxy passwords stay out of errors.
+- `video`: `Video.open(headers:)` goes through a loopback proxy scoped to the source's origin: the headers never sit in ffmpeg's argv or reach a CDN or redirect elsewhere; tool errors mask URL tokens.
+- `chrome`: a launched Chrome talks CDP over `--remote-debugging-pipe` (no TCP port; Windows keeps the port); a proxy password is refused instead of landing in argv.
+- media spooling lives in the user cache at 0700, no longer a shared `/tmp/dart_toolkit_media`; concurrent Chrome downloads share a lock and a fresh temp folder.
+- `tui`: markdown links become OSC 8 only for `http`, `https` and `mailto`.
+- `html`: unclosed formatting tags parse in linear time (120,000 of them: 3 s → 90 ms).
+
 **Fixed**
 
+- `http`: a SOCKS proxy that never answers times out and no longer keeps the script alive; a dropped download keeps its `.part`, a failing pipe deletes it; a reply that fails after the handler is logged, and unencodable JSON is a 500.
+- `shell`: an `onLine` that throws fails the run and kills the child tree (it crashed the script); a reaped child's pid is never signalled; a 7-Zip `-p…` password is masked in errors.
+- `chrome`: a fast download's end is no longer missed (a 30 s timeout); `connect` times out with a `BrowserException`, and a launch failure carries Chrome's stderr; a send during `close()` fails its future instead of escaping.
+- `archive`: a source that fails mid-stream (a dropped connection) keeps its error instead of "corrupt archive"; a crashed decoder isolate is a `StateError`; Windows device names cover `COM0`/`LPT0`, superscripts, `CONIN$`/`CONOUT$` and `nul .txt`.
+- `fs`: a destination link that cannot be removed fails the copy instead of writing through it; an atomic write reports the target, not its hidden temp; a failed `cp -pPR` reports its reason.
+- `pool`: an empty batch with `limit: items.length` returns nothing instead of throwing.
+- `yaml`: `\x`/`\u` escapes take exactly their hex digits; surrogates must pair.
+- `console`: `notify` and `copy` send no escapes under `TERM=dumb`.
 - `video`: `sniff` called HEIC/AVIF photos mp4; the whole video was held in memory and copied per call; probing parsed stderr; audio was always re-encoded; the ffmpeg download was x86_64 on Apple silicon, unchecked and raced on first use.
 - `http`: the cache never hit when a response set a cookie; a cached gzip answer reported its wire size; `lines()` ignored the charset; `Http.pool` skipped `resume:`; `copy(timeout:)` kept the old connect timeout; pool `copy(proxy:)`; resume made two GETs for a changed file and restarted a complete `.part`; strict cookie parsing dropped browser-accepted cookies; proxy default port, relative URL in the pool abort error, silent https→http redirects, unbounded server bodies.
 - `fs`/`shell` docs match the code (`tempDir`/`homeDir`/`scriptDir`, timeout kills the tree, 64 KB of stderr).
@@ -62,6 +92,9 @@
 
 **Removed**
 
+- `core`: `Reader.pipe`/`to` and their mirrors (`|` and `>` are the one spelling).
+- `console`: `Console.clear`, the `Console.accent` field and the `Color` re-export (`tui` exports it); `tui`: `App.state()`.
+- `image`/`video`: `Image.decode`/`Video.decode` (`Reader.of(bytes).image()`/`.video()`); `hash`: `Hasher.of` and `Hasher.base64` (`base64Encode(h.bytes())`).
 - `image`: the isolate thresholds and decode budget (ffmpeg runs in its own process).
 - `video`: writing AVI.
 - `chrome`: `DownloadFuture.name()`, `src/tabs.dart` and the puppeteer dependency.
