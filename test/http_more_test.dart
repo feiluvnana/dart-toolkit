@@ -126,6 +126,52 @@ void main() {
     expect(await Http.client().get('$url/sjis').lines().toList(), ['日本語テスト', '日本語テスト']);
   });
 
+  test('a 307 of a streamed body is unsendable; a text body is sent again', () async {
+    final got = <String>[];
+    final (_, u) = await serve((r) async {
+      got.add('${r.method} ${r.uri.path} ${await utf8.decodeStream(r)}');
+      if (r.uri.path == '/up') {
+        r.response
+          ..statusCode = 307
+          ..headers.set('location', '/there');
+      } else {
+        r.response.write('ok');
+      }
+      await r.response.close();
+    });
+    final c = Http.client(retries: 0);
+    await expectLater(
+      c.put('$u/up', body: Body.stream(Mem('streamed'))),
+      throwsA(
+        isA<HttpRequestException>()
+            .having((e) => e.reason, 'reason', RequestFailure.unsendable)
+            .having((e) => e.message, 'message', contains('cannot resend a streamed body')),
+      ),
+    );
+    expect(await c.put('$u/up', body: const Body.text('again')).text(), 'ok');
+    expect(got, ['PUT /up streamed', 'PUT /up again', 'PUT /there again']);
+  });
+
+  test('Http.pool sends every verb, round-robin over its members', () async {
+    final seen = <String>[];
+    final (_, u) = await serve((r) async {
+      seen.add('${r.method} ${r.headers.value('x-m')} ${await utf8.decodeStream(r)}'.trim());
+      await r.response.close();
+    });
+    final pool = Http.pool([Http.client(headers: {'x-m': 'a'}), Http.client(headers: {'x-m': 'b'})]);
+    addTearDown(pool.close);
+    for (final res in [
+      await pool.head('$u/'),
+      await pool.delete('$u/'),
+      await pool.post('$u/', body: const Body.text('p')),
+      await pool.put('$u/', body: const Body.text('q')),
+      await pool.patch('$u/', body: const Body.text('r')),
+    ]) {
+      expect(res.status(), 200);
+    }
+    expect(seen, ['HEAD a', 'DELETE b', 'POST a p', 'PUT b q', 'PATCH a r']);
+  });
+
   test('lines() joins a character the server flushed in two halves', () async {
     for (final (charset, bytes) in [('shift_jis', _sjisLine), ('utf-8', utf8.encode('日本語テスト'))]) {
       final (_, split) = await serve((r) async {
