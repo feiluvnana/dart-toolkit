@@ -667,8 +667,14 @@ void main() {
       expect(outer.$(':scope > li > ul > li').text(), 'b');
       expect(outer.$(':scope').length, 1);
       expect(doc.$('ul').$('> li').texts(), ['a\nb', 'b', 'c']);
-      expect(doc.$('p')[0].$('+ p'), isEmpty, reason: 'only the receiver and its descendants are candidates');
       expect(doc.$('p').$('+ p').text(), 'y', reason: 'a root itself may match relative to another root');
+      // B23: a leading + or ~ reaches the receiver's later siblings.
+      final h = Html.parse('<h2>t</h2><p>x</p><div><p>in</p></div><p>y</p><h2>u</h2><p>z</p>');
+      expect(h.$('h2').first.$('+ p').texts(), ['x']);
+      expect(h.$('h2').first.$('~ p').texts(), ['x', 'y', 'z']);
+      expect(h.$('h2').$('+ p').texts(), ['x', 'z']);
+      expect(h.$('h2').first.$('~ div p').texts(), ['in']);
+      expect(doc.$('p')[0].$('+ p').text(), 'y');
       expect(doc.$('#o').not('> li > ul').$('li').length, 2);
       expect(doc.$(':scope'), hasLength(3), reason: 'the top-level elements are the scope');
     });

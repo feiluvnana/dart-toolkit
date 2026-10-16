@@ -234,8 +234,8 @@ final class Element {
 - Selectors: type, `*`, `#id`, `.class`, attributes (`= ~= |= ^= $= *=`, `i`), the four
   combinators, `:first-child` … `:only-of-type`, `:nth-child(An+B of S)` and friends, `:not`
   `:is` `:where` `:has`, `:empty` `:root` `:link` `:checked` `:disabled` `:enabled` `:lang`
-  `:scope`. A leading combinator is relative to the receiver: `ul.$('> li')` is its direct items
-  (`:scope` is the receiver, or each of an `Elements`). Pseudo-elements never match. A selector it
+  `:scope`. A leading combinator is relative to the receiver: `ul.$('> li')` is its direct items,
+  `h2.$('+ p')` the paragraph after it (`:scope` is the receiver, or each of an `Elements`). Pseudo-elements never match. A selector it
   rejects is a `ContentException` naming it once.
 - `$` returns matches in document order without duplicates. On `Elements`, `text()` and `attr()`
   both read the **first** match (`''`/`null` when there is none); for every match use

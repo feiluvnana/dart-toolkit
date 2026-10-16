@@ -22,6 +22,7 @@
 - `chrome`: `page.run(js)` (and `html()`/`text()`) gives up on a promise that never settles with a `TimeoutException` after the page's `open(timeout:)` (default 30 s); it waited forever and kept the script alive.
 - `video`: with `Video.open(url, headers:)`, an upstream failure (refused, unresolved, TLS) surfaces as itself naming the source URL, instead of ffmpeg's bare 502 against the loopback proxy's URL.
 - `csv`: `Csv.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
+- `html`: a selector that leads with `+` or `~` matches the receiver's later siblings: `h2.$('+ p')` is the paragraph after the heading (it parsed and never matched).
 
 **Performance**
 

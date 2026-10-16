@@ -47,6 +47,10 @@ final class Selector {
     return false;
   }
 
+  /// Whether a complex leads with `+` or `~`: its matches lie beside the
+  /// scope, not under it.
+  late final bool sideways = _list.any((c) => c.lead == _Comb.adjacent || c.lead == _Comb.sibling);
+
   /// Every descendant of [root] (not [root] itself) that matches, in
   /// document order. [scope] as in [matches].
   void collect(Element root, List<Element> out, {Set<Element>? scope}) {
@@ -96,7 +100,7 @@ Element? up(Element e) {
 /// cached per parent until the parent's children change: every `+`, `~`
 /// and `:nth-*` test asks, and a fresh list per test was O(n²) over a long
 /// list (`li + li` on 20,000 items took 5 s).
-(List<Element>, int) _position(Element e) {
+(List<Element>, int) position(Element e) {
   final p = e.parent;
   if (p == null) return ([e], 0);
   var c = _positions[p];
@@ -148,7 +152,7 @@ final class _Complex {
     final sibling = comb == _Comb.adjacent || comb == _Comb.sibling;
     List<Element>? sib;
     var i = 0;
-    if (sibling) (sib, i) = _position(e);
+    if (sibling) (sib, i) = position(e);
     for (Element? x = sibling ? (i > 0 ? sib![--i] : null) : up(e); x != null;) {
       final r = left(x);
       if (r == _matched || r == _globally || comb == _Comb.adjacent) return r;
@@ -568,7 +572,7 @@ bool _has(_Complex c, Element scope) {
       }
       return false;
     case _Comb.adjacent || _Comb.sibling:
-      final (sib, at) = _position(scope);
+      final (sib, at) = position(scope);
       for (var k = at + 1; k < sib.length; k++) {
         final stack = [sib[k]];
         while (stack.isNotEmpty) {
@@ -612,7 +616,7 @@ bool _hasWord(String? value, String word) {
 /// The counts are cached per parent like [_position], so `li:last-of-type`
 /// or `:nth-child(odd of .x)` over 20,000 items stays linear.
 int _index(Element e, bool last, bool type, [List<_Complex>? of]) {
-  final (sib, at) = _position(e);
+  final (sib, at) = position(e);
   if (!type && of == null) return last ? sib.length - at : at + 1;
   final p = e.parent;
   if (p == null) return 1;

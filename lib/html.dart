@@ -142,7 +142,8 @@ final class Elements extends Iterable<Element> {
   /// of these elements or a descendant of one. The element itself is matched
   /// with the engine's `matches`, so combinators see the real tree.
   /// `:scope` is any of these elements, and a selector may start with a
-  /// combinator relative to them: `list.$('> li')` is the direct items.
+  /// combinator relative to them: `list.$('> li')` is the direct items,
+  /// `headings.$('+ p')` the paragraph after each.
   /// Selectors are parsed once and cached (64-entry LRU keyed by the
   /// selector string): scrapes running the same selectors per page are O(1).
   Elements $(String selector) {
@@ -363,7 +364,8 @@ final class Element {
   /// Matches that are this element or a descendant of it, in document order
   /// without duplicates. The element itself is matched with the engine's
   /// `matches`, so combinators see the real tree. `:scope` is this element,
-  /// and a leading combinator is relative to it: `ul.$('> li')`.
+  /// and a leading combinator is relative to it: `ul.$('> li')`, and
+  /// `h2.$('+ p')` / `$('~ p')` reach its later siblings.
   Elements $(String selector) {
     return Elements._([
       for (final el in _queryRoots([_el], selector)) Element._(el, _ctx),
@@ -700,12 +702,24 @@ List<dom.Element> _queryRoots(List<dom.Element> roots, String selector) {
   }
   final seen = Set<dom.Element>.identity();
   final out = <dom.Element>[];
-  for (final root in roots) {
+  void walk(dom.Element root) {
     if (group.matches(root, scope: scope) && seen.add(root)) out.add(root);
     final found = <dom.Element>[];
     group.collect(root, found, scope: scope);
     for (final el in found) {
       if (seen.add(el)) out.add(el);
+    }
+  }
+
+  // `+ p` / `~ p` match beside a root: its later siblings are walked too,
+  // each once (a walked sibling's later ones were walked with it).
+  final beside = Set<dom.Element>.identity();
+  for (final root in roots) {
+    if (!beside.contains(root)) walk(root);
+    if (!group.sideways) continue;
+    final (siblings, at) = sel.position(root);
+    for (var k = at + 1; k < siblings.length && beside.add(siblings[k]); k++) {
+      walk(siblings[k]);
     }
   }
   return out;
