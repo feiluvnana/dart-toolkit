@@ -411,7 +411,7 @@ final class Region {
         return inner(ev);
       };
     }
-    _s._addFocusable(id, r.$1, r.$2, r.$3, r.$4, order, wrapped, onMap: onMap, fixed: _pop != null);
+    _s._addFocusable(id, r.$1, r.$2, r.$3, r.$4, order, wrapped, onMap: onMap);
   }
 
   Region _sub(int x, int y, int w, int h, {bool? open}) =>

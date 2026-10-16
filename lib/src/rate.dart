@@ -80,11 +80,6 @@ final class Halt {
 
   bool get fired => _done.isCompleted;
 
-  /// How many waits are in flight.
-  int get pending => _waits.length;
-
-  Future<void> get future => _done.future;
-
   void fire() {
     if (_done.isCompleted) return;
     _done.complete();

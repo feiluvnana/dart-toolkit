@@ -278,7 +278,6 @@ final class _Header {
   int byte() => _r.byte();
   int u32() => _r.u32();
   Uint8List bytes(int n) => _r.bytes(n);
-  void skip(int n) => _r.pos += n;
 
   /// The header at [r]'s position; [r] moves past it (not past its data).
   static _Header? read(_Reader r, _HeaderKey? key, String? password) {

@@ -238,10 +238,7 @@ final class TermDrag extends TermEvent {
 
 /// The left button let go at cell (x, y), zero-based: the end of a drag.
 final class TermRelease extends TermEvent {
-  TermRelease(this.x, this.y);
-
-  final int x;
-  final int y;
+  TermRelease();
 }
 
 /// Terminal window focus change (`?1004h` reports). Engines that don't track
@@ -343,7 +340,7 @@ String? resolveHeld(List<int> held, Duration waited) {
           if (bytes[j] != 0x6d) {
             _mouse(out, btn, x, y);
           } else if (btn & 3 == 0 && btn & 64 == 0) {
-            out.add(TermRelease(x, y)); // 'm' is a release
+            out.add(TermRelease()); // 'm' is a release
           }
         }
         i = j + 1;
@@ -393,7 +390,7 @@ String? resolveHeld(List<int> held, Duration waited) {
           final valid = bytes[j + 1] >= 32 && bytes[j + 2] > 32 && bytes[j + 3] > 32;
           if (valid && btn & 3 != 3) _mouse(out, btn, bytes[j + 2] - 33, bytes[j + 3] - 33);
           if (valid && btn & 3 == 3 && btn & 96 == 0) {
-            out.add(TermRelease(bytes[j + 2] - 33, bytes[j + 3] - 33)); // 3 is a release
+            out.add(TermRelease()); // 3 is a release
           }
           i = j + 4;
           continue;

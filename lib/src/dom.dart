@@ -48,11 +48,6 @@ final class Text extends Node {
     return _data;
   }
 
-  set data(String s) {
-    _data = s;
-    _more = null;
-  }
-
   /// Append [s] in amortised O(|s|): the parser merges adjacent text runs
   /// one token at a time, and `data += s` was quadratic.
   void add(String s) => (_more ??= StringBuffer(_data)).write(s);

@@ -83,8 +83,6 @@ final class Cdp {
   /// The browser-level session (no session id).
   late final CdpSession browser = CdpSession._(this, null);
 
-  /// Completes when the connection is gone.
-  Future<void> get done => _done.future;
   final _done = Completer<void>();
 
   /// A new flat session on [targetId].

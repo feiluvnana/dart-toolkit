@@ -45,16 +45,14 @@ void main() {
     expect(isRetryable(ArgumentError('x')), isFalse);
   });
 
-  test('a halt holds no finished waits; firing it ends the ones in flight', () async {
+  test('firing a halt ends the waits in flight', () async {
     final halt = rate.Halt();
     await Future.wait([for (var i = 0; i < 100; i++) rate.sleep(const Duration(milliseconds: 1), halt)]);
-    expect(halt.pending, 0);
     final sw = Stopwatch()..start();
     final long = rate.sleep(const Duration(seconds: 30), halt);
-    expect(halt.pending, 1);
     halt.fire();
     await long;
-    expect((halt.pending, sw.elapsed < const Duration(seconds: 1)), (0, true));
+    expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
   });
 
   test('a server Retry-After is capped at 5 minutes; the own window is not', () {

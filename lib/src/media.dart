@@ -123,14 +123,6 @@ Future<io.Directory> _spool() => _made ??= () async {
 }();
 Future<io.Directory>? _made;
 
-/// A path ffmpeg can read for [reader]: the file itself when the reader is
-/// one, else a temp copy written once (no copy held in memory).
-Future<String> localPath(Reader reader, {String ext = 'bin'}) async {
-  final path = reader.origin().path();
-  if (path != null && await io.File(path).exists()) return path;
-  return spool(reader.stream(), ext: ext);
-}
-
 /// A spooled temp file, deleted once nothing holds this token (an
 /// [Image]/Video and every value derived from it keep it), or after a day
 /// by the sweep when the VM exits first.

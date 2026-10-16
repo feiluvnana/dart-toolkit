@@ -261,3 +261,20 @@ final class _Out {
 
   Uint8List bytes() => _b.takeBytes();
 }
+
+/// CBC encryption of [data] (a multiple of 16 bytes) with [iv]: only the
+/// writer needs it, so it lives here, not in the library.
+extension on Aes {
+  Uint8List cbcEncrypt(Uint8List data, List<int> iv) {
+    final out = Uint8List(data.length);
+    final block = Uint8List.fromList(iv);
+    for (var o = 0; o < data.length; o += 16) {
+      for (var j = 0; j < 16; j++) {
+        block[j] ^= data[o + j];
+      }
+      encryptBlock(block, 0, out, o);
+      block.setRange(0, 16, out, o);
+    }
+    return out;
+  }
+}

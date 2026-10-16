@@ -83,10 +83,7 @@ abstract final class Tui {
 
 /// One focusable thing drawn this frame.
 final class _F {
-  _F(this.id, this.x, this.y, this.w, this.h, this.order, this.tryKey, {this.onMap, this.fixed = false});
-
-  /// Inside a popup: screen coordinates.
-  final bool fixed;
+  _F(this.id, this.x, this.y, this.w, this.h, this.order, this.tryKey, {this.onMap});
 
   final Object id;
   final int x;
@@ -590,9 +587,8 @@ final class _Session<S> implements term.TuiBridge {
     int order,
     bool Function(_Ev ev)? tryKey, {
     Map<String, Binding>? onMap,
-    bool fixed = false,
   }) {
-    _focusables.add(_F(id, x, y, w, h, order, tryKey, onMap: onMap, fixed: fixed));
+    _focusables.add(_F(id, x, y, w, h, order, tryKey, onMap: onMap));
   }
 
   int _listStart(Object id, int n, int h) => _listStarts[id]?.clamp(0, math.max<int>(0, n - h)) ?? 0;

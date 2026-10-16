@@ -144,7 +144,7 @@ void main() {
       expect(click.y, 19);
       expect(click.kind, 'click');
       // A left release ends a drag; a left drag is a drag, a right drag nothing.
-      expect((events('\x1b[<0;10;20m').single as term.TermRelease).x, 9);
+      expect(events('\x1b[<0;10;20m').single, isA<term.TermRelease>());
       expect(events('\x1b[<2;10;20m'), isEmpty);
       expect((events('\x1b[<32;10;20M').single as term.TermDrag).y, 19);
       expect(events('\x1b[<34;10;20M'), isEmpty);
