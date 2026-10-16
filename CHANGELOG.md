@@ -10,6 +10,7 @@
 - `json`: `reader.events()` streams the data of each server-sent event (`text/event-stream`) as it arrives, by the SSE rules: multi-line `data:`, `data:` with no space, comments and `event:`/`id:`/`retry:` fields (`res.events().map(Json.parse)` for LLM streaming APIs).
 - `cli`: an `Opt<DateTime>` takes a duration with a unit as that long ago (`--since 7d`, `1h30m`) besides a date; medialoader's `--since` drops its `parse: DateTime.parse` and takes `7d`.
 - `http`/`image`/`video`/`archive`/`chrome`: `Body.stream(reader)` sends `Content-Length` and `Content-Type` from `reader.origin()` when it knows them (a file, in-memory bytes, a named reader) instead of going chunked with no type, so a presigned S3 PUT works; lazy readers carry a name (`image.encode(.webp)` is `<stem>.webp`, `video.encode` `<stem>.<ext>`, `Archive.archive()` `archive.zip`/`.tgz`/`.7z`, `screenshot()` `screenshot.png`, `pdf()` `page.pdf`), so a multipart part gets a filename and type instead of the field name and `octet-stream`.
+- `fs`/`http`: a `Dir` is a `Writer`: `await (http.get(u) & bar > Fs.dir('out'))` stores the body as `out/<origin().name()>` (`content-disposition`, else the URL tail; a name with a separator is made one safe segment), and a `resume: true` client skips and resumes it as `> Fs.dir('out').file(name)` does. Any named reader works (`Fs.file(f) > dir`); a reader with no name is a `ContentException` naming `dir.file(name)`. keybox drops its `nameOf` helper.
 
 **Fixed**
 

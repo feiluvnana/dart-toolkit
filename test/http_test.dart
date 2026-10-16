@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_toolkit/fs.dart' show Fs;
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
@@ -931,6 +932,9 @@ void clientTests() {
           case '/file':
             final range = r.headers.value('range');
             final from = range == null ? 0 : int.parse(range.substring(6, range.length - 1));
+            if (r.uri.queryParameters['as'] case final name?) {
+              r.response.headers.set('content-disposition', 'attachment; filename="$name"');
+            }
             if (from > 0) {
               r.response
                 ..statusCode = 206
@@ -1231,6 +1235,44 @@ Future<void> main() async {
         final plain = _Path('${dir.path}/p.bin');
         await (Http.client().get('$url/file') > plain);
         expect(File('${plain.path}.part').existsSync(), isFalse);
+      });
+
+      test('M3: into a folder under the server\'s name, skipped once complete, resumed from a .part', () async {
+        final out = Fs.dir('${dir.path}/out');
+        final before = hits['/file'] ?? 0;
+        final heard = <(int, int?)>[];
+        await (c.get('$url/file?as=report.bin') & _Heard(heard) > out);
+        expect(await File('${dir.path}/out/report.bin').readAsBytes(), body);
+        expect(heard.last, (1000, 1000));
+        await (c.get('$url/file?as=report.bin') > out); // complete: one GET, its body unread
+        expect(hits['/file'], before + 2);
+        await File('${dir.path}/out/report.bin').delete();
+        await File('${dir.path}/out/report.bin.part').writeAsBytes(body.sublist(0, 600));
+        await (c.get('$url/file?as=report.bin') > out);
+        expect(seen['range'], 'bytes=600-');
+        expect(await File('${dir.path}/out/report.bin').readAsBytes(), body);
+        expect(Directory('${dir.path}/out').listSync().map((e) => e.path.split('/').last), ['report.bin']);
+      });
+
+      test('M3: into a folder without resume, piped, named by the URL tail', () async {
+        final out = Fs.dir(dir.path);
+        await (Http.client().get('$url/file') | _Count() > out);
+        expect(await File('${dir.path}/file').readAsBytes(), body);
+        await expectLater(
+          Http.client().get('$url/file?as=..%2F..%2Fescape') > out,
+          completes,
+          reason: 'a name with separators stays one segment in the folder',
+        );
+        expect(File('${dir.path}/../escape').existsSync(), isFalse);
+      });
+
+      test('M3: a 404 into a folder writes nothing', () async {
+        final out = Fs.dir('${dir.path}/out');
+        await expectLater(
+          c.get('$url/missing') > out,
+          throwsA(isA<HttpStatusException>().having((e) => e.status, 'status', 404)),
+        );
+        expect(Directory('${dir.path}/out').existsSync(), isFalse);
       });
     });
 

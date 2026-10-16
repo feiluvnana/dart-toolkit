@@ -4,15 +4,17 @@
 library;
 
 import '../core.dart';
+import 'names.dart' show safeName;
 
 /// A source that can deliver itself to a file path (an unsent GET).
 abstract interface class Resumable {
   /// Take over before the request is sent; false once it has started.
   bool claim();
 
-  /// Deliver to [path] through [pipes] (all [PassThrough]): skip a complete
-  /// file, resume a `.part`, rename into place.
-  Future<void> resume(String path, List<Pipe> pipes);
+  /// Deliver to [to] (a writer with a path, or a [Folder]) through [pipes]
+  /// (all [PassThrough]): skip a complete file, resume a `.part`, rename
+  /// into place.
+  Future<void> resume(Writer to, List<Pipe> pipes);
 }
 
 /// A pipe whose output is its input (a progress bar, a hasher), so stored
@@ -29,3 +31,24 @@ final sizers = Expando<void Function(int bytes)>();
 /// complete file), so the rate leaves them out. The resume path calls it
 /// right before it starts the pipes.
 final replays = Expando<void Function(int bytes)>();
+
+/// A writer that is a folder (fs `Dir`): `Reader >` stores the bytes in
+/// its [file] named by the reader's `origin().name()`, resumable or not.
+abstract interface class Folder implements Writer {
+  /// The file called [name] inside this folder.
+  Writer file(String name);
+}
+
+/// [folder]'s file for a reader from [origin]: its name, made one safe
+/// segment when it is not one already (a separator, `..`).
+Writer into(Folder folder, Origin origin) {
+  final name = origin.name();
+  if (name == null || name.isEmpty) {
+    throw ContentException('this reader has no name to store it under in a folder: write to dir.file(name) instead');
+  }
+  final plain = !name.contains(_separator) && name != '.' && name != '..';
+  final safe = plain ? name : safeName(name);
+  return folder.file(safe.isEmpty ? '_' : safe);
+}
+
+final _separator = RegExp(r'[\\/\x00]');

@@ -205,7 +205,7 @@ extension ReaderCsv on Reader { Future<List<List<String>>> csv({String sep = ','
 | final URL / HTTP status / 2xx          | `url()` / `status()` / `ok()`                                           | `Response` (`Page` has `url()`)                                              |
 | a file name / a size in bytes          | `name()` / `size()`                                                     | `Entry`, `Download`, `Response`, `Capture` / `File`, `Response`, `Origin`    |
 | run a program, an app, a CLI / jobs    | `run` / `map`, `settle`                                                 | `Shell`, `Tui`, `Command` / `Pool`                                           |
-| download to a file (skip, resume)      | `get(u) & bar > file` with `resume: true`                               | `Client`                                                                     |
+| download to a file (skip, resume)      | `get(u) & bar > file` or `> dir` (the server's name) with `resume: true` | `Client`                                                                     |
 | parse / write HTML back out            | `html()` / `markup()`                                                   | `Reader`, `Page` / `Element(s)`                                              |
 | check a result                         | `check()`                                                               | `Response`, `Output`                                                         |
 | run a body with a resource, then free  | `tempDir((dir) …)` / `lock(() …)`                                        | `Fs` / `File`                                                                |
@@ -397,6 +397,8 @@ final class Response with Reader implements Closeable {
   - resumes a `.part` with `Range` when the server answers 206 (anything else restarts), and
     finishes a complete one on a 416; a changed file reuses the first GET;
   - renames the finished file into place.
+  - piped into a folder (`> Fs.dir('out')`), names the file by the response's `origin().name()`
+    (`content-disposition`, else the URL tail) and does all of the above for `out/<name>`.
     Stored bytes replay through the pipes, so a bar counts the whole file and a hash verifies it.
     A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
     keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
@@ -422,7 +424,7 @@ final shop = Http.client(base: 'https://shop.example/', headers: {'accept-langua
 final page = await shop.get('list.php', query: {'page': p}).html();
 final me = await api.get('me').check().json();
 final ig = Http.client(base: _ig, cookies: session, csrf: (cookie: 'csrftoken', header: 'x-csrftoken'));
-await (cdn.get(url) & Console.bar(name) > Fs.dir('imgs').file(name));   // skip, resume, atomic
+await (cdn.get(url) & Console.bar(name) > Fs.dir('imgs'));   // imgs/<the server's name>: skip, resume, atomic
 final login = await HttpServer.bind('127.0.0.1', 0);   // an OAuth loopback redirect is plain dart:io
 final req = await login.first;
 final code = req.uri.queryParameters['code'];
@@ -572,7 +574,7 @@ final class File extends Entry with Reader, Writer {
   Future<T> lock<T>(Future<T> Function() body, {Duration? timeout});   // exclusive OS lock for the body
   Future<String> text({String? or});  Future<List<int>> bytes({List<int>? or});   // or: when it does not exist
 }
-final class Dir extends Entry {
+final class Dir extends Entry with Writer {   // > dir stores a reader as dir/<origin().name()>
   File file(String name);  Dir dir(String name);
   Task<List<Entry>> list({String? match});  Future<Dir> create();   // list counts entries; match sets the depth
   Task<Dir> copy(String to, {String? match});   // match: only the entries list(match:) gives, with their folders
@@ -610,6 +612,9 @@ final class Link extends Entry {
   tree), `{a,b}` and `[abc]` pick.
 - `text(or: '')` answers a missing file; any other failure (a folder, permissions) still throws.
   A `File` is a `Writer` whose `origin()` reports its path, which is how a `resume: true` download skips and resumes.
+  A `Dir` is a `Writer` too: `reader > dir` stores the bytes as `dir/<reader.origin().name()>` (a
+  name with a separator is made one safe segment), with the same skip/resume for a download; a
+  reader with no name (`Reader.of`, a hash) is a `ContentException` that says to use `dir.file(name)`.
 - `Fs.tempDir((dir) async {…})` runs the body with a fresh temp folder and deletes it after (Ctrl-C
   too); `file.lock(() async {…}, timeout:)` holds an exclusive OS lock for the body, so a second
   cron run fails at once with a `LockedException` (`locked by another process`). Both are scopes, not handles: nothing

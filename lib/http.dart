@@ -1117,7 +1117,7 @@ final class _Lazy implements Future<Response>, Resumable {
   }
 
   @override
-  Future<void> resume(String path, List<Pipe> pipes) => _deliver(_fetch, path, pipes);
+  Future<void> resume(Writer to, List<Pipe> pipes) => _deliver(_fetch, to, pipes);
 
   @override
   Stream<Response> asStream() => _start().asStream();
@@ -1138,9 +1138,10 @@ final class _Lazy implements Future<Response>, Resumable {
   Future<Response> whenComplete(FutureOr<void> Function() action) => _start().whenComplete(action);
 }
 
-/// `resume: true` delivery of a GET to [path] through pass-through [pipes]:
-/// skip a complete file, resume a `.part`, rename into place.
-Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch, String path, List<Pipe> pipes) async {
+/// `resume: true` delivery of a GET to [to]'s path, or into a [Folder]
+/// under the response's name, through pass-through [pipes]: skip a
+/// complete file, resume a `.part`, rename into place.
+Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch, Writer to, List<Pipe> pipes) async {
   Stream<List<int>> through(Stream<List<int>> input) {
     var out = input;
     for (final p in pipes) {
@@ -1174,11 +1175,25 @@ Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch
   // The .part's validator (a strong ETag, else Last-Modified) sits in
   // .part.tag, written before any byte: sent back as If-Range, a file
   // that changed answers 200 and restarts instead of being spliced.
+  // A folder learns the file's name from the first answer.
+  Response? first;
+  final String path;
+  if (to is Folder) {
+    first = await fetch(const {});
+    try {
+      path = into(to, first.origin()).origin().path()!;
+    } catch (_) {
+      await first.close();
+      rethrow;
+    }
+  } else {
+    path = to.origin().path()!;
+  }
   final file = File(path), part = File('$path.part'), tagFile = File('$path.part.tag');
   Response? res;
   var have = 0;
   if (await file.exists()) {
-    final first = await fetch(const {});
+    first ??= await fetch(const {});
     final size = first.size();
     if (first.ok() && (size == null || size == await file.length())) {
       await first.close();
@@ -1191,7 +1206,10 @@ Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch
   } else {
     have = await part.exists() ? await part.length() : 0;
     final kept = have > 0 && await tagFile.exists() ? (await tagFile.readAsString()).trim() : '';
-    res = await fetch(have > 0 ? {'range': 'bytes=$have-', if (kept.isNotEmpty) 'if-range': kept} : const {});
+    if (have > 0) await first?.close(); // a .part to resume: ask for the rest instead
+    res = have == 0 && first != null
+        ? first
+        : await fetch(have > 0 ? {'range': 'bytes=$have-', if (kept.isNotEmpty) 'if-range': kept} : const {});
     if (have > 0) {
       final range = (res.header('content-range') ?? '').trim();
       if (res.status() == 416 && _unsatisfied.firstMatch(range)?[1] == '$have') {

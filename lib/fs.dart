@@ -8,6 +8,7 @@
 ///   case null: print('nothing there');
 /// }
 /// await (Reader.of(bytes) > Fs.file('a.bin'));
+/// await (http.get(url) > Fs.dir('out'));   // out/<the server's name>
 /// ```
 ///
 /// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link],
@@ -20,7 +21,8 @@
 ///   (`copy`, `move` and `Dir.list` are [Task]s: `dir.copy(to) & Console.bar('backup')`).
 ///   `copy`/`move` move an entry with its modes and times; `>` moves content.
 /// - [File] supports `write` `append` `size` `touch` `lock` (plus [Reader]/[Writer]).
-/// - [Dir] supports `file` `dir` `list` `size` `create`.
+/// - [Dir] supports `file` `dir` `list` `size` `create` (plus [Writer]:
+///   `> Fs.dir('out')` stores a reader under its `origin().name()`).
 /// - [Link] supports `target` `resolve`.
 /// Everything else is private.
 library;
@@ -42,6 +44,7 @@ import 'src/missing.dart';
 import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/progress.dart' show Run, relay, task;
+import 'src/resume.dart' show Folder;
 import 'src/tree.dart' as tree;
 
 /// What [File.lock] throws when another holder keeps the lock: tell it
@@ -465,12 +468,21 @@ final class File extends Entry with Reader, Writer {
   }
 }
 
-/// A folder.
-final class Dir extends Entry {
+/// A folder. As a [Writer] it stores a reader under its `origin().name()`:
+/// `await (http.get(u) & bar > Fs.dir('out'))` writes `out/<name>`, and a
+/// `resume: true` client skips or resumes it as `> dir.file(name)` does.
+final class Dir extends Entry with Writer implements Folder {
   Dir._(super.path) : super._();
 
   /// A file handle under this folder. No I/O.
+  @override
   File file(String name) => File._(p.join(_path, name));
+
+  /// Bytes with no reader have no name: `Reader >` names the file, so
+  /// write to [file] when calling this directly.
+  @override
+  Future<void> consume(Stream<List<int>> input) async =>
+      throw ContentException('a stream has no name to store it under in $_path: write to dir.file(name) instead');
 
   /// A folder handle under this folder. No I/O.
   Dir dir(String name) => Dir._(p.join(_path, name));

@@ -30,7 +30,7 @@ final discInLink = RegExp(r'/(\d+)-');
 final trackInLink = RegExp(r'-(\d+)\.');
 final number = RegExp(r'(\d+)');
 
-typedef Asset = (String url, File to);
+typedef Asset = (String url, Writer to); // a file, or a folder that takes the server's name
 
 final class Disc {
   Disc(this.name, this.tracks);
@@ -61,8 +61,7 @@ Future<void> download() async {
 
   await (Pool.map(assets, (a) async {
         final (url, to) = a;
-        if (await to.exists()) return;
-        await (http.get(url) & Console.bar('  ${to.name()}', keep: false) > to);
+        await (http.get(url) & Console.bar('  ${Uri.parse(url).pathSegments.last}', keep: false) > to);
       }) &
       Console.bar('files done'));
   final zip = Fs.file('${box.path}.zip');
@@ -71,8 +70,6 @@ Future<void> download() async {
 }
 
 Future<Elements> page(String url) => http.get(url).html();
-
-String nameOf(String url) => Uri.parse(url).pathSegments.last;
 
 Map<int, Disc> readDiscs(Elements page) {
   final discs = <int, Disc>{};
@@ -99,9 +96,9 @@ List<Asset> discArtwork(Elements page, Map<int, Disc> discs) {
     if (url == null) continue;
     final text = item.text();
     if (discNumber.firstMatch(text)?[1] case final disc?) {
-      if (discs[int.parse(disc)] case final d?) out.add((url, d.folder.file(nameOf(url))));
+      if (discs[int.parse(disc)] case final d?) out.add((url, d.folder));
     } else if (text.contains('ALL')) {
-      out.add((url, keyBoxArt.file(nameOf(url))));
+      out.add((url, keyBoxArt));
     }
   }
   return out;
@@ -164,7 +161,7 @@ List<Asset> messages(Elements page) {
 String studio(String url) => url.contains('wfs') ? 'WFS_' : (url.contains('cygames') ? 'Cygames_' : '');
 
 List<Asset> topics(Elements page) => [
-  for (final src in page.$('.topics_box img').attrs('src')) (src, events.file(nameOf(src))),
+  for (final src in page.$('.topics_box img').attrs('src')) (src, events),
 ];
 
 // khinsider has one page per song; the actual file link is on that page.

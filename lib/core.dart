@@ -138,9 +138,8 @@ Future<void> _run(Reader self, Writer? writer) async {
   final probes = _probes(self);
   final run = probes.isEmpty ? null : Run(probes);
   // Synchronously, before any await: a resumable GET (http `resume: true`)
-  // piped into a path through pass-through pipes delivers itself.
-  final path = writer?.origin().path();
-  if (path != null) {
+  // piped into a path or a folder through pass-through pipes delivers itself.
+  if (writer != null && (writer is Folder || writer.origin().path() != null)) {
     final pipes = <Pipe>[];
     Reader cur = self;
     while (cur is _PipedReader || cur is _WatchedReader) {
@@ -154,7 +153,7 @@ Future<void> _run(Reader self, Writer? writer) async {
     final source = cur is _FutureReader ? cur._future : cur;
     if (source is Resumable && pipes.every((p) => p is PassThrough) && source.claim()) {
       try {
-        await source.resume(path, [if (run != null) _Counter(run), ...pipes]);
+        await source.resume(writer, [if (run != null) _Counter(run), ...pipes]);
         run?.end();
         return;
       } catch (e) {
@@ -170,6 +169,9 @@ Future<void> _run(Reader self, Writer? writer) async {
     // throws before its first listen (missing parent, closed response)
     // therefore leaves the source untouched; [abort] below still
     // poisons/frees the stages.
+    // A folder stores the bytes under the reader's name, known once its
+    // future (a response) is in.
+    if (writer is Folder) writer = into(writer, await _settled(self));
     s = _open(self, run);
     if (writer == null) {
       await for (final _ in s) {
@@ -191,6 +193,22 @@ Future<void> _run(Reader self, Writer? writer) async {
     run?.end(e);
     unawaited(_closeRoot(self));
     Error.throwWithStackTrace(e, st);
+  }
+}
+
+/// [reader]'s origin once every future in its chain is in.
+Future<Origin> _settled(Reader reader) async {
+  var cur = reader;
+  while (true) {
+    if (cur is _PipedReader) {
+      cur = cur._source;
+    } else if (cur is _WatchedReader) {
+      cur = cur._source;
+    } else if (cur is _FutureReader) {
+      cur = await cur._get();
+    } else {
+      return reader.origin();
+    }
   }
 }
 
@@ -437,8 +455,12 @@ final class _FutureReader with Reader {
   @override
   Future<void> operator >(Writer? writer) {
     final Object source = _future;
-    final path = writer?.origin().path();
-    if (path != null && source is Resumable && source.claim()) return source.resume(path, const <Pipe>[]);
+    if (writer != null &&
+        (writer is Folder || writer.origin().path() != null) &&
+        source is Resumable &&
+        source.claim()) {
+      return source.resume(writer, const <Pipe>[]);
+    }
     return _get().then((r) => r > writer);
   }
 }

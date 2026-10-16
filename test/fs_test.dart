@@ -597,6 +597,21 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
   });
 
   group('Dir', () {
+    test('M3: > a folder stores a reader under its name; a nameless one is a ContentException', () async {
+      await Fs.file(p('src/notes.txt')).write('hello');
+      final out = Fs.dir(p('out'));
+      await (Fs.file(p('src/notes.txt')) > out);
+      expect(await out.file('notes.txt').text(), 'hello');
+      await (Fs.file(p('src/notes.txt')) | _Gzip() > out); // a piped reader keeps its name
+      expect(await out.file('notes.txt').bytes(), gzip.encode(utf8.encode('hello')));
+      final nameless = throwsA(
+        isA<ContentException>().having((e) => e.message, 'message', contains('dir.file(name)')),
+      );
+      await expectLater(Reader.of([1, 2]) > out, nameless);
+      await expectLater(out.consume(Stream.value([1])), nameless);
+      expect([for (final e in await out.list()) e.name()], ['notes.txt']);
+    });
+
     test('list keys entries by their path under the folder, however it was spelled', () async {
       for (final f in ['a/b', 'a-b', 'a.txt', 'z/y.txt']) {
         await Fs.file(p('l/$f')).write(f);
@@ -848,3 +863,8 @@ Future<void> expectThrows(Future<void> f, String what) async {
   });
 }
 
+
+final class _Gzip with Pipe {
+  @override
+  Stream<List<int>> transform(Stream<List<int>> input) => input.transform(gzip.encoder);
+}
