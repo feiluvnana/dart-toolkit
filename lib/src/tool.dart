@@ -12,7 +12,6 @@ import 'dart:io' as io;
 
 import 'package:path/path.dart' as p;
 
-import 'dart:isolate';
 
 import '../shell.dart';
 import 'cache.dart' as cache;
@@ -175,6 +174,7 @@ Future<void> _download(Tool t, String target) async {
     try {
       await _fetch(build, tmp.path, _exe(t));
       final exe = p.join(tmp.path, build.member ?? _exe(t));
+      if (!await io.File(exe).exists()) throw ContentException('download failed: ${build.url} holds no ${p.basename(exe)}');
       if (!io.Platform.isWindows) await posix.chmod(exe, 0x1ed);
       // Windows: one zip holds both tools, so take the sibling too.
       for (final other in Tool.values) {
@@ -194,28 +194,21 @@ Future<void> _download(Tool t, String target) async {
   }
 }
 
-/// Run `tool_fetch.dart` in an isolate spawned by URI: a deferred import
-/// still compiles http and archive at startup under `dart run`, this does
-/// not. A compiled exe cannot spawn it, so it asks for the tool on PATH.
+/// Download [build] in `tool_fetch.dart`'s isolate (see
+/// [cache.fetchInIsolate]); a compiled exe asks for the tool on PATH.
 Future<void> _fetch(_Build build, String dir, String name) async {
   io.stderr.writeln('dart_toolkit: downloading ${p.basename(build.url)} (once per machine)');
-  final reply = ReceivePort();
+  final String? failed;
   try {
-    final entry = await Isolate.resolvePackageUri(Uri.parse('package:dart_toolkit/src/tool_fetch.dart'));
-    if (entry == null) throw UnsupportedError('no package config');
-    await Isolate.spawnUri(
-      entry,
-      [build.url, build.sha256, build.member == null ? 'raw' : 'zip', dir, name],
-      reply.sendPort,
-      onError: reply.sendPort,
-      onExit: reply.sendPort,
-      automaticPackageResolution: true,
-    );
-  } catch (e) {
-    reply.close();
-    throw UnsupportedError('$name is not on PATH and can only be downloaded from a `dart run` script: install it ($e)');
+    failed = await cache.fetchInIsolate('tool_fetch.dart', [
+      build.url,
+      build.sha256,
+      build.member == null ? 'raw' : 'zip',
+      dir,
+      name,
+    ]);
+  } on UnsupportedError catch (e) {
+    throw UnsupportedError('$name is not on PATH and can only be downloaded from a `dart run` script: install it (${e.message})');
   }
-  final result = await reply.first;
-  reply.close();
-  if (result != null) throw ContentException('download failed: ${build.url}: $result');
+  if (failed != null) throw ContentException('download failed: ${build.url}: $failed');
 }

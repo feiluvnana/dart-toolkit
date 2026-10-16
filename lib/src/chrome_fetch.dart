@@ -3,7 +3,7 @@
 /// archive at startup).
 ///
 /// Arguments: kind (`chrome` or `chrome-headless-shell`), platform
-/// (`mac-arm64`…), the target folder. Replies `null` on success, else the
+/// (`mac-arm64`…), the target folder. Replies `ok` on success, else the
 /// error text. The zip resumes across runs (`<dir>.zip.part`); the folder
 /// appears by an atomic rename, so a reader never sees half of it.
 library;
@@ -23,7 +23,7 @@ const _index = 'https://googlechromelabs.github.io/chrome-for-testing/last-known
 Future<void> main(List<String> args, SendPort reply) async {
   try {
     await fetch(args[0], args[1], args[2]);
-    reply.send(null);
+    reply.send('ok');
   } catch (e) {
     reply.send('$e');
   }
@@ -42,7 +42,7 @@ Future<void> fetch(String kind, String platform, String dir) async {
   final zip = '$dir.zip';
   await io.Directory(p.dirname(dir)).create(recursive: true);
   await (http.get(url) > Fs.file(zip));
-  final tmp = '$dir.${io.pid}.tmp';
+  final tmp = (await io.Directory(p.dirname(dir)).createTemp('${p.basename(dir)}.tmp-')).path;
   try {
     await (Fs.file(zip) > Archive.unarchive(tmp)); // keeps modes and the app bundle's links
     if (io.Platform.isMacOS) await io.Process.run('xattr', ['-dr', 'com.apple.quarantine', tmp]);

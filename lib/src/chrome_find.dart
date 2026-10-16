@@ -9,7 +9,6 @@ library;
 
 import 'dart:ffi' show Abi;
 import 'dart:io' as io;
-import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 
@@ -81,8 +80,19 @@ String? testingPlatform() => switch (Abi.current()) {
 };
 
 /// The cached Chrome for Testing (`chrome-headless-shell` when [headless]),
-/// downloaded on first use.
-Future<String> testingChrome({required bool headless}) async {
+/// downloaded on first use: once per process (a memoized future) and one
+/// process at a time (a file lock).
+Future<String> testingChrome({required bool headless}) {
+  final key = headless;
+  return _fetching[key] ??= _testingChrome(headless: headless).catchError((Object e) {
+    _fetching.remove(key); // a failed download may be retried
+    throw e;
+  });
+}
+
+final _fetching = <bool, Future<String>>{};
+
+Future<String> _testingChrome({required bool headless}) async {
   final (:kind, :platform, :dir, :exe) =
       _testingPath(headless: headless) ??
       (throw BrowserException(
@@ -90,31 +100,27 @@ Future<String> testingChrome({required bool headless}) async {
         'install Chrome or Chromium, or pass path:',
       ));
   if (io.File(exe).existsSync()) return exe;
-  io.stderr.writeln('dart_toolkit: downloading $kind for $platform (once per machine)');
-  final reply = ReceivePort();
+  await io.Directory(p.dirname(dir)).create(recursive: true);
+  final lock = await io.File('$dir.lock').open(mode: io.FileMode.append);
   try {
-    final entry = await Isolate.resolvePackageUri(Uri.parse('package:dart_toolkit/src/chrome_fetch.dart'));
-    if (entry == null) throw UnsupportedError('no package config');
-    await Isolate.spawnUri(
-      entry,
-      [kind, platform, dir],
-      reply.sendPort,
-      onError: reply.sendPort,
-      onExit: reply.sendPort,
-      automaticPackageResolution: true,
-    );
-  } catch (e) {
-    reply.close();
-    throw BrowserException(
-      'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '
-      '(`dart run`) or with Chrome installed: pass path: or install Chrome ($e)',
-      cause: e,
-    );
+    await lock.lock(io.FileLock.blockingExclusive);
+    if (io.File(exe).existsSync()) return exe; // another process fetched it
+    io.stderr.writeln('dart_toolkit: downloading $kind for $platform (once per machine)');
+    final String? failed;
+    try {
+      failed = await fetchInIsolate('chrome_fetch.dart', [kind, platform, dir]);
+    } on UnsupportedError catch (e) {
+      throw BrowserException(
+        'no Chrome found, and Chrome for Testing can only be fetched from a JIT run '
+        '(`dart run`) or with Chrome installed: pass path: or install Chrome (${e.message})',
+        cause: e,
+      );
+    }
+    if (failed != null || !io.File(exe).existsSync()) {
+      throw BrowserException('Chrome for Testing download failed: ${failed ?? 'no $exe'}', cause: failed);
+    }
+    return exe;
+  } finally {
+    await lock.close(); // closing releases the lock
   }
-  final result = await reply.first;
-  reply.close();
-  if (result != null || !io.File(exe).existsSync()) {
-    throw BrowserException('Chrome for Testing download failed: ${result ?? 'no $exe'}', cause: result);
-  }
-  return exe;
 }

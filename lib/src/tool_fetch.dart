@@ -2,7 +2,7 @@
 /// `tool.dart` (spawned by URI, so `image`, `video` and `archive` never
 /// compile http at startup).
 ///
-/// Arguments: url, sha256, `zip` or `raw`, the target folder. Replies null on
+/// Arguments: url, sha256, `zip` or `raw`, the target folder. Replies `ok` on
 /// success, else the error text. Nothing lands before the hash checks.
 library;
 
@@ -18,7 +18,7 @@ import '../http.dart';
 Future<void> main(List<String> args, SendPort reply) async {
   try {
     await fetch(args[0], args[1], raw: args[2] == 'raw', dir: args[3], name: args[4]);
-    reply.send(null);
+    reply.send('ok');
   } catch (e) {
     reply.send('$e');
   }

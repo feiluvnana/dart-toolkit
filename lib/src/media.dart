@@ -13,6 +13,8 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../shell.dart';
+import 'cache.dart' as cache;
+import 'posix.dart' as posix;
 import 'tool.dart';
 
 // ── running ───────────────────────────────────────────────────────────────
@@ -103,10 +105,20 @@ String _tail(String err) {
 
 // ── sources ───────────────────────────────────────────────────────────────
 
-/// Where spooled readers go; files older than a day are swept on the
-/// next spool (a script that ends normally cannot delete its own).
-final _spoolDir = p.join(io.Directory.systemTemp.path, 'dart_toolkit_media');
+/// Where spooled readers go: in the user cache, owner-only (never a shared
+/// temp folder another user can read or plant names in). Files older than
+/// a day are swept on the next spool (a script that ends normally cannot
+/// delete its own).
+final _spoolDir = p.join(cache.userCacheDir(), 'dart_toolkit', 'media');
 var _swept = false;
+
+/// The spool folder, made owner-only once per process.
+Future<io.Directory> _spool() => _made ??= () async {
+  final dir = await io.Directory(_spoolDir).create(recursive: true);
+  if (!io.Platform.isWindows) await posix.chmod(dir.path, 0x1c0); // 0700
+  return dir;
+}();
+Future<io.Directory>? _made;
 
 /// A path ffmpeg can read for [reader]: the file itself when the reader is
 /// one, else a temp copy written once (no copy held in memory).
@@ -135,8 +147,7 @@ final class Temp {
 
 /// Write [chunks] to a fresh temp file and return its path.
 Future<String> spool(Stream<List<int>> chunks, {String ext = 'bin'}) async {
-  final dir = io.Directory(_spoolDir);
-  await dir.create(recursive: true);
+  final dir = await _spool();
   if (!_swept) {
     _swept = true;
     unawaited(_sweep(dir));
@@ -165,7 +176,7 @@ Future<void> _sweep(io.Directory dir) async {
 /// A temp output path next to the spool, for encodes that need a seekable
 /// output (mp4 `faststart`, image muxers).
 Future<String> tempOut(String ext) async {
-  await io.Directory(_spoolDir).create(recursive: true);
+  await _spool();
   return p.join(_spoolDir, '${DateTime.now().microsecondsSinceEpoch}-${io.pid}-${_n++}.out.$ext');
 }
 
