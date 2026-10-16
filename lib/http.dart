@@ -10,7 +10,7 @@
 ///
 /// Public surface is exactly: [Http], [Client], [Response], [Body],
 /// [HttpStatusException], [HttpRequestException], [RequestFailure],
-/// [SessionException], [Browser], [Feed], [FeedPage].
+/// [SessionException], [Feed], [FeedPage].
 /// - `Http.client(...)` holds the settings a script states once (base,
 ///   headers, cookies, retries, pacing); `client.copy(...)` is a variant
 ///   that stays one session. `Http.pool([...])` spreads requests over
@@ -228,37 +228,6 @@ enum RequestFailure {
   unsendable,
 }
 
-/// The headers a desktop browser sends with a request, for sites that
-/// refuse anything else: `Http.client(browser: .page)`.
-enum Browser {
-  /// Opening a page: `accept: text/html…`, `sec-fetch-mode: navigate`,
-  /// `upgrade-insecure-requests`.
-  page,
-
-  /// A page's own script calling its API: `accept: */*`,
-  /// `sec-fetch-mode: cors`.
-  api,
-}
-
-/// What [Browser] adds, under any header the client or the call names.
-Map<String, String> _browserHeaders(Browser b) => switch (b) {
-  Browser.page => const {
-    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'accept-language': 'en-US,en;q=0.9',
-    'upgrade-insecure-requests': '1',
-    'sec-fetch-dest': 'document',
-    'sec-fetch-mode': 'navigate',
-    'sec-fetch-site': 'same-origin',
-  },
-  Browser.api => const {
-    'accept': '*/*',
-    'accept-language': 'en-US,en;q=0.9',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-origin',
-  },
-};
-
 /// A logged-in session that is not any more: the request landed on one of
 /// the client's `login:` paths (a redirect to the sign-in page) instead of
 /// what it asked for. [url] is where it landed.
@@ -309,7 +278,8 @@ abstract final class Http {
   ///   with `token`, `key`, `auth` …) go only to [base]'s origin, or without
   ///   [base] to the first request's. Without a `user-agent` one, requests
   ///   send the user-agent the jar's session file names (its `user-agent:`
-  ///   line), else a current desktop Chrome's.
+  ///   line), else a current desktop Chrome's. utils' `HttpUtils.page` /
+  ///   `HttpUtils.api` are what a desktop browser sends.
   /// - [timeout]: the connect, the wait for the headers, then any stall
   ///   streaming.
   /// - [retries]: re-sends only when the request provably was not
@@ -342,9 +312,6 @@ abstract final class Http {
   ///   `json`, `html`) may decode to; past it the read fails with a
   ///   [ContentException], so a gzip bomb cannot fill the heap. Piping a
   ///   body into a file has no limit.
-  /// - [browser]: send what a desktop browser sends for a page
-  ///   ([Browser.page]) or for its script's API call ([Browser.api]) along
-  ///   with the user-agent; [headers] and a call's headers still win.
   /// - [login]: paths of the site's sign-in pages (`/accounts/login`); a
   ///   response that lands on one, after redirects, throws
   ///   [SessionException]: the session in [cookies] has run out.
@@ -360,7 +327,6 @@ abstract final class Http {
     String? proxy,
     bool resume = false,
     int max = 256 << 20,
-    Browser? browser,
     List<String> login = const [],
   }) {
     if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
@@ -376,7 +342,6 @@ abstract final class Http {
       csrf: csrf,
       resume: resume,
       max: max,
-      browser: browser,
       login: login,
     );
     return _Client(settings, _Conn(proxy: proxy, timeout: timeout));
@@ -462,7 +427,6 @@ final class _Settings {
     required this.csrf,
     required this.resume,
     required this.max,
-    required this.browser,
     required this.login,
   });
 
@@ -476,7 +440,6 @@ final class _Settings {
   final ({String cookie, String header})? csrf;
   final bool resume;
   final int max;
-  final Browser? browser;
   final List<String> login;
 }
 
@@ -613,7 +576,6 @@ final class _Client extends Client {
         csrf: s.csrf,
         resume: s.resume,
         max: s.max,
-        browser: s.browser,
         login: s.login,
       ),
       conn,
@@ -886,11 +848,6 @@ final class _Client extends Client {
       }
       if (!headers.keys.any((k) => k.toLowerCase() == 'user-agent')) {
         req.headers.set('user-agent', jar.agentOf(_s.cookies) ?? _userAgent);
-      }
-      if (_s.browser case final b?) {
-        for (final MapEntry(:key, :value) in _browserHeaders(b).entries) {
-          if (req.headers.value(key) == null) req.headers.set(key, value);
-        }
       }
       final cookie = _cookieHeader(uri, headers);
       if (cookie != null) req.headers.set('cookie', cookie);

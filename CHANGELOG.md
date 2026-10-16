@@ -69,6 +69,7 @@
 - `core`: helpers moved to `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: `Durations` as `DurationUtils` (`3.seconds`), `Sizes` as `SizeUtils` (`bytes.size()`), `Times` as `TimeUtils` (`now.format(…)`), `Spans` as `SpanUtils` (`d.human()`), `Rate`, `Cookies`, and `reader.cookies(or:)` as the `ReaderCookies` extension. A script that uses them adds `import 'package:dart_toolkit/utils.dart';`.
 - `hash`: moved to `package:dart_toolkit/utils.dart` as `HashUtils` (`HashUtils.sha256(expect: sum)` in a pipe, `key:` for HMAC) and `Hasher`; `package:dart_toolkit/hash.dart` is gone.
 - `csv`: moved to `package:dart_toolkit/utils.dart` as `CsvUtils.parse`/`encode`; `reader.csv(or:)` and `reader.rows()` are utils' `ReaderCsv` extension. `package:dart_toolkit/csv.dart` is gone.
+- `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
 
 **Removed**
 

@@ -146,6 +146,7 @@ final class Cookies {                             // the jar chrome produces and
   String? operator [](String name);  Cookies set(String name, String value, {required String url});
 }
 extension ReaderCookies on Reader { Future<Cookies> cookies({Cookies? or}); }   // a cookies.txt session; or: when missing
+abstract final class HttpUtils { static const Map<String, String> page, api; }   // a browser's headers: Http.client(headers: HttpUtils.page)
 ```
 
 **Hashes** (`HashUtils`, over `package:crypto`):
@@ -222,9 +223,9 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
-| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` · `CsvUtils` `parse` `encode` · `Reader.csv(or:)` `rows` (a separate import)                                                                                                                                                                                   | in-house                            |
+| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` · `HashUtils` `md5` `sha1` `sha256` `sha512` (md5/sha256: `expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `bytes` · `CsvUtils` `parse` `encode` · `Reader.csv(or:)` `rows` · `HttpUtils` `page` `api` (a separate import)                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
-| `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
+| `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
@@ -310,7 +311,6 @@ abstract final class Http {
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, bool resume = false,
       int max = 256 << 20,                        // max: bytes a body read into memory may decode to
-      Browser? browser,                           // .page / .api: the headers a desktop browser sends
       List<String> login = const []});            // sign-in paths: landing on one throws SessionException
   static Client pool(List<Client> members);      // also a Client
 }
@@ -341,9 +341,9 @@ final class Response with Reader implements Closeable {
 ```
 
 - `query:` values are `String`, `num`, `bool`, a `Map` (sent as JSON: GraphQL's `variables`), null (dropped) or an `Iterable` (the key repeats).
-- **`browser: .page`** sends what a desktop browser sends opening a page (`accept: text/html…`,
-  `sec-fetch-mode: navigate`), **`.api`** what its script sends (`accept: */*`, `sec-fetch-mode: cors`);
-  `headers:` still wins. **`login:`** names the site's sign-in paths: a response that lands on one
+- **`headers: HttpUtils.page`** (utils) sends what a desktop browser sends opening a page (`accept: text/html…`,
+  `sec-fetch-mode: navigate`), **`HttpUtils.api`** what its script sends (`accept: */*`, `sec-fetch-mode: cors`);
+  spread it first so your names win (`{...HttpUtils.api, 'x-app': '1'}`), and the user-agent fallback still applies. **`login:`** names the site's sign-in paths: a response that lands on one
   after redirects throws `SessionException` (its `url`), so a lost session is an error, not a page.
 - **Settings live on the client**, stated once; a request passes only `query`, `headers` and
   `body`. `Http.client()` with no arguments is a new, isolated client (its own jar and sockets);

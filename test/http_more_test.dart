@@ -370,13 +370,16 @@ Future<void> main() async {
     });
   });
 
-  group('browser and login', () {
-    test('browser: sends what a browser sends for a page or an API call; headers still win', () async {
-      expect(await Http.client(browser: .page).get('$url/seen').text(), startsWith('text/html,'));
-      expect(await Http.client(browser: .page).get('$url/seen').text(), endsWith('|navigate|1'));
-      expect(await Http.client(browser: .api).get('$url/seen').text(), '*/*|cors|null');
-      expect(await Http.client(browser: .api, headers: {'accept': 'application/json'}).get('$url/seen').text(), startsWith('application/json|'));
-      expect(await Http.client().get('$url/seen').text(), contains('null|null'), reason: 'none without browser:');
+  group('browser headers and login', () {
+    test('HttpUtils.page/api send what a browser sends; later and per-call headers win; the user-agent stays', () async {
+      expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), startsWith('text/html,'));
+      expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), endsWith('|navigate|1'));
+      expect(await Http.client(headers: HttpUtils.api).get('$url/seen').text(), '*/*|cors|null');
+      final json = Http.client(headers: {...HttpUtils.api, 'Accept': 'application/json'});
+      expect(await json.get('$url/seen').text(), startsWith('application/json|'));
+      expect(await Http.client(headers: HttpUtils.api).get('$url/seen', headers: {'accept': 'text/csv'}).text(), startsWith('text/csv|'));
+      expect(await Http.client(headers: HttpUtils.page).get('$url/ua').text(), contains('Chrome/'), reason: 'the user-agent fallback still applies');
+      expect(await Http.client().get('$url/seen').text(), contains('null|null'), reason: 'none without the header set');
     });
 
     test('login: landing on a sign-in page throws SessionException, a ToolkitException', () async {

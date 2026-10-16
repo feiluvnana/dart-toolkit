@@ -1,5 +1,6 @@
 /// Helpers beside the core, one separate import (no module re-exports it):
-/// unit literals, human sizes and times, pacing, cookie jars, hashes and CSV.
+/// unit literals, human sizes and times, pacing, cookie jars, hashes, CSV
+/// and the headers a browser sends.
 ///
 /// ```dart
 /// final http = Http.client(rate: Rate(4, 1.seconds), cookies: await Fs.file('.session').cookies(or: Cookies()));
@@ -11,11 +12,14 @@
 /// final [keys, ...people] = await Fs.file('people.csv').csv();                 // header row first
 /// await for (final row in http.get(exportUrl).rows()) {}                        // streamed, constant memory
 /// await Fs.file('out.csv').write(CsvUtils.encode([['name', 'n'], ['a', 1]]));
+/// final site = Http.client(headers: HttpUtils.page);                           // looks like a browser tab
+/// final api = Http.client(headers: {...HttpUtils.api, 'x-app': '1'});          // later names win
 /// ```
 ///
 /// Public surface is exactly: [DurationUtils], [SizeUtils], [TimeUtils],
 /// [SpanUtils], [Rate], [Cookies], [ReaderCookies], [ReaderFutureCookies],
-/// [HashUtils], [Hasher], [CsvUtils], [ReaderCsv], [ReaderFutureCsv].
+/// [HashUtils], [Hasher], [CsvUtils], [ReaderCsv], [ReaderFutureCsv],
+/// [HttpUtils].
 /// - [DurationUtils]: `3.seconds`, `11.minutes`: unit literals for every timeout.
 /// - [SizeUtils]: `bytes.size()` (`12.1 MB`).
 /// - [TimeUtils]: `now.format('yyyy-MM-dd')`; [SpanUtils]: `wait.human()` (`11 min 5 s`).
@@ -29,6 +33,8 @@
 ///   `reader | hasher > file` stores and checksums in one pass.
 /// - [CsvUtils]: RFC 4180 `parse` (rows) and `encode`; `reader.csv(or:)`
 ///   parses any [Reader], `reader.rows()` streams its rows.
+/// - [HttpUtils]: `page` / `api`, the headers a desktop browser sends, for
+///   `Http.client(headers:)`.
 /// Everything else is private.
 ///
 /// {@canonicalFor cookies.Cookies}
@@ -77,4 +83,31 @@ extension ReaderCookies on Reader {
 /// The Future mirror (rule 4).
 extension ReaderFutureCookies on Future<Reader> {
   Future<Cookies> cookies({Cookies? or}) async => (await this).cookies(or: or);
+}
+
+/// Header sets for `Http.client(headers:)` or a call's `headers:`, for sites
+/// that refuse anything but a browser. The client still adds its
+/// user-agent (the jar's session one, else a current Chrome's); spread a
+/// set first so your own names win: `{...HttpUtils.page, 'accept': 'x'}`.
+abstract final class HttpUtils {
+  /// What a desktop browser sends opening a page: `accept: text/html…`,
+  /// `sec-fetch-mode: navigate`, `upgrade-insecure-requests`.
+  static const page = {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'upgrade-insecure-requests': '1',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'same-origin',
+  };
+
+  /// What a page's own script sends calling its API: `accept: */*`,
+  /// `sec-fetch-mode: cors`.
+  static const api = {
+    'accept': '*/*',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+  };
 }

@@ -63,10 +63,9 @@ final class Instagram extends Platform {
     cookies: jar,
     // Without the csrftoken echoed as a header, Instagram treats you as a bot.
     csrf: (cookie: 'csrftoken', header: 'x-csrftoken'),
-    browser: .api,
     // Asking you to log in again, or to verify the account, it redirects there.
     login: const ['/accounts/login', '/challenge/'],
-    headers: {'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest'},
+    headers: {...HttpUtils.api, 'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest'},
   );
 
   @override

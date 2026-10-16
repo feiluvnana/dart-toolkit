@@ -67,10 +67,10 @@ final class Twitter extends Platform {
     check: true,
     cookies: jar,
     csrf: (cookie: 'ct0', header: 'x-csrf-token'),
-    browser: .api,
     // A lost session is redirected to the login flow.
     login: const ['/i/flow/login', '/account/access'],
     headers: {
+      ...HttpUtils.api,
       'authorization': bearer,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',

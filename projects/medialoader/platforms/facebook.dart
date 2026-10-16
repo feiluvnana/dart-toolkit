@@ -242,7 +242,7 @@ final class Facebook extends Platform {
 
   @override
   Client client(Cookies jar) =>
-      Http.client(base: web, rate: apiRate, check: true, cookies: jar, browser: .page, login: const ['/login']);
+      Http.client(base: web, rate: apiRate, check: true, cookies: jar, headers: HttpUtils.page, login: const ['/login']);
 
   @override
   Future<void> explore(Job j) async {

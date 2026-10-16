@@ -16,7 +16,7 @@ import 'package:dart_toolkit/utils.dart';
 const site = 'https://key.visualarts.gr.jp/key20th/';
 const soundtrack = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
 const scans = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
-final http = Http.client(browser: .page, timeout: 60.seconds, retries: 3, resume: true);
+final http = Http.client(headers: HttpUtils.page, timeout: 60.seconds, retries: 3, resume: true);
 
 final box = Fs.scriptDir().dir('Key BOX -for two decades- (2019)');
 final keyBoxArt = box.dir('Others').dir('KeyBOX');
