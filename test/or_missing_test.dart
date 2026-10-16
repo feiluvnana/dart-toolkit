@@ -59,13 +59,13 @@ void main() {
   }
 
   test('without or:, a 404 body is still the data when the client does not check', () async {
-    final c = Http.client(base: base, retries: 0);
+    final c = Http.client(base: base, check: false, retries: 0);
     addTearDown(c.close);
     expect((await (await c.get('/404')).json()).$('error').text(), 'nope');
   });
 
   test('a 500 is not missing: check: throws through or:', () async {
-    final c = Http.client(base: base, check: true, retries: 0);
+    final c = Http.client(base: base, retries: 0); // check: by default
     addTearDown(c.close);
     await expectLater(c.get('/500').json(or: fallback), throwsA(isA<HttpStatusException>()));
   });

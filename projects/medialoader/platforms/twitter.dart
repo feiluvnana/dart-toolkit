@@ -64,7 +64,6 @@ final class Twitter extends Platform {
   Client client(Cookies jar) => Http.client(
     base: web,
     rate: apiRate,
-    check: true,
     cookies: jar,
     csrf: (cookie: 'ct0', header: 'x-csrf-token'),
     // A lost session is redirected to the login flow.

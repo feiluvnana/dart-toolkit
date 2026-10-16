@@ -1,7 +1,7 @@
 /// Minimal HTTP client. Thin facade over SDK `dart:io` `HttpClient`.
 ///
 /// ```dart
-/// final api = Http.client(base: 'https://api.example.com/', headers: {'authorization': token}, check: true);
+/// final api = Http.client(base: 'https://api.example.com/', headers: {'authorization': token});
 /// final me = await api.get('me').json();
 /// final cdn = Http.client(resume: true);
 /// await (cdn.get(isoUrl) & Console.bar('d.iso') > Fs.file('d.iso'));   // skips, resumes, renames atomically
@@ -30,8 +30,9 @@
 /// - [HttpStatusException] is what `check` and piping a non-2xx body throw;
 ///   [HttpRequestException] is a request that was aborted or could not
 ///   follow a redirect.
-/// A non-2xx status is still a [Response] unless the client says `check:`;
-/// only network failures and timeouts throw. Everything else is private.
+/// A non-2xx status throws [HttpStatusException] by default; with
+/// `check: false` it is a [Response] and only network failures and
+/// timeouts throw. Everything else is private.
 library;
 
 import 'dart:async';
@@ -292,7 +293,8 @@ abstract final class Http {
   ///   jitter; `Retry-After` is honoured (capped at 5 min unless [rate] is
   ///   set, then a 429 waits the window out). TLS failures never retry.
   /// - [rate] paces every send (each host apart with `perHost: true`);
-  ///   [check] throws [HttpStatusException] on a non-2xx status.
+  ///   [check] (true) throws [HttpStatusException] on a non-2xx status;
+  ///   `check: false` returns the [Response] to branch on its `status()`.
   /// - [cookies]: the jar (a fresh one when null): `set-cookie` (redirect
   ///   hops too) updates it, and a per-call `cookie` header merges by name.
   /// - [csrf] copies a cookie into a header on every send.
@@ -324,7 +326,7 @@ abstract final class Http {
     Duration timeout = const Duration(seconds: 30),
     int retries = 3,
     Rate? rate,
-    bool check = false,
+    bool check = true,
     Cookies? cookies,
     ({String cookie, String header})? csrf,
     String? proxy,

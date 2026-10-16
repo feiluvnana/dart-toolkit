@@ -72,6 +72,7 @@
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
 - `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
 - `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
+- `http`: `Http.client(check:)` defaults to `true`: a non-2xx status throws `HttpStatusException` unless the client says `check: false` (then it is a `Response` to branch on, as before). A reading's `or:` still answers a 404/410. The explicit `check: true` in medialoader and the docs go.
 - `http`: `Http.client(retries:)` defaults to 3 (it was 2, and every script passed 3).
 - `json`: `Json.encode` writes any `Iterable` (a `Set`, a `map(...)`) as a list instead of throwing `JsonUnsupportedObjectError`; medialoader's index saves its sets as they are.
 - `chrome`: `Page.url()` is a `String` (in memory, as `Response.url()`); `browser.open(u).url()` on a `Future<Page>` stays a Future.

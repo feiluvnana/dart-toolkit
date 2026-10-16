@@ -27,7 +27,7 @@ const _cjk = {
 };
 
 /// The client most tests share: default settings.
-final http = Http.client();
+final http = Http.client(check: false); // these tests read non-2xx Responses
 
 void main() {
   serveTests();
@@ -168,7 +168,7 @@ void main() {
     });
 
     test('check: true throws with status, method, url and a body snippet', () async {
-      final strict = Http.client(check: true);
+      final strict = Http.client(); // check: is on by default
       await expectLater(
         strict.get('$base/nope'),
         throwsA(
@@ -205,7 +205,7 @@ void main() {
     });
 
     test('a 500 is never retried; a 503 retries every verb, a 502 only idempotent ones', () async {
-      final once = Http.client(retries: 1);
+      final once = Http.client(retries: 1, check: false);
       await once.put('$base/boom', body: Body.text('x'));
       expect(hits['PUT'], 1);
       await once.put('$base/boom?code=503', body: Body.text('x'));
@@ -267,7 +267,7 @@ void main() {
 
     test('a streamed body is sent once, whatever retries says', () async {
       final before = hits['PUT'] ?? 0;
-      await Http.client(retries: 2).put('$base/boom?code=503', body: Body.stream(Mem('x')));
+      await Http.client(retries: 2, check: false).put('$base/boom?code=503', body: Body.stream(Mem('x')));
       expect(hits['PUT'], before + 1);
     });
   });
@@ -657,7 +657,7 @@ Future<void> main() async {
     test('error messages never show URL credentials or token values', () async {
       final secret = url.replaceFirst('http://', 'http://alice:hunter2@');
       await expectLater(
-        Http.client(check: true).get('$secret/denied?access_token=SECRET&page=2'),
+        Http.client().get('$secret/denied?access_token=SECRET&page=2'),
         throwsA(
           isA<HttpException>().having(
             (e) => '$e',
@@ -682,7 +682,7 @@ Future<void> main() async {
     r.response.close();
   });
   for (final p in ['/len', '/chunked']) {
-    print((await Http.client().get('http://127.0.0.1:\${s.port}\$p')).status());
+    print((await Http.client(check: false).get('http://127.0.0.1:\${s.port}\$p')).status());
   }
   await s.close(force: true);
 }
@@ -755,7 +755,7 @@ Future<void> main() async {
     });
 
     test('cookies: a login that redirects keeps its session, per host and per client', () async {
-      final c = Http.client();
+      final c = Http.client(check: false);
       final res = await c.post('$url/login', body: .form({'user': 'a'}));
       expect((res.status(), await res.text()), (200, 'sid=s3cret'));
       expect(await c.get('$url/home').status(), 200);
@@ -763,7 +763,7 @@ Future<void> main() async {
       // Another host (localhost vs 127.0.0.1) never sees it, nor another client.
       final other = url.replaceFirst('127.0.0.1', 'localhost');
       expect(await c.get('$other/home').status(), 401);
-      expect(await Http.client().get('$url/home').status(), 401);
+      expect(await Http.client(check: false).get('$url/home').status(), 401);
       // A copy shares the jar.
       expect(await c.copy(retries: 0).get('$url/home').status(), 200);
       // A per-call cookie header wins by name for that call.
@@ -1294,7 +1294,7 @@ Future<void> main() async {
     });
 
     test('pool: with every member benched, a retry waits for the first one back', () async {
-      final p = Http.pool([Http.client(retries: 2), Http.client(retries: 2)]);
+      final p = Http.pool([Http.client(retries: 2, check: false), Http.client(retries: 2, check: false)]);
       final sw = Stopwatch()..start();
       expect(await p.get('$url/banned').status(), 429);
       expect(hits['/banned'], 3);
@@ -1323,12 +1323,12 @@ Future<void> main() async {
     });
 
     test('lines() works on an error page, like text()', () async {
-      final res = await Http.client().get('$url/missing');
+      final res = await Http.client(check: false).get('$url/missing');
       expect(await res.lines().toList(), ['line 1', 'line 2']);
     });
 
     test('piping an error page throws what check() throws', () async {
-      final res = await Http.client().get('$url/missing');
+      final res = await Http.client(check: false).get('$url/missing');
       await expectLater(
         res > Collect(),
         throwsA(

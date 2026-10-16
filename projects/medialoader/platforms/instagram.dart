@@ -59,7 +59,6 @@ final class Instagram extends Platform {
   Client client(Cookies jar) => Http.client(
     base: web,
     rate: apiRate,
-    check: true,
     cookies: jar,
     // Without the csrftoken echoed as a header, Instagram treats you as a bot.
     csrf: (cookie: 'csrftoken', header: 'x-csrftoken'),

@@ -74,7 +74,6 @@ Future<void> main() async {
       'accept': 'text/html,application/xhtml+xml',
       'accept-language': 'en-US,en;q=0.9',
     },
-    check: true,
     timeout: 30.seconds,
   );
   final out = await Pool.settle(urls.entries, (e) async {

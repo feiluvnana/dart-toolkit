@@ -3,8 +3,8 @@ part of '../../http.dart';
 
 /// An HTTP response: a [Reader] of the body, streamed from the socket.
 ///
-/// - A non-2xx status is still a [Response] (unless the client says
-///   `check:`). [ok] tests 200–299. The readings ([text], [bytes], [lines])
+/// - A non-2xx status is a [Response] only from a `check: false` client
+///   (the default throws [HttpStatusException]). [ok] tests 200–299. The readings ([text], [bytes], [lines])
 ///   work on any status, but only a 2xx body can be piped: [stream] (and so
 ///   `>`) throws the same [HttpStatusException] as [check] otherwise.
 /// - [text] decodes with the charset in `content-type`, then

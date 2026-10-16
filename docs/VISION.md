@@ -7,7 +7,7 @@ engine (`dart:io`, a pinned native tool, or an in-house parser), and every modul
 pipe in a shell, and everything that takes time can be watched the same way.
 
 ```dart
-final http = Http.client(check: true);
+final http = Http.client();
 final title = await http.get('https://example.com').html().$('title').text();
 final port = await Fs.file('conf.json').json().$('server.port').or(8080);
 await (Fs.file('photo.jpg').image().resize(width: 800).encode(.jpg) > Fs.file('thumb.jpg'));
@@ -45,7 +45,7 @@ at its call sites than it adds to the surface.
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name.                                                                                                                                                                                                                         |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                                                                                                                                                                                                                                                                   |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                                                                                                                                                                                                                                                                   |
-| 7   | **Outcomes are values; only failing to reach throws.** A 404 is a `Response`, a non-zero exit is an `Output`, malformed HTML still parses, a missing path is `null`. What throws is the network, the disk, a program that won't start, a wait that runs out.                                                                                                                                                                                                                                |
+| 7   | **Outcomes are values; only failing to reach throws.** A non-zero exit is an `Output`, malformed HTML still parses, a missing path is `null`. What throws is the network, the disk, a program that won't start, a wait that runs out. HTTP is the one default the other way: a non-2xx throws `HttpStatusException` (scripts want the 200 or a stop), and `Http.client(check: false)` gives the `Response` to branch on.                                                                                                                                                                                                                                |
 | 8   | **Never null for collections, nullable for single lookups.** No match gives an empty `Elements`; a missing attribute, header or option gives `null`.                                                                                                                                                                                                                                                                                                                                        |
 | 9   | **In memory is sync, I/O is async.** There are no sync twins.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 10  | **Inputs are positional, options are named and optional** with defaults. There are no option objects, builders, or flags that change the result type. In-memory data is a `String` (UTF-8) or a `List<int>`.                                                                                                                                                                                                                                                                                |
@@ -314,7 +314,7 @@ final user = (await ig.get('/$name/').html()).json().$('**.xig_user_by_username'
 ```dart
 abstract final class Http {
   static Client client({String? base, Map<String, String> headers = const {}, Duration timeout = const Duration(seconds: 30),
-      int retries = 3, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
+      int retries = 3, Rate? rate, bool check = true, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, bool resume = false,
       int max = 256 << 20,                        // max: bytes a body read into memory may decode to
       List<String> login = const []});            // sign-in paths: landing on one throws SessionException
@@ -357,9 +357,9 @@ final class Response with Reader implements Closeable {
   variant that stays one session.
 - `base:` resolves relative URLs. `query` values may be `String`, `num`, `bool`, null (drops the
   key) or an `Iterable` (repeats the key); `Body.form` takes the same map.
-- A verb completes when the headers arrive; the body streams. A non-2xx status is still a
-  `Response` unless the client says `check: true`; `res.check()` (and `get(u).check()`) throws
-  `HttpStatusException('HTTP 404 GET <url>: <snippet>')`.
+- A verb completes when the headers arrive; the body streams. A non-2xx status throws
+  `HttpStatusException('HTTP 404 GET <url>: <snippet>')` by default; with `check: false` it is
+  a `Response` to branch on, and `res.check()` (or `get(u).check()`) throws the same.
 - Redirects are followed for every verb, as in browsers: 301/302/303 after a POST become a GET,
   and 307/308 keep the method and resend an in-memory body. `url()` is the final URL. A
   cross-origin hop drops credential headers; an https → http hop warns on stderr.
