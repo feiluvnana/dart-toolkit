@@ -34,6 +34,16 @@ String safeName(String name) {
   return s;
 }
 
+/// The last path segment of `a/b\\c`, made portable by [safeName]. Empty
+/// when nothing usable is left (callers fall back to `download`/`upload`).
+/// Used for header filenames and upload staging alike.
+String stripPath(String name) {
+  final parts = name.split(_separator);
+  return safeName(parts.isEmpty ? name : parts.last);
+}
+
+final _separator = RegExp(r'[\\/]');
+
 final _unsafe = RegExp(r'[\\/<>:"|?*\x00-\x1f\x7f]');
 final _trailing = RegExp(r'[. ]+$');
 /// A Windows device name, with or without an extension: `CON`, `PRN`,

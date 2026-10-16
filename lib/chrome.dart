@@ -37,7 +37,7 @@ import 'src/cookies.dart' as jar;
 import 'src/exit.dart' as exit;
 import 'src/glob.dart';
 import 'src/keys.dart' as keys;
-import 'src/origin.dart' as origin;
+import 'src/names.dart' as names;
 
 export 'core.dart';
 export 'html.dart';
@@ -60,7 +60,7 @@ abstract final class Chrome {
   static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy}) async {
     if (proxy != null && (Uri.tryParse(proxy)?.userInfo.isNotEmpty ?? false)) {
       // It would sit in the process list, and Chrome ignores it anyway.
-      throw ArgumentError.value(origin.redact(proxy), 'proxy', 'Chrome takes no proxy password: use an open local proxy');
+      throw ArgumentError.value(names.redact(proxy), 'proxy', 'Chrome takes no proxy password: use an open local proxy');
     }
     final exe = path ?? await chromeExecutable(headless: headless && profile == null);
     final temp = profile == null ? await io.Directory.systemTemp.createTemp('dart_toolkit_chrome-') : null;
@@ -1129,7 +1129,7 @@ function(value) {
       stopHearing();
     }
     if (end['state'] != 'completed') throw BrowserException('download ${end['state']}: $suggested');
-    final safe = origin.stripPath(suggested);
+    final safe = names.stripPath(suggested);
     return Download._(io.File(end['filePath'] as String? ?? p.join(dir, guid)), safe.isEmpty ? 'download' : safe);
   }
 
@@ -1253,7 +1253,7 @@ async (selector, mode, ms) => {
   Future<(String, io.Directory?)> _stage(Reader file) async {
     final o = file.origin();
     if (o.path() case final keep?) return (keep, null);
-    var name = origin.stripPath(o.name() ?? '');
+    var name = names.stripPath(o.name() ?? '');
     if (name.isEmpty) name = 'upload';
     final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_up');
     final staged = io.File(p.join(tmp.path, name));

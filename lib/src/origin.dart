@@ -71,16 +71,6 @@ String? dispositionName(String? header) {
 final _starName = RegExp(r'''filename\*\s*=\s*([^;]+)''', caseSensitive: false);
 final _plainName = RegExp(r'''filename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]+))''', caseSensitive: false);
 
-/// The last path segment of `a/b\\c`, made portable by [safeName]. Empty
-/// when nothing usable is left (callers fall back to `download`/`upload`).
-/// Used for header filenames and upload staging alike.
-String stripPath(String name) {
-  final parts = name.split(_separator);
-  return safeName(parts.isEmpty ? name : parts.last);
-}
-
-final _separator = RegExp(r'[\\/]');
-
 /// `%XX` escapes as bytes; any other character as its UTF-8 bytes (a
 /// surrogate pair is one character, so astral text survives).
 List<int> percentDecode(String s) {
