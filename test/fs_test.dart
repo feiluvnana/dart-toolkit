@@ -205,7 +205,7 @@ void main() {
     });
 
     test('a merging dir copy keeps nested folder modes and mtimes', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       await Fs.file(p('src/a/b/f.txt')).write('f');
       await Process.run('chmod', ['700', p('src/a')]);
       await Process.run('touch', ['-t', '200102030405.06', p('src/a/b'), p('src/a')]);
@@ -295,7 +295,7 @@ void main() {
     });
 
     test('an unreadable file fails the copy as a catchable error', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       for (var i = 0; i < 50; i++) {
         await Fs.file(p('src/d$i/f.txt')).write('x');
       }
@@ -395,7 +395,7 @@ void main() {
     });
 
     test('overwriting a 0600 file never exposes the new bytes in a 0644 temp', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       await Fs.file(p('token')).write('old');
       await Process.run('chmod', ['600', p('token')]);
       final modes = <int>[];
@@ -412,7 +412,7 @@ void main() {
     });
 
     test('F7: writes keep the old mode and go through symlinks', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       final f = Fs.file(p('run.sh'));
       await f.write('#!/bin/sh\necho hi\n');
       await Process.run('chmod', ['755', p('run.sh')]);
@@ -619,7 +619,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
 
   group('posix helpers', () {
     test('L14: a path starting with - is a path, not an option', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       await Fs.file(p('w/-f')).write('x');
       await Fs.dir(p('w/-d')).create();
       await Fs.file(p('w/s/a')).write('a');
@@ -643,7 +643,7 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
     });
 
     test('chmod and touch failures throw (regression: exit codes ignored)', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       await runInDir(
         tmp.path,
         '''

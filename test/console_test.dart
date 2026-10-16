@@ -225,7 +225,7 @@ Future<void> main() async {
 
   group('exit hooks', () {
     test('a second SIGINT during cleanup exits at once', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX signals');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX signals');
       final p = await startDart('''
 import 'dart:async';
 import 'dart:io';

@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/child.dart';
 import 'support/term.dart';
 
 void main() {
@@ -19,8 +20,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('with stdin piped, keys come from the terminal and its modes come back', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
-      await _needPython();
       final root = Directory.current.path;
       final log = File('${Directory.systemTemp.path}/tui-piped-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
@@ -52,8 +51,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('exit() in a handler still restores the modes and leaves the alternate screen', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
-      await _needPython();
       final root = Directory.current.path;
       final log = File('${Directory.systemTemp.path}/tui-exit-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
@@ -178,8 +175,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('ctrl+z stops the app with the terminal restored; fg takes it back', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
-      await _needPython();
       final root = Directory.current.path;
       final res = await Process.run('python3', [
         '$root/test/tui_pty/suspend_drive.py',
@@ -218,7 +213,7 @@ void main() {
       final t = Term(80, 24)..feed(out.substring(0, out.indexOf('\x1b[?1049l')));
       expect(t.row(0).trimRight(), 'loaded');
     }, timeout: const Timeout(Duration(seconds: 60)));
-  });
+  }, skip: noPty);
 }
 
 /// Run the probe helper under a real pty; return (log text, terminal bytes).
@@ -231,11 +226,9 @@ Future<(String, List<int>, int?)> _pty({
   int cols = 80,
   Map<String, String> env = const {},
 }) async {
-  if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
   // `dart test` compiles the test into a temp dir, so Platform.script is
   // useless for locating helpers; the working directory is the package root.
   final root = Directory.current.path;
-  await _needPython();
   final log = File('${Directory.systemTemp.path}/tui-pty-${DateTime.now().microsecondsSinceEpoch}.log');
   final res = await Process.run(
     'python3',
@@ -268,13 +261,4 @@ Future<(String, List<int>, int?)> _pty({
     await log.delete();
   } catch (_) {}
   return (text, res.stdout as List<int>, code == null ? null : int.parse(code));
-}
-
-Future<void> _needPython() async {
-  try {
-    final py = await Process.run('python3', ['--version']);
-    if (py.exitCode != 0) markTestSkipped('needs python3 for the pty driver');
-  } catch (_) {
-    markTestSkipped('needs python3 for the pty driver');
-  }
 }

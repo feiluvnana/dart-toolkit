@@ -242,7 +242,7 @@ void main() {
     }
 
     test('our zip passes unzip -t and keeps modes and unicode names', () async {
-      if (!await has('unzip')) markTestSkipped('needs unzip');
+      if (!await has('unzip')) return markTestSkipped('needs unzip');
       await Fs.file(p('src/run.sh')).write('#!/bin/sh\n');
       await Process.run('chmod', ['755', p('src/run.sh')]);
       await Fs.file(p('src/d/café.txt')).write('x' * 5000);
@@ -254,7 +254,7 @@ void main() {
     });
 
     test('zips from zip -r, zip -fz (zip64) and ditto unpack', () async {
-      if (!await has('zip')) markTestSkipped('needs zip');
+      if (!await has('zip')) return markTestSkipped('needs zip');
       await Fs.file(p('src/a.txt')).write('a' * 3000);
       await Fs.file(p('src/sub/b.bin')).write('b');
       final makers = <String, List<String>>{
@@ -291,7 +291,7 @@ void main() {
     });
 
     test('encrypted zips interoperate with bsdtar (AES) and zip -P (ZipCrypto)', () async {
-      if (!await has('bsdtar') || !await has('zip')) markTestSkipped('needs bsdtar and zip');
+      if (!await has('bsdtar') || !await has('zip')) return markTestSkipped('needs bsdtar and zip');
       await Fs.file(p('src/a.txt')).write('hello ' * 300);
       await Fs.file(p('src/d/b.txt')).write('b');
       await (Archive.archive(['.'], dir: p('src'), password: 'pw') > Fs.file(p('ours.zip')));
@@ -322,7 +322,7 @@ void main() {
     });
 
     test('7z from bsdtar (LZMA2, LZMA, Deflate, Copy) unarchives with modes', () async {
-      if (!await has('bsdtar')) markTestSkipped('needs bsdtar');
+      if (!await has('bsdtar')) return markTestSkipped('needs bsdtar');
       await Fs.file(p('src/a.txt')).write('alpha beta ' * 5000);
       await Fs.file(p('src/d/run.sh')).write('#!/bin/sh\n');
       await Process.run('chmod', ['755', p('src/d/run.sh')]);
@@ -481,7 +481,7 @@ void main() {
           p('$check.tar.xz'),
           check,
         ]);
-        if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+        if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
         await (Fs.file(p('$check.tar.xz')) > Archive.unarchive(p('o_$check')));
         expect(await Fs.file(p('o_$check/a.txt')).text(), 'xz ' * 20000, reason: check);
         expect(await Fs.file(p('o_$check/d/b.bin')).text(), 'b', reason: check);
@@ -507,7 +507,7 @@ void main() {
             'print(hashlib.sha256(data).hexdigest())',
         p('big.tar.xz'),
       ]);
-      if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+      if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
       await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
       final h = Hash.sha256();
       await (Fs.file(p('big/big.txt')) > h);
@@ -566,7 +566,7 @@ void main() {
     ); // ~20 s alone, more beside the whole suite
 
     test('an encrypted or truncated zip is a FormatException', () async {
-      if (!await has('zip')) markTestSkipped('needs zip');
+      if (!await has('zip')) return markTestSkipped('needs zip');
       await Fs.file(p('src/a.txt')).write('secret');
       await Process.run('zip', ['-q', '-P', 'pw', p('enc.zip'), 'a.txt'], workingDirectory: p('src'));
       await expectLater(
@@ -698,7 +698,7 @@ void main() {
     });
 
     test('F13: unpacked files keep their executable bit', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       await seed();
       await Process.run('chmod', ['755', p('site/a/b.txt')]);
       await (Archive.archive(['.'], dir: p('site'), format: ArchiveFormat.tar) > Fs.file(p('s.tar')));
@@ -758,7 +758,7 @@ void main() {
     });
 
     test('a read-only member folder merges into an existing one and leaves no temp', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       final tar = [
         ..._tarBlock('ro/', 0, 0x35)..setRange(100, 107, '0000555'.codeUnits),
         ..._tarBlock('ro/f.txt', 1, 0x30),
@@ -778,7 +778,7 @@ void main() {
     });
 
     test('modes apply through the umask, only to what the unpack made', () async {
-      if (Platform.isWindows) markTestSkipped('needs POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       List<int> mode(List<int> block, String octal) => block..setRange(100, 107, octal.codeUnits);
       final tar = [
         ...mode(_tarBlock('secret/', 0, 0x35), '0000777'),
@@ -988,7 +988,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('a target that is a link merges into its folder and keeps what was there', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
       await Fs.file(p('src/secret.txt')).write('member');
       await Fs.dir(p('src/sub')).create();
       await Process.run('chmod', ['777', p('src/secret.txt'), p('src/sub')]);
@@ -1005,7 +1005,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('members are private while the unpack runs (0700 staging, file modes first)', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
       await Fs.file(p('src/id_rsa')).write('key');
       await Process.run('chmod', ['600', p('src/id_rsa')]);
       await Fs.file(p('src/z.bin')).write('z' * 200000);
@@ -1023,14 +1023,14 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('a damaged tar mode field unpacks as a plain file, not 0777', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX modes');
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
       final tar = [..._tarBlock('bad', 1, 0x30, mode: '0000z00'), ..._tarBody('x'.codeUnits), ...List.filled(1024, 0)];
       await Archive.unarchive(p('out')).consume(Stream.value(tar));
       expect((await FileStat.stat(p('out/bad'))).mode & 0x49, 0); // no execute bit
     });
 
     test('archiving a FIFO is refused, not silently skipped', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX FIFOs');
+      if (Platform.isWindows) return markTestSkipped('POSIX FIFOs');
       await Fs.file(p('src/a.txt')).write('a');
       await Process.run('mkfifo', [p('src/pipe')]);
       await expectLater(
@@ -1102,7 +1102,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
   group('interrupt', () {
     for (final mode in ['write', 'unpack']) {
       test('M6: Ctrl-C during $mode leaves no temp siblings', () async {
-        if (Platform.isWindows) markTestSkipped('needs a POSIX SIGINT');
+        if (Platform.isWindows) return markTestSkipped('needs a POSIX SIGINT');
         final proc = await Process.start(Platform.resolvedExecutable, ['test/signal_probe/probe.dart', mode, tmp.path]);
         final lines = proc.stdout.transform(const SystemEncoding().decoder).transform(const LineSplitter());
         await lines.firstWhere((l) => l.trim() == 'ready').timeout(const Duration(seconds: 60));
@@ -1511,7 +1511,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     );
 
     test('a symlink inside the folder unpacks as a link; a hardlink as a copy', () async {
-      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       final tar = tarOf([
         file('pkg/bin/tool.js', 'run'),
         _tarLink('pkg/.bin/tool', '../bin/tool.js'),
@@ -1548,7 +1548,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('our tar, zip and 7z store links inside dir and refuse ones outside', () async {
-      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       await Fs.file(p('src/lib/a.txt')).write('a');
       await io.Link(p('src/link')).create('lib/a.txt');
       for (final format in ArchiveFormat.values) {
@@ -1568,7 +1568,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('zips with symlinks (zip -y) unpack the link', () async {
-      if (!await has('zip')) markTestSkipped('needs zip');
+      if (!await has('zip')) return markTestSkipped('needs zip');
       await Fs.file(p('src/real.txt')).write('r');
       await io.Link(p('src/ln')).create('real.txt');
       await Process.run('zip', ['-qry', p('y.zip'), '.'], workingDirectory: p('src'));
@@ -1693,7 +1693,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
             return (await proc.stdout.expand((c) => c).toList());
           })
           .catchError((_) => <int>[]);
-      if (xzBytes.isEmpty) markTestSkipped('needs xz');
+      if (xzBytes.isEmpty) return markTestSkipped('needs xz');
       await expectLater(Reader.of(xzBytes) > Archive.unarchive(p('x')), refused('xz data is not a tar'));
     });
 
@@ -1731,7 +1731,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('dir: can be a link to a folder', () async {
-      if (Platform.isWindows) markTestSkipped('symlinks need privileges');
+      if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       await Fs.file(p('real/a.txt')).write('a');
       await io.Link(p('alias')).create(p('real'));
       await (Archive.archive(['.'], dir: p('alias'), format: ArchiveFormat.tar) > Archive.unarchive(p('out')));
@@ -1750,7 +1750,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
             'open(sys.argv[1],"wb").write(lzma.compress(buf.getvalue(),preset=0))',
         p('two.tar.xz'),
       ]);
-      if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+      if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
       final bytes = await Fs.file(p('two.tar.xz')).bytes();
       final feed = StreamController<List<int>>();
       final done = Archive.unarchive(p('out')).consume(feed.stream);
@@ -1768,7 +1768,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     });
 
     test('in-memory formats decode off the main isolate: timers keep running', () async {
-      if (!await has('bsdtar')) markTestSkipped('needs bsdtar');
+      if (!await has('bsdtar')) return markTestSkipped('needs bsdtar');
       final text = [for (var i = 0; i < 1500000; i++) 'w${i * 7919 % 50021} '].join();
       await Fs.file(p('src/t.txt')).write(text);
       final made = await Process.run('bsdtar', [
@@ -1829,7 +1829,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
     test(
       'zip64: a file past 4 GiB streams through in constant memory and unzip checks it',
       () async {
-        if (!await has('unzip')) markTestSkipped('needs unzip');
+        if (!await has('unzip')) return markTestSkipped('needs unzip');
         final big = io.File(p('src/big.bin'));
         await Fs.dir(p('src')).create();
         (await big.open(mode: FileMode.write))
@@ -1862,7 +1862,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
             'print(hashlib.sha256(data).hexdigest())',
         p('big.tar.xz'),
       ]);
-      if (made.exitCode != 0) markTestSkipped('needs python3: ${made.stderr}');
+      if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
       await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
       final h = Hash.sha256();
       await (Fs.file(p('big/big.txt')) > h);

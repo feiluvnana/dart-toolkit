@@ -7,12 +7,13 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/child.dart';
+
 void main() {
   group('pty (K1, K6, K10)', () {
     // Regression: the 80 ms repaint of a live spinner landed on the prompt
     // and the typed answer.
     test('a prompt parks the live block: no spinner frame while it waits', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       final log = File('${Directory.systemTemp.path}/probe-park-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
@@ -46,7 +47,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('P3: under TERM=dumb notify and copy print no escapes', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       final res = await Process.run(
         'python3',
@@ -72,7 +72,6 @@ void main() {
     // Regression (ARCHITECTURE A6): an unanswered piped prompt kept the VM
     // alive until a line arrived.
     test('ask(timeout:) on an open pipe gives or and lets the script exit', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX: the reader is a child shell');
       final root = Directory.current;
       final log = File('${Directory.systemTemp.path}/probe-asktimeout-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
@@ -94,7 +93,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('ask(timeout:) on a terminal gives or and stops the reader', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       final log = File('${Directory.systemTemp.path}/probe-ttytimeout-$pid.log');
       addTearDown(() => log.exists().then((e) => e ? log.delete() : null));
@@ -152,7 +150,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('bar, spinner and choose emit no colour codes', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       Future<String> run(String mode) async {
         final res = await Process.run(
@@ -206,7 +203,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('the tty reader child dies with us: exit(), a crash, a cancel', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       for (final mode in ['orphan-exit', 'orphan-crash', 'orphan-cancel']) {
         final log = File('${Directory.systemTemp.path}/console-orphan-${DateTime.now().microsecondsSinceEpoch}.log');
@@ -241,7 +237,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 120)));
 
     test('H15: an unclosed bar does not keep the process alive', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       final res = await Process.run('python3', [
         '${root.path}/test/console_pty/drive.py',
@@ -271,7 +266,6 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 120)));
 
     test('a menu repaint after a resize clears the rows the old paint left', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
       final res = await Process.run(
         'python3',
@@ -339,14 +333,7 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 180)));
 
     test('K3: SIGINT during a prompt exits 130 with the terminal restored', () async {
-      if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
-      try {
-        final py = await Process.run('python3', ['--version']);
-        if (py.exitCode != 0) markTestSkipped('needs python3');
-      } catch (_) {
-        markTestSkipped('needs python3 for the pty driver');
-      }
       final out = File('${Directory.systemTemp.path}/console-sigint-${DateTime.now().microsecondsSinceEpoch}.bin');
       final res = await Process.run('python3', [
         '${root.path}/test/console_pty/sigint_drive.py',
@@ -363,7 +350,7 @@ void main() {
         await out.delete();
       } catch (_) {}
     }, timeout: const Timeout(Duration(seconds: 120)));
-  });
+  }, skip: noPty);
 }
 
 /// Display cells in a raw terminal line (escapes add none).
@@ -389,14 +376,7 @@ int _cells(String line) {
 
 /// Run the bar probe under a 40-column pty; return the terminal bytes.
 Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, String>? env}) async {
-  if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
   final root = Directory.current;
-  try {
-    final py = await Process.run('python3', ['--version']);
-    if (py.exitCode != 0) markTestSkipped('needs python3');
-  } catch (_) {
-    markTestSkipped('needs python3 for the pty driver');
-  }
   final res = await Process.run(
     'python3',
     [
@@ -420,14 +400,7 @@ Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, Stri
 
 /// Run the choose probe under a pty with key feeds; return the log line.
 Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
-  if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
   final root = Directory.current;
-  try {
-    final py = await Process.run('python3', ['--version']);
-    if (py.exitCode != 0) markTestSkipped('needs python3');
-  } catch (_) {
-    markTestSkipped('needs python3 for the pty driver');
-  }
   final log = File('${Directory.systemTemp.path}/console-pty-${DateTime.now().microsecondsSinceEpoch}.log');
   final res = await Process.run(
     'python3',

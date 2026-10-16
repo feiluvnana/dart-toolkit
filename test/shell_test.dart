@@ -126,7 +126,7 @@ Future<void> main() async {
     });
 
     test('Shell.open never passes a target as a launcher option', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX launchers only');
+      if (Platform.isWindows) return markTestSkipped('POSIX launchers only');
       final bin = await Directory.systemTemp.createTemp('fake_open');
       addTearDown(() => bin.delete(recursive: true));
       for (final name in ['open', 'xdg-open']) {
@@ -145,7 +145,7 @@ Future<void> main() => Shell.open('-a/System/Applications/Calculator.app');
     });
 
     test('Shell.open returns and exits while the opened app keeps running', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX launchers only');
+      if (Platform.isWindows) return markTestSkipped('POSIX launchers only');
       final bin = await Directory.systemTemp.createTemp('fake_open');
       addTearDown(() => bin.delete(recursive: true));
       for (final name in ['open', 'xdg-open']) {
@@ -166,7 +166,7 @@ Future<void> main() => Shell.open('https://example.com');
     });
 
     test('a SIGTERM that ends the script ends its running child and grandchildren', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX signals');
+      if (Platform.isWindows) return markTestSkipped('POSIX signals');
       final p = await startDart('''
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/shell.dart';
@@ -314,7 +314,7 @@ void timeoutTests() {
     });
 
     test('a timeout kills the grandchildren too, and the script exits at once', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      if (Platform.isWindows) return markTestSkipped('POSIX process tree');
       final dir = await Directory.systemTemp.createTemp('shell_tree');
       addTearDown(() => dir.delete(recursive: true));
       final sw = Stopwatch()..start();
@@ -381,7 +381,7 @@ Future<void> main() async {
         '${(await Process.run('ps', ['-p', pid.trim(), '-o', 'pid='])).stdout}'.trim().isNotEmpty;
 
     test('cancel kills the run and its grandchildren and returns what was captured', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      if (Platform.isWindows) return markTestSkipped('POSIX process tree');
       final dir = await Directory.systemTemp.createTemp('cancel');
       addTearDown(() => dir.delete(recursive: true));
       final pidFile = Fs.file('${dir.path}/pid');
@@ -399,7 +399,7 @@ Future<void> main() async {
     });
 
     test('B2: a read left early kills the tree', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      if (Platform.isWindows) return markTestSkipped('POSIX process tree');
       final r = await runDart(r'''
 import 'dart:io';
 import 'package:dart_toolkit/shell.dart';
@@ -433,14 +433,14 @@ Future<void> main() async {
     });
 
     test('a filter whose reader is cancelled kills its grandchildren', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      if (Platform.isWindows) return markTestSkipped('POSIX process tree');
       final lines = (Reader.of(const []) | Shell.filter(['sh', '-c', r'sleep 20 & echo $!; wait'])).lines();
       final pid = await lines.first.timeout(const Duration(seconds: 5));
       expect(await eventually(() async => !await alive(pid)), isTrue, reason: 'sleep $pid outlived the filter');
     });
 
     test('a SIGTERM that ends the script ends a running filter and its grandchildren', () async {
-      if (Platform.isWindows) markTestSkipped('POSIX signals');
+      if (Platform.isWindows) return markTestSkipped('POSIX signals');
       final p = await startDart('''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {

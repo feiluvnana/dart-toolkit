@@ -4,6 +4,22 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+/// Why a pty test cannot run here (Windows, or no python3 for the pty
+/// driver), or null: pass it as a group's `skip:`.
+final String? noPty = Platform.isWindows
+    ? 'needs a POSIX pty'
+    : _python()
+    ? null
+    : 'needs python3 for the pty driver';
+
+bool _python() {
+  try {
+    return Process.runSync('python3', ['--version']).exitCode == 0;
+  } on ProcessException {
+    return false;
+  }
+}
+
 /// Run [source] as a child Dart script with this package's dependencies,
 /// for tests that check a process exits, owns its stdio or needs its own
 /// working directory. The script lives in a fresh temp dir (never the repo);
