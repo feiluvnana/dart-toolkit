@@ -340,8 +340,9 @@ abstract final class Chrome {
   static Future<Browser> launch({bool headless = true, String? path, String? profile, String? proxy});
   static Future<Browser> connect(String url);
 }
+enum Resource { image, font, media, stylesheet }   // what open(block:) stops loading
 final class Browser implements Closeable {
-  Future<Page> open(String url, {Map<String, String>? headers, List<String>? block, int? width, int? height,
+  Future<Page> open(String url, {Map<String, String>? headers, Set<Resource> block = const {}, int? width, int? height,
       Duration? timeout});
   Future<List<Page>> pages();
 }
@@ -399,7 +400,7 @@ final class Capture with Reader { int status();  String url();  String? header(S
   running.
 
 ```dart
-final page = await Chrome.launch(profile: '.chrome').open(loginUrl, block: ['image', 'font'])
+final page = await Chrome.launch(profile: '.chrome').open(loginUrl, block: {.image, .font})
     .fill('#user', name).fill('#pass', pass).click('button[type=submit]').wait('.dashboard');
 final invoice = await page.download('a.invoice');
 await (invoice > Fs.dir('invoices').file(invoice.name()));

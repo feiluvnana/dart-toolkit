@@ -3,13 +3,13 @@
 ///
 /// ```dart
 /// final browser = await Chrome.launch(profile: '.chrome');
-/// final page = await browser.open('https://example.com/login', block: ['image', 'font'])
+/// final page = await browser.open('https://example.com/login', block: {.image, .font})
 ///     .fill('#user', name).fill('#pass', password).click('button[type=submit]').wait('.dashboard');
 /// await (page.screenshot(fullPage: true) > Fs.file('orders.png'));
 /// await browser.close();
 /// ```
 ///
-/// Public surface is exactly: [Chrome], [Browser], [Page], [Download], [Capture], [BrowserException].
+/// Public surface is exactly: [Chrome], [Browser], [Page], [Download], [Capture], [Resource], [BrowserException].
 /// - `Chrome.launch/connect()` open a browser.
 /// - [Browser] supports `open` `pages`.
 /// - [Page] supports `go` `back` `reload` `url` `html` `text` `run`
@@ -42,6 +42,17 @@ import 'src/names.dart' as names;
 export 'core.dart';
 export 'html.dart';
 export 'src/cdp.dart' show BrowserException;
+
+/// What [Browser.open]'s `block:` can stop a tab from loading.
+enum Resource {
+  image('Image'),
+  font('Font'),
+  media('Media'),
+  stylesheet('Stylesheet');
+
+  const Resource(this._cdp);
+  final String _cdp;
+}
 
 /// Default bound on browser waits and actions.
 const Duration _defaultTimeout = Duration(seconds: 30);
@@ -278,22 +289,18 @@ final class Browser implements Closeable {
   /// Open a new tab and wait for the load event. Tab setup goes here, before
   /// the first request: [headers] are extra request headers for everything
   /// the tab loads (`user-agent` also sets the UA string), [block]
-  /// aborts requests by resource type (`'image'`, `'font'`, `'media'`,
-  /// `'stylesheet'`), [width]/[height] set the viewport.
+  /// aborts requests of those [Resource] types, [width]/[height] set the
+  /// viewport.
   /// [timeout] bounds the navigation. Dialogs are always dismissed.
   Future<Page> open(
     String url, {
     Map<String, String>? headers,
-    List<String>? block,
+    Set<Resource> block = const {},
     int? width,
     int? height,
     Duration? timeout,
   }) async {
-    final blocked = {
-      for (final b in block ?? const <String>[])
-        _blockTypes[b.toLowerCase()] ??
-            (throw ArgumentError.value(block, 'block', 'unknown resource type "$b" (image, font, media, stylesheet)')),
-    };
+    final blocked = {for (final r in block) r._cdp};
     final created = await _cdp.browser.send('Target.createTarget', {'url': 'about:blank'});
     final id = created['targetId']! as String;
     final page = await (_pages[id] = Page._attach(this, id));
@@ -324,7 +331,6 @@ final class Browser implements Closeable {
     return page;
   }
 
-  static const _blockTypes = {'image': 'Image', 'font': 'Font', 'media': 'Media', 'stylesheet': 'Stylesheet'};
 
   /// Every open tab, popups included (one wrapper per tab).
   Future<List<Page>> pages() async {
@@ -1354,7 +1360,7 @@ extension BrowserFuture on Future<Browser> {
   Future<Page> open(
     String url, {
     Map<String, String>? headers,
-    List<String>? block,
+    Set<Resource> block = const {},
     int? width,
     int? height,
     Duration? timeout,

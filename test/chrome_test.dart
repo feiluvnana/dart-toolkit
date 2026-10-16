@@ -278,7 +278,7 @@ void main() {
       final page = await browser.open(
         '$base/echo-header',
         headers: {'x-test': 'hi'},
-        block: ['image'],
+        block: {.image},
         width: 800,
         height: 600,
       );
@@ -289,7 +289,7 @@ void main() {
     });
 
     test('block aborts image requests', () async {
-      await browser.open('$base/imgpage', block: ['image']).then((p) => p.close());
+      await browser.open('$base/imgpage', block: {.image}).then((p) => p.close());
       expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
       // Without block the image loads (settled via idle).
       final page = await browser.open('$base/imgpage');
