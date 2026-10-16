@@ -41,6 +41,7 @@ export 'core.dart';
 
 import 'shell.dart' show Shell;
 import 'src/exit.dart' as exit;
+import 'src/names.dart' as naming;
 import 'src/posix.dart' as posix;
 import 'src/rar.dart' as rarlib;
 import 'src/sevenzip.dart' as sevenzip;
@@ -979,7 +980,6 @@ _Modes _placeLinks(String tmp, List<_Link> links, _Modes modes) {
 }
 
 final _badPart = RegExp(r'[<>:"|?*\x00-\x1f]');
-final _reserved = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', caseSensitive: false);
 
 /// Rejects, on every OS, any name that would not extract the same way on
 /// Linux, macOS and Windows: escapes, device names, characters and
@@ -998,7 +998,7 @@ void _checkMember(String name, Map<String, String> folded) {
         part.endsWith('.') && part != '.' ||
         part.endsWith(' ') ||
         _badPart.hasMatch(part) ||
-        _reserved.hasMatch(part)) {
+        naming.isReserved(part)) {
       throw ContentException('archive member escapes: $name');
     }
     if (part.isEmpty || part == '.') continue;

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dart_toolkit/src/charset.dart';
+import 'package:dart_toolkit/src/names.dart' show isReserved;
 import 'package:dart_toolkit/src/origin.dart';
 import 'package:test/test.dart';
 
@@ -24,6 +25,15 @@ void main() {
       expect(h('plain.txt'), 'plain.txt');
       expect(h('.bashrc'), '_.bashrc');
       expect(h('-rf'), '_-rf');
+    });
+
+    test('P4: every Windows device name is reserved', () {
+      for (final n in ['COM0', 'lpt0.log', 'COM\u00b9', 'LPT\u00b3.txt', 'CONIN\$', 'conout\$.x', 'nul .txt', 'Aux']) {
+        expect(isReserved(n), isTrue, reason: n);
+      }
+      for (final n in ['COM10', 'console', 'nul_', 'auxiliary.txt', 'lpt']) {
+        expect(isReserved(n), isFalse, reason: n);
+      }
     });
   });
 

@@ -13,7 +13,7 @@ import 'dart:convert';
 String safeName(String name) {
   var s = name.replaceAll(_unsafe, '_').trim().replaceAll(_trailing, '');
   if (s.isEmpty) return '';
-  if (_reserved.hasMatch(s) || s.startsWith('.') || s.startsWith('-')) s = '_$s';
+  if (isReserved(s) || s.startsWith('.') || s.startsWith('-')) s = '_$s';
   if (utf8.encode(s).length > 255) {
     final out = StringBuffer();
     var bytes = 0;
@@ -36,7 +36,13 @@ String safeName(String name) {
 
 final _unsafe = RegExp(r'[\\/<>:"|?*\x00-\x1f\x7f]');
 final _trailing = RegExp(r'[. ]+$');
-final _reserved = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', caseSensitive: false);
+/// A Windows device name, with or without an extension: `CON`, `PRN`,
+/// `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9` (superscript ¹²³ too),
+/// `CONIN$`, `CONOUT$`; spaces before the extension do not help
+/// (`nul .txt`).
+bool isReserved(String name) => _reserved.hasMatch(name);
+
+final _reserved = RegExp(r'^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\..*)?$', caseSensitive: false);
 
 /// [url] fit for an error message or log: no `user:password@`, and the
 /// values of credential query parameters shown as `***`. Only exact secret
