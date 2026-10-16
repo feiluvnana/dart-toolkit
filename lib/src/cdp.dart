@@ -235,8 +235,10 @@ final class CdpSession {
 
   bool get isGone => _gone.isCompleted;
 
-  /// Send [method]; completes with its result, or throws [BrowserException].
-  Future<Msg> send(String method, [Msg params = const {}]) {
+  /// Send [method]; completes with its result, or throws [BrowserException]
+  /// (a [TimeoutException] after [timeout], when given: the late reply is
+  /// dropped).
+  Future<Msg> send(String method, [Msg params = const {}, Duration? timeout]) {
     if (_gone.isCompleted || _cdp._closing) {
       return Future.error(BrowserException('$method: target closed', cause: _cdp._cause));
     }
@@ -248,6 +250,12 @@ final class CdpSession {
     } catch (e) {
       _cdp._pending.remove(n);
       return Future.error(BrowserException('$method: browser closed', cause: e));
+    }
+    if (timeout != null) {
+      final timer = Timer(timeout, () {
+        if (_cdp._pending.remove(n) != null) done.completeError(TimeoutException(method, timeout));
+      });
+      done.future.whenComplete(timer.cancel).ignore();
     }
     return _cdp.hold(done.future);
   }

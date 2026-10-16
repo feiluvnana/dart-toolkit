@@ -19,6 +19,7 @@
 - `http`: a header the server sends as raw UTF-8 reads as UTF-8: a non-ASCII `location` redirect goes to the right URL (`/файл`, not `/%C3%91%C2%84…`), and `name()`/`header()` no longer give mojibake.
 - `image`/`video`: spooled sources (`reader.image()`, `reader.video()`) and encode temps no longer pile up in the user cache: a source that fails mid-spool leaves no partial file, and each run spools into its own folder that a watchdog removes when the script ends (POSIX; Windows keeps the one-day sweep).
 - `image`/`video`/`archive`: Ctrl-C during `Image.compress`/`Video.compress` no longer leaves a hidden `.name.compress` beside the file, nor a 7z `Archive.archive` its `dart_toolkit_7z_*` work folder.
+- `chrome`: `page.run(js)` (and `html()`/`text()`) gives up on a promise that never settles with a `TimeoutException` after the page's `open(timeout:)` (default 30 s); it waited forever and kept the script alive.
 
 **Performance**
 

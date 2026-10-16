@@ -333,7 +333,8 @@ final class Browser implements Closeable {
   /// the tab loads (`user-agent` also sets the UA string), [block]
   /// aborts requests of those [Resource] types, [width]/[height] set the
   /// viewport.
-  /// [timeout] bounds the navigation. Dialogs are always dismissed.
+  /// [timeout] bounds the navigation and the page's [Page.run] calls.
+  /// Dialogs are always dismissed.
   Future<Page> open(
     String url, {
     Map<String, String>? headers,
@@ -346,6 +347,7 @@ final class Browser implements Closeable {
     final created = await _cdp.browser.send('Target.createTarget', {'url': 'about:blank'});
     final id = created['targetId']! as String;
     final page = await (_pages[id] = Page._attach(this, id));
+    if (timeout != null) page._timeout = timeout;
     _opened.add(page);
     try {
       final s = page._s;
@@ -506,6 +508,9 @@ final class Page implements Closeable {
   var _url = '';
   var _main = '';
 
+  /// What bounds [run]: `open(timeout:)`, else 30 s.
+  var _timeout = _defaultTimeout;
+
   /// Every frame of this tab, for crediting downloads started in iframes.
   final _frames = <String>{};
 
@@ -659,38 +664,45 @@ final class Page implements Closeable {
   /// Evaluate [js] once (an expression or statements; a function source is
   /// then called once), awaiting a promise, and return the result as [Json]
   /// (`null` and `undefined` read as null). A script that throws is a
-  /// [BrowserException].
+  /// [BrowserException]; one that has not settled after the page's timeout
+  /// (`open(timeout:)`, default 30 s) a [TimeoutException].
   ///
   /// ```dart
   /// final title = await page.run('document.title').or('');
   /// final tags = await page.run('[...document.querySelectorAll("a")].map(a => a.href)').asList<String>();
   /// ```
   Future<Json> run(String js) async {
-    var v = await _eval(js, byValue: false);
-    // An object or function stays in the page: read it (calling a function
-    // first) by reference, so the source never runs twice.
-    if (v['objectId'] case final String id) {
-      final r = await _s.send('Runtime.callFunctionOn', {
-        'objectId': id,
-        'functionDeclaration': 'function() { return typeof this === "function" ? this() : this; }',
-        'awaitPromise': true,
-        'returnByValue': true,
-        'userGesture': true,
-      });
-      unawaited(_s.send('Runtime.releaseObject', {'objectId': id}).then<void>((_) {}, onError: (Object _) {}));
-      _thrown(r, 'run');
-      v = r['result']! as Map<String, Object?>;
+    final sw = Stopwatch()..start();
+    try {
+      var v = await _eval(js, byValue: false);
+      // An object or function stays in the page: read it (calling a function
+      // first) by reference, so the source never runs twice.
+      if (v['objectId'] case final String id) {
+        final r = await _s.send('Runtime.callFunctionOn', {
+          'objectId': id,
+          'functionDeclaration': 'function() { return typeof this === "function" ? this() : this; }',
+          'awaitPromise': true,
+          'returnByValue': true,
+          'userGesture': true,
+        }, _timeout - sw.elapsed);
+        unawaited(_s.send('Runtime.releaseObject', {'objectId': id}).then<void>((_) {}, onError: (Object _) {}));
+        _thrown(r, 'run');
+        v = r['result']! as Map<String, Object?>;
+      }
+      return Json.of(_value(v));
+    } on TimeoutException {
+      throw _Timeout('run timed out', _timeout, js.length > 80 ? '${js.substring(0, 80)}…' : js);
     }
-    return Json.of(_value(v));
   }
 
+  /// Evaluate [js], bounded by the page's timeout.
   Future<Map<String, Object?>> _eval(String js, {bool byValue = true}) async {
     final r = await _s.send('Runtime.evaluate', {
       'expression': js,
       'awaitPromise': true,
       'returnByValue': byValue,
       'userGesture': true,
-    });
+    }, _timeout);
     _thrown(r, 'run');
     return r['result']! as Map<String, Object?>;
   }

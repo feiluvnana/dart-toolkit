@@ -434,6 +434,16 @@ void main() {
       await page.close();
     });
 
+    test('run gives up on a promise that never settles after the page timeout (B19)', () async {
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(seconds: 1));
+      final sw = Stopwatch()..start();
+      await expectLater(page.run('new Promise(() => {})'), throwsA(isA<TimeoutException>()));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+      await expectLater(page.run('({then() {}})'), throwsA(isA<TimeoutException>()), reason: 'by reference too');
+      expect(await page.run('1 + 1').value<int>(), 2, reason: 'the page still answers');
+      await page.close();
+    });
+
     test('run calls a function source; a script that throws is BrowserException', () async {
       final page = await browser.open(dataUrl(testHtml));
       expect(await page.run('() => document.title').value<String>(), 'T');
