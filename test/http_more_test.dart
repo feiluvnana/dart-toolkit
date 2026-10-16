@@ -416,13 +416,13 @@ Future<void> main() async {
   });
 
   test('Rate(perHost: true) paces each host apart', () async {
-    final c = Http.client(rate: Rate(1, 3.seconds, perHost: true));
+    final c = Http.client(rate: Rate(1, 600.milliseconds, perHost: true));
     final sw = Stopwatch()..start();
     await c.get('$url/ua').status();
     await c.get('http://localhost:${server.port}/ua').status();
-    expect(sw.elapsed, lessThan(const Duration(milliseconds: 2500)));
+    expect(sw.elapsed, lessThan(const Duration(milliseconds: 450)));
     await c.get('$url/ua').status();
-    expect(sw.elapsed, greaterThan(const Duration(milliseconds: 2900)));
+    expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 550)));
   });
 }
 

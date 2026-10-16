@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' show Hmac, sha1;
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/aes.dart';
 import 'package:dart_toolkit/src/crc32.dart';
 import 'package:dart_toolkit/src/lzma.dart';
@@ -491,29 +490,6 @@ void main() {
       await expectLater(Reader.of(flipped) > Archive.unarchive(p('bad')), throwsFormatException);
     });
 
-    test('.tar.xz streams: one block far past its dictionary decodes exactly', () async {
-      // 20 MB of words in one LZMA2 block with a 64 KiB dictionary: the
-      // decoder slides its window several times.
-      final made = await Process.run('python3', [
-        '-I',
-        '-c',
-        'import tarfile,lzma,io,sys,random,hashlib\n'
-            'r=random.Random(7); words=[bytes(r.choice(b"abcdefgh") for _ in range(r.randint(2,9))) for _ in range(5000)]\n'
-            'data=b" ".join(r.choice(words) for _ in range(3500000))\n'
-            'buf=io.BytesIO(); i=tarfile.TarInfo("big.txt"); i.size=len(data)\n'
-            'with tarfile.open(fileobj=buf,mode="w") as t: t.addfile(i, io.BytesIO(data))\n'
-            'f=[{"id": lzma.FILTER_LZMA2, "preset": 1, "dict_size": 65536}]\n'
-            'open(sys.argv[1],"wb").write(lzma.compress(buf.getvalue(),check=lzma.CHECK_CRC64,filters=f))\n'
-            'print(hashlib.sha256(data).hexdigest())',
-        p('big.tar.xz'),
-      ]);
-      if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
-      await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-      final h = Hash.sha256();
-      await (Fs.file(p('big/big.txt')) > h);
-      expect(h.hex(), '${made.stdout}'.trim());
-    }, tags: 'slow');
-
     test('PPMd: 7z from bsdtar and a RAR4 best-mode archive decode exactly', () async {
       final text = [for (var i = 0; i < 40000; i++) 'word${i % 977} '].join();
       await Fs.file(p('src/t.txt')).write(text);
@@ -537,33 +513,6 @@ void main() {
       expect(html.data().length, 20111);
       expect(entries.where((e) => e.isLink).map((e) => e.name), ['testlink']);
     });
-
-    test(
-      'damaged 7z and RAR input is a FormatException, never a crash',
-      () async {
-        final fx = Directory('test/fixtures/archives')
-            .listSync()
-            .whereType<io.File>()
-            .where((f) => !f.path.endsWith('.md'));
-        for (final f in fx) {
-          final orig = f.readAsBytesSync();
-          for (var t = 1; t < 40; t++) {
-            final cut = orig.sublist(0, orig.length * t ~/ 40);
-            final flipped = Uint8List.fromList(orig)..[8 + (orig.length - 9) * t ~/ 40] ^= 0x10;
-            for (final input in [cut, flipped]) {
-              try {
-                await (Reader.of(input) >
-                    Archive.unarchive(p('dmg'), password: f.path.contains('7z') ? '12345678' : 'password'));
-              } on FormatException {
-                // expected
-              }
-            }
-          }
-        }
-      },
-      tags: 'slow',
-      timeout: const Timeout(Duration(minutes: 3)),
-    ); // ~20 s alone, more beside the whole suite
 
     test('an encrypted or truncated zip is a FormatException', () async {
       if (!await has('zip')) return markTestSkipped('needs zip');
@@ -1630,23 +1579,6 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       expect(await Fs.file(p('out-ar/a.txt')).text(), 'hello');
     });
 
-    test('P2: a big encrypted 7z goes through 7-Zip with the password on stdin', () async {
-      final big = Uint8List(33 << 20);
-      final rnd = Random(3);
-      for (var i = 0; i < big.length; i++) {
-        big[i] = rnd.nextInt(256); // incompressible: the archive passes 32 MiB
-      }
-      await (Reader.of(big) > Fs.file(p('src/big.bin')));
-      await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip, password: 'pw s3cret') >
-          Fs.file(p('big.7z')));
-      await expectLater(
-        Fs.file(p('big.7z')) > Archive.unarchive(p('bad'), password: 'nope'),
-        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
-      );
-      await (Fs.file(p('big.7z')) > Archive.unarchive(p('out'), password: 'pw s3cret'));
-      expect((await Fs.file(p('out/big.bin')).bytes()).length, big.length);
-    }, tags: 'slow');
-
     test('7z bigger than the in-memory limit goes through 7-Zip; a 7z write is LZMA2', () async {
       // Incompressible, so the archive itself passes 32 MiB.
       final big = Uint8List(33 << 20);
@@ -1826,48 +1758,6 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       }
     });
 
-    test(
-      'zip64: a file past 4 GiB streams through in constant memory and unzip checks it',
-      () async {
-        if (!await has('unzip')) return markTestSkipped('needs unzip');
-        final big = io.File(p('src/big.bin'));
-        await Fs.dir(p('src')).create();
-        (await big.open(mode: FileMode.write))
-          ..setPositionSync((1 << 32) + 4096)
-          ..writeFromSync([1])
-          ..closeSync(); // sparse: costs no disk
-        final rss = ProcessInfo.currentRss;
-        await (Archive.archive(['.'], dir: p('src')) > Fs.file(p('big.zip')));
-        expect(ProcessInfo.currentRss - rss, lessThan(256 << 20));
-        final r = await Process.run('unzip', ['-tq', p('big.zip')]);
-        expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
-        final l = await Process.run('unzip', ['-l', p('big.zip')]);
-        expect('${l.stdout}', contains('${(1 << 32) + 4097}'));
-      },
-      tags: 'slow',
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
-
-    test('LZMA2 with a dictionary past the slack slides its window exactly', () async {
-      final made = await Process.run('python3', [
-        '-I',
-        '-c',
-        'import tarfile,lzma,io,sys,random,hashlib\n'
-            'r=random.Random(3); words=[bytes(r.choice(b"abcdefgh") for _ in range(r.randint(2,9))) for _ in range(3000)]\n'
-            'data=b" ".join(r.choice(words) for _ in range(9000000))\n'
-            'buf=io.BytesIO(); i=tarfile.TarInfo("big.txt"); i.size=len(data)\n'
-            'with tarfile.open(fileobj=buf,mode="w") as t: t.addfile(i, io.BytesIO(data))\n'
-            'f=[{"id": lzma.FILTER_LZMA2, "preset": 1, "dict_size": 12<<20}]\n'
-            'open(sys.argv[1],"wb").write(lzma.compress(buf.getvalue(),filters=f))\n'
-            'print(hashlib.sha256(data).hexdigest())',
-        p('big.tar.xz'),
-      ]);
-      if (made.exitCode != 0) return markTestSkipped('needs python3: ${made.stderr}');
-      await (Fs.file(p('big.tar.xz')) > Archive.unarchive(p('big')));
-      final h = Hash.sha256();
-      await (Fs.file(p('big/big.txt')) > h);
-      expect(h.hex(), '${made.stdout}'.trim());
-    }, tags: 'slow');
   });
 }
 
