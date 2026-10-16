@@ -498,7 +498,7 @@ void main() {
     });
 
     test('cookie() waits until the page sets it; responses() captures XHR/fetch', () async {
-      final page = await browser.open('about:blank');
+      final page = await browser.open('about:blank', timeout: 2.seconds);
       final captured = page.responses('*/graphql/query*').first;
       await page.go('$base/spa');
       final c = await captured;
@@ -506,8 +506,8 @@ void main() {
       expect(c.url(), '$base/api/graphql/query?q=1');
       expect(c.name(), 'query', reason: "named like a Response: the URL's last segment");
       expect(await c.text(), '{"user":{"pk":42}}');
-      expect(await page.cookie('sid', timeout: 5.seconds), 'late');
-      await expectLater(page.cookie('never', timeout: 300.milliseconds), throwsA(isA<TimeoutException>()));
+      expect(await page.cookie('sid'), 'late');
+      await expectLater(page.cookie('never'), throwsA(isA<TimeoutException>())); // the page's 2 s
       await page.close();
     });
 
@@ -518,12 +518,12 @@ void main() {
     });
 
     test('closing the tab during cookie() or wait() is BrowserException', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: 10.seconds);
       final waiting = expectLater(
-        page.cookie('never', timeout: 10.seconds),
+        page.cookie('never'),
         throwsA(isA<BrowserException>().having((e) => e.message, 'message', 'browser closed')),
       );
-      final selecting = expectLater(page.wait('#never', timeout: 10.seconds), throwsA(isA<BrowserException>()));
+      final selecting = expectLater(page.wait('#never'), throwsA(isA<BrowserException>()));
       await Future<void>.delayed(300.milliseconds);
       await page.close();
       await waiting;
@@ -540,18 +540,18 @@ void main() {
     });
 
     test('click on a missing selector times out naming it', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 300));
       await expectLater(
-        page.click('#missing', timeout: const Duration(milliseconds: 300)),
+        page.click('#missing'),
         throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('#missing'))),
       );
       await page.close();
     });
 
     test('timeouts print a human limit once (regression: 0:00:00.300000 twice)', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 300));
       final e = await page
-          .click('#nope', timeout: const Duration(milliseconds: 300))
+          .click('#nope')
           .then<Object?>((_) => null, onError: (Object e) => e);
       expect(e, isA<TimeoutException>());
       expect(e.toString(), 'TimeoutException: no actionable #nope after 300 ms');
@@ -710,10 +710,10 @@ void main() {
     });
 
     test('B6: scroll on a missing selector times out (named timeout, regression: positional)', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 500));
       final sw = Stopwatch()..start();
       await expectLater(
-        page.scroll(to: '#missing', timeout: const Duration(milliseconds: 500)),
+        page.scroll(to: '#missing'),
         throwsA(isA<TimeoutException>()),
       );
       expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
@@ -735,9 +735,9 @@ void main() {
     });
 
     test('wait times out naming the selector', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 300));
       await expectLater(
-        page.wait('.never', timeout: const Duration(milliseconds: 300)),
+        page.wait('.never'),
         throwsA(isA<TimeoutException>().having((e) => e.toString(), 'message', contains('.never'))),
       );
       await page.close();
@@ -763,9 +763,9 @@ void main() {
 
   group('Page idle with a long-poll', () {
     test('a request open over 5 s stops holding idle (regression: idle never settled)', () async {
-      final page = await browser.open('$base/longpoll');
+      final page = await browser.open('$base/longpoll', timeout: const Duration(seconds: 15));
       final sw = Stopwatch()..start();
-      await page.idle(timeout: const Duration(seconds: 15));
+      await page.idle();
       expect(sw.elapsed, lessThan(const Duration(seconds: 8)));
       await page.close();
     });
@@ -825,16 +825,16 @@ void main() {
     });
 
     test('download credits one started in an iframe (regression: main frame only)', () async {
-      final page = await browser.open('$base/framed');
-      final download = await page.download('#d', timeout: const Duration(seconds: 10));
+      final page = await browser.open('$base/framed', timeout: const Duration(seconds: 10));
+      final download = await page.download('#d');
       expect((download.name(), await download.text()), ('hello.txt', 'download-me'));
       await page.close();
     });
 
     test('B1: download on a missing selector throws, never crashes', () async {
-      final page = await browser.open(dataUrl(testHtml));
+      final page = await browser.open(dataUrl(testHtml), timeout: const Duration(seconds: 2));
       await expectLater(
-        page.download('#missing', timeout: const Duration(seconds: 2)),
+        page.download('#missing'),
         throwsA(isA<TimeoutException>()),
       );
       await page.close();
@@ -846,9 +846,10 @@ void main() {
           '<a id="off" href="$base/file" style="position:fixed;left:-9999px;width:10px;height:10px">x</a>'
           '<a id="d" href="$base/file">get it</a>',
         ),
+        timeout: const Duration(seconds: 5),
       );
-      await expectLater(page.download('#off', timeout: const Duration(seconds: 3)), throwsA(anything));
-      final download = await page.download('#d', timeout: const Duration(seconds: 5));
+      await expectLater(page.download('#off'), throwsA(anything));
+      final download = await page.download('#d');
       expect(download.name(), 'hello.txt');
       await page.close();
     });
@@ -864,7 +865,7 @@ void main() {
       await page.close();
       final sw = Stopwatch()..start();
       await expectLater(
-        page.wait('#x', timeout: const Duration(seconds: 20)),
+        page.wait('#x'),
         throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('#x'))),
       );
       expect(sw.elapsed, lessThan(const Duration(seconds: 10)));

@@ -388,24 +388,22 @@ abstract final class Chrome {
 enum Resource { image, font, media, stylesheet }   // what open(block:) stops loading
 final class Browser implements Closeable {
   Future<Page> open(String url, {Map<String, String>? headers, Set<Resource> block = const {}, int? width, int? height,
-      Duration? timeout});
+      Duration? timeout});   // timeout (30 s): every wait of that page
   Future<List<Page>> pages();
 }
 final class Page implements Closeable {
-  Future<Page> go(String url, {Duration? timeout});                                  // wait for load
-  Future<Page> back({Duration? timeout});                                            // a reload is go(await url())
+  Future<Page> go(String url);  Future<Page> back();                                   // wait for load; a reload is go(await url())
   Future<String> url();  Future<Elements> html();  Future<String> text();
   Future<Json> run(String js);   Future<Cookies> cookies({bool all = false});          // the current URL's jar
-  Future<String> cookie(String name, {Duration? timeout});                              // waits until set
+  Future<String> cookie(String name);                                                   // waits until set
   Stream<Capture> responses(String pattern);                                            // XHR/fetch matching a glob
-  Future<Page> click(String selector, {Duration? timeout});                             // auto-wait
-  Future<Page> fill(String selector, String value, {Duration? timeout});
-  Future<Page> select(String selector, String value, {Duration? timeout});
-  Future<Page> upload(String selector, Reader file, {Duration? timeout});
-  Future<Page> press(String key);  Future<Page> scroll({String? to, Duration? timeout});   // to the bottom, or to a selector
-  Future<Page> wait(String selector, {Duration? timeout});  Future<Page> idle({Duration? timeout});
+  Future<Page> click(String selector);                                                  // auto-wait
+  Future<Page> fill(String selector, String value);  Future<Page> select(String selector, String value);
+  Future<Page> upload(String selector, Reader file);
+  Future<Page> press(String key);  Future<Page> scroll({String? to});                  // to the bottom, or to a selector
+  Future<Page> wait(String selector);  Future<Page> idle();
   Reader screenshot({bool fullPage = false});  Reader pdf();                            // captured when read
-  Future<Download> download(String selector, {Duration? timeout});
+  Future<Download> download(String selector);
 }
 final class Download with Reader { String name(); }   // returned when the download begins; reading waits for the file
 final class Capture with Reader { int status();  String url();  String? header(String name);  String name(); }
@@ -422,8 +420,8 @@ final class Capture with Reader { int status();  String url();  String? header(S
   (`'image'`, `'font'`, `'media'`, `'stylesheet'`), and the viewport. Dialogs are always
   dismissed.
 - Actions wait until the first match is attached, visible and enabled (`upload`: attached only,
-  since file inputs are usually hidden). They time out (30 s) with a `TimeoutException` naming the
-  selector. `fill` clears the field (an input, a textarea or a `contenteditable`), types the value,
+  since file inputs are usually hidden). They time out after the page's `open(timeout:)` (30 s)
+  with a `TimeoutException` naming the selector; every wait of a page shares that one bound. `fill` clears the field (an input, a textarea or a `contenteditable`), types the value,
   and fires `input`/`change`.
 - `idle` waits for 500 ms with no request in flight. `download` credits a download started in the
   tab or any of its frames and returns once the browser names the file; reading the `Download`
@@ -454,7 +452,7 @@ final page = await Chrome.launch(profile: '.chrome').open(loginUrl, block: {.ima
 final invoice = await page.download('a.invoice');
 await (invoice > Fs.dir('invoices').file(invoice.name()));
 final api = await Http.client(cookies: await page.cookies()).get(apiUrl).json();
-await page.cookie('sessionid', timeout: 5.minutes);           // a hand login finished
+await Chrome.launch(profile: '.chrome').open(loginUrl, timeout: 5.minutes).cookie('sessionid');   // a hand login
 ```
 
 ### 4.4 json

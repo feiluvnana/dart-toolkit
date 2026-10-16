@@ -345,7 +345,9 @@ final class Browser implements Closeable {
   /// the tab loads (`user-agent` also sets the UA string), [block]
   /// aborts requests of those [Resource] types, [width]/[height] set the
   /// viewport.
-  /// [timeout] bounds the navigation and the page's [Page.run] calls.
+  /// [timeout] (30 s by default) bounds everything the page waits for: each
+  /// navigation, [Page.run], and the waits of `click`, `fill`, `wait`,
+  /// `idle`, `cookie`, `download` and the rest.
   /// Dialogs are always dismissed.
   Future<Page> open(
     String url, {
@@ -378,7 +380,7 @@ final class Browser implements Closeable {
         if (extra.isNotEmpty) s.send('Network.setExtraHTTPHeaders', {'headers': extra}),
         if (blocked.isNotEmpty) page._block(blocked),
       ]);
-      await page.go(url, timeout: timeout);
+      await page.go(url);
     } catch (_) {
       // Don't leak the tab when setup or navigation fails.
       await page.close();
@@ -520,7 +522,7 @@ final class Page implements Closeable {
   var _url = '';
   var _main = '';
 
-  /// What bounds [run]: `open(timeout:)`, else 30 s.
+  /// What bounds every wait of this page: `open(timeout:)`, else 30 s.
   var _timeout = _defaultTimeout;
 
   /// Every frame of this tab, for crediting downloads started in iframes.
@@ -598,19 +600,19 @@ final class Page implements Closeable {
   }
 
   /// Re-navigate this tab; waits for the load event. Returns this page.
-  Future<Page> go(String url, {Duration? timeout}) => _navigate(url, timeout, () async {
+  Future<Page> go(String url) => _navigate(url, () async {
     final r = await _s.send('Page.navigate', {'url': url});
     if (r['errorText'] case final String e when e.isNotEmpty) throw BrowserException('go $url: $e');
     return r['loaderId'] as String?;
   }, sameDocument: true);
 
   /// Go back; waits for the load event. Without history, stays. Returns this page.
-  Future<Page> back({Duration? timeout}) async {
+  Future<Page> back() async {
     final h = await _s.send('Page.getNavigationHistory');
     final at = h['currentIndex']! as int;
     if (at == 0) return this;
     final entry = ((h['entries']! as List)[at - 1] as Map)['id'];
-    return _navigate(_url, timeout, () async {
+    return _navigate(_url, () async {
       await _s.send('Page.navigateToHistoryEntry', {'entryId': entry});
       return null;
     });
@@ -621,11 +623,10 @@ final class Page implements Closeable {
   /// (with [sameDocument], null means a fragment change: done).
   Future<Page> _navigate(
     String subject,
-    Duration? timeout,
     Future<String?> Function() start, {
     bool sameDocument = false,
   }) async {
-    final limit = timeout ?? _defaultTimeout;
+    final limit = _timeout;
     final sw = Stopwatch()..start();
     Duration left() => limit - sw.elapsed;
     try {
@@ -760,9 +761,9 @@ final class Page implements Closeable {
 
   /// Wait until the current URL has a cookie [name] (a login that sets
   /// `sessionid`), and return its value. Throws [TimeoutException] after
-  /// [timeout], and [BrowserException] when the window is closed meanwhile.
-  Future<String> cookie(String name, {Duration? timeout}) {
-    final limit = timeout ?? _defaultTimeout;
+  /// the page's timeout (`open(timeout: 5.minutes)` for a hand login), and [BrowserException] when the window is closed meanwhile.
+  Future<String> cookie(String name) {
+    final limit = _timeout;
     return _whileOpen(() async {
       final end = _clock.elapsed + limit;
       while (true) {
@@ -834,10 +835,10 @@ final class Page implements Closeable {
   }
 
   /// Click the first match of [selector], waiting until it is actionable
-  /// (up to [timeout]): scrolled into view, then pressed at the centre of its
+  /// (up to the page's timeout): scrolled into view, then pressed at the centre of its
   /// visible box. Returns this page.
-  Future<Page> click(String selector, {Duration? timeout}) =>
-      _act('click', selector, () => _on(selector, _Ready.actionable, timeout, (el) => _click(el, selector)));
+  Future<Page> click(String selector) =>
+      _act('click', selector, () => _on(selector, _Ready.actionable, (el) => _click(el, selector)));
 
   Future<void> _click(String el, String selector) async {
     final at = await _call(el, _pointJs);
@@ -875,10 +876,10 @@ function() {
   /// `change`), waiting until it is actionable. Works on inputs, textareas
   /// and `contenteditable` elements. Always clears first, so an empty
   /// [value] empties the field. Returns this page.
-  Future<Page> fill(String selector, String value, {Duration? timeout}) => _act(
+  Future<Page> fill(String selector, String value) => _act(
     'fill',
     selector,
-    () => _on(selector, _Ready.actionable, timeout, (el) async {
+    () => _on(selector, _Ready.actionable, (el) async {
       await _call(el, _clearJs);
       await _type(value);
       await _call(el, 'function() { this.dispatchEvent(new Event("change", {bubbles: true})); }');
@@ -1016,10 +1017,10 @@ function() {
 
   /// Pick the `<option>` by its value, waiting until actionable.
   /// Throws [BrowserException] when the option is missing. Returns this page.
-  Future<Page> select(String selector, String value, {Duration? timeout}) => _act(
+  Future<Page> select(String selector, String value) => _act(
     'select',
     selector,
-    () => _on(selector, _Ready.actionable, timeout, (el) async {
+    () => _on(selector, _Ready.actionable, (el) async {
       if (await _call(el, _selectJs, [value]) != true) {
         throw BrowserException('no option "$value" in $selector', selector: selector);
       }
@@ -1043,14 +1044,14 @@ function(value) {
   /// hidden, so this waits for *attached*, not visible. Staged copies are
   /// kept until this tab closes (the browser reads them at submit). The
   /// browser fires `input`/`change`. Returns this page.
-  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async {
+  Future<Page> upload(String selector, Reader file) async {
     final (path, tmp) = await _stage(file);
     if (tmp != null) _stagedDirs.add(tmp);
     try {
       return await _act(
         'upload',
         selector,
-        () => _on(selector, _Ready.attached, timeout, (el) async {
+        () => _on(selector, _Ready.attached, (el) async {
           await _s.send('DOM.setFileInputFiles', {
             'objectId': el,
             'files': [p.absolute(path)],
@@ -1067,13 +1068,13 @@ function(value) {
   }
 
   /// Bring the first match of the selector [to] into view, waiting until it
-  /// is attached (up to [timeout]); with no selector, go to the bottom of
+  /// is attached (up to the page's timeout); with no selector, go to the bottom of
   /// the page (what infinite lists need). Returns this page.
-  Future<Page> scroll({String? to, Duration? timeout}) => _act('scroll', to, () async {
+  Future<Page> scroll({String? to}) => _act('scroll', to, () async {
     if (to == null) {
       await _eval('window.scrollTo(0, document.body.scrollHeight)');
     } else {
-      await _on(to, _Ready.attached, timeout, (el) => _call(el, 'function() { this.scrollIntoViewIfNeeded(true); }'));
+      await _on(to, _Ready.attached, (el) => _call(el, 'function() { this.scrollIntoViewIfNeeded(true); }'));
     }
   });
 
@@ -1101,16 +1102,16 @@ function(value) {
 
   /// Wait until [selector] is visible. Returns this page.
   /// Throws [BrowserException] `browser closed` when the window closes first.
-  Future<Page> wait(String selector, {Duration? timeout}) async {
-    await _whileOpen(_on(selector, _Ready.visible, timeout, (_) async {}), selector);
+  Future<Page> wait(String selector) async {
+    await _whileOpen(_on(selector, _Ready.visible, (_) async {}), selector);
     return this;
   }
 
   /// Wait until there has been no request in flight for 500 ms. A request
   /// open longer than 5 s (a long-poll, an event stream) stops counting, so
   /// a page that keeps one open still settles. Returns this page.
-  Future<Page> idle({Duration? timeout}) async {
-    final limit = timeout ?? _defaultTimeout;
+  Future<Page> idle() async {
+    final limit = _timeout;
     final start = _clock.elapsed;
     for (;;) {
       final now = _clock.elapsed;
@@ -1160,10 +1161,10 @@ function(value) {
   /// (`d & Console.bar(d.name()) > Fs.file(d.name())` shows the browser's
   /// progress). Downloads share one folder per browser, told apart by their
   /// DevTools `guid`, so concurrent downloads don't clash. Beginning and
-  /// finishing share one [timeout] deadline. The browser's copies are
+  /// finishing share one deadline, the page's timeout. The browser's copies are
   /// removed when the browser closes.
-  Future<Download> download(String selector, {Duration? timeout}) async {
-    final limit = timeout ?? _defaultTimeout;
+  Future<Download> download(String selector) async {
+    final limit = _timeout;
     final sw = Stopwatch()..start();
     Duration left() => limit - sw.elapsed < Duration.zero ? Duration.zero : limit - sw.elapsed;
     final events = _browser._cdp.browser;
@@ -1184,7 +1185,7 @@ function(value) {
       await prev;
       dir = await _browser._downloadFolder();
       await _act('download', selector, () async {
-        await _on(selector, _Ready.actionable, timeout, (el) async {
+        await _on(selector, _Ready.actionable, (el) async {
           final begin = events.once(
             'Browser.downloadWillBegin',
             where: (e) => _frames.contains(e['frameId']),
@@ -1258,8 +1259,8 @@ function(value) {
 
   /// Wait for [selector] to be ready per [mode], then run [use] on its
   /// remote object id and release it.
-  Future<void> _on(String selector, _Ready mode, Duration? timeout, Future<void> Function(String el) use) async {
-    final el = await _ready(selector, mode, timeout ?? _defaultTimeout);
+  Future<void> _on(String selector, _Ready mode, Future<void> Function(String el) use) async {
+    final el = await _ready(selector, mode, _timeout);
     try {
       await use(el);
     } finally {
@@ -1496,26 +1497,23 @@ extension BrowserFuture on Future<Browser> {
 
 /// Future mirrors for [Page].
 extension PageFuture on Future<Page> {
-  Future<Page> go(String url, {Duration? timeout}) async => (await this).go(url, timeout: timeout);
-  Future<Page> back({Duration? timeout}) async => (await this).back(timeout: timeout);
+  Future<Page> go(String url) async => (await this).go(url);
+  Future<Page> back() async => (await this).back();
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
   Future<Json> run(String js) async => (await this).run(js);
   Future<Cookies> cookies({bool all = false}) async => (await this).cookies(all: all);
-  Future<String> cookie(String name, {Duration? timeout}) async => (await this).cookie(name, timeout: timeout);
+  Future<String> cookie(String name) async => (await this).cookie(name);
   Stream<Capture> responses(String pattern) => Stream.fromFuture(this).asyncExpand((p) => p.responses(pattern));
-  Future<Page> click(String selector, {Duration? timeout}) async => (await this).click(selector, timeout: timeout);
-  Future<Page> fill(String selector, String value, {Duration? timeout}) async =>
-      (await this).fill(selector, value, timeout: timeout);
+  Future<Page> click(String selector) async => (await this).click(selector);
+  Future<Page> fill(String selector, String value) async => (await this).fill(selector, value);
   Future<Page> press(String key) async => (await this).press(key);
-  Future<Page> select(String selector, String value, {Duration? timeout}) async =>
-      (await this).select(selector, value, timeout: timeout);
-  Future<Page> upload(String selector, Reader file, {Duration? timeout}) async =>
-      (await this).upload(selector, file, timeout: timeout);
-  Future<Page> scroll({String? to, Duration? timeout}) async => (await this).scroll(to: to, timeout: timeout);
-  Future<Page> wait(String selector, {Duration? timeout}) async => (await this).wait(selector, timeout: timeout);
-  Future<Page> idle({Duration? timeout}) async => (await this).idle(timeout: timeout);
+  Future<Page> select(String selector, String value) async => (await this).select(selector, value);
+  Future<Page> upload(String selector, Reader file) async => (await this).upload(selector, file);
+  Future<Page> scroll({String? to}) async => (await this).scroll(to: to);
+  Future<Page> wait(String selector) async => (await this).wait(selector);
+  Future<Page> idle() async => (await this).idle();
   Reader screenshot({bool fullPage = false}) => _later((p) => p.screenshot(fullPage: fullPage));
   Reader pdf() => _later((p) => p.pdf());
 
@@ -1526,8 +1524,7 @@ extension PageFuture on Future<Page> {
     return _Shot(() async => reader(await this).bytes());
   }
 
-  Future<Download> download(String selector, {Duration? timeout}) async =>
-      (await this).download(selector, timeout: timeout);
+  Future<Download> download(String selector) async => (await this).download(selector);
 }
 
 /// Content captured when read.
