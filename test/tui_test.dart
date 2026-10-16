@@ -8,6 +8,7 @@ import 'package:dart_toolkit/src/tui.dart' show TestSession, testSession;
 import 'package:dart_toolkit/tui.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
 import 'support/term.dart';
 
 void main() {
@@ -294,19 +295,29 @@ void main() {
   });
 
   group('Tui.run guard', () {
-    test('a second concurrent run throws StateError', () async {
-      // If stdout is not a terminal, the first run throws StdoutException.
-      // If a terminal is present, quit immediately so the test terminates cleanly.
-      final first = Tui.run<int>(0, (s, app) {
-        app.quit();
-        return Screen((r) {});
-      });
-      expect(() => Tui.run<int>(0, (s, app) => Screen((r) {})), throwsStateError);
-      try {
-        await first;
-      } on StdoutException catch (_) {
-        // Expected when run without a terminal.
-      }
+    // In a child with piped stdout, so the suite's own terminal (when run
+    // from one) never enters raw mode.
+    test('a second concurrent run throws StateError; piped stdout is refused', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/tui.dart';
+Future<void> main() async {
+  final first = Tui.run<int>(0, (s, app) => Screen((r) {}));
+  try {
+    await Tui.run<int>(0, (s, app) => Screen((r) {}));
+    print('no guard');
+  } on StateError {
+    print('guarded');
+  }
+  try {
+    await first;
+  } on StdoutException catch (e) {
+    print('refused: \${e.message}');
+  }
+}
+''');
+      expect(r.stdout, startsWith('guarded\nrefused: no terminal for the TUI'), reason: '${r.stderr}');
+      expect(r.exitCode, 0);
     });
   });
 

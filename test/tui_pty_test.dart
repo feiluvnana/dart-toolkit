@@ -123,6 +123,12 @@ void main() {
       expect(code, 0);
     }, timeout: const Timeout(Duration(seconds: 60)));
 
+    test('TERM=dumb on a terminal is refused before any escape is written', () async {
+      final (log, bytes, _) = await _pty(mode: 'dumb', env: {'TERM': 'dumb'});
+      expect(log, startsWith('refused: TERM=dumb'));
+      expect(utf8.decode(bytes, allowMalformed: true), isNot(contains('\x1b[')));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('a second run in the same process works', () async {
       final (log, _, _) = await _pty(mode: 'second');
       expect(log, 'second-ok');

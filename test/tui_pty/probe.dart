@@ -178,6 +178,12 @@ Future<void> main(List<String> args) async {
           b.bar(Meter()..update(1, 2)).write('x', color: Color.red);
         }, keys: {'escape': ('', () => quitOnEscape(app))}),
       );
+    case 'dumb':
+      try {
+        await Tui.run<int>(0, (s, app) => Screen((r) => r.write('drawn')));
+      } on StdoutException catch (e) {
+        seen.add('refused: ${e.message}');
+      }
   }
   await log.writeAsString('${seen.join('\n')}\n');
 }
