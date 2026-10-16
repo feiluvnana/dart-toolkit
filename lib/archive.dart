@@ -419,8 +419,13 @@ final class _Extraction {
     return switch (m) {
       (final Object? value,) => value as R,
       (final Object e, final String stack) => Error.throwWithStackTrace(e, StackTrace.fromString(stack)),
-      [final Object? e, _] => throw ContentException('corrupt archive: $e'),
-      _ => throw const ContentException('corrupt archive: the decoder stopped (out of memory?)'),
+      // An uncaught error or a vanished isolate is a decoder bug or a
+      // resource limit, never a verdict on the data.
+      [final Object? e, final Object? stack] => Error.throwWithStackTrace(
+        StateError('the archive decoder crashed: $e'),
+        StackTrace.fromString('$stack'),
+      ),
+      _ => throw StateError('the archive decoder stopped (out of memory?)'),
     };
   }
 
@@ -746,8 +751,12 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
   try {
     Isolate.exit(reply, message);
   } catch (_) {
-    // An error that cannot cross isolates goes as its text.
-    Isolate.exit(reply, (ContentException('corrupt archive: $message'), ''));
+    // An error that cannot cross isolates goes as its text, keeping its kind.
+    Isolate.exit(reply, switch (message) {
+      (final ContentException e, final String st) => (ContentException(e.message), st),
+      (final Object e, final String st) => (StateError('$e'), st),
+      _ => (StateError('the archive decoder result cannot cross isolates'), ''),
+    });
   }
 }
 
@@ -1171,7 +1180,7 @@ Stream<Uint8List> _offloaded(Stream<List<int>> input, Stream<Uint8List> Function
         case (final Object e, final String stack):
           Error.throwWithStackTrace(e, StackTrace.fromString(stack));
         default:
-          throw const ContentException('corrupt archive: the decoder stopped (out of memory?)');
+          throw StateError('the archive decoder stopped (out of memory?)');
       }
     }
   } finally {
@@ -1237,7 +1246,7 @@ Future<void> _offloadMain((Stream<Uint8List> Function(Stream<List<int>>), SendPo
     try {
       reply.send((e, '$st'));
     } catch (_) {
-      reply.send((ContentException('corrupt archive: $e'), '$st'));
+      reply.send((e is ContentException ? ContentException(e.message) : StateError('$e'), '$st'));
     }
   } finally {
     inbox.close();
