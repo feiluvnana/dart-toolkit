@@ -107,15 +107,18 @@ String _touchStamp(DateTime mtime) {
 
 /// Copy a tree with `cp -pPR` (keeps modes, times, links) on POSIX.
 /// Returns true when `cp` did the work; false when the caller should use its
-/// in-process loop (Windows, missing `cp`, non-zero exit).
+/// in-process loop (Windows, or no `cp` to start). A `cp` that fails throws
+/// its own message: running the copy again would only hide it.
 Future<bool> copyTreeWithCp(String from, String to) async {
   if (!isPosix) return false;
+  final io.ProcessResult r;
   try {
-    final r = await io.Process.run('cp', ['-pPR', '--', from, to]);
-    return r.exitCode == 0;
-  } catch (_) {
+    r = await io.Process.run('cp', ['-pPR', '--', from, to]);
+  } on io.ProcessException {
     return false;
   }
+  if (r.exitCode != 0) throw io.FileSystemException('copy failed: ${'${r.stderr}'.trim()}', from);
+  return true;
 }
 
 /// True for a name [tmpPath] made: `.<base>.tmp<pid>.<µs>.<rand>`.

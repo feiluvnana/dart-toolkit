@@ -145,6 +145,17 @@ void main() {
       );
     });
 
+    test('B19: a dir copy that cp refuses throws cp\'s reason', () async {
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
+      await Fs.file(p('tree/secret.txt')).write('x');
+      await Process.run('chmod', ['000', p('tree/secret.txt')]);
+      addTearDown(() => Process.run('chmod', ['644', p('tree/secret.txt')]));
+      await expectLater(
+        Fs.dir(p('tree')).copy(p('tree2')),
+        throwsA(isA<io.FileSystemException>().having((e) => e.message, 'message', contains('Permission denied'))),
+      );
+    });
+
     test('B10: a dest link that cannot be removed fails the copy, never writes through it', () async {
       if (Platform.isWindows) return markTestSkipped('POSIX modes');
       await Fs.file(p('outside.txt')).write('keep');
