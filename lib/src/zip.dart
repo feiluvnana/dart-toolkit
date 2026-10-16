@@ -199,7 +199,7 @@ List<ZipEntry> readZipAt(int length, ReadAt read) {
     final nameEnd = at + 46 + nameLen;
     if (nameEnd + extraLen > b.length) _corrupt('bad central directory');
     final rawName = Uint8List.sublistView(b, at + 46, nameEnd);
-    final name = flags & 0x800 != 0 ? utf8.decode(rawName, allowMalformed: true) : _legacyName(rawName);
+    var name = flags & 0x800 != 0 ? utf8.decode(rawName, allowMalformed: true) : _legacyName(rawName);
     ({int version, int strength, int method})? aes;
     DateTime? mtime;
     // Zip64 extra field (0x0001): the 64-bit values, in order, for each
@@ -213,6 +213,11 @@ List<ZipEntry> readZipAt(int length, ReadAt read) {
           _corrupt('bad AES extra field: $name');
         }
         aes = (version: version, strength: strength, method: _u16(b, e + 9));
+      }
+      // Info-ZIP Unicode Path (0x7075): the UTF-8 name, kept while the
+      // CRC still matches the header's name.
+      if (id == 0x7075 && len >= 5 && b[e + 4] == 1 && flags & 0x800 == 0 && _u32(b, e + 5) == crc32(rawName)) {
+        name = utf8.decode(Uint8List.sublistView(b, e + 9, e + 4 + len), allowMalformed: true);
       }
       if (id == 0x5455 && len >= 5 && b[e + 4] & 1 != 0) {
         mtime = DateTime.fromMillisecondsSinceEpoch(_u32(b, e + 5) * 1000);
@@ -563,14 +568,19 @@ final class _ZipCrypto {
 int _crcByte(int c, int b) => crcTable[(c ^ b) & 0xFF] ^ (c >> 8);
 
 /// A name without the UTF-8 flag: UTF-8 when it decodes (what most tools
-/// write anyway), else Latin-1 (close to CP437 for the printable range).
+/// write anyway), else CP437, the zip default (Windows' own zips).
 String _legacyName(Uint8List raw) {
   try {
     return utf8.decode(raw);
   } on FormatException {
-    return latin1.decode(raw);
+    return String.fromCharCodes([for (final c in raw) c < 0x80 ? c : _cp437.codeUnitAt(c - 0x80)]);
   }
 }
+
+/// CP437's upper half, 0x80 to 0xFF.
+const _cp437 =
+    'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐'
+    '└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0';
 
 /// [t] as DOS time and date (local, 2-second steps, 1980 to 2107).
 (int, int) _dosTime(DateTime t) {

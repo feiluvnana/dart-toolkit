@@ -670,6 +670,37 @@ Future<void> main(List<String> args) async =>
       expect(Fs.file(p('bad.zip')) > Archive.unarchive(p('out')), throwsFormatException);
     });
 
+    test('P2: names without the UTF-8 flag read as CP437, or from the Unicode Path field', () async {
+      // Stored members with raw names, no UTF-8 flag, each holding "x".
+      List<int> le(int v, int n) => [for (var i = 0; i < n; i++) v >> 8 * i & 0xFF];
+      List<int> zipOf(List<(List<int>, List<int>)> members) {
+        final body = <int>[], dir = <int>[];
+        for (final (name, extra) in members) {
+          List<int> fields(int sig, bool central) => [
+            ...le(sig, 4), if (central) ...le(20, 2), ...le(20, 2), 0, 0, 0, 0, 0, 0, 0x21, 0,
+            ...le(crc32([0x78]), 4), ...le(1, 4), ...le(1, 4), ...le(name.length, 2), ...le(extra.length, 2),
+            if (central) ...[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...le(body.length, 4)],
+            ...name, ...extra,
+          ];
+          dir.addAll(fields(0x02014b50, true));
+          body.addAll([...fields(0x04034b50, false), 0x78]);
+        }
+        final n = members.length;
+        return [...body, ...dir, ...le(0x06054b50, 4), 0, 0, 0, 0, ...le(n, 2), ...le(n, 2), ...le(dir.length, 4), ...le(body.length, 4), 0, 0];
+      }
+
+      final raw = [...'caf'.codeUnits, 0x82, ...'.txt'.codeUnits]; // é in CP437
+      final unicode = utf8.encode('名前.txt');
+      final upath = [1, ...le(crc32([0x3F, 0x3F, ...'.txt'.codeUnits]), 4), ...unicode];
+      final zip = zipOf([
+        (raw, const []),
+        ([0x3F, 0x3F, ...'.txt'.codeUnits], [...le(0x7075, 2), ...le(upath.length, 2), ...upath]),
+      ]);
+      await Archive.unarchive(p('out')).consume(Stream.value(zip));
+      expect(await Fs.file(p('out/café.txt')).text(), 'x');
+      expect(await Fs.file(p('out/名前.txt')).text(), 'x');
+    });
+
     test('a failed run leaves no half-unpacked tree', () async {
       await (Reader.of([1, 2, 3, 4]) > Fs.file(p('bad.zip')));
       await expectLater(Fs.file(p('bad.zip')) > Archive.unarchive(p('out')), throwsFormatException);
