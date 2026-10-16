@@ -34,10 +34,11 @@ final class Feed<T> {
   /// known, or older than wanted). A cursor is visited once a run, so a
   /// feed that loops back ends; a page with no items ends the walk. [run]
   /// waits for [onPage], not for the work: the next page is fetched while
-  /// it runs. The cursor moves past a page only once its work and every earlier page's succeeded. With [all], the walk
-  /// starts from the top whatever cursor is saved (a full re-list). A
-  /// failing [page] fails the run; the cursor stays at the last page whose
-  /// work was done. [run] completes after every page's work.
+  /// it runs. The cursor moves past a page only once its work and every
+  /// earlier page's succeeded. With [all], the walk starts from the top
+  /// whatever cursor is saved (a full re-list). A failing [page] fails the
+  /// run; the cursor stays at the last page whose work was done. [run]
+  /// completes after every page's work.
   Future<bool> run(FutureOr<void> Function(FeedPage<T> page) onPage, {bool all = false}) async {
     final file = _cursor == null ? null : File(_cursor);
     final saved = all || file == null || !await file.exists() ? '' : (await file.readAsString()).trim();

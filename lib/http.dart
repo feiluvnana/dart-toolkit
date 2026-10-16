@@ -1246,12 +1246,12 @@ Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch
     res = first; // the file changed: this full answer is the new one
   } else {
     have = await part.exists() ? await part.length() : 0;
-    final kept = have > 0 && await tagFile.exists() ? (await tagFile.readAsString()).trim() : '';
-    if (have > 0) await first?.close(); // a .part to resume: ask for the rest instead
-    res = have == 0 && first != null
-        ? first
-        : await fetch(have > 0 ? {'range': 'bytes=$have-', if (kept.isNotEmpty) 'if-range': kept} : const {});
-    if (have > 0) {
+    if (have == 0) {
+      res = first ?? await fetch(const {});
+    } else {
+      final kept = await tagFile.exists() ? (await tagFile.readAsString()).trim() : '';
+      await first?.close(); // a .part to resume: ask for the rest instead
+      res = await fetch({'range': 'bytes=$have-', if (kept.isNotEmpty) 'if-range': kept});
       final range = (res.header('content-range') ?? '').trim();
       if (res.status() == 416 && _unsatisfied.firstMatch(range)?[1] == '$have') {
         // The .part already holds every byte: finish it, no download.

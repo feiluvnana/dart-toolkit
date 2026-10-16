@@ -161,7 +161,8 @@ abstract final class Chrome {
       if (pipes == null) {
         final url = await endpoint.future.timeout(
           _defaultTimeout,
-          onTimeout: () async => throw BrowserException(await why('Chrome did not start in ${_defaultTimeout.inSeconds} s')),
+          onTimeout: () async =>
+              throw BrowserException(await why('Chrome did not start in ${_defaultTimeout.inSeconds} s')),
         );
         cdp = await Cdp.connect(url).timeout(_defaultTimeout);
       } else {
@@ -295,7 +296,7 @@ final class Browser implements Closeable {
   /// The connection ended without [close]: Chromium has exited.
   Future<void> _gone() async {
     if (_closed) return;
-    if (_dog case final dog?) dog.kill();
+    _dog?.kill();
     try {
       await _temp?.delete(recursive: true);
     } catch (_) {}
@@ -385,7 +386,6 @@ final class Browser implements Closeable {
     }
     return page;
   }
-
 
   /// Every open tab, popups included (one wrapper per tab).
   Future<List<Page>> pages() async {
