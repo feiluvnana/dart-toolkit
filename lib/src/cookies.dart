@@ -6,6 +6,8 @@ library;
 import 'dart:convert';
 import 'dart:io' as io;
 
+import '../core.dart' show ContentException;
+
 /// A cookie jar: domain, path, expiry and `secure` per cookie, which a
 /// `Cookie:` header string loses, plus the session's `User-Agent`.
 ///
@@ -23,9 +25,12 @@ final class Cookies {
   /// A Netscape `cookies.txt`: what [encode] writes, and what browser
   /// cookie-export extensions, curl and yt-dlp use. Comments and lines that
   /// do not parse are skipped (`#HttpOnly_` lines are cookies). A
-  /// `user-agent: …` line (or `# user-agent: …`) sets [agent].
+  /// `user-agent: …` line (or `# user-agent: …`) sets [agent]. Text with
+  /// content lines but none that parses (a space-separated paste, a JSON
+  /// export) is a [ContentException].
   static Cookies parse(String text) {
     final jar = Cookies();
+    var content = 0, parsed = 0;
     for (var line in const LineSplitter().convert(text)) {
       line = line.trim();
       if (_agentLine.firstMatch(line) case final m?) {
@@ -35,11 +40,13 @@ final class Cookies {
       }
       if (line.startsWith('#HttpOnly_')) line = line.substring('#HttpOnly_'.length);
       if (line.isEmpty || line.startsWith('#')) continue;
+      content++;
       final f = line.split('\t');
       if (f.length != 7 || f[0].isEmpty || f[5].isEmpty) continue;
       final seconds = num.tryParse(f[4]);
       if (seconds == null) continue;
       final domain = f[0].toLowerCase();
+      parsed++;
       jar._put(
         _Cookie(
           f[5],
@@ -51,6 +58,9 @@ final class Cookies {
           expires: seconds <= 0 ? null : DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round()),
         ),
       );
+    }
+    if (content > 0 && parsed == 0) {
+      throw ContentException('not a Netscape cookies.txt: no line has 7 tab-separated fields');
     }
     return jar;
   }

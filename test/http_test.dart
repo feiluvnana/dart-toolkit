@@ -801,6 +801,17 @@ Future<void> main() async {
       expect(again.header('https://api.example.com/'), 'sid=s3cret; tok=abc');
     });
 
+    test('Cookies.parse of text with no cookies.txt line is a ContentException (B24)', () {
+      for (final bad in [
+        '.example.com TRUE / TRUE 4102444800 sid s3cret', // spaces, from a paste
+        '[{"domain": ".example.com", "name": "sid", "value": "s3cret"}]', // a JSON export
+      ]) {
+        expect(() => Cookies.parse(bad), throwsA(isA<ContentException>()), reason: bad);
+      }
+      expect(Cookies.parse('').header('https://example.com/'), isNull);
+      expect(Cookies.parse('# Netscape HTTP Cookie File\n# user-agent: UA\n').agent(), 'UA');
+    });
+
     test('a script exits once its client closes', () async {
       final sw = Stopwatch()..start();
       final r = await runDart(
