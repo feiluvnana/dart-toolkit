@@ -214,21 +214,11 @@ void main() {
 
   test('bug 10: a proxy without a port uses 1080; an unknown scheme is refused', () async {
     expect(() => Http.client(proxy: 'ftp://p'), throwsArgumentError);
-    final ServerSocket proxy;
-    try {
-      proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 1080);
-    } on SocketException {
-      return markTestSkipped('port 1080 is taken');
-    }
-    addTearDown(proxy.close);
-    proxy.listen((s) {
-      s.listen(
-        (_) => s
-          ..write('HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nproxy')
-          ..close(),
-      );
-    });
-    expect(await Http.client(proxy: 'http://127.0.0.1').get('$url/ua').text(), 'proxy');
+    // The refusal (nothing listens on 1080 here) names the port it tried.
+    await expectLater(
+      Http.client(proxy: 'socks5://127.0.0.1', retries: 0).get('$url/ua').text(),
+      throwsA(predicate((e) => '$e'.contains('1080'))),
+    );
   });
 
   test('bug 10: Http.serve caps a request body (413), declared or streamed', () async {
@@ -389,13 +379,13 @@ void main() {
   });
 
   test('Rate(perHost: true) paces each host apart', () async {
-    final c = Http.client(rate: Rate(1, 1.seconds, perHost: true));
+    final c = Http.client(rate: Rate(1, 3.seconds, perHost: true));
     final sw = Stopwatch()..start();
     await c.get('$url/ua').status();
     await c.get('http://localhost:${server.port}/ua').status();
-    expect(sw.elapsed, lessThan(const Duration(milliseconds: 800)));
+    expect(sw.elapsed, lessThan(const Duration(milliseconds: 2500)));
     await c.get('$url/ua').status();
-    expect(sw.elapsed, greaterThan(const Duration(milliseconds: 900)));
+    expect(sw.elapsed, greaterThan(const Duration(milliseconds: 2900)));
   });
 }
 

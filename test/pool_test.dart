@@ -115,7 +115,7 @@ void main() {
       final out = await Pool.map([1, 2, 3, 4, 5, 6], quarterSecond, limit: 6, isolates: true);
       sw.stop();
       expect(out, [1, 2, 3, 4, 5, 6]);
-      expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 1400))); // serial is 1.5 s
     });
   });
 

@@ -7,6 +7,7 @@ import 'package:dart_toolkit/shell.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/poll.dart';
 
 void main() {
   timeoutTests();
@@ -139,28 +140,23 @@ Future<void> main() => Shell.open('https://example.com');
 
     test('a SIGTERM that ends the script ends its running child and grandchildren', () async {
       if (Platform.isWindows) markTestSkipped('POSIX signals');
-      final dir = await Directory.systemTemp.createTemp('shell_orphan');
-      addTearDown(() => dir.delete(recursive: true));
-      await Fs.file('${dir.path}/main.dart').write('''
+      final p = await startDart('''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
   await Shell.run(['sh', '-c', r'sleep 20 & echo \$!; wait'], live: true);
 }
 ''');
-      final p = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        '${dir.path}/main.dart',
-      ]);
       final first = await p.stdout.transform(const SystemEncoding().decoder).first;
       final child = first.trim();
       p.kill(); // SIGTERM to the script we spawned
       expect(await p.exitCode.timeout(const Duration(seconds: 10)), 143);
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      final ps = await Process.run('ps', ['-p', child, '-o', 'pid=']);
-      expect('${ps.stdout}'.trim(), isEmpty, reason: 'sleep $child outlived the script');
+      final gone = await eventually(
+        () async => '${(await Process.run('ps', ['-p', child, '-o', 'pid='])).stdout}'.trim().isEmpty,
+      );
+      expect(gone, isTrue, reason: 'sleep $child outlived the script');
     });
 
-    test('bytes() is a view, not a copy', () async {
+    test('bytes() is unmodifiable and the same each call', () async {
       final out = await Shell.run(['printf', 'abc']);
       final a = await out.bytes();
       final b = await out.bytes();
@@ -354,8 +350,7 @@ Future<void> main() async {
       expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
       expect(out.code(), -9);
       expect(await out.text(), pid);
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      expect(await alive(pid!), isFalse, reason: 'sleep $pid outlived the cancel');
+      expect(await eventually(() async => !await alive(pid!)), isTrue, reason: 'sleep $pid outlived the cancel');
     });
 
     test('a cancel after the run ended changes nothing', () async {
@@ -372,15 +367,12 @@ Future<void> main() async {
       if (Platform.isWindows) markTestSkipped('POSIX process tree');
       final lines = (Reader.of(const []) | Shell.filter(['sh', '-c', r'sleep 20 & echo $!; wait'])).lines();
       final pid = await lines.first.timeout(const Duration(seconds: 5));
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(await alive(pid), isFalse, reason: 'sleep $pid outlived the filter');
+      expect(await eventually(() async => !await alive(pid)), isTrue, reason: 'sleep $pid outlived the filter');
     });
 
     test('a SIGTERM that ends the script ends a running filter and its grandchildren', () async {
       if (Platform.isWindows) markTestSkipped('POSIX signals');
-      final dir = await Directory.systemTemp.createTemp('shell_filter_orphan');
-      addTearDown(() => dir.delete(recursive: true));
-      await Fs.file('${dir.path}/main.dart').write('''
+      final p = await startDart('''
 import 'package:dart_toolkit/shell.dart';
 Future<void> main() async {
   await for (final line in (Reader.of(const []) | Shell.filter(['sh', '-c', r'sleep 20 & echo \$!; wait'])).lines()) {
@@ -388,15 +380,10 @@ Future<void> main() async {
   }
 }
 ''');
-      final p = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        '${dir.path}/main.dart',
-      ]);
       final child = (await p.stdout.transform(const SystemEncoding().decoder).first).trim();
       p.kill(); // SIGTERM to the script we spawned
       expect(await p.exitCode.timeout(const Duration(seconds: 10)), 143);
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(await alive(child), isFalse, reason: 'sleep $child outlived the script');
+      expect(await eventually(() async => !await alive(child)), isTrue, reason: 'sleep $child outlived the script');
     });
   });
 }

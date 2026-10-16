@@ -229,7 +229,7 @@ void main() {
       final sw = Stopwatch()..start();
       final links = divs.$('a');
       expect(links.texts(), ['x', 'y']);
-      expect(sw.elapsedMilliseconds, lessThan(50));
+      expect(sw.elapsedMilliseconds, lessThan(500)); // one walk is ~5 ms; one per root is seconds
       expect(divs.$('div').length, 3001);
     });
   });

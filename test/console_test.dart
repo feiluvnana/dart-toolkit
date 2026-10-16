@@ -86,51 +86,54 @@ Future<void> main() async => print('answer=\${await Console.confirm('ok?')}');
 
   group('piped stdin', () {
     test('a line that arrives between prompts is kept', () async {
-      final r = await runDart(
-        '''
+      final p = await startDart('''
 import 'package:dart_toolkit/console.dart';
 Future<void> main() async {
   final a = await Console.ask('first?');
+  print('got \$a');
   await Future<void>.delayed(const Duration(milliseconds: 600));
   final b = await Console.ask('second?');
   print('a=\$a b=\$b');
 }
-''',
-        stdin: const [(Duration.zero, 'one\n'), (Duration(milliseconds: 200), 'two\n')],
-      );
-      expect(r.stdout, contains('a=one b=two'));
-      expect(r.exitCode, 0);
+''');
+      final lines = linesOf(p);
+      p.stdin.write('one\n');
+      await lines.firstWhere((l) => l == 'got one').timeout(const Duration(seconds: 30));
+      p.stdin.write('two\n'); // during the 600 ms between the prompts
+      await p.stdin.close();
+      expect(await lines.firstWhere((l) => l.startsWith('a=')), 'a=one b=two');
+      expect(await p.exitCode, 0);
     });
   });
 
   group('piped stdin, async', () {
     test('ask on piped stdin keeps timers running while it waits', () async {
-      final r = await runDart(
-        '''
+      final p = await startDart('''
 import 'dart:async';
 import 'package:dart_toolkit/console.dart';
 Future<void> main() async {
   var ticks = 0;
   final t = Timer.periodic(const Duration(milliseconds: 20), (_) => ticks++);
+  print('asking');
   final a = await Console.ask('first?');
   t.cancel();
   print('a=\$a ticks=\${ticks > 5}');
 }
-''',
-        stdin: const [(Duration(milliseconds: 600), 'one\n')],
-      );
-      expect(r.stdout, contains('a=one ticks=true'));
-      expect(r.exitCode, 0);
+''');
+      final lines = linesOf(p);
+      await lines.firstWhere((l) => l == 'asking').timeout(const Duration(seconds: 30));
+      await Future<void>.delayed(const Duration(milliseconds: 400)); // ticks while the ask waits
+      p.stdin.write('one\n');
+      await p.stdin.close();
+      expect(await lines.firstWhere((l) => l.startsWith('a=')), 'a=one ticks=true');
+      expect(await p.exitCode, 0);
     });
   });
 
   group('exit hooks', () {
     test('a second SIGINT during cleanup exits at once', () async {
       if (Platform.isWindows) markTestSkipped('needs POSIX signals');
-      final dir = await Directory.systemTemp.createTemp('sig2');
-      addTearDown(() => dir.delete(recursive: true));
-      final script = File('${dir.path}/main.dart')
-        ..writeAsStringSync('''
+      final p = await startDart('''
 import 'dart:async';
 import 'dart:io';
 import 'package:dart_toolkit/src/exit.dart' as exit;
@@ -143,11 +146,7 @@ Future<void> main() async {
   await Future<void>.delayed(const Duration(seconds: 60));
 }
 ''');
-      final p = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        script.path,
-      ]);
-      final lines = p.stdout.transform(utf8.decoder).transform(const LineSplitter()).asBroadcastStream();
+      final lines = linesOf(p);
       await lines.firstWhere((l) => l == 'ready').timeout(const Duration(seconds: 30));
       p.kill(ProcessSignal.sigint);
       await lines.firstWhere((l) => l == 'cleaning').timeout(const Duration(seconds: 10));
@@ -156,7 +155,7 @@ Future<void> main() async {
       // The hook would hold the exit for its 5 s bound.
       expect(await p.exitCode.timeout(const Duration(seconds: 20)), 130);
       expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
-    }, timeout: const Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
   });
 
   group('Console.spin', () {
@@ -204,7 +203,7 @@ Future<void> main() async {
         'over',
       ], workingDirectory: root.path);
       expect(res.stderr, contains('5/3'));
-    }, timeout: const Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
 
     test('keep: false leaves no final line; a failure still prints', () async {
       final root = Directory.current;
@@ -217,7 +216,7 @@ Future<void> main() async {
       expect(res.stderr, contains('kept 2/2'));
       expect(res.stderr, isNot(contains('gone')));
       expect(res.stderr, contains('broken'));
-    }, timeout: const Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
 
     test('L2: control characters in labels are neutralised', () async {
       final root = Directory.current;
@@ -232,7 +231,7 @@ Future<void> main() async {
       await proc.exitCode;
       expect(err, contains('a\u{FFFD}[31mb\u{FFFD}c'));
       expect(err, isNot(contains('\x1b')));
-    }, timeout: const Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
 
     test('update fills in a total that arrives later; log prints above', () async {
       final root = Directory.current;
@@ -243,7 +242,7 @@ Future<void> main() async {
       ], workingDirectory: root.path);
       expect(res.stderr, contains('T 2/4'));
       expect(res.stderr, contains('logged above\n'));
-    }, timeout: const Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
 
     test('null total means unknown, like 0', () async {
       final bar = Console.bar(null, label: 'U');

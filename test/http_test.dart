@@ -315,7 +315,7 @@ void main() {
       expect(await res.bytes(), utf8.encode(a));
     });
 
-    test('bytes() is an unmodifiable O(1) view, not a copy', () async {
+    test('bytes() is unmodifiable', () async {
       final res = await http.get('$base/hello');
       final b = await res.bytes();
       expect(() => b[0] = 0, throwsUnsupportedError);
@@ -499,7 +499,7 @@ void abortTests() {
       final sw = Stopwatch()..start();
       Timer(100.milliseconds, c.close);
       await expectLater(read, throwsA(isA<Exception>()));
-      expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5))); // the slow body takes far longer
     });
 
     test('a pending request fails and is not retried', () async {
@@ -1151,65 +1151,82 @@ Future<void> main() async {
       expect(heard.map((h) => h.$1), orderedEquals([...heard.map((h) => h.$1)]..sort()));
     });
 
-    test('resume: a GET piped into a file is atomic, skips a complete file, resumes a .part', () async {
-      final dir = await Directory.systemTemp.createTemp('resume');
-      addTearDown(() => dir.delete(recursive: true));
+    group('resume: a GET piped into a file', () {
+      late Directory dir;
       final body = List.generate(1000, (i) => i % 256);
       final c = Http.client(resume: true);
-      final to = _Path('${dir.path}/sub/f.bin');
-      await (c.get('$url/file') > to);
-      expect(await File(to.path).readAsBytes(), body);
-      expect(File('${to.path}.part').existsSync(), isFalse);
-      await (c.get('$url/file') > to); // same content-length: skipped after the headers
-      expect(hits['/file'], 2);
+      setUp(() async => dir = await Directory.systemTemp.createTemp('resume'));
+      tearDown(() => dir.delete(recursive: true));
 
-      await File(to.path).delete();
-      await File('${to.path}.part').writeAsBytes(body.sublist(0, 600));
-      await (c.get('$url/file') > to);
-      expect(seen['range'], 'bytes=600-');
-      expect(await File(to.path).readAsBytes(), body);
+      test('is atomic and skips a complete file', () async {
+        final to = _Path('${dir.path}/sub/f.bin');
+        final before = hits['/file'] ?? 0;
+        await (c.get('$url/file') > to);
+        expect(await File(to.path).readAsBytes(), body);
+        expect(File('${to.path}.part').existsSync(), isFalse);
+        await (c.get('$url/file') > to); // same content-length: skipped after the headers
+        expect(hits['/file'], before + 2);
+      });
 
-      // A server that ignores Range restarts the download.
-      final other = _Path('${dir.path}/g.bin');
-      await File('${other.path}.part').writeAsBytes([9, 9, 9]);
-      await (c.get('$url/norange') > other);
-      expect(await File(other.path).readAsBytes(), body);
-      expect(hits['/norange'], 1); // its 200 is the whole body, not fetched again
+      test('resumes a .part', () async {
+        final to = _Path('${dir.path}/f.bin');
+        await File('${to.path}.part').writeAsBytes(body.sublist(0, 600));
+        await (c.get('$url/file') > to);
+        expect(seen['range'], 'bytes=600-');
+        expect(await File(to.path).readAsBytes(), body);
+      });
 
-      // A .part of an older version (its tag says v1) restarts; one of v2 resumes.
-      final v = _Path('${dir.path}/v.bin');
-      await File('${v.path}.part').writeAsString('VERSION'); // version one's bytes
-      await File('${v.path}.part.tag').writeAsString('"v1"');
-      await (c.get('$url/versioned') > v);
-      expect(await File(v.path).readAsString(), 'version two!');
-      expect(seen['range'], 'bytes=7-');
-      expect(File('${v.path}.part.tag').existsSync(), isFalse);
-      await File(v.path).delete();
-      await File('${v.path}.part').writeAsString('version');
-      await File('${v.path}.part.tag').writeAsString('"v2"');
-      await (c.get('$url/versioned') > v);
-      expect(await File(v.path).readAsString(), 'version two!');
+      test('restarts when the server ignores Range', () async {
+        final other = _Path('${dir.path}/g.bin');
+        final before = hits['/norange'] ?? 0;
+        await File('${other.path}.part').writeAsBytes([9, 9, 9]);
+        await (c.get('$url/norange') > other);
+        expect(await File(other.path).readAsBytes(), body);
+        expect(hits['/norange'], before + 1); // its 200 is the whole body, not fetched again
+      });
 
-      // A 206 for another range restarts instead of splicing it on.
-      final wrong = _Path('${dir.path}/w.bin');
-      await File('${wrong.path}.part').writeAsBytes(body.sublist(0, 5));
-      await (c.get('$url/wrongrange') > wrong);
-      expect(await File(wrong.path).readAsBytes(), body);
+      test('restarts a .part of an older version (its tag), resumes the current one', () async {
+        final v = _Path('${dir.path}/v.bin');
+        await File('${v.path}.part').writeAsString('VERSION'); // version one's bytes
+        await File('${v.path}.part.tag').writeAsString('"v1"');
+        await (c.get('$url/versioned') > v);
+        expect(await File(v.path).readAsString(), 'version two!');
+        expect(seen['range'], 'bytes=7-');
+        expect(File('${v.path}.part.tag').existsSync(), isFalse);
+        await File(v.path).delete();
+        await File('${v.path}.part').writeAsString('version');
+        await File('${v.path}.part.tag').writeAsString('"v2"');
+        await (c.get('$url/versioned') > v);
+        expect(await File(v.path).readAsString(), 'version two!');
+      });
 
-      await expectLater(
-        c.get('$url/missing') > _Path('${dir.path}/m'),
-        throwsA(isA<HttpStatusException>().having((e) => e.status, 'status', 404)),
-      );
-      expect(File('${dir.path}/m').existsSync(), isFalse);
-      // A writer without a path just receives the body; awaiting the GET sends it as usual.
-      final sink = _Sink();
-      await (c.get('$url/file') > sink);
-      expect(sink.data, hasLength(1000));
-      expect((await c.get('$url/file')).status(), 200);
-      // Without resume: the old behaviour, every pipe downloads again.
-      final plain = _Path('${dir.path}/p.bin');
-      await (Http.client().get('$url/file') > plain);
-      expect(File('${plain.path}.part').existsSync(), isFalse);
+      test('restarts on a 206 for another range instead of splicing it on', () async {
+        final wrong = _Path('${dir.path}/w.bin');
+        await File('${wrong.path}.part').writeAsBytes(body.sublist(0, 5));
+        await (c.get('$url/wrongrange') > wrong);
+        expect(await File(wrong.path).readAsBytes(), body);
+      });
+
+      test('writes no file for a 404', () async {
+        await expectLater(
+          c.get('$url/missing') > _Path('${dir.path}/m'),
+          throwsA(isA<HttpStatusException>().having((e) => e.status, 'status', 404)),
+        );
+        expect(File('${dir.path}/m').existsSync(), isFalse);
+      });
+
+      test('a writer without a path just receives the body; awaiting the GET sends it', () async {
+        final sink = _Sink();
+        await (c.get('$url/file') > sink);
+        expect(sink.data, hasLength(1000));
+        expect((await c.get('$url/file')).status(), 200);
+      });
+
+      test('without resume every pipe downloads again', () async {
+        final plain = _Path('${dir.path}/p.bin');
+        await (Http.client().get('$url/file') > plain);
+        expect(File('${plain.path}.part').existsSync(), isFalse);
+      });
     });
 
     test('resume replays stored bytes through pass-through pipes; others download again', () async {

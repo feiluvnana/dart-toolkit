@@ -18,16 +18,7 @@ Future<ProcessResult> runDart(
   Map<String, String>? env,
   Duration timeout = const Duration(seconds: 30),
 }) async {
-  final dir = await Directory.systemTemp.createTemp('child');
-  addTearDown(() => dir.delete(recursive: true));
-  final script = File('${dir.path}/main.dart');
-  await script.writeAsString(source);
-  final p = await Process.start(
-    Platform.resolvedExecutable,
-    ['--packages=${Directory.current.path}/.dart_tool/package_config.json', script.path, ...args],
-    workingDirectory: cwd ?? dir.path,
-    environment: env,
-  );
+  final p = await startDart(source, args: args, cwd: cwd, env: env);
   unawaited(
     () async {
       for (final (delay, text) in stdin) {
@@ -48,6 +39,25 @@ Future<ProcessResult> runDart(
   );
   return ProcessResult(p.pid, code, await out, await err);
 }
+
+/// Start [source] as a child Dart script (see [runDart]) and return the
+/// process, for tests that talk to it while it runs. Wait for a line it
+/// prints, never a fixed delay, before acting on it.
+Future<Process> startDart(String source, {List<String> args = const [], String? cwd, Map<String, String>? env}) async {
+  final dir = await Directory.systemTemp.createTemp('child');
+  addTearDown(() => dir.delete(recursive: true));
+  final script = File('${dir.path}/main.dart');
+  await script.writeAsString(source);
+  return Process.start(
+    Platform.resolvedExecutable,
+    ['--packages=${Directory.current.path}/.dart_tool/package_config.json', script.path, ...args],
+    workingDirectory: cwd ?? dir.path,
+    environment: env,
+  );
+}
+
+/// The lines [p] prints on stdout, for waiting on one with `firstWhere`.
+Stream<String> linesOf(Process p) => p.stdout.transform(utf8.decoder).transform(const LineSplitter()).asBroadcastStream();
 
 /// Run [body] as `main` of a child script whose working directory is [dir].
 /// The working directory is per process, so a test that needs one must not

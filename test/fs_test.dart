@@ -7,6 +7,7 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/poll.dart';
 
 void main() {
   late Directory tmp;
@@ -442,21 +443,14 @@ Future<void> main() async {
     test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
       final lock = p('run.lock');
       // A child script holds the lock until its stdin closes.
-      final dir = await Directory.systemTemp.createTemp('lockchild');
-      addTearDown(() => dir.delete(recursive: true));
-      await io.File('${dir.path}/main.dart').writeAsString('''
+      final holder = await startDart('''
 import 'dart:io' as io;
 import 'package:dart_toolkit/fs.dart';
 Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
   print('held');
   await io.stdin.drain<void>();
 });
-''');
-      final holder = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        '${dir.path}/main.dart',
-        lock,
-      ]);
+''', args: [lock]);
       await holder.stdout.transform(utf8.decoder).firstWhere((l) => l.contains('held'));
       await expectLater(
         Fs.file(lock).lock(() async => 1),
@@ -495,12 +489,12 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       final sub = d.watch().listen((f) => seen.add(f.path(from: d)));
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await d.file('a.txt').write('one'); // atomic: a temp file, then a rename
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(await eventually(() => seen.isNotEmpty), isTrue);
       await d.file('a.txt').delete();
       await Future<void>.delayed(const Duration(milliseconds: 600));
       await sub.cancel();
       expect(seen.toSet(), {'a.txt'});
-    });
+    }, tags: 'slow');
 
     test('list(match:) filters by a glob; ** recurses, {a,b} picks', () async {
       for (final f in ['a.jpg', 'b.png', 'c.txt', 'x/d.jpg', 'x/y/e.png', 'x/f.gif']) {

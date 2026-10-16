@@ -44,7 +44,11 @@ final class _Proxy {
     c.findProxy = (_) => 'DIRECT';
     c.connectionFactory = (url, _, _) async {
       final task = await Socket.startConnect(host, port);
-      return ConnectionTask.fromSocket(task.socket.then((s) => _socks(s, url, trusted)), task.cancel);
+      final socket = task.socket.then(
+        (s) => _socks(s, url, trusted),
+        onError: (Object e) => throw SocketException('SOCKS proxy $host:$port: $e'),
+      );
+      return ConnectionTask.fromSocket(socket, task.cancel);
     };
   }
 
