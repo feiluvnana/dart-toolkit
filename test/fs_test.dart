@@ -134,6 +134,18 @@ void main() {
       expect(await Fs.entry(p('dst.txt')), isNull);
     });
 
+    test('B10: a dest link that cannot be removed fails the copy, never writes through it', () async {
+      if (Platform.isWindows) return markTestSkipped('POSIX modes');
+      await Fs.file(p('outside.txt')).write('keep');
+      await Fs.file(p('a.txt')).write('new');
+      await io.Directory(p('ro')).create();
+      await io.Link(p('ro/x')).create(p('outside.txt'));
+      await Process.run('chmod', ['555', p('ro')]);
+      addTearDown(() => Process.run('chmod', ['755', p('ro')]));
+      await expectLater(Fs.file(p('a.txt')).copy(p('ro/x')), throwsA(isA<io.FileSystemException>()));
+      expect(await Fs.file(p('outside.txt')).text(), 'keep');
+    });
+
     test('dir copy into an existing tree merges, replacing files and links', () async {
       await Fs.file(p('src/a.txt')).write('new');
       await Fs.file(p('src/nested/b.txt')).write('b');

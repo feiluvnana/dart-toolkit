@@ -793,13 +793,11 @@ Future<void> _renameOver(io.File tmp, String target) async {
 
 /// Replace a dest symlink with nothing, so a file/dir copy replaces the
 /// link instead of following it to a target outside the tree.
+/// A delete that fails throws: copying on would write through the link.
 Future<void> _removeDestLink(String to) async {
-  try {
-    final t = await io.FileSystemEntity.type(to, followLinks: false);
-    if (t == io.FileSystemEntityType.link) {
-      await io.Link(to).delete();
-    }
-  } catch (_) {}
+  if (await io.FileSystemEntity.type(to, followLinks: false) == io.FileSystemEntityType.link) {
+    await io.Link(to).delete();
+  }
 }
 
 /// Throw before creating anything when the source is missing or of the wrong
