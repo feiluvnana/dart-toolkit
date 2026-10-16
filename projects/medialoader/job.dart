@@ -270,23 +270,22 @@ final class Index {
     return Index(file, await file.json(or: Json.of({})), dry: dry);
   }
 
-  Future<void> _saving = Future.value();
-
-  Future<void> save() => dry ? _saving : _saving = _saving.then((_) => _write(), onError: (_) => _write());
-
-  Future<void> _write() => file.write(
-    Json.encode({
-      'checked': checked.millisecondsSinceEpoch,
-      'newest': newest,
-      'posts': posts,
-      'hidden': [...hidden],
-      'stories': stories,
-      'profiles': profiles,
-      'highlights': {
-        for (final e in highlights.entries) e.key: [...e.value],
-      },
-    }),
-  );
+  Future<void> save() async {
+    if (dry) return;
+    await file.write(
+      Json.encode({
+        'checked': checked.millisecondsSinceEpoch,
+        'newest': newest,
+        'posts': posts,
+        'hidden': [...hidden],
+        'stories': stories,
+        'profiles': profiles,
+        'highlights': {
+          for (final e in highlights.entries) e.key: [...e.value],
+        },
+      }),
+    );
+  }
 }
 
 // The story seen first at [id]'s recorded time (now when new), so a story

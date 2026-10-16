@@ -221,12 +221,14 @@ final class File extends Entry with Reader, Writer {
     return File._(to);
   });
 
-  /// Replace the content with UTF-8 [text], atomically. Creates missing
-  /// parents. Returns this file. Bytes go through the one [Writer] path:
+  /// Replace the content with UTF-8 [text], atomically; writes to one path
+  /// land in call order. Creates missing parents. Returns this file. Bytes go through the one [Writer] path:
   /// `await (Reader.of(bytes) > file)`.
   Future<File> write(String text) async {
-    await _ensureParent(_path);
-    await _atomicWrite(Stream.value(utf8.encode(text)));
+    await _inOrder(() async {
+      await _ensureParent(_path);
+      await _atomicWrite(Stream.value(utf8.encode(text)));
+    });
     return this;
   }
 
@@ -358,10 +360,26 @@ final class File extends Entry with Reader, Writer {
   }
 
   @override
-  Future<void> consume(Stream<List<int>> input) async {
+  Future<void> consume(Stream<List<int>> input) => _inOrder(() async {
     await _ensureParent(_path);
     await _atomicWrite(input);
+  });
+
+  /// Runs [body] after every earlier write to this path in this process,
+  /// claimed at call time, so unawaited writes land in call order.
+  Future<void> _inOrder(Future<void> Function() body) {
+    final key = p.canonicalize(_path);
+    final done = (_writes[key] ?? Future<void>.value()).then((_) => body());
+    final tail = done.catchError((_) {});
+    _writes[key] = tail;
+    tail.whenComplete(() {
+      if (identical(_writes[key], tail)) _writes.remove(key);
+    });
+    return done;
   }
+
+  /// The last pending write per canonical path.
+  static final _writes = <String, Future<void>>{};
 
   Future<void> _atomicWrite(Stream<List<int>> input) async {
     // Writes go through symlinks to their real target: resolve first so

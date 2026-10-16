@@ -374,6 +374,16 @@ void main() {
       expect(await Fs.file(p('out.txt')).text(), 'data');
     });
 
+    test('unawaited writes to one path land in call order: the last one wins', () async {
+      final f = Fs.file(p('state.json'));
+      final writes = <Future<void>>[
+        for (var i = 1; i <= 50; i++) f.write(jsonEncode({for (var k = 0; k < i; k++) '$k': k})),
+      ];
+      writes.add(Mem('{"last":true}') > Fs.file('${tmp.path}/./state.json'));
+      await Future.wait(writes);
+      expect(await f.text(), '{"last":true}');
+    });
+
     test('a failed run keeps the old content and no temp file', () async {
       final f = Fs.file(p('keep.txt'));
       await f.write('OLD');
