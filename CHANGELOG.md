@@ -16,6 +16,7 @@
 - `http`: `Feed.run` no longer reports success when page work failed: it is `false` unless the end was reached with every `page.add(work)` true, and a work that threw fails the run with the first error once every page's work is done (it was mapped to `false` and dropped). medialoader drops its own `ok` flag.
 - `image`/`video`: the shared encode limit (half the cores) is a held `Pool`, so a job arriving as another finishes no longer takes the slot handed to a waiter and runs one encode too many.
 - `csv`: `response.rows()` decodes the body's charset like `csv()` does; it always read UTF-8 (`café` from a windows-1252 export came out as `caf�`).
+- `http`: a header the server sends as raw UTF-8 reads as UTF-8: a non-ASCII `location` redirect goes to the right URL (`/файл`, not `/%C3%91%C2%84…`), and `name()`/`header()` no longer give mojibake.
 
 **Performance**
 

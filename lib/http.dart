@@ -795,7 +795,8 @@ final class _Client extends Client {
         final resp = await _single(client, currentMethod, uri, currentBody, currentHeaders);
         final setCookie = resp.headers[HttpHeaders.setCookieHeader];
         if (setCookie != null) jar.storeSetCookies(_s.cookies, uri, setCookie);
-        final location = _isRedirect(resp.statusCode) ? resp.headers.value('location') : null;
+        final raw = _isRedirect(resp.statusCode) ? resp.headers.value('location') : null;
+        final location = raw == null ? null : _utf8Header(raw);
         if (location == null || location.isEmpty) {
           delivered = true;
           return Response._(resp, this, currentMethod, uri.toString(), head: currentMethod == 'HEAD');
@@ -1434,4 +1435,22 @@ String? _typeFor(String? name) {
     'zip' => 'application/zip',
     _ => null,
   };
+}
+
+/// A header value as the server sent it: dart:io reads header bytes as
+/// Latin-1, so a raw UTF-8 value (a non-ASCII `location`, a `filename="…"`)
+/// is decoded again when its bytes are valid UTF-8.
+String _utf8Header(String value) {
+  var high = false;
+  for (var i = 0; i < value.length; i++) {
+    final c = value.codeUnitAt(i);
+    if (c > 0xFF) return value;
+    if (c >= 0x80) high = true;
+  }
+  if (!high) return value;
+  try {
+    return utf8.decode(latin1.encode(value));
+  } on FormatException {
+    return value;
+  }
 }

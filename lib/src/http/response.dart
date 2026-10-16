@@ -143,7 +143,7 @@ final class Response with Reader implements Closeable {
   String? header(String name) {
     final values = _resp.headers[name];
     if (values == null || values.isEmpty) return null;
-    return values.join(', ');
+    return _utf8Header(values.join(', '));
   }
 
   /// The final URL, after redirects.

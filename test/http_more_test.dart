@@ -485,6 +485,43 @@ Future<void> main() async {
     expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 550)));
   });
 
+  test('raw UTF-8 header values read as UTF-8: Location and name() (B16)', () async {
+    final raw = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(raw.close);
+    final paths = <String>[];
+    raw.listen((sock) {
+      final head = StringBuffer();
+      late final StreamSubscription<List<int>> sub;
+      sub = sock.listen((data) {
+        head.write(latin1.decode(data));
+        if (!head.toString().contains('\r\n\r\n')) return;
+        unawaited(sub.cancel());
+        final path = '$head'.split(' ')[1];
+        paths.add(path);
+        sock.add(switch (path) {
+          '/start' => [
+            ...latin1.encode('HTTP/1.1 302 Found\r\nconnection: close\r\ncontent-length: 0\r\nlocation: '),
+            ...utf8.encode('/файл'),
+            ...latin1.encode('\r\n\r\n'),
+          ],
+          _ => [
+            ...latin1.encode('HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\ncontent-disposition: attachment; filename="'),
+            ...utf8.encode('файл.txt'),
+            ...latin1.encode('"\r\n\r\nok'),
+          ],
+        });
+        sock.flush().then((_) => sock.close());
+      });
+    });
+    final c = Http.client(retries: 0);
+    addTearDown(c.close);
+    final res = await c.get('http://127.0.0.1:${raw.port}/start');
+    expect(await res.text(), 'ok');
+    expect(paths.last, '/%D1%84%D0%B0%D0%B9%D0%BB');
+    expect(res.name(), 'файл.txt');
+    expect(res.header('content-disposition'), contains('файл.txt'));
+  });
+
   group('a body with no length', () {
     test('streams each line as it arrives (B2)', () async {
       final (_, base) = await serve((req) async {
