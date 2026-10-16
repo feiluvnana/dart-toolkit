@@ -169,6 +169,15 @@ void main() {
       expect(await Fs.file(p('outside.txt')).text(), 'o');
     });
 
+    test('M5: a matching copy to a path with a trailing slash leaves the links above it alone', () async {
+      await Fs.file(p('src/f.txt')).write('f');
+      await Fs.dir(p('real')).create();
+      await io.Link(p('alias')).create(p('real'));
+      await Fs.dir(p('src')).copy('${p('alias')}/dst/', match: '*.txt');
+      expect(await Fs.entry(p('alias')), isA<Link>());
+      expect(await Fs.file(p('real/dst/f.txt')).text(), 'f');
+    });
+
     test('copy and move keep the type and make parents', () async {
       await Fs.file(p('a.txt')).write('x');
       final c = await Fs.file(p('a.txt')).copy(p('d/e.txt'));

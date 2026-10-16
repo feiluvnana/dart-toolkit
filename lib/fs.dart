@@ -638,17 +638,21 @@ final class Dir extends Entry {
 Future<void> _copyMatching(String from, String to, String match, Run run) async {
   final cut = from.endsWith('/') || from.endsWith(r'\') ? from.length : from.length + 1;
   final found = await Dir._(from)._list(match, Run());
-  final made = <String>{};
+  // Normalised, so the walk up from a member stops exactly at the root
+  // (`dst/`, `a/../dst`): above it, a link is the caller's and stays.
+  final root = p.normalize(to);
+  final made = <String>{root};
+  await io.Directory(root).create();
   Future<void> folder(String dir) async {
     if (!made.add(dir)) return;
-    if (dir != to) await folder(p.dirname(dir));
+    await folder(p.dirname(dir));
     if (await io.FileSystemEntity.isLink(dir)) await io.Link(dir).delete();
     await io.Directory(dir).create();
   }
 
   final files = <(String, String)>[];
   for (final e in found) {
-    final dest = p.join(to, e._path.substring(cut));
+    final dest = p.join(root, e._path.substring(cut));
     await folder(e is Dir ? dest : p.dirname(dest));
     if (e is Link) {
       await Link._(dest)._create(await io.Link(e._path).target());
