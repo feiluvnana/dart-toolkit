@@ -175,7 +175,7 @@ void main() {
       expect((v.width(), v.height(), v.codec(), v.audioCodec()), (640, 360, 'h264', 'aac'));
       expect(v.format(), VideoFormat.mp4);
       expect(v.fps(), closeTo(30, 0.01));
-      expect(v.duration().inMilliseconds, closeTo(2000, 100));
+      expect(v.duration()!.inMilliseconds, closeTo(2000, 100));
       expect(v.bitrate(), greaterThan(0));
     });
 
@@ -189,6 +189,13 @@ void main() {
     test('unknown bytes are a ContentException', () async {
       await expectLater(_video(List.filled(64, 7)), throwsA(isA<ContentException>()));
       await expectLater(Mem.bytes(List.filled(64, 7)).video(), throwsA(isA<ContentException>()));
+    });
+
+    test('E9: audio only has a null fps, as it has a null width', () async {
+      final audio = await make('probe_only.m4a', ['-i', clip, '-vn', '-c', 'copy']);
+      final v = await Fs.file(audio).video();
+      expect((v.width(), v.fps()), (null, null));
+      expect(v.duration()!.inMilliseconds, closeTo(2000, 150));
     });
 
     test('a rotated video reports its displayed size', () async {
@@ -250,7 +257,7 @@ void main() {
           Fs.file(out));
       final v = await Fs.file(out).video();
       expect((v.width(), v.height(), v.codec(), v.audioCodec()), (320, 180, 'vp9', 'opus'));
-      expect(v.duration().inMilliseconds, closeTo(1500, 150));
+      expect(v.duration()!.inMilliseconds, closeTo(1500, 150));
       expect(seen.where((s) => s.$2 == 1500000), isNotEmpty);
       expect(seen.last, (1500000, 1500000), reason: 'the copy after the encode adds nothing');
     });

@@ -178,11 +178,11 @@ final class Video {
   /// Height in pixels as displayed; null for audio only.
   int? height() => _info.height;
 
-  /// Length; [Duration.zero] when unknown (a live stream).
-  Duration duration() => _info.duration;
+  /// Length; null when unknown (a live stream).
+  Duration? duration() => _info.duration;
 
-  /// Frames per second; 0 for audio only.
-  double fps() => _info.fps;
+  /// Frames per second; null for audio only (or when ffprobe gives none).
+  double? fps() => _info.fps;
 
   /// The video codec as ffprobe names it (`h264`, `hevc`, `av1`, `vp9`), or
   /// null for audio only.
@@ -354,9 +354,8 @@ final class Video {
     if (format == VideoFormat.mp4 || format == VideoFormat.mov || format == VideoFormat.m4a) {
       args.addAll(['-movflags', '+faststart']);
     }
-    final total = info.duration > Duration.zero
-        ? ((end ?? info.duration) - (start ?? Duration.zero)).inMicroseconds
-        : null;
+    final length = info.duration;
+    final total = length == null ? null : ((end ?? length) - (start ?? Duration.zero)).inMicroseconds;
     await media.ffmpeg([...args, '-f', _muxer(format), '-y', out], needs: needs, total: total, onProgress: onProgress);
   }
 }
@@ -415,8 +414,8 @@ final class _Info {
     return _Info(
       w,
       h,
-      secs == null ? Duration.zero : Duration(microseconds: (secs * 1e6).round()),
-      _rate('${v?['avg_frame_rate'] ?? ''}') ?? _rate('${v?['r_frame_rate'] ?? ''}') ?? 0,
+      secs == null || secs <= 0 ? null : Duration(microseconds: (secs * 1e6).round()),
+      v == null ? null : _rate('${v['avg_frame_rate'] ?? ''}') ?? _rate('${v['r_frame_rate'] ?? ''}'),
       v?['codec_name'] as String?,
       a?['codec_name'] as String?,
       int.tryParse('${format['bit_rate'] ?? ''}'),
@@ -437,8 +436,8 @@ final class _Info {
 
   final int? width;
   final int? height;
-  final Duration duration;
-  final double fps;
+  final Duration? duration;
+  final double? fps;
   final String? codec;
   final String? audio;
   final int? bitrate;
@@ -516,8 +515,8 @@ extension ReaderFutureVideo on Future<Reader> {
 extension VideoFuture on Future<Video> {
   Future<int?> width() async => (await this).width();
   Future<int?> height() async => (await this).height();
-  Future<Duration> duration() async => (await this).duration();
-  Future<double> fps() async => (await this).fps();
+  Future<Duration?> duration() async => (await this).duration();
+  Future<double?> fps() async => (await this).fps();
   Future<String?> codec() async => (await this).codec();
   Future<String?> audioCodec() async => (await this).audioCodec();
   Future<VideoFormat?> format() async => (await this).format();

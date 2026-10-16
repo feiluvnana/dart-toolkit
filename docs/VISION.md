@@ -1056,7 +1056,7 @@ final class Video {
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // a URL (HLS/DASH); a file is file.video()
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
   static Task<Compression> compress(String path, {int quality = 70});   // a probe sees media time
-  int? width();  int? height();  Duration duration();  double fps();
+  int? width();  int? height();  Duration? duration();  double? fps();   // null when unknown, as width/height
   VideoFormat? format();  String? codec();  String? audioCodec();  int? bitrate();
   Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,
       Duration? start, Duration? end});   // a probe on it sees the encode in media time
