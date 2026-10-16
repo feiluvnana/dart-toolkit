@@ -52,14 +52,25 @@ final class Server implements Closeable {
           }
         }
       }
+      // Encoded before the status goes out, so a value jsonEncode cannot
+      // take is a logged 500, not a half-written 200.
+      String? json;
+      if (reply case _JsonReply(:final _value)) {
+        try {
+          json = jsonEncode(_value);
+        } catch (e) {
+          stderr.writeln('✗ ${req.method} ${names.redact(req.uri)}: $e');
+          reply = const Reply.status(500);
+        }
+      }
       res.statusCode = reply._status;
       switch (reply) {
         case _TextReply(:final _text):
           res.headers.contentType = ContentType('text', 'plain', charset: 'utf-8');
           res.write(_text);
-        case _JsonReply(:final _value):
+        case _JsonReply():
           res.headers.contentType = ContentType('application', 'json', charset: 'utf-8');
-          res.write(jsonEncode(_value));
+          res.write(json);
         case _StreamReply(:final _body, :final _type):
           final type = _type ?? _typeFor(_body.origin().name());
           if (type != null) res.headers.set('content-type', type);
@@ -70,6 +81,9 @@ final class Server implements Closeable {
           break;
       }
     } catch (e) {
+      // A body stream that fails after the headers: the status is gone,
+      // so the log is the only place it shows.
+      stderr.writeln('✗ ${req.method} ${names.redact(req.uri)}: $e');
       try {
         res.statusCode = 500;
       } catch (_) {}

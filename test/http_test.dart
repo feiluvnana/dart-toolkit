@@ -1469,6 +1469,26 @@ void serveTests() {
       expect(log.err, contains('✗ GET /boom?code=***: Bad state: handler failed'));
     });
 
+    test('B8: a reply that fails after the handler is logged; bad JSON is a 500', () async {
+      final log = await capture(() async {
+        final server = await Http.serve(
+          (r) async => switch (r.path()) {
+            '/json' => Reply.json({'when': DateTime(2026)}), // jsonEncode cannot take a DateTime
+            _ => Reply.stream(_Failing()),
+          },
+        );
+        addTearDown(server.close);
+        final c = Http.client(retries: 0);
+        expect(await c.get('${server.url()}json').status(), 500);
+        try {
+          await c.get('${server.url()}stream').text();
+        } catch (_) {}
+        await c.close();
+      });
+      expect(log.err, contains('✗ GET /json: Converting object to an encodable object failed'));
+      expect(log.err, contains('✗ GET /stream: Bad state: disk gone'));
+    });
+
     test('close waits for a request in flight, then refuses new ones', () async {
       final gate = Completer<void>();
       final server = await Http.serve((r) async {
@@ -1485,4 +1505,13 @@ void serveTests() {
       await expectLater(c.get(server.url()), throwsA(isA<IOException>()));
     });
   });
+}
+
+/// A body that fails after its first chunk.
+final class _Failing with Reader {
+  @override
+  Stream<List<int>> stream() async* {
+    yield 'partial'.codeUnits;
+    throw StateError('disk gone');
+  }
 }
