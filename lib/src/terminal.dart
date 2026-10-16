@@ -1840,9 +1840,11 @@ final class TerminalCaps {
   /// [hasTerminal] is stderr's (console) or stdout's (tui) terminal check;
   /// pass the stream the facade draws on.
   static TerminalCaps of(Map<String, String> env, {required bool hasTerminal}) {
-    final noColor = env['NO_COLOR'] != null;
+    // no-color.org: set and not empty. FORCE_COLOR: any level (1-3, true)
+    // but empty, 0 or false.
+    final noColor = (env['NO_COLOR'] ?? '').isNotEmpty;
     final force = env['FORCE_COLOR']?.toLowerCase();
-    final forced = force == '1' || force == 'true' || force == 'always';
+    final forced = force != null && force != '' && force != '0' && force != 'false';
     final colorterm = (env['COLORTERM'] ?? '').toLowerCase();
     final tm = (env['TERM'] ?? '').toLowerCase();
     final locale = [

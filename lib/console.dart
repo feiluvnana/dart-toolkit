@@ -140,8 +140,8 @@ abstract final class Console {
   }
 
   /// Color codes when the terminal capabilities say styled: a terminal, or
-  /// `FORCE_COLOR=1`/`true`/`always` even when piped; `NO_COLOR` (any value)
-  /// always wins. See `TerminalCaps` in `src/terminal.dart`.
+  /// `FORCE_COLOR` (any value but empty, `0`, `false`) even when piped; a
+  /// non-empty `NO_COLOR` always wins. See `TerminalCaps` in `src/terminal.dart`.
   static bool get _styled => term.TerminalCaps.current.styled;
 
   /// Live redraw (spinners, bars, menu repaints): needs a terminal that

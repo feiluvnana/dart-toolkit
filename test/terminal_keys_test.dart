@@ -127,6 +127,18 @@ void main() {
       expect((xterm.styled, xterm.animated, xterm.color256, xterm.ascii), (true, true, true, false));
       expect(TerminalCaps.isDumb({'TERM': 'DUMB'}), isTrue);
     });
+
+    test('P9: an empty NO_COLOR keeps colour; any FORCE_COLOR but empty, 0 or false forces it', () {
+      bool styled(Map<String, String> env) => TerminalCaps.of({'TERM': 'dumb', ...env}, hasTerminal: false).styled;
+      expect(TerminalCaps.of({'TERM': 'xterm', 'NO_COLOR': ''}, hasTerminal: true).styled, isTrue);
+      expect(TerminalCaps.of({'TERM': 'xterm', 'NO_COLOR': '1'}, hasTerminal: true).styled, isFalse);
+      for (final v in ['1', '2', '3', 'true', 'always', 'yes']) {
+        expect(styled({'FORCE_COLOR': v}), isTrue, reason: v);
+      }
+      for (final v in ['', '0', 'false', 'FALSE']) {
+        expect(styled({'FORCE_COLOR': v}), isFalse, reason: v);
+      }
+    });
   });
 
   test('combining marks, ZWSP and medial jamo take no cell (as wcwidth)', () {
