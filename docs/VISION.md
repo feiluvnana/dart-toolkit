@@ -1033,7 +1033,7 @@ enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // a URL (HLS/DASH); a file is file.video()
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
-  static Task<Compression> compress(String path, {int quality = 70, VideoCodec? codec});   // a probe sees media time
+  static Task<Compression> compress(String path, {int quality = 70});   // a probe sees media time
   int? width();  int? height();  Duration duration();  double fps();
   VideoFormat? format();  String? codec();  String? audioCodec();  int? bitrate();
   Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,

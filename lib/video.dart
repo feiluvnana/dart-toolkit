@@ -136,17 +136,17 @@ final class Video {
   }
 
   /// Re-encode the video at [path] in its own container (h264 for MP4/MOV/
-  /// MKV, VP9 for WebM; [codec] overrides) and replace it, atomically, only
+  /// MKV, VP9 for WebM; another codec is `encode(codec:)`) and replace it, atomically, only
   /// when at least 5% smaller. Audio is copied, not re-encoded. Returns
   /// [Compressed] with the sizes before and after, or [Kept] with the
   /// reason: not a video, AVI or audio only, or no smaller. A [Task]: a
   /// probe shows the encode in media time (`1:12/4:30  3.4×`).
-  static Task<Compression> compress(String path, {int quality = 70, VideoCodec? codec}) {
+  static Task<Compression> compress(String path, {int quality = 70}) {
     media.checkQuality(quality);
-    return task((run) => _compress(path, quality, codec, run));
+    return task((run) => _compress(path, quality, run));
   }
 
-  static Future<Compression> _compress(String path, int quality, VideoCodec? codec, Run run) async {
+  static Future<Compression> _compress(String path, int quality, Run run) async {
     final head = await _head(path);
     final format = sniff(head);
     if (format == null) return const Kept(KeptReason.unknown);
@@ -158,7 +158,7 @@ final class Video {
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     return media.deletedOnExit(tmp, () async {
       try {
-        await video._encodeTo(tmp, format, quality: quality, codec: codec, onProgress: _reporter(run));
+        await video._encodeTo(tmp, format, quality: quality, onProgress: _reporter(run));
       } catch (_) {
         await io.File(tmp).delete().catchError((_) => io.File(tmp));
         rethrow;
