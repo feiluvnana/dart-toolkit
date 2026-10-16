@@ -22,8 +22,8 @@
 ///   (plus [Reader]/[Closeable]).
 /// - [Client] `sent` counts the requests put on the wire.
 /// - [Body] is a sealed request body: `.text` `.bytes` `.form` `.json`
-///   `.multipart` `.stream`. A [Body.stream] (or a multipart with a
-///   [Reader]) is sent once and never retried.
+///   `.multipart` `.stream`. A [Body.stream] (or a multipart with
+///   `files:`) is sent once and never retried.
 /// - [HttpStatusException] is what `check` and piping a non-2xx body throw;
 ///   [HttpRequestException] is a request that was aborted or could not
 ///   follow a redirect.
@@ -84,14 +84,14 @@ sealed class Body {
   /// Streamed from [reader]: sent once, never retried.
   const factory Body.stream(Reader reader) = _StreamBody;
 
-  /// `multipart/form-data`: a `String` value is a field, a [Reader] a file
-  /// (its `origin().name()` is the filename, the type comes from it),
-  /// streamed. With a [Reader] the body is sent once, like [Body.stream].
+  /// `multipart/form-data`: [fields] as text, then [files] streamed from
+  /// their readers (`origin().name()` is the filename, the type comes from
+  /// it). With [files] the body is sent once, like [Body.stream].
   ///
   /// ```dart
-  /// await api.post('upload', body: .multipart({'title': 'Cat', 'file': Fs.file('cat.jpg')}));
+  /// await api.post('upload', body: .multipart({'title': 'Cat'}, files: {'file': Fs.file('cat.jpg')}));
   /// ```
-  const factory Body.multipart(Map<String, Object> parts) = _MultipartBody;
+  const factory Body.multipart(Map<String, String> fields, {Map<String, Reader> files}) = _MultipartBody;
 
   /// Whether the bytes can be produced again (a retry, a 307/308 resend).
   bool get _resendable => true;
@@ -133,36 +133,33 @@ final class _StreamBody extends Body {
 }
 
 final class _MultipartBody extends Body {
-  const _MultipartBody(this._parts) : super._();
+  const _MultipartBody(this._fields, {this._files = const {}}) : super._();
 
-  final Map<String, Object> _parts;
+  final Map<String, String> _fields;
+  final Map<String, Reader> _files;
 
   @override
-  bool get _resendable => !_parts.values.any((v) => v is Reader);
+  bool get _resendable => _files.isEmpty;
 
   /// The body as byte chunks and [Reader]s, in order.
   List<Object> _pieces(String boundary) {
     String quote(String s) => s.replaceAll('"', '%22').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
-    final out = <Object>[];
-    for (final MapEntry(:key, :value) in _parts.entries) {
-      final head = StringBuffer('--$boundary\r\nContent-Disposition: form-data; name="${quote(key)}"');
-      switch (value) {
-        case String():
-          head.write('\r\n\r\n');
-          out.add(utf8.encode('$head$value\r\n'));
-        case Reader():
-          final origin = value.origin();
-          final file = origin.name() ?? origin.path()?.split(RegExp(r'[\\/]')).last ?? key;
-          head.write(
-            '; filename="${quote(file)}"\r\nContent-Type: ${_typeFor(file) ?? 'application/octet-stream'}\r\n\r\n',
-          );
-          out
-            ..add(utf8.encode('$head'))
-            ..add(value)
-            ..add(const [13, 10]);
-        default:
-          throw ArgumentError.value(value, key, 'a multipart value must be a String or a Reader');
-      }
+    String head(String name) => '--$boundary\r\nContent-Disposition: form-data; name="${quote(name)}"';
+    final out = <Object>[
+      for (final MapEntry(:key, :value) in _fields.entries) utf8.encode('${head(key)}\r\n\r\n$value\r\n'),
+    ];
+    for (final MapEntry(:key, :value) in _files.entries) {
+      final origin = value.origin();
+      final file = origin.name() ?? origin.path()?.split(RegExp(r'[\\/]')).last ?? key;
+      out
+        ..add(
+          utf8.encode(
+            '${head(key)}; filename="${quote(file)}"\r\n'
+            'Content-Type: ${_typeFor(file) ?? 'application/octet-stream'}\r\n\r\n',
+          ),
+        )
+        ..add(value)
+        ..add(const [13, 10]);
     }
     out.add(utf8.encode('--$boundary--\r\n'));
     return out;

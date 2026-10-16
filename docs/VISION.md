@@ -248,10 +248,10 @@ sealed class Client implements Closeable {
   Future<Response> post(String url, {Body? body, Map<String, Object?>? query, Map<String, String>? headers}); // put, patch
   Future<void> close();                           // cancels this client's requests and waits; idempotent
 }
-sealed class Body {                              // stream (or multipart with a Reader): sent once, never retried
+sealed class Body {                              // stream (or multipart with files): sent once, never retried
   const factory Body.text(String text);  const factory Body.bytes(List<int> bytes);
   const factory Body.form(Map<String, Object?> fields);  const factory Body.json(Object? value);
-  const factory Body.multipart(Map<String, Object> parts);   // String = field, Reader = file (streamed)
+  const factory Body.multipart(Map<String, String> fields, {Map<String, Reader> files});   // files stream
   const factory Body.stream(Reader reader);
 }
 final class Response with Reader implements Closeable {

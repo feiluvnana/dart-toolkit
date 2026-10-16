@@ -455,10 +455,9 @@ Future<void> main() async {
     );
     final dir = await temp();
     await File('${dir.path}/cat.png').writeAsString('PNG!');
-    final up = await c.post('$url/multipart', body: .multipart({'file': _File('${dir.path}/cat.png')})).text();
+    final up = await c.post('$url/multipart', body: .multipart(const {}, files: {'file': _File('${dir.path}/cat.png')})).text();
     expect(up, contains('|-1|'));
     expect(up, contains('name="file"; filename="cat.png"\r\nContent-Type: image/png\r\n\r\nPNG!\r\n'));
-    expect(() => c.post('$url/multipart', body: .multipart({'n': 1})), throwsArgumentError);
   });
 
   test('Rate(perHost: true) paces each host apart', () async {
