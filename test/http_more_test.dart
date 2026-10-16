@@ -107,7 +107,11 @@ void main() {
         case '/ua':
           res.write(r.headers.value('user-agent'));
         case '/seen':
-          res.write([for (final h in ['accept', 'sec-fetch-mode', 'upgrade-insecure-requests']) r.headers.value(h)].join('|'));
+          res.write(
+            [
+              for (final h in ['accept', 'sec-fetch-mode', 'upgrade-insecure-requests']) r.headers.value(h),
+            ].join('|'),
+          );
         case '/private':
           res.statusCode = 302;
           res.headers.set('location', '/accounts/login/?next=/private');
@@ -168,7 +172,10 @@ void main() {
       seen.add('${r.method} ${r.headers.value('x-m')} ${await utf8.decodeStream(r)}'.trim());
       await r.response.close();
     });
-    final pool = Http.pool([Http.client(headers: {'x-m': 'a'}), Http.client(headers: {'x-m': 'b'})]);
+    final pool = Http.pool([
+      Http.client(headers: {'x-m': 'a'}),
+      Http.client(headers: {'x-m': 'b'}),
+    ]);
     addTearDown(pool.close);
     for (final res in [
       await pool.head('$u/'),
@@ -260,7 +267,11 @@ void main() {
   test('S3: secret client headers go only to the base origin, or the first one without base', () async {
     final seen = <String, Map<String, String?>>{};
     final (other, _) = await serve((r) {
-      seen['${r.uri}'] = {'auth': r.headers.value('authorization'), 'key': r.headers.value('x-api-key'), 'ua': r.headers.value('x-app')};
+      seen['${r.uri}'] = {
+        'auth': r.headers.value('authorization'),
+        'key': r.headers.value('x-api-key'),
+        'ua': r.headers.value('x-app'),
+      };
       r.response.close();
     });
     final evil = 'http://localhost:${other.port}'; // another origin: localhost, not 127.0.0.1
@@ -335,9 +346,7 @@ Future<void> main() async {
           ..headers.set('location', '$url/ua')
           ..close(),
       );
-      final run = await capture(
-        () => Http.client().get('https://localhost:${s.port}/x').status(),
-      );
+      final run = await capture(() => Http.client().get('https://localhost:${s.port}/x').status());
       expect(run.value, 200);
       expect(run.err, contains('redirected from https to $url/ua'));
     });
@@ -380,16 +389,30 @@ Future<void> main() async {
   });
 
   group('browser headers and login', () {
-    test('HttpUtils.page/api send what a browser sends; later and per-call headers win; the user-agent stays', () async {
-      expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), startsWith('text/html,'));
-      expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), endsWith('|navigate|1'));
-      expect(await Http.client(headers: HttpUtils.api).get('$url/seen').text(), '*/*|cors|null');
-      final json = Http.client(headers: {...HttpUtils.api, 'Accept': 'application/json'});
-      expect(await json.get('$url/seen').text(), startsWith('application/json|'));
-      expect(await Http.client(headers: HttpUtils.api).get('$url/seen', headers: {'accept': 'text/csv'}).text(), startsWith('text/csv|'));
-      expect(await Http.client(headers: HttpUtils.page).get('$url/ua').text(), contains('Chrome/'), reason: 'the user-agent fallback still applies');
-      expect(await Http.client().get('$url/seen').text(), contains('null|null'), reason: 'none without the header set');
-    });
+    test(
+      'HttpUtils.page/api send what a browser sends; later and per-call headers win; the user-agent stays',
+      () async {
+        expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), startsWith('text/html,'));
+        expect(await Http.client(headers: HttpUtils.page).get('$url/seen').text(), endsWith('|navigate|1'));
+        expect(await Http.client(headers: HttpUtils.api).get('$url/seen').text(), '*/*|cors|null');
+        final json = Http.client(headers: {...HttpUtils.api, 'Accept': 'application/json'});
+        expect(await json.get('$url/seen').text(), startsWith('application/json|'));
+        expect(
+          await Http.client(headers: HttpUtils.api).get('$url/seen', headers: {'accept': 'text/csv'}).text(),
+          startsWith('text/csv|'),
+        );
+        expect(
+          await Http.client(headers: HttpUtils.page).get('$url/ua').text(),
+          contains('Chrome/'),
+          reason: 'the user-agent fallback still applies',
+        );
+        expect(
+          await Http.client().get('$url/seen').text(),
+          contains('null|null'),
+          reason: 'none without the header set',
+        );
+      },
+    );
 
     test('login: landing on a sign-in page throws SessionException, a ToolkitException', () async {
       final api = Http.client(login: ['/accounts/login']);
@@ -398,7 +421,11 @@ Future<void> main() async {
         throwsA(isA<SessionException>().having((e) => e.url, 'url', contains('/accounts/login/'))),
       );
       expect(await api.get('$url/ua').status(), 200);
-      await expectLater(api.copy().get('$url/private'), throwsA(isA<ToolkitException>()), reason: 'a copy keeps login:');
+      await expectLater(
+        api.copy().get('$url/private'),
+        throwsA(isA<ToolkitException>()),
+        reason: 'a copy keeps login:',
+      );
     });
   });
 
@@ -483,7 +510,9 @@ Future<void> main() async {
     );
     final dir = await temp();
     await File('${dir.path}/cat.png').writeAsString('PNG!');
-    final up = await c.post('$url/multipart', body: .multipart(const {}, files: {'file': _File('${dir.path}/cat.png')})).text();
+    final up = await c
+        .post('$url/multipart', body: .multipart(const {}, files: {'file': _File('${dir.path}/cat.png')}))
+        .text();
     expect(up, contains('|-1|'));
     expect(up, contains('name="file"; filename="cat.png"\r\nContent-Type: image/png\r\n\r\nPNG!\r\n'));
   });
@@ -496,10 +525,15 @@ Future<void> main() async {
     expect(await c.post('$url/multipart', body: .stream(cat)).text(), 'image/png|4|PNG!');
     expect(await c.post('$url/multipart', body: .stream(Reader.of(utf8.encode('abc')))).text(), 'null|3|abc');
     expect(
-      await c.post('$url/multipart', body: .stream(cat), headers: {'content-type': 'x/y', 'content-length': '4'}).text(),
+      await c
+          .post('$url/multipart', body: .stream(cat), headers: {'content-type': 'x/y', 'content-length': '4'})
+          .text(),
       'x/y|4|PNG!',
     );
-    expect(await c.post('$url/multipart', body: .stream(cat | _Upper())).text(), 'image/png|-1|PNG!'); // the name stays, as in a multipart
+    expect(
+      await c.post('$url/multipart', body: .stream(cat | _Upper())).text(),
+      'image/png|-1|PNG!',
+    ); // the name stays, as in a multipart
   });
 
   test('M10: lazy readers name their part: an archive is archive.<format>', () async {
@@ -545,7 +579,9 @@ Future<void> main() async {
             ...latin1.encode('\r\n\r\n'),
           ],
           _ => [
-            ...latin1.encode('HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\ncontent-disposition: attachment; filename="'),
+            ...latin1.encode(
+              'HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\ncontent-disposition: attachment; filename="',
+            ),
             ...utf8.encode('файл.txt'),
             ...latin1.encode('"\r\n\r\nok'),
           ],

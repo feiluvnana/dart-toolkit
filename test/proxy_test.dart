@@ -50,10 +50,11 @@ FutureOr<bool> Function(List<int>, Socket, Stream<Uint8List>) answer(int reply, 
     };
 
 void main() {
-  Future<String> through(ServerSocket p, {String scheme = 'socks5', String host = 'example.test'}) =>
-      Http.client(proxy: '$scheme://127.0.0.1:${p.port}', retries: 0, timeout: const Duration(seconds: 5))
-          .get('http://$host/')
-          .text();
+  Future<String> through(ServerSocket p, {String scheme = 'socks5', String host = 'example.test'}) => Http.client(
+    proxy: '$scheme://127.0.0.1:${p.port}',
+    retries: 0,
+    timeout: const Duration(seconds: 5),
+  ).get('http://$host/').text();
 
   for (final type in [1, 3, 4]) {
     test('T5: a success reply with address type $type tunnels the request', () async {

@@ -19,12 +19,45 @@ Uint8List jpeg(int w, int h, {int? orientation, int components = 3}) {
   final exif = orientation == null
       ? <int>[]
       : () {
-          final tiff = [...'MM'.codeUnits, 0, 0x2A, ...be32(8), ...be16(1), ...be16(0x0112), ...be16(3), ...be32(1), ...be16(orientation), 0, 0, ...be32(0)];
+          final tiff = [
+            ...'MM'.codeUnits,
+            0,
+            0x2A,
+            ...be32(8),
+            ...be16(1),
+            ...be16(0x0112),
+            ...be16(3),
+            ...be32(1),
+            ...be16(orientation),
+            0,
+            0,
+            ...be32(0),
+          ];
           final body = [...'Exif'.codeUnits, 0, 0, ...tiff];
           return [0xFF, 0xE1, ...be16(body.length + 2), ...body];
         }();
-  final sof = [8, ...be16(h), ...be16(w), components, for (var c = 0; c < components; c++) ...[c + 1, 0x11, 0]];
-  return Uint8List.fromList([0xFF, 0xD8, ...exif, 0xFF, 0xC0, ...be16(sof.length + 2), ...sof, 0xFF, 0xDA, 0, 2, 0xFF, 0xD9]);
+  final sof = [
+    8,
+    ...be16(h),
+    ...be16(w),
+    components,
+    for (var c = 0; c < components; c++) ...[c + 1, 0x11, 0],
+  ];
+  return Uint8List.fromList([
+    0xFF,
+    0xD8,
+    ...exif,
+    0xFF,
+    0xC0,
+    ...be16(sof.length + 2),
+    ...sof,
+    0xFF,
+    0xDA,
+    0,
+    2,
+    0xFF,
+    0xD9,
+  ]);
 }
 
 List<int> chunk(String type, List<int> data) => [...be32(data.length), ...type.codeUnits, ...data, 0, 0, 0, 0];
@@ -68,19 +101,26 @@ Uint8List vp8l(int w, int h) => riff('VP8L', [0x2F, ...le32((w - 1) | (h - 1) <<
 Uint8List vp8(int w, int h) => riff('VP8 ', [0, 0, 0, 0x9D, 0x01, 0x2A, ...le16(w), ...le16(h), 0, 0]);
 
 /// A BMP of [w]x[h]; a negative [h] is top-down.
-Uint8List bmp(int w, int h) => Uint8List.fromList([...'BM'.codeUnits, ...List.filled(16, 0), ...le32(w), ...le32(h), ...List.filled(30, 0)]);
+Uint8List bmp(int w, int h) =>
+    Uint8List.fromList([...'BM'.codeUnits, ...List.filled(16, 0), ...le32(w), ...le32(h), ...List.filled(30, 0)]);
 
 void main() {
   final samples = <String, (Uint8List, media.Header)>{
     'jpeg': (jpeg(640, 480), (width: 640, height: 480, orientation: 1, animated: false, components: 3)),
-    'jpeg exif 6': (jpeg(640, 480, orientation: 6), (width: 640, height: 480, orientation: 6, animated: false, components: 3)),
+    'jpeg exif 6': (
+      jpeg(640, 480, orientation: 6),
+      (width: 640, height: 480, orientation: 6, animated: false, components: 3),
+    ),
     'jpeg cmyk': (jpeg(10, 20, components: 4), (width: 10, height: 20, orientation: 1, animated: false, components: 4)),
     'png': (png(3, 5), (width: 3, height: 5, orientation: 1, animated: false, components: 3)),
     'apng': (png(3, 5, animated: true), (width: 3, height: 5, orientation: 1, animated: true, components: 3)),
     'gif': (gif(7, 9, 1), (width: 7, height: 9, orientation: 1, animated: false, components: 3)),
     'gif anim': (gif(7, 9, 2), (width: 7, height: 9, orientation: 1, animated: true, components: 3)),
     'webp vp8x': (vp8x(300, 200), (width: 300, height: 200, orientation: 1, animated: false, components: 3)),
-    'webp vp8x anim': (vp8x(300, 200, animated: true), (width: 300, height: 200, orientation: 1, animated: true, components: 3)),
+    'webp vp8x anim': (
+      vp8x(300, 200, animated: true),
+      (width: 300, height: 200, orientation: 1, animated: true, components: 3),
+    ),
     'webp vp8l': (vp8l(64, 32), (width: 64, height: 32, orientation: 1, animated: false, components: 3)),
     'webp vp8': (vp8(64, 32), (width: 64, height: 32, orientation: 1, animated: false, components: 3)),
     'bmp top-down': (bmp(12, -34), (width: 12, height: 34, orientation: 1, animated: false, components: 3)),

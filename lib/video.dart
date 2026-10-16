@@ -45,18 +45,25 @@ export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 enum VideoFormat {
   /// MP4.
   mp4,
+
   /// WebM.
   webm,
+
   /// Matroska.
   mkv,
+
   /// QuickTime.
   mov,
+
   /// AVI, read only.
   avi,
+
   /// AAC audio in MP4.
   m4a,
+
   /// MP3 audio.
   mp3,
+
   /// Opus audio.
   opus,
 }
@@ -66,10 +73,13 @@ enum VideoFormat {
 enum VideoCodec {
   /// H.264 (AVC).
   h264,
+
   /// H.265 (HEVC).
   h265,
+
   /// AV1.
   av1,
+
   /// VP9.
   vp9,
 }
@@ -143,7 +153,11 @@ final class Video {
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) {
     for (final url in [source, ?audio]) {
       if (!_url.hasMatch(url)) {
-        throw ArgumentError.value(url, url == source ? 'source' : 'audio', 'an http(s) URL; read a file with Fs.file(path).video()');
+        throw ArgumentError.value(
+          url,
+          url == source ? 'source' : 'audio',
+          'an http(s) URL; read a file with Fs.file(path).video()',
+        );
       }
     }
     return _open(source, audio: audio, headers: headers);
@@ -159,7 +173,9 @@ final class Video {
     media.Temp? temp,
     String? name,
   }) async {
-    final inputs = [for (final i in [source, ?audio]) _url.hasMatch(i) ? i : media.file(i)];
+    final inputs = [
+      for (final i in [source, ?audio]) _url.hasMatch(i) ? i : media.file(i),
+    ];
     final infos = await proxy.throughProxy(
       inputs,
       headers,
@@ -502,7 +518,6 @@ Future<List<int>> _head(String path) async {
     await f.close();
   }
 }
-
 
 void _checkEncode(VideoFormat format, int? quality, int? width, int? height, VideoCodec? codec) {
   if (quality != null) media.checkQuality(quality);

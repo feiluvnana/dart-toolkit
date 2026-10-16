@@ -118,7 +118,12 @@ Future<String> _testingChrome({required bool headless}) async {
     final String? failed;
     try {
       final url = 'https://storage.googleapis.com/chrome-for-testing-public/$_version/$platform/$kind-$platform.zip';
-      failed = await fetchInIsolate('fetch.dart', [url, _sha256['$kind $platform']!, 'app', dir], label: '$kind for $platform');
+      failed = await fetchInIsolate('fetch.dart', [
+        url,
+        _sha256['$kind $platform']!,
+        'app',
+        dir,
+      ], label: '$kind for $platform');
     } on SetupException catch (e) {
       throw SetupException('no Chrome found, and ${e.message}: install Chrome or Chromium', cause: e);
     }

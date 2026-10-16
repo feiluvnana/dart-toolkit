@@ -3,7 +3,8 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:dart_toolkit/core.dart' show ContentException;
-import 'package:dart_toolkit/http.dart' show HttpRequestException, HttpStatusException, RequestFailure, SessionException;
+import 'package:dart_toolkit/http.dart'
+    show HttpRequestException, HttpStatusException, RequestFailure, SessionException;
 import 'package:dart_toolkit/shell.dart' show ExitException;
 import 'package:dart_toolkit/src/cdp.dart' show BrowserException;
 import 'package:dart_toolkit/src/rate.dart' as rate;

@@ -571,10 +571,19 @@ final class _Session<S> implements term.TuiBridge {
         if (bar.state() case final b)
           (w) => b.spinning
               ? term.truncateWidth('${frames[_spinTick % frames.length]} ${b.label ?? ''}'.trimRight(), w)
-              : term.barLine(w, label: b.label, done: b.done, total: b.total, unit: b.unit, rate: b.rate, ascii: _caps.ascii),
+              : term.barLine(
+                  w,
+                  label: b.label,
+                  done: b.done,
+                  total: b.total,
+                  unit: b.unit,
+                  rate: b.rate,
+                  ascii: _caps.ascii,
+                ),
       for (final d in _cDone)
         (w) => term.truncateWidth(
-          '${d.ok ? _okMark : _failMark} ${d.state.label ?? ''}  ${fmt.fmtCounts(d.state.done, d.state.total, d.state.unit)}'.trimRight(),
+          '${d.ok ? _okMark : _failMark} ${d.state.label ?? ''}  ${fmt.fmtCounts(d.state.done, d.state.total, d.state.unit)}'
+              .trimRight(),
           w,
         ),
     ];

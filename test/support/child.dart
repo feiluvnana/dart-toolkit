@@ -73,7 +73,8 @@ Future<Process> startDart(String source, {List<String> args = const [], String? 
 }
 
 /// The lines [p] prints on stdout, for waiting on one with `firstWhere`.
-Stream<String> linesOf(Process p) => p.stdout.transform(utf8.decoder).transform(const LineSplitter()).asBroadcastStream();
+Stream<String> linesOf(Process p) =>
+    p.stdout.transform(utf8.decoder).transform(const LineSplitter()).asBroadcastStream();
 
 /// Run [body] as `main` of a child script whose working directory is [dir].
 /// The working directory is per process, so a test that needs one must not

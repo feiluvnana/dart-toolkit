@@ -75,10 +75,7 @@ void main() {
 
     test('a zip that does not match its sha256 unpacks nothing', () async {
       final dir = await fresh('bad');
-      await expectLater(
-        fetch.fetch('$url/tool.zip', '0' * 64, 'zip', dir.path),
-        throwsA(isA<ContentException>()),
-      );
+      await expectLater(fetch.fetch('$url/tool.zip', '0' * 64, 'zip', dir.path), throwsA(isA<ContentException>()));
       expect(dir.listSync(recursive: true), isEmpty);
     });
 
@@ -136,10 +133,17 @@ void main() {
       await Directory('$caches/dart_toolkit/7zip-26.04').create(recursive: true);
       final refuse = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(refuse.close);
-      refuse.listen((s) => s
-        ..write('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n')
-        ..close());
-      env = {'HOME': home, 'XDG_CACHE_HOME': '', 'PATH': '/usr/bin:/bin', 'HTTPS_PROXY': 'http://127.0.0.1:${refuse.port}'};
+      refuse.listen(
+        (s) => s
+          ..write('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n')
+          ..close(),
+      );
+      env = {
+        'HOME': home,
+        'XDG_CACHE_HOME': '',
+        'PATH': '/usr/bin:/bin',
+        'HTTPS_PROXY': 'http://127.0.0.1:${refuse.port}',
+      };
     });
 
     test('a process waiting on the lock takes the binary the holder placed', () async {
@@ -164,8 +168,11 @@ Future<void> main() async {
       expect(await child.exitCode, 0);
     }, testOn: '!windows');
 
-    test('a failed download leaves no temp folder and is not remembered', () async {
-      final r = await runDart('''
+    test(
+      'a failed download leaves no temp folder and is not remembered',
+      () async {
+        final r = await runDart(
+          '''
 import 'dart:io';
 import 'package:dart_toolkit/src/tool.dart';
 Future<void> main(List<String> args) async {
@@ -179,9 +186,16 @@ Future<void> main(List<String> args) async {
   File(args[0]).writeAsStringSync('placed');
   print('then \${await tool(Tool.sevenzip)}');
 }
-''', args: [pinned], env: env, timeout: const Duration(seconds: 60));
-      expect(r.stdout, 'failed: true true\ntemps: 0\nthen $pinned\n', reason: '${r.stderr}');
-    }, testOn: '!windows', tags: 'slow');
+''',
+          args: [pinned],
+          env: env,
+          timeout: const Duration(seconds: 60),
+        );
+        expect(r.stdout, 'failed: true true\ntemps: 0\nthen $pinned\n', reason: '${r.stderr}');
+      },
+      testOn: '!windows',
+      tags: 'slow',
+    );
   });
 
   test('P1: no HOME is an error, never a shared temp folder', () async {
@@ -216,10 +230,12 @@ void main() {
     expect(retry.isPermanent(const SetupException('x')), isTrue);
   });
 
-  test('E8: a compiled exe says so', () async {
-    final dir = await Directory.systemTemp.createTemp('aot');
-    addTearDown(() => dir.delete(recursive: true));
-    await io.File('${dir.path}/main.dart').writeAsString('''
+  test(
+    'E8: a compiled exe says so',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('aot');
+      addTearDown(() => dir.delete(recursive: true));
+      await io.File('${dir.path}/main.dart').writeAsString('''
 import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/src/cache.dart';
 Future<void> main() async {
@@ -230,19 +246,22 @@ Future<void> main() async {
   }
 }
 ''');
-    final exe = '${dir.path}/main.exe';
-    final c = await Process.run(Platform.resolvedExecutable, [
-      'compile',
-      'exe',
-      '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-      '-o',
-      exe,
-      '${dir.path}/main.dart',
-    ]);
-    expect(c.exitCode, 0, reason: '${c.stderr}${c.stdout}');
-    final r = await Process.run(exe, const []);
-    expect(r.stdout, contains('a compiled exe cannot download ffmpeg'), reason: '${r.stderr}');
-  }, tags: 'slow', timeout: const Timeout(Duration(minutes: 3)));
+      final exe = '${dir.path}/main.exe';
+      final c = await Process.run(Platform.resolvedExecutable, [
+        'compile',
+        'exe',
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        '-o',
+        exe,
+        '${dir.path}/main.dart',
+      ]);
+      expect(c.exitCode, 0, reason: '${c.stderr}${c.stdout}');
+      final r = await Process.run(exe, const []);
+      expect(r.stdout, contains('a compiled exe cannot download ffmpeg'), reason: '${r.stderr}');
+    },
+    tags: 'slow',
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
   test('S8: spooled media lands in an owner-only folder of the user cache', () async {
     final path = await media.spool(Stream.value([1, 2, 3]));

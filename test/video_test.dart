@@ -83,7 +83,9 @@ void main() {
         if (r.headers.host == '127.0.0.1' && cookie != 'c=1' || !f.existsSync()) {
           r.response.statusCode = 403;
         } else {
-          if (r.uri.path.endsWith('.m3u8')) r.response.headers.contentType = io.ContentType('application', 'vnd.apple.mpegurl');
+          if (r.uri.path.endsWith('.m3u8')) {
+            r.response.headers.contentType = io.ContentType('application', 'vnd.apple.mpegurl');
+          }
           await r.response.addStream(f.openRead());
         }
         await r.response.close();
@@ -149,13 +151,17 @@ void main() {
     final port = closed.port;
     await closed.close();
     await expectLater(Video.open('http://127.0.0.1:$port/x.mp4'), throwsA(isA<io.IOException>()));
-    final (_, base) = await serve((r) => r.response
-      ..statusCode = 503
-      ..close());
+    final (_, base) = await serve(
+      (r) => r.response
+        ..statusCode = 503
+        ..close(),
+    );
     await expectLater(Video.open('$base/x.mp4'), throwsA(isA<io.IOException>()));
-    final (_, junk) = await serve((r) => r.response
-      ..write('not a video')
-      ..close());
+    final (_, junk) = await serve(
+      (r) => r.response
+        ..write('not a video')
+        ..close(),
+    );
     await expectLater(Video.open('$junk/x.mp4'), throwsA(isA<ContentException>()));
   });
 
@@ -224,7 +230,12 @@ void main() {
     });
 
     test('S7: open refuses every other scheme ffmpeg would read (local files, raw sockets)', () {
-      for (final url in [Uri.file(clip).toString(), 'tcp://127.0.0.1:9/', 'ftp://127.0.0.1/x.mp4', 'concat:$clip|$clip']) {
+      for (final url in [
+        Uri.file(clip).toString(),
+        'tcp://127.0.0.1:9/',
+        'ftp://127.0.0.1/x.mp4',
+        'concat:$clip|$clip',
+      ]) {
         expect(() => Video.open(url), throwsArgumentError, reason: url);
         expect(() => Video.open('http://127.0.0.1:9/x.mp4', audio: url), throwsArgumentError, reason: url);
       }
@@ -306,7 +317,10 @@ void main() {
       expect(saved.after, lessThan(saved.before));
       expect(await io.File(path).length(), saved.after);
       expect(await Fs.file(path).video().audioCodec(), 'aac');
-      expect(await Video.compress(path, quality: 50), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller));
+      expect(
+        await Video.compress(path, quality: 50),
+        isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller),
+      );
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
 
@@ -330,10 +344,13 @@ void main() {
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '5',
       ]);
       final temp = '${tmp.path}/.long.mp4.compress';
-      final child = await startDart('''
+      final child = await startDart(
+        '''
 import 'package:dart_toolkit/video.dart';
 Future<void> main(List<String> args) async => print(await Video.compress(args[0], quality: 50));
-''', args: [path]);
+''',
+        args: [path],
+      );
       expect(await eventually(() => io.File(temp).existsSync(), timeout: const Duration(seconds: 30)), isTrue);
       child.kill(io.ProcessSignal.sigint);
       expect(await child.exitCode.timeout(const Duration(seconds: 15)), 130);

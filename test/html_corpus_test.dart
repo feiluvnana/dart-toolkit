@@ -174,7 +174,8 @@ const _blocks = {
 
 /// Tricky markup the parsing algorithm has rules for, each as a document.
 const snippets = {
-  'script escapes': '<!doctype html><script><!-- document.write("<script src=x></script>"); --></script><p>after</p>'
+  'script escapes':
+      '<!doctype html><script><!-- document.write("<script src=x></script>"); --></script><p>after</p>'
       '<script><!-- a </script><p>cut</p><script>var x = "<!--"; </script><p>end</p>',
   'misnested formatting': '<!doctype html><p><b>1<p>2</b>3</p><b><i>x</b>y</i>',
   'adoption agency': '<!doctype html><a href=1>a<div>b<a href=2>c</a>d</div>e</a><b>f<p>g</b>h',

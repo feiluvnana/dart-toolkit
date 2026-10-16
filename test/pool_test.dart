@@ -213,11 +213,16 @@ void main() {
     test('fail-fast ends the other lanes\' backoffs instead of sitting them out', () async {
       final sw = Stopwatch()..start();
       await expectLater(
-        Pool.map([1, 2, 3], (x) async {
-          if (x != 1) throw const SocketException('flaky'); // retried after a 1 s backoff
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-          throw StateError('bad');
-        }, limit: 3, retries: 3),
+        Pool.map(
+          [1, 2, 3],
+          (x) async {
+            if (x != 1) throw const SocketException('flaky'); // retried after a 1 s backoff
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+            throw StateError('bad');
+          },
+          limit: 3,
+          retries: 3,
+        ),
         throwsStateError,
       );
       expect(sw.elapsed, lessThan(const Duration(milliseconds: 700)));

@@ -229,9 +229,11 @@ Future<void> main() async {
   });
 
   group('exit hooks', () {
-    test('a second SIGINT during cleanup exits at once', () async {
-      if (Platform.isWindows) return markTestSkipped('needs POSIX signals');
-      final p = await startDart('''
+    test(
+      'a second SIGINT during cleanup exits at once',
+      () async {
+        if (Platform.isWindows) return markTestSkipped('needs POSIX signals');
+        final p = await startDart('''
 import 'dart:async';
 import 'dart:io';
 import 'package:dart_toolkit/src/exit.dart' as exit;
@@ -245,16 +247,19 @@ Future<void> main() async {
   await Future<void>.delayed(const Duration(seconds: 60));
 }
 ''');
-      final lines = linesOf(p);
-      await lines.firstWhere((l) => l == 'ready').timeout(const Duration(seconds: 30));
-      p.kill(ProcessSignal.sigint);
-      await lines.firstWhere((l) => l == 'cleaning').timeout(const Duration(seconds: 10));
-      final sw = Stopwatch()..start();
-      p.kill(ProcessSignal.sigint);
-      // The hook would hold the exit for its 5 s bound.
-      expect(await p.exitCode.timeout(const Duration(seconds: 20)), 130);
-      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
-    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
+        final lines = linesOf(p);
+        await lines.firstWhere((l) => l == 'ready').timeout(const Duration(seconds: 30));
+        p.kill(ProcessSignal.sigint);
+        await lines.firstWhere((l) => l == 'cleaning').timeout(const Duration(seconds: 10));
+        final sw = Stopwatch()..start();
+        p.kill(ProcessSignal.sigint);
+        // The hook would hold the exit for its 5 s bound.
+        expect(await p.exitCode.timeout(const Duration(seconds: 20)), 130);
+        expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+      tags: 'slow',
+    );
   });
 
   group('prompts time out', () {
@@ -336,54 +341,74 @@ Future<void> main() async => Console.input() | Shell.filter(['sort']) > Console.
       expect(run.err, 'T 6/3\n');
     });
 
-    test('L3: counts past the total are kept, a count never goes back', () async {
-      final root = Directory.current;
-      final res = await Process.run(Platform.resolvedExecutable, [
-        '${root.path}/test/console_pty/probe.dart',
-        tempFile('probe.log').path,
-        'over',
-      ], workingDirectory: root.path);
-      expect(res.stderr, contains('5/3'));
-    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
+    test(
+      'L3: counts past the total are kept, a count never goes back',
+      () async {
+        final root = Directory.current;
+        final res = await Process.run(Platform.resolvedExecutable, [
+          '${root.path}/test/console_pty/probe.dart',
+          tempFile('probe.log').path,
+          'over',
+        ], workingDirectory: root.path);
+        expect(res.stderr, contains('5/3'));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+      tags: 'slow',
+    );
 
-    test('keep: false leaves no final line; a failure still prints', () async {
-      final root = Directory.current;
-      final res = await Process.run(Platform.resolvedExecutable, [
-        '${root.path}/test/console_pty/probe.dart',
-        tempFile('probe.log').path,
-        'keep',
-      ], workingDirectory: root.path);
-      expect(res.stdout, contains('done'));
-      expect(res.stderr, contains('kept 2/2'));
-      expect(res.stderr, isNot(contains('gone')));
-      expect(res.stderr, contains('broken'));
-    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
+    test(
+      'keep: false leaves no final line; a failure still prints',
+      () async {
+        final root = Directory.current;
+        final res = await Process.run(Platform.resolvedExecutable, [
+          '${root.path}/test/console_pty/probe.dart',
+          tempFile('probe.log').path,
+          'keep',
+        ], workingDirectory: root.path);
+        expect(res.stdout, contains('done'));
+        expect(res.stderr, contains('kept 2/2'));
+        expect(res.stderr, isNot(contains('gone')));
+        expect(res.stderr, contains('broken'));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+      tags: 'slow',
+    );
 
-    test('L2: control characters in labels are neutralised', () async {
-      final root = Directory.current;
-      final proc = await Process.start(Platform.resolvedExecutable, [
-        '${root.path}/test/console_pty/probe.dart',
-        tempFile('probe.log').path,
-        'evil',
-      ], workingDirectory: root.path);
-      proc.stdin.write('1\n');
-      await proc.stdin.close();
-      final err = await proc.stderr.transform(utf8.decoder).join();
-      await proc.exitCode;
-      expect(err, contains('a\u{FFFD}[31mb\u{FFFD}c'));
-      expect(err, isNot(contains('\x1b')));
-    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
+    test(
+      'L2: control characters in labels are neutralised',
+      () async {
+        final root = Directory.current;
+        final proc = await Process.start(Platform.resolvedExecutable, [
+          '${root.path}/test/console_pty/probe.dart',
+          tempFile('probe.log').path,
+          'evil',
+        ], workingDirectory: root.path);
+        proc.stdin.write('1\n');
+        await proc.stdin.close();
+        final err = await proc.stderr.transform(utf8.decoder).join();
+        await proc.exitCode;
+        expect(err, contains('a\u{FFFD}[31mb\u{FFFD}c'));
+        expect(err, isNot(contains('\x1b')));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+      tags: 'slow',
+    );
 
-    test('update fills in a total that arrives later; log prints above', () async {
-      final root = Directory.current;
-      final res = await Process.run(Platform.resolvedExecutable, [
-        '${root.path}/test/console_pty/probe.dart',
-        tempFile('probe.log').path,
-        'total',
-      ], workingDirectory: root.path);
-      expect(res.stderr, contains('T 2/4'));
-      expect(res.stderr, contains('logged above\n'));
-    }, timeout: const Timeout(Duration(seconds: 60)), tags: 'slow');
+    test(
+      'update fills in a total that arrives later; log prints above',
+      () async {
+        final root = Directory.current;
+        final res = await Process.run(Platform.resolvedExecutable, [
+          '${root.path}/test/console_pty/probe.dart',
+          tempFile('probe.log').path,
+          'total',
+        ], workingDirectory: root.path);
+        expect(res.stderr, contains('T 2/4'));
+        expect(res.stderr, contains('logged above\n'));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+      tags: 'slow',
+    );
 
     test('no total means unknown, like 0', () async {
       final run = await capture(() async {

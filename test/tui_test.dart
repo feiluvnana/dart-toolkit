@@ -247,7 +247,10 @@ void main() {
       p.add('c').add('d');
       expect(p.items(), ['a', 'b', 'c', 'd']);
       p.select(2); // 'c'
-      p.set([for (final x in p.items()) if (x != 'b') x]);
+      p.set([
+        for (final x in p.items())
+          if (x != 'b') x,
+      ]);
       expect(p.items(), ['a', 'c', 'd']);
       expect(p.selected(), 'c');
       expect(p.index(), 1);
@@ -452,7 +455,10 @@ Future<void> main() async {
     test('E6: a misspelt binding name is an ArgumentError where the map is built', () {
       expect(() => Screen((r) {}, keys: {'escpae': ('quit', () {})}), throwsArgumentError);
       expect(() => Screen((r) {}, keys: {'b escpae': ('back', () {})}), throwsArgumentError);
-      Screen((r) {}, keys: {'b escape': ('', () {}), 'ctrl+c': ('', () {}), 'Click': ('', () {}), 'resize': ('', () {})});
+      Screen(
+        (r) {},
+        keys: {'b escape': ('', () {}), 'ctrl+c': ('', () {}), 'Click': ('', () {}), 'resize': ('', () {})},
+      );
     });
 
     test('a toolkit error shows its message; SDK prefixes are dropped', () async {
@@ -662,12 +668,7 @@ Future<void> main() async {
     test('bar of a meter watching bytes shows sizes', () async {
       final m = Meter();
       await (Reader.of(List<int>.filled(1536, 0)) & m > null);
-      final t = testSession<int>(
-        0,
-        (s, app) => Screen((r) => r.bar(m, label: 'f')),
-        width: 50,
-        height: 4,
-      );
+      final t = testSession<int>(0, (s, app) => Screen((r) => r.bar(m, label: 'f')), width: 50, height: 4);
       await t.pump();
       expect(t.row(0), contains('1.5 KB/1.5 KB'));
     });
@@ -2159,7 +2160,9 @@ Future<void> main() async {
     test('S14: markdown links open only http, https and mailto', () async {
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) => r.markdown('[web](https://x.y) [mail](mailto:a@b.c) [f](file:///etc/passwd) [app](zoommtg://j)')),
+        (s, app) => Screen(
+          (r) => r.markdown('[web](https://x.y) [mail](mailto:a@b.c) [f](file:///etc/passwd) [app](zoommtg://j)'),
+        ),
         width: 40,
         height: 3,
       );
@@ -2674,7 +2677,10 @@ Future<void> main() async {
       expect(t.row(4), isNot(contains('saved')));
       t.bytes(utf8.encode('f'));
       await t.pump();
-      expect([for (var i = 0; i < 4; i++) t.row(i)].join('\n'), allOf(contains('lost b.jpg'), isNot(contains('saved a.jpg'))));
+      expect(
+        [for (var i = 0; i < 4; i++) t.row(i)].join('\n'),
+        allOf(contains('lost b.jpg'), isNot(contains('saved a.jpg'))),
+      );
       t.close();
     });
 
@@ -2840,7 +2846,12 @@ Future<void> main() async {
     });
 
     test('an inline span that reaches the edge wraps the rest', () async {
-      final t = testSession<int>(0, (s, app) => Screen((r) => r.write('abcd', inline: true).write('efg')), width: 5, height: 3);
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) => r.write('abcd', inline: true).write('efg')),
+        width: 5,
+        height: 3,
+      );
       await t.pump();
       expect(t.row(0), 'abcde');
       expect(t.row(1), 'fg');
@@ -2872,7 +2883,13 @@ Future<void> main() async {
     test('the status row keeps combining marks; ✗ is x under LANG=C', () async {
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) {}, keys: {'a': ('', () => app.status('Tie\u0302\u0301ng Vie\u0302\u0323t')), 'b': ('', () => throw Exception('hỏng'))}),
+        (s, app) => Screen(
+          (r) {},
+          keys: {
+            'a': ('', () => app.status('Tie\u0302\u0301ng Vie\u0302\u0323t')),
+            'b': ('', () => throw Exception('hỏng')),
+          },
+        ),
         width: 30,
         height: 3,
         env: {'LANG': 'C'},
@@ -2891,9 +2908,15 @@ Future<void> main() async {
       String? answer = 'unset';
       final t = testSession<int>(
         0,
-        (s, app) => Screen((r) => r.write('main'), keys: {
-          'a': ('', () async => answer = await Console.ask('name?', or: 'anon', timeout: const Duration(milliseconds: 50))),
-        }),
+        (s, app) => Screen(
+          (r) => r.write('main'),
+          keys: {
+            'a': (
+              '',
+              () async => answer = await Console.ask('name?', or: 'anon', timeout: const Duration(milliseconds: 50)),
+            ),
+          },
+        ),
         width: 30,
         height: 8,
       );

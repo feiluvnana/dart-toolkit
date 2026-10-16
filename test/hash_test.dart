@@ -6,6 +6,7 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/utils.dart';
 
 import 'support/io.dart';
+
 import 'package:test/test.dart';
 
 void main() {
@@ -22,7 +23,10 @@ void main() {
     test('key: makes an HMAC (RFC 4231 and RFC 2202 vectors)', () async {
       const msg = 'what do ya want for nothing?';
       final key = utf8.encode('Jefe');
-      expect(HashUtils.sha256(key: key).add(msg).hex(), '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843');
+      expect(
+        HashUtils.sha256(key: key).add(msg).hex(),
+        '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843',
+      );
       expect(HashUtils.md5(key: key).add(msg).hex(), '750c783e6ab0b503eaa86e310a5db738');
       final hmac = HashUtils.sha256(key: key);
       await (Reader.of(utf8.encode(msg)) > hmac);

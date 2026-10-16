@@ -232,7 +232,10 @@ void main() {
       addTearDown(() => child.kill(ProcessSignal.sigkill));
       final err = StringBuffer();
       child.stderr.transform(utf8.decoder).listen(err.write);
-      await child.stdout.transform(utf8.decoder).firstWhere((s) => s.contains('up')).timeout(const Duration(seconds: 60));
+      await child.stdout
+          .transform(utf8.decoder)
+          .firstWhere((s) => s.contains('up'))
+          .timeout(const Duration(seconds: 60));
       Future<List<(String, String)>> ours() async {
         final ps = await Process.run('ps', ['-ax', '-o', 'pid=,args=']);
         return [
@@ -270,7 +273,8 @@ void main() {
       final ps = await Process.run('ps', ['-ax', '-o', 'pid=,args=']);
       final pids = [
         for (final line in '${ps.stdout}'.split('\n'))
-          if (line.contains('--user-data-dir=${profile.path}') && !line.contains('--type=')) line.trim().split(' ').first,
+          if (line.contains('--user-data-dir=${profile.path}') && !line.contains('--type='))
+            line.trim().split(' ').first,
       ];
       expect(pids, isNotEmpty);
       for (final pid in pids) {
@@ -546,9 +550,7 @@ void main() {
 
     test('timeouts print a human limit once (regression: 0:00:00.300000 twice)', () async {
       final page = await browser.open(dataUrl(testHtml), timeout: const Duration(milliseconds: 300));
-      final e = await page
-          .click('#nope')
-          .then<Object?>((_) => null, onError: (Object e) => e);
+      final e = await page.click('#nope').then<Object?>((_) => null, onError: (Object e) => e);
       expect(e, isA<TimeoutException>());
       expect(e.toString(), 'TimeoutException: no actionable #nope after 300 ms');
       expect((e as TimeoutException).duration, const Duration(milliseconds: 300));
@@ -819,10 +821,7 @@ void main() {
 
     test('B1: download on a missing selector throws, never crashes', () async {
       final page = await browser.open(dataUrl(testHtml), timeout: const Duration(seconds: 2));
-      await expectLater(
-        page.download('#missing'),
-        throwsA(isA<TimeoutException>()),
-      );
+      await expectLater(page.download('#missing'), throwsA(isA<TimeoutException>()));
       await page.close();
     });
 

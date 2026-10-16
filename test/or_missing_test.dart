@@ -42,7 +42,18 @@ void main() {
           expect(await c.get(gone).json(or: fallback), fallback);
           expect(await c.get(gone).yaml(or: fallback), fallback);
           expect((await c.get(gone).html(or: Html.parse('<p>none'))).text(), 'none');
-          expect(await c.get(gone).csv(or: [['x']]), [['x']]);
+          expect(
+            await c
+                .get(gone)
+                .csv(
+                  or: [
+                    ['x'],
+                  ],
+                ),
+            [
+              ['x'],
+            ],
+          );
           final none = Cookies();
           expect(await c.get(gone).cookies(or: none), same(none));
         });
@@ -75,7 +86,16 @@ void main() {
     expect(await f.json(or: fallback), fallback);
     expect(await f.yaml(or: fallback), fallback);
     expect((await f.html(or: Html.parse('<p>none'))).text(), 'none');
-    expect(await f.csv(or: [['x']]), [['x']]);
+    expect(
+      await f.csv(
+        or: [
+          ['x'],
+        ],
+      ),
+      [
+        ['x'],
+      ],
+    );
     expect(await f.text(or: 'x'), 'x');
     expect(await f.bytes(or: [1]), [1]);
   });

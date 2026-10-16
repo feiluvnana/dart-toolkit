@@ -12,7 +12,6 @@ import 'dart:io' as io;
 
 import 'package:path/path.dart' as p;
 
-
 import '../shell.dart';
 import 'cache.dart' as cache;
 import 'names.dart' as names;
@@ -32,7 +31,8 @@ const _riedl = 'https://ffmpeg.martin-riedl.de/download';
 const _gyan = 'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip';
 const _gyanSha = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba';
 const _sevenzipMac = 'bee04358cbcbc7106273cee0e8d72916db2696c48067a3538c34d8cd6fd16578';
-const _sevenzipWin = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'; // 7z only: Windows reads RAR in Dart
+const _sevenzipWin =
+    '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'; // 7z only: Windows reads RAR in Dart
 
 /// Pinned builds per ABI: 7-Zip 26.04 (universal on macOS, static `7zzs`
 /// on Linux, the 7z-only `7zr.exe` on Windows); ffmpeg 9.0.2 from Martin
@@ -174,7 +174,9 @@ Future<void> _download(Tool t, String target) async {
     try {
       await _fetch(build, tmp.path, _exe(t));
       final exe = p.join(tmp.path, build.member ?? _exe(t));
-      if (!await io.File(exe).exists()) throw ContentException('download failed: ${build.url} holds no ${p.basename(exe)}');
+      if (!await io.File(exe).exists()) {
+        throw ContentException('download failed: ${build.url} holds no ${p.basename(exe)}');
+      }
       if (!io.Platform.isWindows) await posix.chmod(exe, 0x1ed);
       // Windows: one zip holds both tools, so take the sibling too.
       for (final other in Tool.values) {

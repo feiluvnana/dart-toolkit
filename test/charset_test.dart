@@ -82,9 +82,8 @@ void main() {
     int sdk() {
       final sw = Stopwatch()..start();
       final out = <String>[];
-      final sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(
-        ChunkedConversionSink<String>.withCallback(out.addAll),
-      );
+      final sink = const Utf8Decoder(allowMalformed: true)
+          .startChunkedConversion(ChunkedConversionSink<String>.withCallback(out.addAll));
       chunks.forEach(sink.add);
       sink.close();
       return sw.elapsedMicroseconds;

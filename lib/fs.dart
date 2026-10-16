@@ -568,7 +568,9 @@ final class Dir extends Entry with Writer implements Folder {
     await for (final e in io.Directory(_path).list(recursive: true, followLinks: false)) {
       if (e is! io.File) continue;
       final name = p.basename(e.path);
-      if (name.endsWith('.part') || name.endsWith('.part.tag') || posix.isTmpName(name) || _isCompressTemp(name)) continue;
+      if (name.endsWith('.part') || name.endsWith('.part.tag') || posix.isTmpName(name) || _isCompressTemp(name)) {
+        continue;
+      }
       // Lengths in parallel; a file gone since the listing is not counted.
       sizes.add(e.length().then<int?>((n) => n, onError: (Object _) => null));
     }
@@ -851,8 +853,7 @@ extension DirFuture on Future<Dir> {
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
-  Task<Dir> copy(String to, {String? match}) =>
-      task((run) async => (await this).copy(to, match: match) & relay(run));
+  Task<Dir> copy(String to, {String? match}) => task((run) async => (await this).copy(to, match: match) & relay(run));
   Task<Dir> move(String to) => task((run) async => (await this).move(to) & relay(run));
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);

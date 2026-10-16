@@ -412,7 +412,6 @@ final class Meter with Probe {
     _hand = (done, total);
     if (before != null) _window.add(done - before);
   }
-
 }
 
 final class _MeterWatch implements Watcher {
@@ -422,7 +421,9 @@ final class _MeterWatch implements Watcher {
 
   @override
   void begin(Object run) {
-    if (_m._hand != null) throw StateError('this Meter is counted by hand (update); a watched run needs a Meter of its own');
+    if (_m._hand != null) {
+      throw StateError('this Meter is counted by hand (update); a watched run needs a Meter of its own');
+    }
     _m._watching = true;
     _m._tally.begin(run);
   }

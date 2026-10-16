@@ -53,10 +53,13 @@ export 'src/cdp.dart' show BrowserException;
 enum Resource {
   /// Pictures (`<img>`, CSS backgrounds).
   image('Image'),
+
   /// Web fonts.
   font('Font'),
+
   /// Audio and video.
   media('Media'),
+
   /// CSS files.
   stylesheet('Stylesheet');
 

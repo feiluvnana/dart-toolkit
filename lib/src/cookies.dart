@@ -192,7 +192,9 @@ bool isPublicSuffix(String domain) {
     return parts.length <= 3 || _awsShared.hasMatch(parts.first);
   }
   if (parts.length != 2 || parts[1].length != 2) return false;
-  return _registries.contains(parts[0]) || _thirdLevelOnly.contains(parts[1]) || parts[1] == 'jp' && _prefectures.contains(parts[0]);
+  return _registries.contains(parts[0]) ||
+      _thirdLevelOnly.contains(parts[1]) ||
+      parts[1] == 'jp' && _prefectures.contains(parts[0]);
 }
 
 /// The first label of an AWS name shared by every customer's site.

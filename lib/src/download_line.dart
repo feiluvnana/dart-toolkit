@@ -54,5 +54,6 @@ final class DownloadLine {
     io.stderr.write(ok ? '\n' : ' ✗\n');
   }
 
-  void _draw() => io.stderr.write('\r\x1b[K$_label  ${fmtCounts(_done, _total, Unit.bytes)}  ${fmtRate(_window.rate())}');
+  void _draw() =>
+      io.stderr.write('\r\x1b[K$_label  ${fmtCounts(_done, _total, Unit.bytes)}  ${fmtRate(_window.rate())}');
 }

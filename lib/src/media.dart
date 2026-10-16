@@ -109,7 +109,6 @@ Future<Map<String, Object?>> ffprobe(String input) async {
   }
 }
 
-
 // ── sources ───────────────────────────────────────────────────────────────
 
 /// Where spooled readers go: in the user cache, owner-only (never a shared

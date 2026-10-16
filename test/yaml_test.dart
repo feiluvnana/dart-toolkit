@@ -7,7 +7,10 @@ void main() {
     for (var k = 1; k <= 5; k++) {
       b.writeln('a$k: &a$k ${'[' * 300}*a${k - 1}${']' * 300}');
     }
-    expect(() => Yaml.parse(b.toString()), throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('deep'))));
+    expect(
+      () => Yaml.parse(b.toString()),
+      throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('deep'))),
+    );
     expect(Yaml.parse('a: &a [[1]]\nb: [[*a, *a]]').toString(), '{"a":[[1]],"b":[[[[1]],[[1]]]]}');
   });
 

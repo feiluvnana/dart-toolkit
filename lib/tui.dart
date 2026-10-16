@@ -43,8 +43,7 @@
 /// {@canonicalFor pixels.Pixels}
 library;
 
-export 'src/tui.dart'
-    show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, Style;
+export 'src/tui.dart' show Tui, App, Screen, Binding, Pick, Field, Scroll, Region, RegionWidgets, RegionMarkdown, Style;
 export 'src/terminal.dart' show Color;
 export 'src/pixels.dart' show Pixels;
 export 'src/progress.dart' show Meter;

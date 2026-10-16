@@ -728,7 +728,9 @@ Future<Json> _json(Reader r) async {
   } on FormatException catch (e) {
     throw ContentException('invalid JSON${_from(r.origin())}: ${e.message}', e.source, e.offset, e);
   }
-  if (_tooDeepBytes(bytes)) throw ContentException('invalid JSON${_from(r.origin())}: nested deeper than $_maxDepth levels');
+  if (_tooDeepBytes(bytes)) {
+    throw ContentException('invalid JSON${_from(r.origin())}: nested deeper than $_maxDepth levels');
+  }
   return Json._(v);
 }
 

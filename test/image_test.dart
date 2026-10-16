@@ -199,7 +199,10 @@ void main() {
       final img = await Fs.file(path).image();
       expect(img.encode(ImageFormat.webp).origin().name(), 'photo.webp');
       expect(img.resize(width: 1).encode(ImageFormat.jpg).origin().name(), 'photo.jpg');
-      expect((await Mem.bytes(tinyPng, const Origin(name: 'cat.png')).image()).encode(.avif).origin().name(), 'cat.avif');
+      expect(
+        (await Mem.bytes(tinyPng, const Origin(name: 'cat.png')).image()).encode(.avif).origin().name(),
+        'cat.avif',
+      );
       expect((await Mem.bytes(tinyPng).image()).encode(.png).origin().name(), 'image.png');
       expect(Fs.file(path).image().encode(.gif).origin().name(), 'image.gif');
     });
@@ -287,7 +290,10 @@ void main() {
       final out = await io.File(path).readAsBytes();
       expect(out.length, saved.after);
       expect(latin1.decode(out.sublist(0, 64), allowInvalid: true), contains('Exif'));
-      expect(await Image.compress(path, quality: 60), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller));
+      expect(
+        await Image.compress(path, quality: 60),
+        isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller),
+      );
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
 

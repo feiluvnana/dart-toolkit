@@ -115,7 +115,11 @@ void main() {
     await expectLater(cut.timeout(const Duration(seconds: 5)), throwsA(isA<BrowserException>()));
     final bytes = cdp.browser.send('Never.answer');
     await Future<void>.delayed(const Duration(milliseconds: 50));
-    await fake.raw([...utf8.encode('{"id": ${fake.commands.last['id']}, "result": {"v": "a'), 0xFF, ...utf8.encode('"}}')]);
+    await fake.raw([
+      ...utf8.encode('{"id": ${fake.commands.last['id']}, "result": {"v": "a'),
+      0xFF,
+      ...utf8.encode('"}}'),
+    ]);
     expect((await bytes.timeout(const Duration(seconds: 5)))['v'], 'a\uFFFD');
   });
 
@@ -189,7 +193,8 @@ void main() {
       ..createSync(recursive: true)
       ..writeAsStringSync('#!/bin/sh\necho "bad flag --x" >&2\nexit 3\n');
     await Process.run('chmod', ['+x', fake.path]);
-    final r = await runDart('''
+    final r = await runDart(
+      '''
 import 'package:dart_toolkit/chrome.dart';
 Future<void> main() async {
   try {
@@ -198,7 +203,9 @@ Future<void> main() async {
     print(e.message);
   }
 }
-''', env: {'HOME': home.path, 'XDG_CACHE_HOME': ''});
+''',
+      env: {'HOME': home.path, 'XDG_CACHE_HOME': ''},
+    );
     expect(r.stdout, contains('bad flag --x'), reason: '${r.stderr}');
   });
 }

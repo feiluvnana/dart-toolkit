@@ -275,11 +275,12 @@ final class _Packed with Reader {
     }
   }
 
-  static Stream<List<int>> _counted(Stream<List<int>> bytes, void Function(int)? packed) =>
-      packed == null ? bytes : bytes.map((c) {
-        packed(c.length);
-        return c;
-      });
+  static Stream<List<int>> _counted(Stream<List<int>> bytes, void Function(int)? packed) => packed == null
+      ? bytes
+      : bytes.map((c) {
+          packed(c.length);
+          return c;
+        });
 
   /// 7-Zip writes it (LZMA2 on every core, links kept, AES with the
   /// names hidden when a password is set) into a temp file, since 7z's
@@ -898,7 +899,14 @@ Future<void> _isolateMain((FutureOr<Object?> Function(), SendPort) m) async {
 }
 
 /// A job for [_Extraction._isolated] capturing only what it needs.
-un.Modes Function() _unpackJob(Uint8List bytes, _Format format, String? password, String tmp, int? max, RegExp? match) =>
+un.Modes Function() _unpackJob(
+  Uint8List bytes,
+  _Format format,
+  String? password,
+  String tmp,
+  int? max,
+  RegExp? match,
+) =>
     () => un.unpackEntries(_entries(bytes, format, password), tmp, un.Budget(max), match);
 
 /// A job unpacking the zip spooled at [path], read by offset.
@@ -1488,5 +1496,4 @@ final class _Percents {
 }
 
 /// [output]'s percentages to [on], until it ends.
-Future<void> _percents(Stream<List<int>> output, void Function(int pct) on) =>
-    output.forEach(_Percents(on).add);
+Future<void> _percents(Stream<List<int>> output, void Function(int pct) on) => output.forEach(_Percents(on).add);

@@ -205,7 +205,9 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid, Bud
       }
     }
     if (!ok) {
-      throw k == null ? ContentException('corrupt archive: RAR checksum of $name') : PasswordException('wrong password or corrupt archive: $name');
+      throw k == null
+          ? ContentException('corrupt archive: RAR checksum of $name')
+          : PasswordException('wrong password or corrupt archive: $name');
     }
     return data;
   });

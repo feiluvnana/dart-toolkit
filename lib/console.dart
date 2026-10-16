@@ -583,9 +583,12 @@ abstract final class Console {
 
   /// Every line [log] printed this run, one per line with its time (failed
   /// ones marked `✗`), as a [Reader]: `await (Console.logged() > Fs.file('run.log'))`.
-  static Reader logged() => Reader.of(utf8.encode([
-    for (final l in logbook) '${l.at.format('yyyy-MM-dd HH:mm:ss')}  ${l.failed ? '$_failMark ' : ''}${l.text}\n',
-  ].join()));
+  static Reader logged() => Reader.of(
+    utf8.encode(
+      [for (final l in logbook) '${l.at.format('yyyy-MM-dd HH:mm:ss')}  ${l.failed ? '$_failMark ' : ''}${l.text}\n']
+          .join(),
+    ),
+  );
 
   /// Our stdout as a [Writer]: `Shell.read(cmd) > Console.out()` shows a
   /// program's output as it runs. Live bars step aside while it writes.

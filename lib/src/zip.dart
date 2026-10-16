@@ -103,7 +103,9 @@ final class ZipEntry {
     if (out.length != _size) _corrupt('$name inflates to ${out.length} bytes, not $_size');
     if (!(encrypted && aes != null && aes.version == 2) && crc32(out) != _crc) {
       // ZipCrypto's one-byte check passes a wrong password 1 time in 256.
-      throw encrypted ? PasswordException('wrong password or corrupt data: $name') : ContentException('corrupt archive: CRC of $name');
+      throw encrypted
+          ? PasswordException('wrong password or corrupt data: $name')
+          : ContentException('corrupt archive: CRC of $name');
     }
     return out;
   }
@@ -364,7 +366,11 @@ Stream<Uint8List> zipStream(Stream<ZipSource> members, {String? password}) async
       if (packed >= 0xFFFFFFFF) ..._le(packed, 8),
       if (at >= 0xFFFFFFFF) ..._le(at, 8),
     ];
-    final extra = [if (big.isNotEmpty) ...[1, 0, big.length, 0, ...big], ...aesExtra, ...stamp];
+    final extra = [
+      if (big.isNotEmpty) ...[1, 0, big.length, 0, ...big],
+      ...aesExtra,
+      ...stamp,
+    ];
     final type = link != null ? 0xA000 : (m.name.endsWith('/') ? 0x4000 : 0x8000);
     central
       ..add(_le(0x02014b50, 4))
@@ -591,8 +597,9 @@ const _cp437 =
 }
 
 /// A DOS [time] and [date] as a local time; null for none (a zero date).
-DateTime? _fromDos(int time, int date) =>
-    date == 0 ? null : DateTime(1980 + (date >> 9), date >> 5 & 15, date & 31, time >> 11, time >> 5 & 63, (time & 31) * 2);
+DateTime? _fromDos(int time, int date) => date == 0
+    ? null
+    : DateTime(1980 + (date >> 9), date >> 5 & 15, date & 31, time >> 11, time >> 5 & 63, (time & 31) * 2);
 
 /// Inflates the raw deflate [input], stopping as soon as the output passes
 /// [size] (a bomb never gets past its declared size) and naming [what] in

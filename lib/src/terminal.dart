@@ -88,7 +88,9 @@ final bool stdinTty = () {
 Future<String?> pipedLine({Duration? timeout}) {
   if (timeout == null || io.Platform.isWindows) {
     final line = Isolate.run(_readLineSync);
-    return timeout == null ? line : line.timeout(timeout, onTimeout: () => throw TimeoutException('no answer', timeout));
+    return timeout == null
+        ? line
+        : line.timeout(timeout, onTimeout: () => throw TimeoutException('no answer', timeout));
   }
   return _pipedLineChild(timeout);
 }
@@ -453,20 +455,28 @@ final class Color {
   /// The eight basic terminal colours and gray (the palette's 0–8) follow
   /// the user's terminal theme. Black.
   static const black = Color._(0, null);
+
   /// Red.
   static const red = Color._(1, null);
+
   /// Green.
   static const green = Color._(2, null);
+
   /// Yellow.
   static const yellow = Color._(3, null);
+
   /// Blue.
   static const blue = Color._(4, null);
+
   /// Magenta.
   static const magenta = Color._(5, null);
+
   /// Cyan.
   static const cyan = Color._(6, null);
+
   /// White.
   static const white = Color._(7, null);
+
   /// Gray (bright black).
   static const gray = Color._(8, null);
 

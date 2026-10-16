@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dart_toolkit/json.dart';
 
 import 'support/io.dart';
+
 import 'package:test/test.dart';
 
 void main() {
@@ -16,14 +17,20 @@ void main() {
   });
 
   test('value<DateTime>() reads ISO text and Unix seconds or milliseconds', () {
-    final doc = Json.parse('{"iso":"2024-05-01T10:00:00Z","s":1714557600,"ms":1714557600000,"txt":"1714557600","no":"soon"}');
+    final doc = Json.parse(
+      '{"iso":"2024-05-01T10:00:00Z","s":1714557600,"ms":1714557600000,"txt":"1714557600","no":"soon"}',
+    );
     final at = DateTime.utc(2024, 5, 1, 10);
     expect(doc.$('iso').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
     expect(doc.$('s').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
     expect(doc.$('ms').value<DateTime>()!.isAtSameMomentAs(at), isTrue);
     expect(doc.$('txt').or(DateTime(0)).isAtSameMomentAs(at), isTrue);
     expect(doc.$('no').value<DateTime>(), isNull);
-    expect(Json.parse('{"id":1700000000000000000000}').$('id').value<DateTime>(), isNull, reason: 'past DateTime: not a time');
+    expect(
+      Json.parse('{"id":1700000000000000000000}').$('id').value<DateTime>(),
+      isNull,
+      reason: 'past DateTime: not a time',
+    );
     expect(Json.parse('["99999999999999999999"]').asList<DateTime>(), isEmpty);
     expect(Json.parse('[1714557600, 1714557600000]').asList<DateTime>(), hasLength(2));
     // B25: microsecond and nanosecond epochs (they read as ms: year 57742).
@@ -70,8 +77,22 @@ void main() {
     });
 
     test('E14: any Iterable (a Set, a map(...)) encodes as a list', () {
-      expect(Json.encode({'s': {1, 2}, 'm': [1, 2].map((i) => i * 10), 'j': Json.of({'t': {'x'}})}), '{"s":[1,2],"m":[10,20],"j":{"t":["x"]}}');
-      expect(Json.encode({'a': {3}}, pretty: true), '{\n  "a": [\n    3\n  ]\n}');
+      expect(
+        Json.encode({
+          's': {1, 2},
+          'm': [1, 2].map((i) => i * 10),
+          'j': Json.of({
+            't': {'x'},
+          }),
+        }),
+        '{"s":[1,2],"m":[10,20],"j":{"t":["x"]}}',
+      );
+      expect(
+        Json.encode({
+          'a': {3},
+        }, pretty: true),
+        '{\n  "a": [\n    3\n  ]\n}',
+      );
       expect(Json.encode(_Point()), '{"x":1}');
       expect(() => Json.encode(Object()), throwsA(isA<JsonUnsupportedObjectError>()));
     });

@@ -46,20 +46,28 @@ const _maxPixels = 1 << 28;
 enum ImageFormat {
   /// PNG, lossless.
   png,
+
   /// JPEG.
   jpg,
+
   /// GIF.
   gif,
+
   /// Windows bitmap.
   bmp,
+
   /// TIFF.
   tiff,
+
   /// Windows icon.
   ico,
+
   /// WebP.
   webp,
+
   /// AVIF.
   avif,
+
   /// HEIC/HEIF, read only.
   heic,
 }
@@ -347,7 +355,6 @@ bool _isLosslessWebp(Uint8List b) {
   }
   return false;
 }
-
 
 /// Refuse what [Image._encode] cannot write, up front.
 void _checkEncode(ImageFormat format, int quality, Image? image) {

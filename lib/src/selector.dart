@@ -483,10 +483,9 @@ final class _Parser {
       'scope' => (e) => _scopes?.contains(e) ?? up(e) == null,
       'link' || 'any-link' => (e) => const {'a', 'area'}.contains(e.localName) && e.attributes.containsKey('href'),
       'visited' || 'hover' || 'active' || 'focus' || 'focus-within' || 'focus-visible' || 'target' => (_) => false,
-      'checked' =>
-        (e) =>
-            (e.localName == 'input' && e.attributes.containsKey('checked')) ||
-            (e.localName == 'option' && _chosen(e)),
+      'checked' => (
+        e,
+      ) => (e.localName == 'input' && e.attributes.containsKey('checked')) || (e.localName == 'option' && _chosen(e)),
       'disabled' => _disabled,
       'enabled' => (e) => _formControls.contains(e.localName) && !_disabled(e),
       'before' || 'after' || 'first-line' || 'first-letter' => (_) => false,

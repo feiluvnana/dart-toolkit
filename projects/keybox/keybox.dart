@@ -40,11 +40,8 @@ final class Disc {
   File track(int number, String title) => folder.dir('mp3').file('$number. $title.mp3');
 }
 
-Future<void> main(List<String> args) => Command(
-  'keybox',
-  'Download the Key BOX set into "${box.path}" and zip it.',
-  handler: (_) => download(),
-).run(args);
+Future<void> main(List<String> args) =>
+    Command('keybox', 'Download the Key BOX set into "${box.path}" and zip it.', handler: (_) => download()).run(args);
 
 Future<void> download() async {
   final (keyBox, messagePage, topicsPage) =
@@ -160,9 +157,7 @@ List<Asset> messages(Elements page) {
 
 String studio(String url) => url.contains('wfs') ? 'WFS_' : (url.contains('cygames') ? 'Cygames_' : '');
 
-List<Asset> topics(Elements page) => [
-  for (final src in page.$('.topics_box img').attrs('src')) (src, events),
-];
+List<Asset> topics(Elements page) => [for (final src in page.$('.topics_box img').attrs('src')) (src, events)];
 
 // khinsider has one page per song; the actual file link is on that page.
 Future<List<Asset>> songs(Map<int, Disc> discs) async {

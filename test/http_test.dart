@@ -737,7 +737,17 @@ Future<void> main() async {
             },
           )
           .status();
-      await http.get(u, query: {'variables': {'id': 7, 'tags': ['a']}}).status();
+      await http
+          .get(
+            u,
+            query: {
+              'variables': {
+                'id': 7,
+                'tags': ['a'],
+              },
+            },
+          )
+          .status();
       expect(seen, [
         'q=a+b%26c&page=2&on=true',
         'x=1&y=%C3%A9',
@@ -1044,7 +1054,10 @@ void clientTests() {
       final c = Http.client();
       await c.get('$url/cookies').status();
       final jar = c.cookies();
-      expect([jar['good'], jar['bad'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']], ['1', '2', null, null, '5', '6']);
+      expect(
+        [jar['good'], jar['bad'], jar['tld'], jar['ip'], jar['deep'], jar['shallow']],
+        ['1', '2', null, null, '5', '6'],
+      );
       expect(cookieHeader(jar, '$url/a/b/c'), 'deep=5; shallow=6; good=1; bad=2');
       expect(cookieHeader(jar, 'http://example.com/'), isNull);
       jar.set('k', 'v', url: url);
@@ -1201,7 +1214,10 @@ Future<void> main() async {
             if (range == null) {
               sock.add(latin1.encode('HTTP/1.1 200 OK\r\ncontent-length: 200000\r\netag: "d1"\r\n\r\n'));
               sock.add(big.sublist(0, 100000));
-              sock.flush().then((_) => Future<void>.delayed(const Duration(milliseconds: 200))).then((_) => sock.destroy()); // mid-body
+              sock
+                  .flush()
+                  .then((_) => Future<void>.delayed(const Duration(milliseconds: 200)))
+                  .then((_) => sock.destroy()); // mid-body
             } else {
               sock.add(
                 latin1.encode(
@@ -1452,7 +1468,11 @@ void serveTests() {
       ('https://evil.blogspot.de/', 'blogspot.de', 'https://victim.blogspot.de/'),
       ('https://evil.blogspot.co.uk/', 'blogspot.co.uk', 'https://victim.blogspot.co.uk/'),
       ('https://evil.city.tokyo.jp/', 'tokyo.jp', 'https://shop.tokyo.jp/'),
-      ('https://evil.s3.eu-west-1.amazonaws.com/', 's3.eu-west-1.amazonaws.com', 'https://victim.s3.eu-west-1.amazonaws.com/'),
+      (
+        'https://evil.s3.eu-west-1.amazonaws.com/',
+        's3.eu-west-1.amazonaws.com',
+        'https://victim.s3.eu-west-1.amazonaws.com/',
+      ),
       ('https://evil.uk.com/', 'uk.com', 'https://victim.uk.com/'),
       ('https://evil.example.com.br/', 'com.br', 'https://victim.com.br/'),
       ('https://evil.shop.za/', 'shop.za', 'https://victim.shop.za/'),

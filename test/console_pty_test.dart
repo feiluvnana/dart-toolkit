@@ -82,10 +82,13 @@ void main() {
       unawaited(proc.stdout.drain<void>());
       unawaited(proc.stderr.drain<void>());
       // stdin stays open and silent.
-      final code = await proc.exitCode.timeout(const Duration(seconds: 20), onTimeout: () {
-        proc.kill();
-        return -1;
-      });
+      final code = await proc.exitCode.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {
+          proc.kill();
+          return -1;
+        },
+      );
       expect(code, 0, reason: 'exits on its own');
       expect(await log.readAsString(), 'answer=anon\n');
       await proc.stdin.close();
@@ -512,7 +515,11 @@ Future<(String, String)> _pty(
 }
 
 /// Run the choose probe under a pty with key feeds; return the log line.
-Future<String> _ptyChoose({required List<(double, String)> feeds, String mode = 'choose', String ready = 'blue'}) async {
+Future<String> _ptyChoose({
+  required List<(double, String)> feeds,
+  String mode = 'choose',
+  String ready = 'blue',
+}) async {
   final root = Directory.current;
   final log = tempFile('console-pty.log');
   final res = await Process.run(

@@ -45,9 +45,10 @@ void main() {
   test('the cursor moves past a page only once its work succeeded, and never past a failure', () async {
     final work = [for (var i = 0; i < 4; i++) Completer<bool>()];
     var n = 0;
-    final run = Feed((c) async => _page(c, 9), cursor: cursor).run(
-      (page) => n < 4 ? page.add(work[n++].future) : page.stop(),
-    );
+    final run = Feed(
+      (c) async => _page(c, 9),
+      cursor: cursor,
+    ).run((page) => n < 4 ? page.add(work[n++].future) : page.stop());
     await pumpEventQueue();
     expect(n, 4, reason: 'pages are listed while earlier work still runs');
     work[0].complete(true);
@@ -59,15 +60,17 @@ void main() {
     expect(File(cursor).readAsStringSync(), 'p1');
   });
 
-  test('work that fails makes the run fail: the first error is rethrown after every page, false is not complete (B11)', () async {
-    var saves = 0;
-    final thrown = Feed((c) async => _page(c, 2)).run(
-      (page) => page.add(Future(() => throw StateError('save ${++saves} failed'))),
-    );
-    await expectLater(thrown, throwsA(isA<StateError>().having((e) => e.message, 'message', 'save 1 failed')));
-    expect(saves, 3);
-    expect(await Feed((c) async => _page(c, 2)).run((page) => page.add(Future.value(false))), isFalse);
-  });
+  test(
+    'work that fails makes the run fail: the first error is rethrown after every page, false is not complete (B11)',
+    () async {
+      var saves = 0;
+      final thrown = Feed((c) async => _page(c, 2))
+          .run((page) => page.add(Future(() => throw StateError('save ${++saves} failed'))));
+      await expectLater(thrown, throwsA(isA<StateError>().having((e) => e.message, 'message', 'save 1 failed')));
+      expect(saves, 3);
+      expect(await Feed((c) async => _page(c, 2)).run((page) => page.add(Future.value(false))), isFalse);
+    },
+  );
 
   test('an interrupted run continues: the top first, up to what is known, then the saved cursor', () async {
     saveCursor('p5\n');
@@ -84,10 +87,10 @@ void main() {
   test('all: a full re-list from the top, whatever cursor is saved', () async {
     saveCursor('p5');
     final firsts = <int>[];
-    final complete = await Feed((c) async => _page(c, 3), cursor: cursor).run(
-      (page) => firsts.add(page.items().first),
-      all: true,
-    );
+    final complete = await Feed(
+      (c) async => _page(c, 3),
+      cursor: cursor,
+    ).run((page) => firsts.add(page.items().first), all: true);
     expect(complete, isTrue);
     expect(firsts, [0, 3, 6, 9]);
     expect(File(cursor).existsSync(), isFalse);
@@ -95,9 +98,8 @@ void main() {
 
   test('a feed that loops back to a cursor it saw ends instead of spinning', () async {
     var pages = 0;
-    final complete = await Feed<int>((c) async => (items: [1], next: c == 'b' ? 'a' : (c == 'a' ? 'b' : 'a'))).run(
-      (_) => pages++,
-    );
+    final complete = await Feed<int>((c) async => (items: [1], next: c == 'b' ? 'a' : (c == 'a' ? 'b' : 'a')))
+        .run((_) => pages++);
     expect((complete, pages), (true, 3));
   });
 

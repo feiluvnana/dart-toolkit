@@ -1,4 +1,3 @@
-
 import 'package:dart_toolkit/cli.dart';
 import 'package:test/test.dart';
 
@@ -265,7 +264,10 @@ void main() {
       expect(DateTime.now().difference(at!).inMinutes, 90);
       expect(await cli.run(['--since', '2026-10-08']), 0);
       expect(at, DateTime(2026, 10, 8));
-      expect(await fails(cli, ['--since', 'soon']), contains('expected a date such as 2026-10-08 or a time ago such as 7d'));
+      expect(
+        await fails(cli, ['--since', 'soon']),
+        contains('expected a date such as 2026-10-08 or a time ago such as 7d'),
+      );
       expect(await fails(cli, ['--since', '-7d']), contains('expected a date')); // the future is a date
       expect(await fails(cli, ['--since', '7']), contains('expected a date')); // a unit says ago
     });

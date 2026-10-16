@@ -140,13 +140,10 @@ void main() {
       final bar = Meter();
       final c = await (Fs.dir(p('src')).copy(p('dst'), match: '**/*.dart') & bar);
       expect(c, isA<Dir>());
-      expect([for (final e in await Fs.dir(p('dst')).list(match: '**')) e.relative(Fs.dir(p('dst')))], [
-        'a.dart',
-        'lib',
-        'lib/b.dart',
-        'lib/deep',
-        'lib/deep/d.dart',
-      ]);
+      expect(
+        [for (final e in await Fs.dir(p('dst')).list(match: '**')) e.relative(Fs.dir(p('dst')))],
+        ['a.dart', 'lib', 'lib/b.dart', 'lib/deep', 'lib/deep/d.dart'],
+      );
       expect(await Fs.file(p('dst/lib/deep/d.dart')).text(), 'd' * 300);
       expect((bar.done(), bar.total()), (600, 600));
       // One level, through the Future mirror, unwatched.
@@ -575,14 +572,17 @@ Future<void> main() async {
     test('lock: one holder at a time across processes; wait retries; the body result returns', () async {
       final lock = p('run.lock');
       // A child script holds the lock until its stdin closes.
-      final holder = await startDart('''
+      final holder = await startDart(
+        '''
 import 'dart:io' as io;
 import 'package:dart_toolkit/fs.dart';
 Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
   print('held');
   await io.stdin.drain<void>();
 });
-''', args: [lock]);
+''',
+        args: [lock],
+      );
       await holder.stdout.transform(utf8.decoder).firstWhere((l) => l.contains('held'));
       await expectLater(
         Fs.file(lock).lock(() async => 1),
@@ -604,9 +604,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       expect(await out.file('notes.txt').text(), 'hello');
       await (Fs.file(p('src/notes.txt')) | _Gzip() > out); // a piped reader keeps its name
       expect(await out.file('notes.txt').bytes(), gzip.encode(utf8.encode('hello')));
-      final nameless = throwsA(
-        isA<ContentException>().having((e) => e.message, 'message', contains('dir.file(name)')),
-      );
+      final nameless = throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('dir.file(name)')));
       await expectLater(Reader.of([1, 2]) > out, nameless);
       await expectLater(out.consume(Stream.value([1])), nameless);
       expect([for (final e in await out.list()) e.name()], ['notes.txt']);
@@ -622,11 +620,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
           [for (final e in await d.list(match: '**')) e.relative(d)],
           ['a', 'a/b', 'a-b', 'a.txt', 'z', 'z/y.txt'],
         );
-        expect(
-          [for (final e in await d.list(match: '**.txt')) e.relative(d)],
-          ['a.txt', 'z/y.txt'],
-          reason: spelled,
-        );
+        expect([for (final e in await d.list(match: '**.txt')) e.relative(d)], ['a.txt', 'z/y.txt'], reason: spelled);
       }
     });
 
@@ -723,10 +717,13 @@ void check(bool ok, String what) { if (!ok) throw StateError(what); }''',
         posix.writeAll(f, BoomReader().stream()),
         throwsA(isA<StateError>().having((e) => e.message, 'message', 'reader blew up mid-write')),
       );
-      await posix.writeAll(f, Stream.fromIterable([
-        [1],
-        [2, 3],
-      ]));
+      await posix.writeAll(
+        f,
+        Stream.fromIterable([
+          [1],
+          [2, 3],
+        ]),
+      );
       expect(await f.readAsBytes(), [1, 2, 3]);
     });
 
@@ -852,7 +849,10 @@ Future<void> expectThrows(Future<void> f, String what) async {
     });
 
     test('a streamed write of many small and large chunks lands byte for byte (regression: fsync path)', () async {
-      final chunks = [for (var i = 0; i < 3000; i++) List<int>.filled(i % 97 + 1, i & 0xff), List<int>.filled(200000, 7)];
+      final chunks = [
+        for (var i = 0; i < 3000; i++) List<int>.filled(i % 97 + 1, i & 0xff),
+        List<int>.filled(200000, 7),
+      ];
       final f = Fs.file(p('big.bin'));
       await (Reader.of(chunks.expand((c) => c).toList()) > f);
       await f.consume(Stream.fromIterable(chunks));
@@ -862,7 +862,6 @@ Future<void> expectThrows(Future<void> f, String what) async {
     });
   });
 }
-
 
 final class _Gzip with Pipe {
   @override

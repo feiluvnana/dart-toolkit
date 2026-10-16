@@ -962,7 +962,10 @@ extension RegionWidgets on Region {
     _s._barsShown = true;
     final rows = _s._barRows();
     if (rows.isNotEmpty) _s._spinVisible = true; // spinners and the 2 s ✓ rows need frames
-    return lines(rows.length, (row, i) => row.write(rows[i](row.width()), color: color, background: background, style: style));
+    return lines(
+      rows.length,
+      (row, i) => row.write(rows[i](row.width()), color: color, background: background, style: style),
+    );
   }
 
   /// Every `Console.log` line of the run that passes [only], a row each
@@ -970,13 +973,14 @@ extension RegionWidgets on Region {
   /// view. A failed line (`Console.log(line, failed: true)`) is bold, in
   /// [failures] when given; others in [color]. Drawing this takes Console's
   /// lines out of the status row.
-  Region log({
-    bool Function(({DateTime at, String text, bool failed}) line)? only,
-    Color? color,
-    Color? failures,
-  }) {
+  Region log({bool Function(({DateTime at, String text, bool failed}) line)? only, Color? color, Color? failures}) {
     _s._logShown = true;
-    final shown = only == null ? logbook : [for (final l in logbook) if (only(l)) l];
+    final shown = only == null
+        ? logbook
+        : [
+            for (final l in logbook)
+              if (only(l)) l,
+          ];
     return lines(shown.length, (row, i) {
       final l = shown[i];
       row.write('${l.at.format('HH:mm:ss')}  ', inline: true, style: {Style.dim});

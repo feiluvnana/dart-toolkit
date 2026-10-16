@@ -61,7 +61,9 @@ Future<Photo?> photo(Client c, String id, [String set = '']) async {
   final url =
       d.page.$('link[rel="preload"][as="image"][data-preloader*="CometPhotoRoot"]').attr('href') ??
       d.data.$('**.uri').texts().where((u) => u.contains('t39.30808-6')).firstOrNull ??
-      d.data.$('**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri').text();
+      d.data
+          .$('**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri')
+          .text();
   if (url == null) return null;
   return (
     id:
@@ -85,7 +87,11 @@ Future<Video?> video(Client c, String id) async {
       (progressive.where((p) => p.$('metadata.quality').text() == 'HD').firstOrNull ?? progressive.firstOrNull)
           ?.$('progressive_url')
           .text() ??
-      d.data.$('**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url').text() ??
+      d.data
+          .$(
+            '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url',
+          )
+          .text() ??
       RegExp(r'(?:<|\\u003C)BaseURL>(https:[^<\\"]+)')
           .firstMatch(d.text)?[1]
           ?.replaceAll(r'\/', '/')

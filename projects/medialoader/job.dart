@@ -173,7 +173,9 @@ final class Job {
             .run(
               () => switch (f.text) {
                 final text? => Reader.of(utf8.encode(text)) & part.meter & got & bar > f.to,
-                _ => cdn.get(f.url!, headers: {'referer': '${platform.site}/'}) & board.meter & part.meter & got & bar > f.to,
+                _ =>
+                  cdn.get(f.url!, headers: {'referer': '${platform.site}/'}) & board.meter & part.meter & got & bar >
+                      f.to,
               },
             )
             .whenComplete(() => board.active--);

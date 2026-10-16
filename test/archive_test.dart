@@ -393,23 +393,33 @@ void main() {
       expect(await Fs.file(p('o5/a.txt')).text(), 'seven ' * 4000);
     }, tags: 'media');
 
-    test('Ctrl-C mid-7z removes the 7-Zip work folder (B18)', () async {
-      final temp = await Directory(p('tmpdir')).create(recursive: true);
-      final rnd = Random(7);
-      await io.File(p('big/r.bin')).create(recursive: true);
-      await io.File(p('big/r.bin')).writeAsBytes(Uint8List.fromList(List.generate(48 << 20, (_) => rnd.nextInt(256))));
-      final child = await startDart('''
+    test(
+      'Ctrl-C mid-7z removes the 7-Zip work folder (B18)',
+      () async {
+        final temp = await Directory(p('tmpdir')).create(recursive: true);
+        final rnd = Random(7);
+        await io.File(p('big/r.bin')).create(recursive: true);
+        await io.File(p('big/r.bin'))
+            .writeAsBytes(Uint8List.fromList(List.generate(48 << 20, (_) => rnd.nextInt(256))));
+        final child = await startDart(
+          '''
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/fs.dart';
 Future<void> main(List<String> args) async =>
     Archive.archive(['.'], dir: args[0], format: ArchiveFormat.sevenzip) > Fs.file(args[1]);
-''', args: [p('big'), p('big.7z')], env: {'TMPDIR': temp.path});
-      bool working() => temp.listSync().any((e) => e.path.contains('dart_toolkit_7z_'));
-      expect(await eventually(working, timeout: const Duration(seconds: 60)), isTrue);
-      child.kill(ProcessSignal.sigint);
-      expect(await child.exitCode.timeout(const Duration(seconds: 15)), 130);
-      expect(working(), isFalse);
-    }, tags: 'media', skip: Platform.isWindows ? 'POSIX signals' : null);
+''',
+          args: [p('big'), p('big.7z')],
+          env: {'TMPDIR': temp.path},
+        );
+        bool working() => temp.listSync().any((e) => e.path.contains('dart_toolkit_7z_'));
+        expect(await eventually(working, timeout: const Duration(seconds: 60)), isTrue);
+        child.kill(ProcessSignal.sigint);
+        expect(await child.exitCode.timeout(const Duration(seconds: 15)), 130);
+        expect(working(), isFalse);
+      },
+      tags: 'media',
+      skip: Platform.isWindows ? 'POSIX signals' : null,
+    );
 
     test('7-Zip AES archives (data, and header too) open with their password', () async {
       for (final name in ['7z_aes', '7z_aes_header']) {
@@ -677,21 +687,54 @@ Future<void> main(List<String> args) async =>
         final body = <int>[], dir = <int>[];
         for (final (name, extra) in members) {
           List<int> fields(int sig, bool central) => [
-            ...le(sig, 4), if (central) ...le(20, 2), ...le(20, 2), 0, 0, 0, 0, 0, 0, 0x21, 0,
-            ...le(crc32([0x78]), 4), ...le(1, 4), ...le(1, 4), ...le(name.length, 2), ...le(extra.length, 2),
+            ...le(sig, 4),
+            if (central) ...le(20, 2),
+            ...le(20, 2),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x21,
+            0,
+            ...le(crc32([0x78]), 4),
+            ...le(1, 4),
+            ...le(1, 4),
+            ...le(name.length, 2),
+            ...le(extra.length, 2),
             if (central) ...[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...le(body.length, 4)],
-            ...name, ...extra,
+            ...name,
+            ...extra,
           ];
           dir.addAll(fields(0x02014b50, true));
           body.addAll([...fields(0x04034b50, false), 0x78]);
         }
         final n = members.length;
-        return [...body, ...dir, ...le(0x06054b50, 4), 0, 0, 0, 0, ...le(n, 2), ...le(n, 2), ...le(dir.length, 4), ...le(body.length, 4), 0, 0];
+        return [
+          ...body,
+          ...dir,
+          ...le(0x06054b50, 4),
+          0,
+          0,
+          0,
+          0,
+          ...le(n, 2),
+          ...le(n, 2),
+          ...le(dir.length, 4),
+          ...le(body.length, 4),
+          0,
+          0,
+        ];
       }
 
       final raw = [...'caf'.codeUnits, 0x82, ...'.txt'.codeUnits]; // é in CP437
       final unicode = utf8.encode('名前.txt');
-      final upath = [1, ...le(crc32([0x3F, 0x3F, ...'.txt'.codeUnits]), 4), ...unicode];
+      final upath = [
+        1,
+        ...le(crc32([0x3F, 0x3F, ...'.txt'.codeUnits]), 4),
+        ...unicode,
+      ];
       final zip = zipOf([
         (raw, const []),
         ([0x3F, 0x3F, ...'.txt'.codeUnits], [...le(0x7075, 2), ...le(upath.length, 2), ...upath]),
@@ -1086,36 +1129,40 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       }
     });
 
-    test('G4: Archive.member pipes one member\'s bytes out of a tar, tgz or zip; a missing one is a ContentException', () async {
-      await Fs.file(p('src/package/package.json')).write('{"name":"x"}');
-      await Fs.file(p('src/package/lib/a.txt')).write('A');
-      for (final format in [ArchiveFormat.tar, ArchiveFormat.tgz, ArchiveFormat.zip]) {
-        final pack = Archive.archive(['.'], dir: p('src'), format: format);
-        await (pack > Fs.file(p('a.${format.name}')));
-        final file = Fs.file(p('a.${format.name}'));
-        expect(await (file | Archive.member('package/package.json')).text(), '{"name":"x"}', reason: format.name);
-        expect(await (file | Archive.member('./package/lib/a.txt')).text(), 'A', reason: format.name);
-        await expectLater(
-          (file | Archive.member('package.json')).text(),
-          throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('no member "package.json"'))),
-          reason: format.name,
-        );
-        await expectLater(
-          (file | Archive.member('package/lib')).text(),
-          throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('folder'))),
-          reason: format.name,
-        );
-      }
-      expect(() => Archive.member('./'), throwsArgumentError);
-      final rar = Fs.file('test/fixtures/archives/rar5_multiple_files.rar');
-      expect(await (rar | Archive.member('test4.bin')).bytes(), hasLength(4096));
-      expect(Directory.systemTemp.listSync().where((e) => e.path.contains('dart_toolkit_member_')), isEmpty);
-    });
+    test(
+      'G4: Archive.member pipes one member\'s bytes out of a tar, tgz or zip; a missing one is a ContentException',
+      () async {
+        await Fs.file(p('src/package/package.json')).write('{"name":"x"}');
+        await Fs.file(p('src/package/lib/a.txt')).write('A');
+        for (final format in [ArchiveFormat.tar, ArchiveFormat.tgz, ArchiveFormat.zip]) {
+          final pack = Archive.archive(['.'], dir: p('src'), format: format);
+          await (pack > Fs.file(p('a.${format.name}')));
+          final file = Fs.file(p('a.${format.name}'));
+          expect(await (file | Archive.member('package/package.json')).text(), '{"name":"x"}', reason: format.name);
+          expect(await (file | Archive.member('./package/lib/a.txt')).text(), 'A', reason: format.name);
+          await expectLater(
+            (file | Archive.member('package.json')).text(),
+            throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('no member "package.json"'))),
+            reason: format.name,
+          );
+          await expectLater(
+            (file | Archive.member('package/lib')).text(),
+            throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('folder'))),
+            reason: format.name,
+          );
+        }
+        expect(() => Archive.member('./'), throwsArgumentError);
+        final rar = Fs.file('test/fixtures/archives/rar5_multiple_files.rar');
+        expect(await (rar | Archive.member('test4.bin')).bytes(), hasLength(4096));
+        expect(Directory.systemTemp.listSync().where((e) => e.path.contains('dart_toolkit_member_')), isEmpty);
+      },
+    );
 
     test('G4: Archive.member stops reading a tgz once its member ends', () async {
       final rnd = Random(4);
       await Fs.file(p('src/a/first.txt')).write('first');
-      await Fs.file(p('src/b/big.bin')).write(String.fromCharCodes(List.generate(4 << 20, (_) => 33 + rnd.nextInt(90))));
+      await Fs.file(p('src/b/big.bin'))
+          .write(String.fromCharCodes(List.generate(4 << 20, (_) => 33 + rnd.nextInt(90))));
       await (Archive.archive(['a', 'b'], dir: p('src'), format: ArchiveFormat.tgz) > Fs.file(p('s.tgz')));
       final size = await Fs.file(p('s.tgz')).size();
       var read = 0;
@@ -1349,7 +1396,9 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
 
     test('S7: a RAR5 member with two encryption records is refused', () {
       final record = [1, 0, 0, 1, ...List.filled(32, 7)]; // type 1, v0, flags 0, 2^1 rounds, salt, iv
-      final extra = [for (var k = 0; k < 2; k++) ...[..._vint(record.length), ...record]];
+      final extra = [
+        for (var k = 0; k < 2; k++) ...[..._vint(record.length), ...record],
+      ];
       final b = Uint8List.fromList(_rar5(List.filled(16, 0), extra: extra));
       expect(() => rar.readRar(b, password: 'pw'), throwsA(content('two encryption records')));
     });
@@ -1740,7 +1789,11 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
       await (Reader.of(big) > Fs.file(p('src/a.bin')));
       await (Reader.of(big) > Fs.file(p('src/b.bin')));
       final zipped = await Archive.archive(['.'], dir: p('src')).bytes();
-      for (final (name, bytes) in [('tar', tar), ('tgz', await (Reader.of(tar) | Archive.gzip()).bytes()), ('zip', zipped)]) {
+      for (final (name, bytes) in [
+        ('tar', tar),
+        ('tgz', await (Reader.of(tar) | Archive.gzip()).bytes()),
+        ('zip', zipped),
+      ]) {
         await expectLater(
           Archive.unarchive(p('$name-capped'), max: 500 << 10).consume(Stream.value(bytes)),
           refused('max'),
@@ -1770,7 +1823,11 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
         if (Platform.isMacOS) 'nfd': [link('\u00e9', '.'), link('up', 'e\u0301/..')],
       };
       for (final MapEntry(key: name, value: members) in cases.entries) {
-        await expectLater(Archive.unarchive(p(name)).consume(Stream.value(tarOf(members))), throwsFormatException, reason: name);
+        await expectLater(
+          Archive.unarchive(p(name)).consume(Stream.value(tarOf(members))),
+          throwsFormatException,
+          reason: name,
+        );
         expect(await Fs.entry(p(name)), isNull, reason: name);
       }
     });

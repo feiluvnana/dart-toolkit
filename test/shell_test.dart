@@ -203,12 +203,16 @@ Future<void> main() async {
       await Process.run('chmod', ['+x', fake]);
       await expectLater(
         Shell.run([fake, 'x', '-pSECRET', 'a.7z']).check(),
-        throwsA(isA<ProcessException>().having((e) => '$e', 'text', allOf(contains('-p***'), isNot(contains('SECRET'))))),
+        throwsA(
+          isA<ProcessException>().having((e) => '$e', 'text', allOf(contains('-p***'), isNot(contains('SECRET')))),
+        ),
       );
     }, testOn: '!windows');
 
     test('E5: a non-zero exit with check() is an ExitException, a toolkit error', () async {
-      final e = await Shell.run(['sh', '-c', 'echo boom >&2; exit 3']).check().then<Object>((_) => 'ran', onError: (Object e) => e);
+      final e = await Shell.run(['sh', '-c', 'echo boom >&2; exit 3'])
+          .check()
+          .then<Object>((_) => 'ran', onError: (Object e) => e);
       expect(e, isA<ExitException>().having((x) => x.errorCode, 'code', 3));
       expect(e, isA<ToolkitException>().having((x) => x.message, 'message', contains('boom')));
       await expectLater(Shell.run(['dart-toolkit-no-such-program-xyz']), throwsA(isNot(isA<ExitException>())));
@@ -335,13 +339,9 @@ Future<void> main() async {
         '-H',
         'Accept: text/html',
       ];
-      final failed = await Shell.run([
-        'sh',
-        '-c',
-        'exit 3',
-        'sh',
-        ...args,
-      ]).check().then<Object?>((_) => null, onError: (Object e) => e);
+      final failed = await Shell.run(['sh', '-c', 'exit 3', 'sh', ...args])
+          .check()
+          .then<Object?>((_) => null, onError: (Object e) => e);
       final timedOut = await Shell.run([
         'sh',
         '-c',
@@ -374,7 +374,11 @@ Future<void> main() async {
       final pidFile = Fs.file('${dir.path}/pid');
       final stop = Completer<void>();
       final sw = Stopwatch()..start();
-      final run = Shell.run(['sh', '-c', 'sleep 20 & echo \$! > "${pidFile.path}"; echo \$!; wait'], cancel: stop.future);
+      final run = Shell.run([
+        'sh',
+        '-c',
+        'sleep 20 & echo \$! > "${pidFile.path}"; echo \$!; wait',
+      ], cancel: stop.future);
       expect(await eventually(() async => (await pidFile.text(or: '')).trim().isNotEmpty), isTrue);
       final pid = (await pidFile.text()).trim();
       stop.complete();

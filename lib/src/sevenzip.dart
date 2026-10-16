@@ -77,7 +77,9 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
     final decoded = _decodeFolder(b, info, 0, pw, budget);
     final crc = info.folders[0].crc;
     if (crc != null && crc32(decoded) != crc) {
-      throw pw == null ? ContentException('corrupt archive: 7z header CRC') : PasswordException('wrong password or corrupt archive');
+      throw pw == null
+          ? ContentException('corrupt archive: 7z header CRC')
+          : PasswordException('wrong password or corrupt archive');
     }
     header = _Bytes(decoded, 0);
     if (pw != null && header.peek() != 0x01 && header.peek() != 0x17) {
@@ -134,7 +136,9 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
         if (size < 0 || at + size > whole.length) _bad('file past its folder');
         final data = Uint8List.sublistView(whole, at, at + size);
         if (crc != null && crc32(data) != crc) {
-          throw pw == null ? ContentException('corrupt archive: 7z CRC of ${f.name}') : PasswordException('wrong password or corrupt archive: ${f.name}');
+          throw pw == null
+              ? ContentException('corrupt archive: 7z CRC of ${f.name}')
+              : PasswordException('wrong password or corrupt archive: ${f.name}');
         }
         return data;
       }),
@@ -496,7 +500,9 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   final data = output(f.mainOut);
   final crc = f.crc;
   if (crc != null && info.subCounts.length > index && info.subCounts[index] != 1 && crc32(data) != crc) {
-    throw password == null ? ContentException('corrupt archive: 7z folder CRC') : PasswordException('wrong password or corrupt archive');
+    throw password == null
+        ? ContentException('corrupt archive: 7z folder CRC')
+        : PasswordException('wrong password or corrupt archive');
   }
   return data;
 }
@@ -601,7 +607,6 @@ final class _DigestSink implements Sink<crypto.Digest> {
   @override
   void close() {}
 }
-
 
 String _hex(List<int> id) => id.map((v) => v.toRadixString(16).padLeft(2, '0')).join();
 

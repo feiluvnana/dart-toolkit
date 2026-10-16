@@ -77,6 +77,7 @@ final class Hasher with Writer implements Pipe, PassThrough {
     }
     return hex;
   }
+
   final _DigestCapture _capture;
   late final ByteConversionSink _in;
   var _state = _State.idle;

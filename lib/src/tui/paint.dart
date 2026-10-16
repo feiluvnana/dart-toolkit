@@ -21,14 +21,19 @@ String _lf(String s) => s.contains('\r\n') ? s.replaceAll('\r\n', '\n') : s;
 enum Style {
   /// Bold.
   bold,
+
   /// Dim (faint).
   dim,
+
   /// Italic.
   italic,
+
   /// Underlined.
   underline,
+
   /// Struck through.
   strike,
+
   /// Foreground and background swapped.
   reverse,
 }
