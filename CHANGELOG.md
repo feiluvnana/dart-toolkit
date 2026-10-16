@@ -86,6 +86,7 @@
 - `chrome`: `Page.scroll(to:)`; `click`, `fill` and the other actions scroll their element into view, and `page.run('document.querySelector("#x").scrollIntoView()')` does it by hand. `scroll()` still goes to the bottom.
 - `fs`: `Dir.watch()`; `io.Directory(path).watch(recursive: true)` (not recursive on Linux either way).
 - `fs`: `Dir.list(recursive:)`; the whole tree is `list(match: '**')`, and a glob's own depth decides how far it walks.
+- `fs`: `Dir.size(match:)`; the bytes of some files are `[for (final e in await dir.list(match: '**/*.jpg')) if (e is File) await e.size()].fold(0, (a, b) => a + b)`.
 - `tui`: `Region.diff(before, after)`; a script shows a diff with `Shell.run(['diff', '-u', a, b])` (or `git diff --no-index`).
 
 ## 0.1.0

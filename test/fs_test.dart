@@ -761,8 +761,6 @@ Future<void> expectThrows(Future<void> f, String what) async {
       await Fs.file(p('outside.bin')).write('x' * 100);
       await io.Link('${d.path()}/ln').create(p('outside.bin'));
       expect(await d.size(), (files: 3, bytes: 9));
-      expect(await d.size(match: '**/*.{jpg,mp4}'), (files: 2, bytes: 8));
-      expect(await d.size(match: '*.jpg'), (files: 1, bytes: 5));
       expect(await Future.value(d).size(), (files: 3, bytes: 9));
     });
 

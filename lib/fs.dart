@@ -546,24 +546,18 @@ final class Dir extends Entry {
   /// How many files are under this folder (recursively, links not
   /// followed) and their bytes. In-flight toolkit files are left out:
   /// download partials (`x.part`, `x.part.tag`), atomic-write temps
-  /// (`.x.tmp…`) and `Image`/`Video.compress` encodes (`.x.compress`), so a folder mid-download counts what is finished. [match]
-  /// keeps the files whose path relative to this folder matches a glob, as
-  /// in [list]. A missing folder is `(files: 0, bytes: 0)`.
-  Future<({int files, int bytes})> size({String? match}) async {
-    final pattern = match == null ? null : glob(match);
+  /// (`.x.tmp…`) and `Image`/`Video.compress` encodes (`.x.compress`), so
+  /// a folder mid-download counts what is finished. A missing folder is
+  /// `(files: 0, bytes: 0)`.
+  Future<({int files, int bytes})> size() async {
     if (await io.FileSystemEntity.type(_path, followLinks: false) == io.FileSystemEntityType.notFound) {
       return (files: 0, bytes: 0);
     }
-    final cut = _path.endsWith('/') || _path.endsWith(r'\') ? _path.length : _path.length + 1;
     final sizes = <Future<int?>>[];
     await for (final e in io.Directory(_path).list(recursive: true, followLinks: false)) {
       if (e is! io.File) continue;
       final name = p.basename(e.path);
       if (name.endsWith('.part') || name.endsWith('.part.tag') || posix.isTmpName(name) || _isCompressTemp(name)) continue;
-      if (pattern != null) {
-        final rel = (e.path.startsWith(_path) ? e.path.substring(cut) : p.relative(e.path, from: _path));
-        if (!pattern.hasMatch(rel.replaceAll(r'\', '/'))) continue;
-      }
       // Lengths in parallel; a file gone since the listing is not counted.
       sizes.add(e.length().then<int?>((n) => n, onError: (Object _) => null));
     }
@@ -791,7 +785,7 @@ extension DirFuture on Future<Dir> {
   Future<File> file(String name) async => (await this).file(name);
   Future<Dir> dir(String name) async => (await this).dir(name);
   Task<List<Entry>> list({String? match}) => task((run) async => (await this).list(match: match) & relay(run));
-  Future<({int files, int bytes})> size({String? match}) async => (await this).size(match: match);
+  Future<({int files, int bytes})> size() async => (await this).size();
   Future<Dir> create() async => (await this).create();
 }
 

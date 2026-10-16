@@ -520,7 +520,7 @@ final class File extends Entry with Reader, Writer {
 final class Dir extends Entry {
   File file(String name);  Dir dir(String name);
   Task<List<Entry>> list({String? match});  Future<Dir> create();   // list counts entries; match sets the depth
-  Future<({int files, int bytes})> size({String? match});   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
+  Future<({int files, int bytes})> size();   // recursive; skips .part, .part.tag, .x.tmp… ; missing = zeros
 }
 final class Link extends Entry {
   Future<String> target();  Future<Entry?> resolve();   // a new link is dart:io's Link(path).create(target)
