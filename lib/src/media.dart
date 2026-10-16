@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import '../pool.dart' show Pool;
 import '../shell.dart';
 import 'cache.dart' as cache;
+import 'exit.dart' as exit;
 import 'posix.dart' as posix;
 import 'quiet.dart';
 import 'tool.dart';
@@ -195,6 +196,17 @@ Future<void> _sweep(io.Directory root) async {
 /// seekable output (mp4 `faststart`, image muxers).
 Future<String> tempOut(String ext) async =>
     p.join((await _spool()).path, '${DateTime.now().microsecondsSinceEpoch}-${_n++}.out.$ext');
+
+/// [body], with the temp file [path] deleted if a signal ends the script
+/// meanwhile (Ctrl-C skips `finally`).
+Future<T> deletedOnExit<T>(String path, Future<T> Function() body) async {
+  final token = exit.onExit(() => io.File(path).delete().then((_) {}, onError: (_) {}));
+  try {
+    return await body();
+  } finally {
+    exit.offExit(token);
+  }
+}
 
 /// Stream [path] and delete it after.
 Stream<List<int>> readAndDelete(String path) async* {

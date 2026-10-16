@@ -154,8 +154,10 @@ final class Image {
     var out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));
     if (format == ImageFormat.jpg) out = media.withMetadata(out, bytes);
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
-    await io.File(tmp).writeAsBytes(out, flush: true);
-    return media.replaceIfSmaller(path, tmp, by: 0.05);
+    return media.deletedOnExit(tmp, () async {
+      await io.File(tmp).writeAsBytes(out, flush: true);
+      return media.replaceIfSmaller(path, tmp, by: 0.05);
+    });
   }
 
   /// Width in pixels, as displayed (EXIF orientation applied).

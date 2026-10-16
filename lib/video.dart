@@ -152,13 +152,15 @@ final class Video {
     final video = await _open(path);
     if (video._info.width == null) return const Kept(KeptReason.lossy);
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
-    try {
-      await video._encodeTo(tmp, format, quality: quality, codec: codec, onProgress: _reporter(run));
-    } catch (_) {
-      await io.File(tmp).delete().catchError((_) => io.File(tmp));
-      rethrow;
-    }
-    return media.replaceIfSmaller(path, tmp, by: 0.05);
+    return media.deletedOnExit(tmp, () async {
+      try {
+        await video._encodeTo(tmp, format, quality: quality, codec: codec, onProgress: _reporter(run));
+      } catch (_) {
+        await io.File(tmp).delete().catchError((_) => io.File(tmp));
+        rethrow;
+      }
+      return media.replaceIfSmaller(path, tmp, by: 0.05);
+    });
   }
 
   /// Width in pixels as displayed (rotation applied); null for audio only.

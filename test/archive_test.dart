@@ -19,6 +19,7 @@ import 'package:dart_toolkit/src/zip.dart' as zip;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
+import 'support/poll.dart';
 import 'support/sevenzip_writer.dart';
 
 List<int> _tarBlock(String name, int size, int typeflag, {String mode = '0000644'}) {
@@ -391,6 +392,24 @@ void main() {
       await (Fs.file(p('enc.7z')) > Archive.unarchive(p('o5'), password: 'pw'));
       expect(await Fs.file(p('o5/a.txt')).text(), 'seven ' * 4000);
     }, tags: 'media');
+
+    test('Ctrl-C mid-7z removes the 7-Zip work folder (B18)', () async {
+      final temp = await Directory(p('tmpdir')).create(recursive: true);
+      final rnd = Random(7);
+      await io.File(p('big/r.bin')).create(recursive: true);
+      await io.File(p('big/r.bin')).writeAsBytes(Uint8List.fromList(List.generate(48 << 20, (_) => rnd.nextInt(256))));
+      final child = await startDart('''
+import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/fs.dart';
+Future<void> main(List<String> args) async =>
+    Archive.archive(['.'], dir: args[0], format: ArchiveFormat.sevenzip) > Fs.file(args[1]);
+''', args: [p('big'), p('big.7z')], env: {'TMPDIR': temp.path});
+      bool working() => temp.listSync().any((e) => e.path.contains('dart_toolkit_7z_'));
+      expect(await eventually(working, timeout: const Duration(seconds: 60)), isTrue);
+      child.kill(ProcessSignal.sigint);
+      expect(await child.exitCode.timeout(const Duration(seconds: 15)), 130);
+      expect(working(), isFalse);
+    }, tags: 'media', skip: Platform.isWindows ? 'POSIX signals' : null);
 
     test('7-Zip AES archives (data, and header too) open with their password', () async {
       for (final name in ['7z_aes', '7z_aes_header']) {

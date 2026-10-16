@@ -273,6 +273,8 @@ final class _Packed with Reader {
       base = await io.Directory(base).resolveSymbolicLinks();
     }
     final work = await io.Directory.systemTemp.createTemp('dart_toolkit_7z_');
+    // Ctrl-C skips `finally`: the exit hook removes the work folder.
+    final token = exit.onExit(() => work.delete(recursive: true).then((_) {}, onError: (_) {}));
     try {
       final list = p.join(work.path, 'list.txt');
       final out = p.join(work.path, 'out.7z');
@@ -301,6 +303,7 @@ final class _Packed with Reader {
       }
       yield* io.File(out).openRead();
     } finally {
+      exit.offExit(token);
       await work.delete(recursive: true).catchError((_) => work);
     }
   }

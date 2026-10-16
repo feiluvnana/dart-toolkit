@@ -9,7 +9,9 @@ import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/video.dart';
 import 'package:test/test.dart';
 
+import 'support/child.dart';
 import 'support/io.dart';
+import 'support/poll.dart';
 
 late io.Directory tmp;
 
@@ -243,6 +245,22 @@ void main() {
       await io.File(txt).writeAsString('not a video at all, really not');
       expect(await Video.compress(txt), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.unknown));
     });
+
+    test('Ctrl-C mid-compress leaves no .compress beside the file (B18)', () async {
+      final path = await make('long.mp4', [
+        '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:d=20:r=30', //
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '5',
+      ]);
+      final temp = '${tmp.path}/.long.mp4.compress';
+      final child = await startDart('''
+import 'package:dart_toolkit/video.dart';
+Future<void> main(List<String> args) async => print(await Video.compress(args[0], quality: 50));
+''', args: [path]);
+      expect(await eventually(() => io.File(temp).existsSync(), timeout: const Duration(seconds: 30)), isTrue);
+      child.kill(io.ProcessSignal.sigint);
+      expect(await child.exitCode.timeout(const Duration(seconds: 15)), 130);
+      expect(io.File(temp).existsSync(), isFalse);
+    }, skip: io.Platform.isWindows ? 'POSIX signals' : null);
   });
 }
 
