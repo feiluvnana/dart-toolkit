@@ -72,6 +72,7 @@
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
 - `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
 - `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
+- `json`: `text()`, `value<T>()` and `or()` on a `*`/`**` result read the first hit that reads (`$('**.id').text()` was null with hits, while `Elements` read their first match). medialoader's Facebook helpers `one()`/`when()` go.
 - `json`/`yaml`/`html`/`csv`/`cookies`: on a response, a 404 or 410 is the missing source for `or:`, with or without `check:` (a 404 threw under `check:`, or returned the error page's body as data). `reader.html(or:)` is new. medialoader's Facebook loader drops its `HttpStatusException` catch.
 - `fs`: `Entry.path` is a getter (`file.path`, as in `dart:io`) and `toString()` returns it: `'${dir.path}/x'` wrote into a folder named `Closure: ({Dir? from}) => String` with no warning. `path(from: dir)` is `relative(dir)`.
 

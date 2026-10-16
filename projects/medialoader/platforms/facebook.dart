@@ -24,14 +24,8 @@ Future<Doc> load(Client c, String path) async {
   return (page: page, data: page.json(), text: page.markup());
 }
 
-// The first of [paths] (`**.a|**.b`) found, as text.
-String? one(Json data, String paths) => data.$(paths).texts().firstOrNull;
-
 // Every string in the page's data, and every link in its markup.
 List<String> links(Doc d) => [...d.data.$('**').texts(), ...d.page.$('a[href]').attrs('href')];
-
-// When it was posted: the first of [paths], Unix seconds in the page data.
-DateTime when(Json data, String paths) => data.$(paths).firstOrNull?.value<DateTime>() ?? DateTime.now();
 
 String ext(String url) {
   final e = Uri.parse(url).path.split('.').last.toLowerCase();
@@ -48,12 +42,12 @@ Future<Profile> profile(Client c, String name) async {
     throw Exception('user not found or unavailable: "$name"');
   }
   return (
-    id: one(d.data, '**.profile_owner.id|**.entity_id|**.userID') ?? name,
-    name: one(d.data, '**.userVanity|**.vanity') ?? name,
+    id: d.data.$('**.profile_owner.id|**.entity_id|**.userID').text() ?? name,
+    name: d.data.$('**.userVanity|**.vanity').text() ?? name,
     avatar:
-        one(d.data, '**.profilePicLarge.uri|**.profilePhoto.url|**.profile_pic_url') ??
+        d.data.$('**.profilePicLarge.uri|**.profilePhoto.url|**.profile_pic_url').text() ??
         d.data.$('**.uri').texts().where((u) => u.contains('t39.30808-1')).firstOrNull,
-    cover: one(d.data, '**.coverPhoto.url|**.cover_photo.uri|**.cover_photo.**.image.uri'),
+    cover: d.data.$('**.coverPhoto.url|**.cover_photo.uri|**.cover_photo.**.image.uri').text(),
     doc: d,
   );
 }
@@ -67,17 +61,17 @@ Future<Photo?> photo(Client c, String id, [String set = '']) async {
   final url =
       d.page.$('link[rel="preload"][as="image"][data-preloader*="CometPhotoRoot"]').attr('href') ??
       d.data.$('**.uri').texts().where((u) => u.contains('t39.30808-6')).firstOrNull ??
-      one(d.data, '**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri');
+      d.data.$('**.viewer_image.uri|**.image.uri|**.browser_native_hd_url|**.image.*.uri|**.prefetch_uris_v2.*.uri').text();
   if (url == null) return null;
   return (
     id:
         d.data.$('**').where((n) => n.$('__isNode').text() == 'Photo').firstOrNull?.$('id').text() ??
-        one(d.data, '**.photo_id') ??
+        d.data.$('**.photo_id').text() ??
         id,
     url: url,
-    caption: one(d.data, '**.message.text'),
-    at: when(d.data, '**.publish_time|**.created_time|**.creation_time'),
-    next: one(d.data, '**.nextMediaAfterNodeId.id|**.nextMedia.edges.0.node.id'),
+    caption: d.data.$('**.message.text').text(),
+    at: d.data.$('**.publish_time|**.created_time|**.creation_time').or(DateTime.now()),
+    next: d.data.$('**.nextMediaAfterNodeId.id|**.nextMedia.edges.0.node.id').text(),
   );
 }
 
@@ -91,10 +85,7 @@ Future<Video?> video(Client c, String id) async {
       (progressive.where((p) => p.$('metadata.quality').text() == 'HD').firstOrNull ?? progressive.firstOrNull)
           ?.$('progressive_url')
           .text() ??
-      one(
-        d.data,
-        '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url',
-      ) ??
+      d.data.$('**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url').text() ??
       RegExp(r'(?:<|\\u003C)BaseURL>(https:[^<\\"]+)')
           .firstMatch(d.text)?[1]
           ?.replaceAll(r'\/', '/')
@@ -103,8 +94,8 @@ Future<Video?> video(Client c, String id) async {
   return (
     id: id,
     url: url,
-    title: one(d.data, '**.savable_title.text|**.message.text'),
-    at: when(d.data, '**.publish_time|**.created_time|**.creation_time'),
+    title: d.data.$('**.savable_title.text|**.message.text').text(),
+    at: d.data.$('**.publish_time|**.created_time|**.creation_time').or(DateTime.now()),
   );
 }
 
@@ -355,7 +346,7 @@ final class Facebook extends Platform {
     var set = profileSet(by);
     if (set == null) {
       final all = await load(j.api, tab('photos'));
-      set = profileSet(all) ?? setIn(links(all)) ?? one(all.data, '**.mediaSetToken');
+      set = profileSet(all) ?? setIn(links(all)) ?? all.data.$('**.mediaSetToken').text();
     }
     final ids = [...photoIds(by), ...photoIds(p.doc)];
     if (set != null) ids.insertAll(0, photoIds(await load(j.api, '/media/set/?set=$set')));
@@ -421,7 +412,7 @@ final class Facebook extends Platform {
       final page = await load(j.api, '/media/set/?set=$set');
       final name =
           page.data.$('**').where((n) => n.$('__isMediaSet').text() == 'Album').firstOrNull?.$('title.text').text() ??
-          one(page.data, '**.title.text') ??
+          page.data.$('**.title.text').text() ??
           title;
       final dir = j.folder(Kind.albums).dir(Fs.sanitize(name));
       n += await _walk(j, photoIds(page), set, 'album:$set', (_) => dir);

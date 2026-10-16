@@ -31,9 +31,12 @@ import 'src/names.dart' as names;
 /// A JSON value: an object, array, scalar, or null.
 final class Json extends Iterable<Json> {
   // A Json held inside another (`Json.of([Json.parse(a), …])`) reads as its value.
-  Json._(Object? v) : _v = v is Json ? v._v : v;
+  Json._(Object? v, [this._hits = false]) : _v = v is Json ? v._v : v;
 
   final Object? _v;
+
+  // A `*`/`**` result: scalar reads take the first hit that reads.
+  final bool _hits;
   List<dynamic>? _valuesCache;
 
   /// Parse [json]. Throws [ContentException] on invalid JSON, and on a
@@ -87,13 +90,14 @@ final class Json extends Iterable<Json> {
     Object? none; // a wildcard alternative that matched nothing: [] unless a later one hits
     for (final alt in _splitPath(path)) {
       final hit = _walk(_v, alt, 0);
-      if (hit is List && hit.isEmpty && alt.any((s) => s is _Wild)) {
+      final wild = alt.any((s) => s is _Wild);
+      if (hit is List && hit.isEmpty && wild) {
         none = hit;
       } else if (hit != null) {
-        return Json._(hit);
+        return Json._(hit, wild);
       }
     }
-    return Json._(none);
+    return Json._(none, none != null);
   }
 
   /// Index the iteration (array items or object values), O(1) per item
@@ -126,14 +130,24 @@ final class Json extends Iterable<Json> {
   }
 
   /// Any scalar as a `String` (`787132` → `'787132'`, `true` → `'true'`);
-  /// null for null, a missing path or a collection. Not [toString], which
-  /// renders JSON.
-  String? text() => switch (_v) {
-    final String s => s,
-    final num n => '$n',
-    final bool b => '$b',
-    _ => null,
-  };
+  /// null for null, a missing path or a collection. On a `*`/`**` result,
+  /// the first hit that is a scalar (`$('**.id').text()`), as `Elements`
+  /// read their first match. Not [toString], which renders JSON.
+  String? text() {
+    final v = _v;
+    if (_hits && v is List) {
+      for (final i in v) {
+        if (Json._(i).text() case final t?) return t;
+      }
+      return null;
+    }
+    return switch (v) {
+      final String s => s,
+      final num n => '$n',
+      final bool b => '$b',
+      _ => null,
+    };
+  }
 
   /// Every item's [text], misses dropped, as `Elements.texts()` gives every
   /// match's: `data.$('**.uri').texts()` is each `uri` found as a string. A
@@ -160,7 +174,8 @@ final class Json extends Iterable<Json> {
     return best ?? Json._(null);
   }
 
-  /// The value when it is a `T`, else null.
+  /// The value when it is a `T`, else null; on a `*`/`**` result, the first
+  /// hit that is a `T` (`$('**.publish_time').value<DateTime>()`).
   /// Scalars: integral numbers read as both `int` and `double`, so `3`,
   /// `3.0`, `value<int>()` and `value<double>()` all agree (a non-integral
   /// `double` is not an `int`). Use `num` for numbers that may be either,
@@ -185,6 +200,13 @@ final class Json extends Iterable<Json> {
   T? value<T>() {
     final v = _v;
     if (v is T) return v;
+    if (_hits && v is List) {
+      // A `*`/`**` result reads its first hit that is a `T`.
+      for (final i in v) {
+        if (Json._(i).value<T>() case final r?) return r;
+      }
+      return null;
+    }
     if (<T>[] is List<DateTime?>) return _date(v) as T?;
     if ((v is List || v is Map) && (<T>[] is List<List<Object?>?> || <T>[] is List<Map<Object?, Object?>?>)) {
       throw ArgumentError('value<$T>() reads scalars and raw shapes; use asList/asMap');

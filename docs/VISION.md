@@ -525,7 +525,8 @@ extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }  
   segment searches every depth: `$('**.pk')` lists each `pk` in the document (misses dropped). A
   wildcard after a wildcard flattens: `x.*.a.*.b` is one list. `|` separates whole paths tried in
   order: `$('code|shortcode')`, `$('rest_id|legacy.id_str')`. `\*`, `\|` and `\.` are literal. A
-  missing path is a `Json` of `null`, never a throw.
+  missing path is a `Json` of `null`, never a throw. Scalar reads on a `*`/`**` result (`text()`, `value<T>()`,
+  `or`) take the first hit that reads, as `Elements` read their first match: `$('**.id').text()`.
 - `value<T>()` returns `null` when the value is absent or not a `T`. Integral numbers read as both
   `int` and `double`, so `3`, `3.0`, `value<int>()` and `value<double>()` all agree.
   `$('port').or(8080)` is a non-null `int`. `text()` reads `787132` as `'787132'` (not

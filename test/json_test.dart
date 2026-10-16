@@ -277,6 +277,20 @@ void main() {
 }
 
 void deepPathTests() {
+  test('E5: scalar reads on a * or ** result take the first hit that reads', () {
+    final doc = Json.parse('{"a": {"y": {"z": 1}}, "b": {"y": "two", "t": 1700000000}, "c": [{"n": 3}, {"n": 4}]}');
+    expect(doc.$('**.y').text(), 'two'); // the object hit has no text
+    expect(doc.$('**.y').or(''), 'two');
+    expect(doc.$('c.*.n').value<int>(), 3);
+    expect(doc.$('c.*.n').or(0), 3);
+    expect(doc.$('**.t').value<DateTime>(), DateTime.fromMillisecondsSinceEpoch(1700000000000));
+    expect(doc.$('**.nope').text(), isNull);
+    expect(doc.$('**.nope').or(7), 7);
+    expect(doc.$('c.*.n').texts(), ['3', '4']);
+    expect(doc.$('c.*.n').value<List<Object?>>(), [3, 4]); // the raw shape is still the list
+    expect(doc.$('c').text(), isNull); // a plain array is not a hit list
+  });
+
   group('json **', () {
     final doc = Json.of({
       'pk': 1,
