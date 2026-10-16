@@ -42,7 +42,7 @@ final class Disc {
 
 Future<void> main(List<String> args) => Command(
   'keybox',
-  'Download the Key BOX set into "${box.path()}" and zip it.',
+  'Download the Key BOX set into "${box.path}" and zip it.',
   handler: (_) => download(),
 ).run(args);
 
@@ -65,9 +65,9 @@ Future<void> download() async {
         await (http.get(url) & Console.bar('  ${to.name()}', keep: false) > to);
       }) &
       Console.bar('files done'));
-  final zip = Fs.file('${box.path()}.zip');
-  await (Archive.archive(['.'], dir: box.path()) & Console.bar('zipping into ${zip.path()}') > zip);
-  Console.log('done: ${discs.length} discs and ${assets.length} files in "${box.path()}", zipped to "${zip.path()}"');
+  final zip = Fs.file('${box.path}.zip');
+  await (Archive.archive(['.'], dir: box.path) & Console.bar('zipping into ${zip.path}') > zip);
+  Console.log('done: ${discs.length} discs and ${assets.length} files in "${box.path}", zipped to "${zip.path}"');
 }
 
 Future<Elements> page(String url) => http.get(url).html();

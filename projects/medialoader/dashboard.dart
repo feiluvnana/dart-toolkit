@@ -273,7 +273,7 @@ const bad = Color.red, warn = Color.yellow;
 Future<String> saveLog() async {
   final file = Fs.scriptDir().file('.medialoader.log');
   await (Console.logged() > file);
-  return file.path();
+  return file.path;
 }
 
 // After the dashboard: a table per user, what changed and what failed.

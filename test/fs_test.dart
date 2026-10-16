@@ -63,24 +63,33 @@ void main() {
 
     test('dir().dir().file() builds a path', () async {
       final f = Fs.dir(p('a')).dir('b').file('c.txt');
-      expect(f.path(), p('a/b/c.txt'));
+      expect(f.path, p('a/b/c.txt'));
       await f.write('deep');
       expect(await Fs.file(p('a/b/c.txt')).text(), 'deep');
     });
   });
 
   group('Entry', () {
-    test('path(from:) is relative to a folder', () async {
+    test('relative(dir) is the path under a folder', () async {
       final root = Fs.dir(p('site'));
-      expect(root.dir('a').file('b.txt').path(from: root), 'a/b.txt');
-      expect(await Future.value(root.file('c.txt')).path(from: root), 'c.txt');
+      expect(root.dir('a').file('b.txt').relative(root), 'a/b.txt');
+      expect(await Future.value(root.file('c.txt')).relative(root), 'c.txt');
+    });
+
+    test("'\${dir.path}/x' and '\$dir/x' build a path, not a Closure folder", () async {
+      final dir = Fs.dir(p('d'));
+      await Fs.file('${dir.path}/x').write('a');
+      await Fs.file('$dir/y').write('b');
+      expect(await dir.file('x').text(), 'a');
+      expect(await dir.file('y').text(), 'b');
+      expect(Fs.file(p('f.txt')).toString(), p('f.txt'));
     });
 
     test('path/name/parent', () async {
       final f = Fs.file(p('a.txt'));
-      expect(f.path(), p('a.txt'));
+      expect(f.path, p('a.txt'));
       expect(f.name(), 'a.txt');
-      expect(f.parent().path(), tmp.path);
+      expect(f.parent().path, tmp.path);
     });
 
     test('exists is true only for its own kind', () async {
@@ -402,7 +411,7 @@ void main() {
       expect(await f.size(), 1);
       expect(await f.exists(), isTrue);
       expect(await f.name(), 'm.txt');
-      expect((await f.parent()).path(), tmp.path);
+      expect((await f.parent()).path, tmp.path);
       await f.delete();
       expect(await f.exists(), isFalse);
     });
@@ -442,7 +451,7 @@ void main() {
     test('Fs.temp hands a fresh folder to the body and deletes it after, failures too', () async {
       String? kept;
       final n = await Fs.tempDir((d) async {
-        kept = d.path();
+        kept = d.path;
         await d.file('x/y.txt').write('y');
         return 3;
       });
@@ -450,7 +459,7 @@ void main() {
       expect(Directory(kept!).existsSync(), isFalse);
       await expectLater(
         Fs.tempDir((d) async {
-          kept = d.path();
+          kept = d.path;
           throw StateError('boom');
         }),
         throwsStateError,
@@ -464,7 +473,7 @@ void main() {
       final r = await runDart('''
 import 'package:dart_toolkit/fs.dart';
 Future<void> main() async {
-  print(Fs.scriptDir().path());
+  print(Fs.scriptDir().path);
   print(await Fs.scriptDir().file('main.dart').exists());
 }
 ''', cwd: cwd.path);
@@ -475,13 +484,13 @@ Future<void> main() async {
     });
 
     test('Fs.home is HOME', () {
-      expect(Fs.homeDir().path(), Platform.environment['HOME']);
+      expect(Fs.homeDir().path, Platform.environment['HOME']);
     });
 
     test('modified() reads the mtime; a missing entry throws', () async {
       final f = await Fs.file(p('m.txt')).write('x');
       final when = DateTime(2020, 1, 2, 3, 4, 5);
-      await io.File(f.path()).setLastModified(when);
+      await io.File(f.path).setLastModified(when);
       expect(await f.modified(), when);
       expect(await Fs.dir(tmp.path).modified(), isA<DateTime>());
       await expectLater(Fs.file(p('none')).modified(), throwsA(isA<PathNotFoundException>()));
@@ -548,11 +557,11 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       for (final spelled in [p('l'), '${p('l')}/', '${p('l')}/.']) {
         final d = Fs.dir(spelled);
         expect(
-          [for (final e in await d.list(match: '**')) e.path(from: d)],
+          [for (final e in await d.list(match: '**')) e.relative(d)],
           ['a', 'a/b', 'a-b', 'a.txt', 'z', 'z/y.txt'],
         );
         expect(
-          [for (final e in await d.list(match: '**.txt')) e.path(from: d)],
+          [for (final e in await d.list(match: '**.txt')) e.relative(d)],
           ['a.txt', 'z/y.txt'],
           reason: spelled,
         );
@@ -565,7 +574,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       }
       final shots = Fs.dir(p('shots'));
       Future<List<String>> names(String glob) async => [
-        for (final e in await shots.list(match: glob)) e.path(from: shots),
+        for (final e in await shots.list(match: glob)) e.relative(shots),
       ];
       expect(await names('*.{jpg,png}'), ['a.jpg', 'b.png']);
       expect(await names('**/*.{jpg,png}'), ['a.jpg', 'b.png', 'x/d.jpg', 'x/y/e.png']);
@@ -578,8 +587,8 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
     });
 
     test('file/dir navigate without I/O', () {
-      expect(Fs.dir(p('d')).file('a').path(), '${p('d')}/a');
-      expect(Fs.dir(p('d')).dir('e').path(), '${p('d')}/e');
+      expect(Fs.dir(p('d')).file('a').path, '${p('d')}/a');
+      expect(Fs.dir(p('d')).dir('e').path, '${p('d')}/e');
     });
 
     test('list returns typed children sorted by name', () async {
@@ -594,7 +603,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       await Fs.file(p('o/a/b')).write('1');
       await Fs.file(p('o/a-b')).write('2');
       await Fs.file(p('o/a.c')).write('3');
-      final names = [for (final e in await Fs.dir(p('o')).list(match: '**')) e.path().substring(p('o').length + 1)];
+      final names = [for (final e in await Fs.dir(p('o')).list(match: '**')) e.path.substring(p('o').length + 1)];
       expect(names, ['a', 'a/b', 'a-b', 'a.c']);
     });
 
@@ -616,7 +625,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       final d = Future.value(Fs.dir(p('md')));
       await d.create();
       expect(await d.exists(), isTrue);
-      expect((await d.file('a')).path(), '${p('md')}/a');
+      expect((await d.file('a')).path, '${p('md')}/a');
       expect(await d.list(), isEmpty);
     });
   });
@@ -706,7 +715,7 @@ Future<void> expectThrows(Future<void> f, String what) async {
       expect(resolved, isA<File>());
       // resolveSymbolicLinks may normalize the temp prefix (/var vs
       // /private/var on macOS): compare the tail.
-      expect(resolved!.path(), endsWith('real.txt'));
+      expect(resolved!.path, endsWith('real.txt'));
       expect(await resolved.exists(), isTrue);
     });
 
@@ -714,7 +723,7 @@ Future<void> expectThrows(Future<void> f, String what) async {
       await Fs.dir(p('proj/sub')).create();
       await io.Link(p('proj/up')).create(p('proj'));
       final moved = await link(p('proj/up')).move(p('proj/sub/up'));
-      expect(moved.path(), p('proj/sub/up'));
+      expect(moved.path, p('proj/sub/up'));
       expect(await Fs.entry(p('proj/up')), isNull);
       await link(p('proj/sub/up')).copy(p('proj/sub/up2'));
       expect(await link(p('proj/sub/up2')).target(), p('proj'));
@@ -760,7 +769,7 @@ Future<void> expectThrows(Future<void> f, String what) async {
       // An Image/Video.compress encode in flight (regression: medialoader counted it).
       await d.file('posts/.b.mp4.compress').write('xxxxxxxx');
       await Fs.file(p('outside.bin')).write('x' * 100);
-      await io.Link('${d.path()}/ln').create(p('outside.bin'));
+      await io.Link('${d.path}/ln').create(p('outside.bin'));
       expect(await d.size(), (files: 3, bytes: 9));
       expect(await Future.value(d).size(), (files: 3, bytes: 9));
     });

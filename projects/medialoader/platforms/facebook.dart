@@ -332,7 +332,7 @@ final class Facebook extends Platform {
         return (items: [(id: id, photo: ph)], next: jump ? more() : ph.next ?? more());
       }
       return (items: const <({String id, Photo? photo})>[], next: null);
-    }, cursor: mark == null || j.o.dry ? null : mark.path());
+    }, cursor: mark == null || j.o.dry ? null : mark.path);
     await photos.run(all: j.o.all, (page) async {
       final ph = page.items().single.photo;
       final file = ph == null ? null : dir(ph).file('${ph.id}.${ext(ph.url)}');

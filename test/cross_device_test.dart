@@ -46,7 +46,7 @@ void main() {
     if (!await mounted()) return markTestSkipped('no RAM disk here');
     final when = DateTime(2020, 1, 2, 3, 4, 5);
     final src = await Fs.file('$tmp/a.bin').write('x' * 100000);
-    await io.File(src.path()).setLastModified(when);
+    await io.File(src.path).setLastModified(when);
     final meter = Meter();
     final moved = await (src.move('$ram/in/a.bin') & meter);
     expect(await moved.text(), 'x' * 100000);

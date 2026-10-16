@@ -159,7 +159,7 @@ final class Job {
   // when new. Its bar is a row in the dashboard, or a line without one.
   Future<bool> _save(Download f) async {
     if (await f.to.exists()) return false;
-    final path = f.to.path(from: dir);
+    final path = f.to.relative(dir);
     final key = path.split('/').first, part = u.parts.putIfAbsent(key, () => Part(key));
     part.queued++;
     final got = Meter(); // this file's bytes, taken back if it fails
@@ -199,11 +199,11 @@ final class Job {
   // Re-encodes the file at --image-quality/--video-quality; returns its size
   // on disk and how compressing went: `1.6 MB (compressed from 2.7 MB, -39%)`.
   Future<String> _compress(Download f, Part part) async {
-    final path = f.to.path(), size = (await f.to.size()).size();
+    final path = f.to.path, size = (await f.to.size()).size();
     final video = const {'mp4', 'mov', 'webm', 'mkv'}.contains(path.split('.').last.toLowerCase());
     final quality = video ? o.video : o.image;
     if (quality == null) return size;
-    final bar = Console.bar('[$code] compressing ${f.to.path(from: dir)}', keep: false);
+    final bar = Console.bar('[$code] compressing ${f.to.relative(dir)}', keep: false);
     try {
       final c = video
           ? await (Video.compress(path, quality: quality) & bar)

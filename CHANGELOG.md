@@ -72,6 +72,7 @@
 - `http`: `Http.client(browser: .page/.api)` and `enum Browser` are gone (the enum clashed with chrome's `Browser`); the same header sets are utils' `HttpUtils.page` / `HttpUtils.api`: `Http.client(headers: HttpUtils.page)` or `{...HttpUtils.api, 'x-app': '1'}`. Your own and per-call headers still win, and the user-agent fallback still applies.
 - `console`: `Console.copy` moved to utils as `ConsoleUtils.copy(text)` (same behaviour, through the app inside a `Tui.run`).
 - `shell`: `Shell.which` and `Shell.open` moved to utils as `ShellUtils.which(program)` and `ShellUtils.open(target)` (same behaviour); `Shell` keeps `run`, `read` and `filter`.
+- `fs`: `Entry.path` is a getter (`file.path`, as in `dart:io`) and `toString()` returns it: `'${dir.path}/x'` wrote into a folder named `Closure: ({Dir? from}) => String` with no warning. `path(from: dir)` is `relative(dir)`.
 
 **Removed**
 

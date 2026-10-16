@@ -123,10 +123,13 @@ sealed class Entry {
 
   final String _path;
 
-  /// The string as given, without trailing separators; with [from], the
-  /// path relative to that folder, always with `/` (`a/b.txt` under `site`,
+  /// The string as given, without trailing separators. A getter, as in
+  /// `dart:io`, so `'${dir.path}/x'` builds a path (and `'$dir/x'` too).
+  String get path => _path;
+
+  /// The path relative to [dir], always with `/` (`a/b.txt` under `site`,
   /// on Windows too: it becomes manifest keys and URL paths).
-  String path({Dir? from}) => from == null ? _path : p.relative(_path, from: from._path).replaceAll(r'\', '/');
+  String relative(Dir dir) => p.relative(_path, from: dir._path).replaceAll(r'\', '/');
 
   /// The last segment.
   String name() => p.basename(_path);
@@ -174,6 +177,10 @@ sealed class Entry {
 
   @override
   int get hashCode => Object.hash(runtimeType, _key);
+
+  /// The path, so `'$dir/x'` and `print(file)` show it.
+  @override
+  String toString() => _path;
 }
 
 /// A file: a [Reader] in 64 KiB chunks, a [Writer] written atomically.
@@ -744,7 +751,8 @@ final class Link extends Entry {
 /// [Reader]/[Writer]/[Closeable] members come from `Future<Reader>`.
 extension EntryFuture on Future<Entry> {
   Future<DateTime> modified() async => (await this).modified();
-  Future<String> path({Dir? from}) async => (await this).path(from: from);
+  Future<String> get path async => (await this).path;
+  Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -759,7 +767,8 @@ extension FileFuture on Future<File> {
   Future<String> text({String? or}) async => (await this).text(or: or);
   Future<T> lock<T>(Future<T> Function() body, {Duration? timeout}) async => (await this).lock(body, timeout: timeout);
   Future<List<int>> bytes({List<int>? or}) async => (await this).bytes(or: or);
-  Future<String> path({Dir? from}) async => (await this).path(from: from);
+  Future<String> get path async => (await this).path;
+  Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -775,7 +784,8 @@ extension FileFuture on Future<File> {
 /// Future mirrors for [Dir].
 extension DirFuture on Future<Dir> {
   Future<DateTime> modified() async => (await this).modified();
-  Future<String> path({Dir? from}) async => (await this).path(from: from);
+  Future<String> get path async => (await this).path;
+  Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
@@ -792,7 +802,8 @@ extension DirFuture on Future<Dir> {
 /// Future mirrors for [Link].
 extension LinkFuture on Future<Link> {
   Future<DateTime> modified() async => (await this).modified();
-  Future<String> path({Dir? from}) async => (await this).path(from: from);
+  Future<String> get path async => (await this).path;
+  Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();

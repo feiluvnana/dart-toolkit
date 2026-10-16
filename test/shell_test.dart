@@ -374,7 +374,7 @@ Future<void> main() async {
       final pidFile = Fs.file('${dir.path}/pid');
       final stop = Completer<void>();
       final sw = Stopwatch()..start();
-      final run = Shell.run(['sh', '-c', 'sleep 20 & echo \$! > "${pidFile.path()}"; echo \$!; wait'], cancel: stop.future);
+      final run = Shell.run(['sh', '-c', 'sleep 20 & echo \$! > "${pidFile.path}"; echo \$!; wait'], cancel: stop.future);
       expect(await eventually(() async => (await pidFile.text(or: '')).trim().isNotEmpty), isTrue);
       final pid = (await pidFile.text()).trim();
       stop.complete();

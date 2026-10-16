@@ -64,7 +64,7 @@ Future<void> feed(
     return files(page);
   }
 
-  final complete = await Feed(page, cursor: j.o.dry ? null : mark.path()).run(all: full, (p) async {
+  final complete = await Feed(page, cursor: j.o.dry ? null : mark.path).run(all: full, (p) async {
     final wanted = [
       for (final i in p.items())
         if (j.keep(time(i))) i,

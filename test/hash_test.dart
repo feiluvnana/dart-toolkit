@@ -83,7 +83,7 @@ void main() {
     test('a mismatched archive is never unarchived', () async {
       final src = Fs.dir('${tmp.path}/src');
       await src.file('a.txt').write('a');
-      final tgz = await Archive.archive(['.'], dir: src.path(), format: ArchiveFormat.tgz).bytes();
+      final tgz = await Archive.archive(['.'], dir: src.path, format: ArchiveFormat.tgz).bytes();
       await expectLater(
         Reader.of(tgz) | HashUtils.sha256(expect: abc) > Archive.unarchive('${tmp.path}/out'),
         throwsFormatException,
