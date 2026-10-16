@@ -79,7 +79,7 @@ List<RarEntry> readRar(Uint8List b, {String? password}) {
         final flags = h.vint();
         if (flags & 0x1 != 0) throw const ContentException('multi-volume RAR archives are not supported');
       case 4: // archive encryption: every later header is encrypted
-        if (password == null) throw const ContentException('archive is encrypted (pass password:)');
+        if (password == null) throw const PasswordException('archive is encrypted (pass password:)');
         final version = h.vint();
         if (version != 0) _bad('encryption version $version');
         final flags = h.vint();
@@ -131,7 +131,7 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid, Bud
     if (recSize < 1 || recEnd > h.extraEnd) _bad('extra record size $recSize');
     final type = x.vint();
     if (type == 1) {
-      if (password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
+      if (password == null) throw PasswordException('archive member is encrypted: $name (pass password:)');
       // One per member: each costs up to 2^24 key rounds.
       if (key != null) _bad('two encryption records for $name');
       if (x.vint() != 0) _bad('encryption version');
@@ -205,9 +205,7 @@ RarEntry? _fileEntry(_Header h, Uint8List b, String? password, _Solid solid, Bud
       }
     }
     if (!ok) {
-      throw ContentException(
-        k == null ? 'corrupt archive: RAR checksum of $name' : 'wrong password or corrupt archive: $name',
-      );
+      throw k == null ? ContentException('corrupt archive: RAR checksum of $name') : PasswordException('wrong password or corrupt archive: $name');
     }
     return data;
   });
@@ -301,7 +299,7 @@ final class _Header {
     final end = start + size;
     if (size < 1 || end > src.b.length) _bad('header past the end');
     if (crc32(src.b, start: base + 4, end: end) != crc) {
-      if (key != null) throw const ContentException('wrong password or corrupt archive');
+      if (key != null) throw const PasswordException('wrong password or corrupt archive');
       _bad('header CRC');
     }
     final h = _Reader(src.b, start);
@@ -372,7 +370,7 @@ final class _Key {
     final sum = crypto.sha256.convert(stored.sublist(0, 8)).bytes;
     if (sum[0] != stored[8] || sum[1] != stored[9] || sum[2] != stored[10] || sum[3] != stored[11]) return;
     for (var i = 0; i < 8; i++) {
-      if (value[i] != stored[i]) throw ContentException('wrong password${member == null ? '' : ' for $member'}');
+      if (value[i] != stored[i]) throw PasswordException('wrong password${member == null ? '' : ' for $member'}');
     }
   }
 

@@ -493,9 +493,9 @@ final class _Extraction {
         await done.future;
       } on ExitException catch (e) {
         final why = toolTail(e.message);
-        throw ContentException(
-          why.contains('Wrong password') ? 'wrong password or corrupt archive' : 'corrupt archive: $why',
-        );
+        throw why.contains('Wrong password')
+            ? const PasswordException('wrong password or corrupt archive')
+            : ContentException('corrupt archive: $why');
       } finally {
         _cancel = null;
       }

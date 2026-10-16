@@ -9,7 +9,7 @@
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin],
 /// [Cookies], [Rate], [Durations], [Sizes], [Times], [Spans], [ToolkitException],
-/// [ContentException].
+/// [ContentException], [PasswordException].
 /// - [Reader]: `stream` `bytes` `text` `lines` `|` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
 /// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `load` `encode` `[]` `header` `set` `agent`.
@@ -403,4 +403,10 @@ final class ContentException extends FormatException implements ToolkitException
 
   @override
   final Object? cause;
+}
+
+/// An encrypted archive with no password, or the wrong one: ask again
+/// instead of treating the data as damaged. A [ContentException].
+final class PasswordException extends ContentException {
+  const PasswordException(super.message);
 }

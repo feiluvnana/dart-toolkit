@@ -77,11 +77,11 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
     final decoded = _decodeFolder(b, info, 0, pw, budget);
     final crc = info.folders[0].crc;
     if (crc != null && crc32(decoded) != crc) {
-      throw ContentException(pw == null ? 'corrupt archive: 7z header CRC' : 'wrong password or corrupt archive');
+      throw pw == null ? ContentException('corrupt archive: 7z header CRC') : PasswordException('wrong password or corrupt archive');
     }
     header = _Bytes(decoded, 0);
     if (pw != null && header.peek() != 0x01 && header.peek() != 0x17) {
-      throw const ContentException('wrong password or corrupt archive');
+      throw const PasswordException('wrong password or corrupt archive');
     }
   }
   if (header.byte() != 0x01) _bad('missing header');
@@ -134,9 +134,7 @@ List<SevenzipEntry> readSevenzip(Uint8List b, {String? password}) {
         if (size < 0 || at + size > whole.length) _bad('file past its folder');
         final data = Uint8List.sublistView(whole, at, at + size);
         if (crc != null && crc32(data) != crc) {
-          throw ContentException(
-            pw == null ? 'corrupt archive: 7z CRC of ${f.name}' : 'wrong password or corrupt archive: ${f.name}',
-          );
+          throw pw == null ? ContentException('corrupt archive: 7z CRC of ${f.name}') : PasswordException('wrong password or corrupt archive: ${f.name}');
         }
         return data;
       }),
@@ -448,7 +446,7 @@ Uint8List _decodeFolder(Uint8List b, _StreamsInfo info, int index, String? passw
   try {
     return _decodeFolderRaw(b, info, index, password, budget);
   } on FormatException {
-    throw const ContentException('wrong password or corrupt archive');
+    throw const PasswordException('wrong password or corrupt archive');
   }
 }
 
@@ -498,7 +496,7 @@ Uint8List _decodeFolderRaw(Uint8List b, _StreamsInfo info, int index, String? pa
   final data = output(f.mainOut);
   final crc = f.crc;
   if (crc != null && info.subCounts.length > index && info.subCounts[index] != 1 && crc32(data) != crc) {
-    throw ContentException(password == null ? 'corrupt archive: 7z folder CRC' : 'wrong password or corrupt archive');
+    throw password == null ? ContentException('corrupt archive: 7z folder CRC') : PasswordException('wrong password or corrupt archive');
   }
   return data;
 }
@@ -524,7 +522,7 @@ Uint8List _run(_Coder c, Uint8List input, int size, String? password, Budget bud
     case '03': // delta
       return delta(Uint8List.fromList(input), (c.props.isEmpty ? 0 : c.props[0]) + 1);
     case '06f10701': // AES-256 + SHA-256
-      if (password == null) throw const ContentException('archive is encrypted (pass password:)');
+      if (password == null) throw const PasswordException('archive is encrypted (pass password:)');
       return _aes(input, c.props, password, size, budget);
     default:
       throw ContentException('unsupported 7z coder $id');

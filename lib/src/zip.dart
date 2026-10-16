@@ -80,7 +80,7 @@ final class ZipEntry {
     var method = _method;
     final aes = _aes;
     if (encrypted) {
-      if (password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
+      if (password == null) throw PasswordException('archive member is encrypted: $name (pass password:)');
       if (aes != null) {
         raw = _aesDecrypt(raw, utf8.encode(password), aes.strength);
         method = aes.method;
@@ -100,7 +100,7 @@ final class ZipEntry {
     if (out.length != _size) _corrupt('$name inflates to ${out.length} bytes, not $_size');
     if (!(encrypted && aes != null && aes.version == 2) && crc32(out) != _crc) {
       // ZipCrypto's one-byte check passes a wrong password 1 time in 256.
-      throw ContentException(encrypted ? 'wrong password or corrupt data: $name' : 'corrupt archive: CRC of $name');
+      throw encrypted ? PasswordException('wrong password or corrupt data: $name') : ContentException('corrupt archive: CRC of $name');
     }
     return out;
   }
@@ -112,7 +112,7 @@ final class ZipEntry {
     if (raw.length < saltLen + 12) _corrupt('encrypted member too short: $name');
     final keys = pbkdf2(password, Uint8List.sublistView(raw, 0, saltLen), 1000, 2 * keyLen + 2);
     if (keys[2 * keyLen] != raw[saltLen] || keys[2 * keyLen + 1] != raw[saltLen + 1]) {
-      throw ContentException('wrong password for $name');
+      throw PasswordException('wrong password for $name');
     }
     final body = Uint8List.sublistView(raw, saltLen + 2, raw.length - 10);
     final mac = crypto.Hmac(crypto.sha1, Uint8List.sublistView(keys, keyLen, 2 * keyLen)).convert(body).bytes;
@@ -133,7 +133,7 @@ final class ZipEntry {
     // The last header byte repeats the CRC's high byte (or the time's,
     // when sizes trail the data).
     final check = _flags & 8 != 0 ? _time >> 8 & 0xFF : _crc >> 24 & 0xFF;
-    if (head[11] != check) throw ContentException('wrong password for $name');
+    if (head[11] != check) throw PasswordException('wrong password for $name');
     final out = Uint8List(raw.length - 12);
     for (var i = 0; i < out.length; i++) {
       out[i] = keys.decrypt(raw[12 + i]);

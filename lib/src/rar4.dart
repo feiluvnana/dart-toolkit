@@ -18,15 +18,15 @@ List<RarEntry> _readRar4(Uint8List b, String? password, Budget budget) {
     var hp = 0;
     int headerEnd;
     if (encryptedHeaders) {
-      if (password == null) throw const ContentException('archive is encrypted (pass password:)');
+      if (password == null) throw const PasswordException('archive is encrypted (pass password:)');
       if (pos + 8 + 16 > b.length) _bad('archive ends without its end block (truncated)');
       final salt = Uint8List.sublistView(b, pos, pos + 8);
       final k = _Key4.derive(password, salt);
       final first = k.aes.cbcDecrypt(Uint8List.sublistView(b, pos + 8, pos + 24), k.iv);
       final size = first[5] | first[6] << 8;
-      if (size < 7) throw const ContentException('wrong password or corrupt archive');
+      if (size < 7) throw const PasswordException('wrong password or corrupt archive');
       final total = (size + 15) & ~15;
-      if (pos + 8 + total > b.length) throw const ContentException('wrong password or corrupt archive');
+      if (pos + 8 + total > b.length) throw const PasswordException('wrong password or corrupt archive');
       h = k.aes.cbcDecrypt(Uint8List.sublistView(b, pos + 8, pos + 8 + total), k.iv);
       headerEnd = pos + 8 + total;
     } else {
@@ -39,11 +39,11 @@ List<RarEntry> _readRar4(Uint8List b, String? password, Budget budget) {
     final flags = h[hp + 3] | h[hp + 4] << 8;
     final size = h[hp + 5] | h[hp + 6] << 8;
     if (size < 7 || hp + size > h.length) {
-      if (encryptedHeaders) throw const ContentException('wrong password or corrupt archive');
+      if (encryptedHeaders) throw const PasswordException('wrong password or corrupt archive');
       _bad('header past the end');
     }
     if (type != 0x72 && (crc32(h, start: hp + 2, end: hp + size) & 0xFFFF) != crc) {
-      if (encryptedHeaders) throw const ContentException('wrong password or corrupt archive');
+      if (encryptedHeaders) throw const PasswordException('wrong password or corrupt archive');
       _bad('header CRC');
     }
     var addSize = 0;
@@ -134,7 +134,7 @@ RarEntry _file4(
   if (isDir) return RarEntry(name, true, mode, mtime, () => Uint8List(0));
   budget.take(size, 'RAR $name');
   final encrypted = flags & 0x04 != 0;
-  if (encrypted && password == null) throw ContentException('archive member is encrypted: $name (pass password:)');
+  if (encrypted && password == null) throw PasswordException('archive member is encrypted: $name (pass password:)');
   final packed = Uint8List.sublistView(b, dataStart, dataStart + packSize);
   final index = run.add(() {
     var input = packed;
@@ -150,7 +150,7 @@ RarEntry _file4(
       data = run.data(index);
     } on FormatException {
       // A wrong key turns the data into noise the decoder chokes on.
-      if (encrypted) throw ContentException('wrong password or corrupt archive: $name');
+      if (encrypted) throw PasswordException('wrong password or corrupt archive: $name');
       rethrow;
     }
     if (crc32(data) != crc) {

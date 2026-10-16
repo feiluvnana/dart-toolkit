@@ -488,7 +488,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       await holder.stdout.transform(utf8.decoder).firstWhere((l) => l.contains('held'));
       await expectLater(
         Fs.file(lock).lock(() async => 1),
-        throwsA(isA<FileSystemException>().having((e) => e.message, 'message', 'locked by another process')),
+        throwsA(isA<LockedException>().having((e) => e.message, 'message', 'locked by another process')),
       );
       final waited = Fs.file(lock).lock(() async => 2, wait: 5.seconds);
       await Future<void>.delayed(const Duration(milliseconds: 100));

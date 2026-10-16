@@ -278,11 +278,11 @@ void main() {
       expect(raw.contains('secret'), isFalse);
       await expectLater(
         Fs.file(p('enc.zip')) > Archive.unarchive(p('o1'), password: 'nope'),
-        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
       );
       await expectLater(
         Fs.file(p('enc.zip')) > Archive.unarchive(p('o2')),
-        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))),
+        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('pass password:'))),
       );
       expect(await Fs.entry(p('o1/a.txt')), isNull);
       await (Fs.file(p('enc.zip')) > Archive.unarchive(p('o3'), password: 'pw'));
@@ -382,7 +382,7 @@ void main() {
         final src = Fs.file('test/fixtures/archives/$name.7z');
         await expectLater(
           src > Archive.unarchive(p('bad_$name'), password: 'nope'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+          throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
         );
         await (src > Archive.unarchive(p(name), password: '12345678'));
         expect((await Fs.file(p('$name/bar.txt')).text()).trim(), 'foo', reason: name);
@@ -408,11 +408,11 @@ void main() {
       final fx = 'test/fixtures/archives';
       await expectLater(
         Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('none')),
-        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('pass password:'))),
+        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('pass password:'))),
       );
       await expectLater(
         Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('bad'), password: 'nope'),
-        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
       );
       await (Fs.file('$fx/rar5_encrypted_filenames.rar') > Archive.unarchive(p('names'), password: 'password'));
       expect((await Fs.file(p('names/a.txt')).text()).isNotEmpty, isTrue);
@@ -431,7 +431,7 @@ void main() {
       for (final name in ['rar4_encrypted_filenames', 'rar4_solid_encrypted']) {
         await expectLater(
           Fs.file('$fx/$name.rar') > Archive.unarchive(p('bad_$name'), password: 'nope'),
-          throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('wrong password'))),
+          throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
         );
         await (Fs.file('$fx/$name.rar') > Archive.unarchive(p(name), password: 'password'));
         expect(
@@ -1626,7 +1626,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
           Fs.file(p('big.7z')));
       await expectLater(
         Fs.file(p('big.7z')) > Archive.unarchive(p('bad'), password: 'nope'),
-        throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('wrong password'))),
+        throwsA(isA<PasswordException>().having((e) => e.message, 'message', contains('wrong password'))),
       );
       await (Fs.file(p('big.7z')) > Archive.unarchive(p('out'), password: 'pw s3cret'));
       expect((await Fs.file(p('out/big.bin')).bytes()).length, big.length);

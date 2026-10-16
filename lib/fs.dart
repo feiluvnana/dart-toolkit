@@ -10,7 +10,8 @@
 /// await (Reader.of(bytes) > Fs.file('a.bin'));
 /// ```
 ///
-/// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link].
+/// Public surface is exactly: [Fs], [Entry], [File], [Dir], [Link],
+/// [LockedException].
 /// - `Fs.entry/file/dir/link()` inspect or build handles (`entry` is the
 ///   one call that does I/O; the other three do none); `Fs.sanitize()` makes
 ///   an untrusted string a safe file name.
@@ -36,6 +37,15 @@ import 'src/glob.dart';
 import 'src/names.dart' as names;
 import 'src/posix.dart' as posix;
 import 'src/tree.dart' as tree;
+
+/// What [File.lock] throws when another holder keeps the lock: tell it
+/// from other disk errors by type. A [io.FileSystemException].
+final class LockedException extends io.FileSystemException implements ToolkitException {
+  const LockedException(super.message, [super.path]);
+
+  @override
+  Object? get cause => null;
+}
 
 /// Entry point: inspect the disk or build handles (handles do no I/O).
 abstract final class Fs {
@@ -262,7 +272,7 @@ final class File extends Entry with Reader, Writer {
   /// Run [body] holding an exclusive OS lock on this file (created when
   /// missing), then release it, and return what [body] returned: one cron
   /// run at a time. Another holder fails at once with
-  /// [io.FileSystemException] `locked by another process`, or, with [wait],
+  /// [LockedException] `locked by another process`, or, with [wait],
   /// after retrying that long. The OS drops the lock if the process dies;
   /// the file itself stays (deleting it would race the next run).
   Future<T> lock<T>(Future<T> Function() body, {Duration? wait}) async {
@@ -273,7 +283,7 @@ final class File extends Entry with Reader, Writer {
     final until = wait == null ? null : DateTime.now().add(wait);
     Future<void> retry(String holder) async {
       if (until == null || DateTime.now().isAfter(until)) {
-        throw io.FileSystemException('locked by $holder', _path);
+        throw LockedException('locked by $holder', _path);
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
