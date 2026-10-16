@@ -539,7 +539,8 @@ extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }  
   `v.$('display_resources').max((c) => c.$('width|config_width').or(0)).$('url|src').text()`.
 - A `Json` iterates an array's items or an object's values; `toString` is the JSON text and `==`
   is deep.
-- `encode` accepts what `dart:convert` accepts (string keys) and throws what it throws.
+- `encode` accepts what `dart:convert` accepts (string keys), plus any `Iterable` (a `Set`) as a list,
+  and throws what it throws.
   Invalid JSON is a `ContentException` naming the source. `json()` decodes the bytes straight
   to a value (no `String` in between); `ndjson()` streams one `Json` per non-blank line and
   names a bad line's number.

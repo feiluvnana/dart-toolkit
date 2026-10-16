@@ -58,12 +58,20 @@ final class Json extends Iterable<Json> {
   static Json of(Object? decoded) => Json._(decoded);
 
   /// Render [value] as JSON text. Accepts what `dart:convert` accepts (string
-  /// keys) and throws what it throws. A [Json] anywhere inside is read as its
-  /// raw value.
+  /// keys) and throws what it throws, plus any [Iterable] (a `Set`, a
+  /// `map(...)`) as a list. A [Json] anywhere inside is read as its raw value.
   static String encode(Object? value, {bool pretty = false}) {
-    final encoder = pretty ? const JsonEncoder.withIndent('  ') : const JsonEncoder();
+    final encoder = pretty ? const JsonEncoder.withIndent('  ', _encodable) : const JsonEncoder(_encodable);
     return encoder.convert(value);
   }
+
+  static Object? _encodable(Object? o) => switch (o) {
+    final Json j => j._v,
+    final Iterable<Object?> i => i.toList(),
+    // What dart:convert's default does: an object's own toJson().
+    // ignore: avoid_dynamic_calls
+    _ => (o as dynamic).toJson(),
+  };
 
   /// What `jsonEncode` calls: a [Json] inside any encoded value is its raw value.
   Object? toJson() => _v;

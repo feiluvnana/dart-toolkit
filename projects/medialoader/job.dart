@@ -278,12 +278,10 @@ final class Index {
         'checked': checked.millisecondsSinceEpoch,
         'newest': newest,
         'posts': posts,
-        'hidden': [...hidden],
+        'hidden': hidden,
         'stories': stories,
         'profiles': profiles,
-        'highlights': {
-          for (final e in highlights.entries) e.key: [...e.value],
-        },
+        'highlights': highlights,
       }),
     );
   }

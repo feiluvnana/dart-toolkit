@@ -68,6 +68,13 @@ void main() {
     test('pretty indents by two spaces', () {
       expect(Json.encode({'a': 1}, pretty: true), '{\n  "a": 1\n}');
     });
+
+    test('E14: any Iterable (a Set, a map(...)) encodes as a list', () {
+      expect(Json.encode({'s': {1, 2}, 'm': [1, 2].map((i) => i * 10), 'j': Json.of({'t': {'x'}})}), '{"s":[1,2],"m":[10,20],"j":{"t":["x"]}}');
+      expect(Json.encode({'a': {3}}, pretty: true), '{\n  "a": [\n    3\n  ]\n}');
+      expect(Json.encode(_Point()), '{"x":1}');
+      expect(() => Json.encode(Object()), throwsA(isA<JsonUnsupportedObjectError>()));
+    });
   });
 
   group('Json', () {
@@ -489,4 +496,8 @@ final class _Page with Reader {
   Origin origin() => _origin;
   @override
   Stream<List<int>> stream() => Stream.value(_text.codeUnits);
+}
+
+final class _Point {
+  Map<String, Object?> toJson() => {'x': 1};
 }
