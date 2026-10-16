@@ -247,6 +247,10 @@ void main() {
       expect(d, const Duration(seconds: 90));
       expect(await fails(cli, ['--wait', 'soon']), contains('expected a duration such as 90s'));
       expect(await fails(cli, ['--wait', '99999999999999999d']), contains('expected a duration')); // wrapped negative
+      expect(await fails(cli, ['--wait', '1m1m']), contains('expected a duration')); // B26: was 2 min
+      expect(await fails(cli, ['--wait', '1s 2s']), contains('expected a duration'));
+      expect(await cli.run(['--wait', '1h 5m 3s 250ms']), 0);
+      expect(d, const Duration(hours: 1, minutes: 5, seconds: 3, milliseconds: 250));
       expect(await fails(cli, ['--uri', 'notaurl']), contains('expected a URL'));
     });
 

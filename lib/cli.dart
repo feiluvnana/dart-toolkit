@@ -688,10 +688,13 @@ Duration? _parseDuration(String raw) {
     if (m.isNotEmpty) {
       var covered = 0;
       var ms = 0.0;
+      final units = <String>{};
       for (final x in m) {
         covered += (x.group(0) ?? '').length;
         final n = num.parse(x.group(1) ?? '0');
-        switch ((x.group(2) ?? '').toLowerCase()) {
+        final unit = (x.group(2) ?? '').toLowerCase();
+        if (!units.add(unit)) return null; // `1m1m` is a typo, not 2 min
+        switch (unit) {
           case 'd':
             ms += n * 86400000;
           case 'h':

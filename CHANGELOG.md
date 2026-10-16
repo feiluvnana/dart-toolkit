@@ -25,6 +25,7 @@
 - `html`: a selector that leads with `+` or `~` matches the receiver's later siblings: `h2.$('+ p')` is the paragraph after the heading (it parsed and never matched).
 - `core`: `Cookies.parse` (and `reader.cookies()`) of text that has lines but no `cookies.txt` line (a space-separated paste, a JSON export) is a `ContentException` instead of a silently empty jar.
 - `json`: `value<DateTime>()` reads microsecond and nanosecond epochs (they read as milliseconds: the year 57742).
+- `cli`: a duration that repeats a unit (`--wait=1m1m`) is a usage error instead of adding up to 2 minutes.
 
 **Performance**
 
