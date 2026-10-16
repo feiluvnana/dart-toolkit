@@ -42,10 +42,11 @@ abstract final class Console {
   /// Only used when animated; otherwise each prints one final line.
   static final _lives = <_Live>[];
 
-  /// Rows of the live block on screen; the cursor rests at the start of
+  /// Cell widths of the live block's rows on screen; the cursor rests on
   /// its last row.
-  static var _drawn = 0;
+  static var _drawn = const <int>[];
   static var _lastPaint = 0;
+  static final _csi = RegExp(r'\x1b\[[0-9;?]*[A-Za-z]');
 
   /// Open prompts and tables: while any is writing, the live block is
   /// erased and does not repaint, so the 80 ms redraw never lands on a
@@ -53,9 +54,9 @@ abstract final class Console {
   static var _parked = 0;
 
   static void _park() {
-    if (_parked++ > 0 || _drawn == 0) return;
+    if (_parked++ > 0 || _drawn.isEmpty) return;
     io.stderr.write(_erase());
-    _drawn = 0;
+    _drawn = const [];
   }
 
   static void _unpark() {
@@ -92,7 +93,7 @@ abstract final class Console {
       return;
     }
     io.stderr.write(last == null ? _erase() : '${_erase()}$last\n');
-    _drawn = 0;
+    _drawn = const [];
     _paint(force: true);
     _syncTicker();
   }
@@ -112,8 +113,21 @@ abstract final class Console {
 
   /// Move to the top of the live block and clear it.
   static String _erase() {
-    if (_drawn == 0) return '';
-    return '\r${_drawn > 1 ? '\x1b[${_drawn - 1}A' : ''}\x1b[J';
+    if (_drawn.isEmpty) return '';
+    final up = _rowsUp(_columns());
+    return '\r${up > 0 ? '\x1b[${up}A' : ''}\x1b[J';
+  }
+
+  /// Screen rows from the live block's last row up to its first at [cols]:
+  /// after a narrowing resize a reflowing terminal wraps each old row onto
+  /// several. Capped at the screen height.
+  static int _rowsUp(int cols) {
+    var rows = 0;
+    for (final w in _drawn) {
+      rows += cols > 0 && w > cols ? (w + cols - 1) ~/ cols : 1;
+    }
+    final most = _lines() - 1;
+    return rows - 1 > most ? most : rows - 1;
   }
 
   /// Redraw the live block in place (throttled to 80 ms unless [force]).
@@ -129,13 +143,17 @@ abstract final class Console {
     final room = _lines() - 1 < 1 ? 1 : _lines() - 1;
     final shown = _lives.length > room ? _lives.sublist(_lives.length - room) : _lives;
     final b = StringBuffer('\r');
-    if (_drawn > 1) b.write('\x1b[${_drawn - 1}A');
+    final up = _rowsUp(cols);
+    if (up > 0) b.write('\x1b[${up}A');
+    final widths = <int>[];
     for (var i = 0; i < shown.length; i++) {
       if (i > 0) b.write('\n');
-      b.write('${shown[i]._text(cols)}\x1b[K');
+      final row = shown[i]._text(cols);
+      widths.add(term.displayWidth(row.contains('\x1b') ? row.replaceAll(_csi, '') : row));
+      b.write('$row\x1b[K');
     }
-    if (shown.length < _drawn) b.write('\x1b[J');
-    _drawn = shown.length;
+    if (shown.length <= up) b.write('\x1b[J');
+    _drawn = widths;
     io.stderr.write(b);
   }
 
@@ -471,7 +489,7 @@ abstract final class Console {
     final text = term.safeText(failed ? '$_failMark $line' : line);
     if (_lives.isEmpty) return io.stderr.writeln(text);
     io.stderr.write('${_erase()}$text\n');
-    _drawn = 0;
+    _drawn = const [];
     _paint(force: true);
   }
 

@@ -187,6 +187,31 @@ void main() {
       }
     }, timeout: const Timeout(Duration(seconds: 120)));
 
+    test('P12: after a narrowing resize the live block moves up past its reflowed rows', () async {
+      final root = Directory.current;
+      final res = await Process.run(
+        'python3',
+        [
+          '${root.path}/test/console_pty/drive.py',
+          '--size', '24', '80', //
+          '--ready', 'alpha',
+          '--resize', '1.0', '24', '20',
+          '--',
+          Platform.resolvedExecutable,
+          '${root.path}/test/console_pty/probe.dart',
+          tempFile('probe-narrow.log').path,
+          'narrow',
+        ],
+        workingDirectory: root.path,
+        stdoutEncoding: null,
+        environment: {'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color'},
+      );
+      final out = utf8.decode(res.stdout as List<int>, allowMalformed: true);
+      expect(out, contains('narrowed'));
+      // Two 39-cell rows reflow to two rows each at 20 columns: up three.
+      expect(out, contains('\r\x1b[3A'), reason: out);
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
     test('live lines stack: a bar and two spinners each keep a row', () async {
       final out = await _ptyBar(cols: 40, mode: 'stack');
       expect(out, contains('stacked'));

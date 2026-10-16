@@ -35,6 +35,7 @@
 - `console`: `Console.choose` under `TERM=dumb` asks with the numbered list instead of drawing the live menu (its escapes leaked), and under `LC_ALL=C` the menu hint is ASCII.
 - `console`/`tui`: an empty `NO_COLOR=` no longer turns colour off (no-color.org: set and not empty), and `FORCE_COLOR=2`/`3` (or any value but empty, `0`, `false`) forces it like `1`.
 - `tui`: an error no handler owns (a timer or future the script started outside the Tui) fails `Tui.run` after the alternate screen is left, so its trace stays on screen; it printed on the alternate screen and vanished with it.
+- `console`: live bars and spinners redraw in place after the terminal narrows: the block counts the rows a reflowing terminal wrapped its old lines onto (as `choose` does), instead of stacking stale rows.
 
 **Security**
 

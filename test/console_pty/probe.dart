@@ -5,6 +5,7 @@
 //   bar:    a 100-item bar with a long label under the pty, then close.
 //   choose: interactive choose of [red, green, blue]; writes the pick.
 //   stack:  a bar and two spinners live at once.
+//   narrow: two bars live while the test halves the terminal width.
 //   orphan-exit|crash|cancel: start the tty reader, print its pid, then
 //           exit(3), crash, or cancel and report whether it is alive.
 //   leak:   ticks a bar and returns without closing it; must still exit.
@@ -64,6 +65,15 @@ Future<void> main(List<String> args) async {
       }
       await spins;
       stdout.writeln('stacked');
+    case 'narrow':
+      // Two bars live across a resize narrower than their rows.
+      final a = Console.bar('alpha', total: 20), b = Console.bar('beta', total: 20);
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        a.tick();
+        b.tick();
+      }
+      stdout.writeln('narrowed');
     case 'orphan-exit' || 'orphan-crash' || 'orphan-cancel':
       // Listen to the terminal (starts the `cat /dev/tty` child), report the
       // reader's pid, then leave without cancelling.
