@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:dart_toolkit/core.dart' show ContentException;
 import 'package:dart_toolkit/http.dart' show HttpRequestException, HttpStatusException, RequestFailure, SessionException;
@@ -96,23 +97,30 @@ void main() {
   });
 
   test('free() polled during a wait never lets the window take more than its count (B5)', () async {
-    final r = rate.Rate(2, const Duration(milliseconds: 300));
+    // Two starts per 400 ms. The window's first start is at 0 and the second
+    // at ~200, so a third may start at 400 at the earliest; a take that
+    // dropped a live start (the bug) starts the third with the second, at
+    // the end of the stall (~430). The bound sits between the two with room
+    // for a loaded machine on either side.
+    const per = Duration(milliseconds: 400);
+    final r = rate.Rate(2, per);
     final poll = Timer.periodic(const Duration(milliseconds: 2), (_) => rate.free(r));
     addTearDown(poll.cancel);
     final sw = Stopwatch()..start();
     final starts = <int>[];
     Future<void> start() => rate.take(r, null).then((_) => starts.add(sw.elapsedMilliseconds));
     await start();
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
     // Stall the event loop across the first start's expiry, so the poll
     // trims the window before the waiting take wakes.
-    Timer(const Duration(milliseconds: 150), () {
+    Timer(Duration(milliseconds: math.max(0, 370 - sw.elapsedMilliseconds)), () {
       final busy = Stopwatch()..start();
-      while (busy.elapsedMilliseconds < 100) {}
+      while (busy.elapsedMilliseconds < 60) {}
     });
     await Future.wait([start(), start(), start()]);
+    expect(starts, hasLength(4));
     for (var i = 2; i < starts.length; i++) {
-      expect(starts[i] - starts[i - 2], greaterThanOrEqualTo(295), reason: 'starts $starts');
+      expect(starts[i] - starts[i - 2], greaterThanOrEqualTo(per.inMilliseconds - 50), reason: 'starts $starts');
     }
   });
 
