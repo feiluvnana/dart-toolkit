@@ -213,12 +213,8 @@ void draw(Region r) {
         .scroll(b.transfersScroll),
     b,
   );
-  // Clicking the log's header shows only failures and rate limits, and back.
-  final head = b.failuresOnly
-      ? 'log: failures & rate limits only (f or click: all)'
-      : 'log (f or click: failures & rate limits only)';
-  final toggle = {'click': ('', () => b.failuresOnly = !b.failuresOnly)};
-  events(bottom.box(head, color: border, on: toggle).scroll(b.log), b);
+  // f shows only failures and rate limits, and back.
+  events(bottom.box(b.failuresOnly ? 'log: failures & rate limits only' : 'log', color: border).scroll(b.log), b);
 }
 
 // `[ins] ` in the platform's colour, then the row continues.

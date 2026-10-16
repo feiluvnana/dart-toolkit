@@ -67,37 +67,39 @@ final class Queue {
       await f.to.write(text);
       t.part.bytes += utf8.encode(text).length;
     } else {
-      var how = '';
+      var shown = '';
       try {
         await _lanes.run(() {
           board.transfers.add(t);
           return cdn.get(f.url!, headers: {'referer': '${j.platform.site}/'}) | board.speed | Pipe.tap(t.update) > f.to;
         });
-        how = await _compress(f, t);
+        shown = await _compress(f, t);
       } finally {
         board.transfers.remove(t);
       }
-      board.note('@${j.u.name} ${t.path}  ${t.done.size()}$how', platform: j.code);
+      board.note('@${j.u.name} ${t.path}  $shown', platform: j.code);
     }
     if (f.at case final at?) await f.to.touch(at);
     return true;
   }
 
-  // Re-encodes the file at --image-quality/--video-quality; says how it went.
+  // Re-encodes the file at --image-quality/--video-quality; returns its size
+  // on disk and how compressing went: `1.6 MB (compressed from 2.7 MB, -39%)`.
   Future<String> _compress(Download f, Transfer t) async {
     final path = f.to.path();
     final video = const {'mp4', 'mov', 'webm', 'mkv'}.contains(path.split('.').last.toLowerCase());
     final quality = video ? o.video : o.image;
-    if (quality == null) return '';
+    final downloaded = t.done.size();
+    if (quality == null) return downloaded;
     t.status = 'compressing';
     try {
       final r = video ? await Video.compress(path, quality: quality) : await Image.compress(path, quality: quality);
-      if (r == null) return ' (kept: compressing would not make it smaller)';
+      if (r == null) return '$downloaded (kept: compressing would not make it smaller)';
       final (before, after) = r;
       t.part.bytes += after - before;
-      return ' (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
+      return '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
     } on ToolkitException catch (e) {
-      return ' (not compressed: ${e.message})';
+      return '$downloaded (not compressed: ${e.message})';
     } finally {
       t.status = null;
     }

@@ -82,7 +82,8 @@
 - Categories are one shared set for every platform: `posts` `stories` `highlights` `photos` `videos` `albums` `profiles` (`--category=posts,stories`); each platform offers its own, and a user whose platform has none of the chosen ones is skipped. Folders are named after them; Twitter's `tweets/` is renamed to `posts/` on the next run.
 - Restructured so a new platform (TikTok, Bluesky, …) is one file in `platforms/` extending `Platform` plus a line in `platforms.dart`: login from `.<code>.session`, rate-limit waits, error wording, CLI values, `update` and dashboard colours come for free. `job.dart` (a user's download and index), `queue.dart` (downloads and compression), `feed.dart` (newest-first timelines), `run.dart` (a run, `update`'s discovery).
 - Fixed: `--reset` deleted every listing cursor, not only the reset categories'; it looked for the folder under the name as typed instead of the resolved one; a tweet whose media did not resolve still wrote its caption; Instagram fetched the first posts page twice per user; a crash inside the dashboard exited 0; with `--since`, the Facebook photos walk kept opening older photos' pages.
-- Dashboard: an overall progress row, each user's new files and size beside their name, `f` toggles failures only.
+- Dashboard: an overall progress row, each user's new files and size beside their name, `f` toggles failures only (the log's header is no longer clickable).
+- Fixed: a compressed file's log line showed its downloaded size instead of the size on disk (`2.7 MB (compressed from 2.7 MB, -39%)`).
 ## 0.0.5
 
 **Added**

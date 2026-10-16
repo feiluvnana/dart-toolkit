@@ -1,6 +1,6 @@
 # AUDIT 2026-10-16 (52a69d6d, clean tree)
 
-Whole-library audit by `/dart-lib-audit` (first run of the skill). Scope: all of lib/, every lens but dogfood. Audited at 28d9b852; the baseline and statuses were updated after 52a69d6d (medialoader refactor, project tests removed, cli long `values:` display). Line numbers are as of 52a69d6d.
+Whole-library audit by `/dart-lib-audit` (first run of the skill). Scope: all of lib/, every lens but dogfood. Audited at 28d9b852; the baseline and statuses were updated after 52a69d6d (medialoader refactor, project tests removed, cli long `values:` display) and after the medialoader log fix that follows it (compressed size, no clickable log header). Line numbers are as of 52a69d6d.
 
 ## Baseline
 - analyze `lib test projects tool`: clean.
@@ -61,7 +61,7 @@ Evidence key: **V** = Verified (probe output, measurement, or deterministic code
 | A2 | architecture | archive.dart:45-50 | 7z/RAR/xz/bcj decoders always load: +90–112 ms on every zip/tar script; deferred imports save nothing under JIT | V: A/B | spawnUri worker for 7z/RAR/xz (as tool_fetch does); AOT keeps the in-process path | M |
 | A3 | architecture | src/chrome_find.dart:94, tool.dart ~:200 | the spawnUri download dance is written twice, and they differ (B15) | V read | one `fetchInIsolate` in src/cache | S |
 | E1 | ergonomic | http.dart:586, 577, 667 | `copy()` clients neither close nor count with their parent; medialoader keeps its own list | V: probe | close/sent cover copies (−6 lines, +0 surface) | S |
-| E2 | ergonomic | image.dart:143, video.dart:121 | `compress` returns `(int,int)?`, where null means three things; medialoader prints the wrong reason | V | named record, or sealed `Compressed|Kept(reason)` | S |
+| E2 | ergonomic | image.dart:143, video.dart:121 | `compress` returns `(int,int)?`, where null means three things; medialoader prints the wrong reason (its line now shows the size on disk after compression; the reason is still a guess) | V | named record, or sealed `Compressed|Kept(reason)` | S |
 | E3 | ergonomic | chrome.dart:566 | `Page.run<T>` returns `T?`: non-scalars need `Json.of(await …)` (the doc example does); a function result is called with userGesture and runs twice | V: probe | `Future<Json> run(js)`; call only function source | S |
 | E4 | ergonomic | http.dart:94 | `Body.multipart(Map<String,Object>)` has a runtime type check, contradicting the Body doc | V | `(Map<String,String> fields, {Map<String,Reader> files})` | S |
 | E5 | ergonomic | shell.dart:177 | `check:` throws plain ProcessException, the same type as "won't start" and outside ToolkitException | V | `ExitException extends ProcessException implements ToolkitException` | S |
