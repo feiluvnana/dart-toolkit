@@ -14,6 +14,7 @@ import 'package:path/path.dart' as p;
 
 import '../shell.dart';
 import 'cache.dart' as cache;
+import 'names.dart' as names;
 import 'posix.dart' as posix;
 import 'tool.dart';
 
@@ -74,13 +75,12 @@ Future<List<int>> ffmpeg(
 
 /// ffprobe's JSON for [input] (a path or URL). Unreadable input is a
 /// [ContentException].
-Future<Map<String, Object?>> ffprobe(String input, {List<String> before = const []}) async {
+Future<Map<String, Object?>> ffprobe(String input) async {
   final exe = await tool(Tool.ffprobe);
   final out = await Shell.run([
     exe,
     '-v',
     'error',
-    ...before,
     '-show_format',
     '-show_streams',
     '-show_stream_groups',
@@ -97,11 +97,14 @@ Future<Map<String, Object?>> ffprobe(String input, {List<String> before = const 
 }
 
 /// The last lines of a tool's stderr: enough to say why, never a dump.
+/// URLs in it are redacted (a signed URL's token stays out of errors).
 String _tail(String err) {
   final lines = err.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
   final tail = lines.length <= 3 ? lines : lines.sublist(lines.length - 3);
-  return tail.isEmpty ? 'no output' : tail.join(' / ');
+  return tail.isEmpty ? 'no output' : tail.join(' / ').replaceAllMapped(_url, (m) => names.redact(m[0]!));
 }
+
+final _url = RegExp(r'''https?://[^\s'"]+''');
 
 // ── sources ───────────────────────────────────────────────────────────────
 

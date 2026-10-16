@@ -30,6 +30,7 @@ import 'package:path/path.dart' as p;
 
 import 'image.dart';
 import 'src/media.dart' as media;
+import 'src/media_proxy.dart' as proxy;
 
 export 'core.dart';
 
@@ -44,13 +45,14 @@ enum VideoCodec { h264, h265, av1, vp9 }
 
 /// A video (or audio) source and what ffprobe says about it.
 final class Video {
-  Video._(this._inputs, this._before, this._info, [this._temp]);
+  Video._(this._inputs, this._headers, this._info, [this._temp]);
 
   /// Inputs in order: the source, then a separate audio source.
   final List<String> _inputs;
 
-  /// Arguments before each `-i` (HTTP headers for a URL).
-  final List<String> _before;
+  /// HTTP headers for a URL source, added by [proxy.throughProxy] for its
+  /// own origins only (never in argv).
+  final Map<String, String>? _headers;
 
   final _Info _info;
 
@@ -106,20 +108,22 @@ final class Video {
 
   /// Probe [source], a path or a URL (`.m3u8`/`.mpd` manifests included);
   /// [audio] adds a separate audio source (DASH serves them apart), and
-  /// [headers] go with every request ffmpeg makes for a URL (cookies,
-  /// referer).
+  /// [headers] (cookies, referer, a token) go with ffmpeg's requests to
+  /// the source's own origins only, through a loopback proxy: never in the
+  /// process list, never to a CDN or redirect on another host.
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers}) =>
       _open(source, audio: audio, headers: headers);
 
   static Future<Video> _open(String source, {String? audio, Map<String, String>? headers, media.Temp? temp}) async {
-    final before = headers == null || headers.isEmpty
-        ? const <String>[]
-        : ['-headers', headers.entries.map((e) => '${e.key}: ${e.value}\r\n').join()];
     final inputs = [source, ?audio];
-    final infos = [for (final i in inputs) _Info.of(await media.ffprobe(i, before: before))];
+    final infos = await proxy.throughProxy(
+      inputs,
+      headers,
+      (mapped) async => [for (final i in mapped) _Info.of(await media.ffprobe(i))],
+    );
     final info = infos.length == 1 ? infos.first : infos.first.withAudio(infos.last);
     if (info.width == null && info.audio == null) throw const ContentException('no video or audio stream found');
-    return Video._(inputs, before, info, temp);
+    return Video._(inputs, headers, info, temp);
   }
 
   /// Re-encode the video at [path] in its own container (h264 for MP4/MOV/
@@ -211,16 +215,19 @@ final class Video {
   Future<Image> frame({Duration at = Duration.zero}) async {
     if (_info.width == null) throw StateError('audio only: no frames');
     final out = await media.tempOut('png');
-    await media.ffmpeg([
-      if (at > Duration.zero) ...['-ss', _secs(at)],
-      ..._before,
-      '-i',
-      _inputs.first,
-      '-frames:v',
-      '1',
-      '-y',
-      out,
-    ]);
+    await proxy.throughProxy(
+      _inputs,
+      _headers,
+      (inputs) => media.ffmpeg([
+        if (at > Duration.zero) ...['-ss', _secs(at)],
+        '-i',
+        inputs.first,
+        '-frames:v',
+        '1',
+        '-y',
+        out,
+      ]),
+    );
     try {
       return await Image.decode(await io.File(out).readAsBytes());
     } finally {
@@ -239,21 +246,50 @@ final class Video {
     Duration? end,
     void Function(int done, int? total)? onProgress,
   }) async {
+    await proxy.throughProxy(
+      _inputs,
+      _headers,
+      (inputs) => _encodeFrom(
+        inputs,
+        out,
+        format,
+        quality: quality,
+        width: width,
+        height: height,
+        codec: codec,
+        start: start,
+        end: end,
+        onProgress: onProgress,
+      ),
+    );
+  }
+
+  Future<void> _encodeFrom(
+    List<String> inputs,
+    String out,
+    VideoFormat format, {
+    int? quality,
+    int? width,
+    int? height,
+    VideoCodec? codec,
+    Duration? start,
+    Duration? end,
+    void Function(int done, int? total)? onProgress,
+  }) async {
     final info = _info;
     final audioOnly = const {VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format);
     final encodeVideo = !audioOnly && (quality != null || width != null || height != null || codec != null);
     final vcodec = codec ?? (format == VideoFormat.webm ? VideoCodec.vp9 : VideoCodec.h264);
     final q = quality ?? 80;
     final args = <String>[
-      for (final input in _inputs) ...[
+      for (final input in inputs) ...[
         if (start != null) ...['-ss', _secs(start)],
-        ..._before,
         '-i',
         input,
       ],
       if (end != null) ...['-t', _secs(end - (start ?? Duration.zero))],
       if (!audioOnly && info.width != null) ...['-map', '0:v:0'],
-      if (info.audio != null) ...['-map', _inputs.length > 1 ? '1:a:0' : '0:a:0?'],
+      if (info.audio != null) ...['-map', inputs.length > 1 ? '1:a:0' : '0:a:0?'],
       if (audioOnly) '-vn',
     ];
     final needs = <String>{};
@@ -340,7 +376,9 @@ final class _Info {
   factory _Info.of(Map<String, Object?> json) {
     final streams = ((json['streams'] as List?) ?? const []).cast<Map<String, Object?>>();
     final format = (json['format'] as Map?) ?? const {};
-    final v = streams.where((s) => s['codec_type'] == 'video' && (s['disposition'] as Map?)?['attached_pic'] != 1).firstOrNull;
+    final v = streams
+        .where((s) => s['codec_type'] == 'video' && (s['disposition'] as Map?)?['attached_pic'] != 1)
+        .firstOrNull;
     final a = streams.where((s) => s['codec_type'] == 'audio').firstOrNull;
     int? w = v?['width'] as int?, h = v?['height'] as int?;
     final rotation = ((v?['side_data_list'] as List?) ?? const [])

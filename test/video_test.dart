@@ -56,6 +56,64 @@ void main() {
     });
   });
 
+  group('S4: open(headers:)', () {
+    late io.HttpServer server;
+    late String home, other;
+    final seen = <String>[]; // "host path cookie"
+    setUpAll(() async {
+      await io.Directory('${tmp.path}/hls').create();
+      await media.ffmpeg([
+        '-f', 'lavfi', '-i', 'testsrc2=s=160x90:d=2:r=10', //
+        '-c:v', 'libx264', '-hls_time', '1', '-hls_list_size', '0',
+        '-f', 'hls', '-y', '${tmp.path}/hls/x.m3u8',
+      ]);
+      server = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, 0);
+      home = 'http://127.0.0.1:${server.port}';
+      other = 'http://localhost:${server.port}';
+      server.listen((r) async {
+        final cookie = r.headers.value('cookie');
+        seen.add('${r.headers.host} ${r.uri.path} $cookie');
+        if (r.uri.path == '/go') {
+          r.response.redirect(Uri.parse('$other/hls/x.m3u8'));
+          return;
+        }
+        final f = io.File('${tmp.path}${r.uri.path}');
+        if (r.headers.host == '127.0.0.1' && cookie != 'c=1' || !f.existsSync()) {
+          r.response.statusCode = 403;
+        } else {
+          if (r.uri.path.endsWith('.m3u8')) r.response.headers.contentType = io.ContentType('application', 'vnd.apple.mpegurl');
+          await r.response.addStream(f.openRead());
+        }
+        await r.response.close();
+      });
+    });
+    tearDownAll(() => server.close(force: true));
+
+    test('the headers reach the source origin: the manifest and every segment', () async {
+      seen.clear();
+      final v = await Video.open('$home/hls/x.m3u8', headers: {'cookie': 'c=1'});
+      expect(v.width(), 160);
+      await (v.encode(.mp4) > Fs.file('${tmp.path}/hls.mp4'));
+      expect(seen.where((l) => l.contains('.ts')), isNotEmpty);
+      expect(seen.where((l) => l.startsWith('127.0.0.1') && !l.endsWith(' c=1')), isEmpty, reason: '$seen');
+    });
+
+    test('a redirect to another host gets no headers', () async {
+      seen.clear();
+      await Video.open('$home/go', headers: {'cookie': 'c=1'});
+      final elsewhere = seen.where((l) => l.startsWith('localhost'));
+      expect(elsewhere, isNotEmpty);
+      expect(elsewhere.where((l) => !l.endsWith(' null')), isEmpty, reason: '$seen');
+    });
+
+    test('a failure names the URL with its token masked', () async {
+      await expectLater(
+        Video.open('$home/missing.m3u8?token=SECRET', headers: {'cookie': 'c=1'}),
+        throwsA(isA<ContentException>().having((e) => e.message, 'message', isNot(contains('SECRET')))),
+      );
+    });
+  });
+
   group('probe', () {
     test('a file is probed in place', () async {
       final v = await Fs.file(clip).video();
