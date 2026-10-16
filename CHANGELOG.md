@@ -8,7 +8,7 @@
 - `video`: `Video.open(path or URL, audio:, headers:)` (HLS/DASH, a separate audio source); `encode` copies streams when no quality/size/codec is asked (remux), `codec:` (`h264` `h265` `av1` `vp9`), `start:`/`end:`, `onProgress:`; audio-only `m4a`/`mp3`/`opus`; `frame(at:)` → `Image`; `codec()` `audio()` `bitrate()`; `Video.compress(path, quality:, codec:)`.
 - ffmpeg/ffprobe 9.0.2: a PATH copy is used when it has the encoders a call needs, else a static build pinned by sha256 is downloaded once into the user cache (native arm64 on Apple silicon), one process at a time; encodes share a limit of half the cores and run through `shell`, so Ctrl-C ends them.
 - `core`: `bytes.size()` (`12.1 MB`).
-- `http`: `Body.multipart(fields, files: {name: reader})` (files stream); `Rate(perHost: true)`; ETag/Last-Modified revalidation in `cache:`; `socks5://`/`socks5h://` proxies; `client.sent()`; `Cookies.load(reader)`, `Cookies.agent()`, `Cookies(agent:)`; `Http.serve(limit:)` (413 over 64 MB).
+- `http`: `Body.multipart(fields, files: {name: reader})` (files stream); `Rate(perHost: true)`; ETag/Last-Modified revalidation in `cache:`; `socks5://`/`socks5h://` proxies; `client.sent()`; `Cookies.load(reader)`, `Cookies.agent()`, `Cookies(agent:)`; `Http.serve(max:)` (413 over 64 MB).
 - `fs`: `Dir.size({match})` → `(files, bytes)`, skipping partial and temp files; `File.touch([time])`.
 - `pool`: `Pool(limit:)` with `run(job)`: shared FIFO lanes.
 - `shell`: `Shell.run(cancel:)`.

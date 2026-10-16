@@ -202,10 +202,10 @@ final class Response with Reader implements Closeable {
     if (cached != null) return cached.asUnmodifiableView();
     if (_file case final file?) {
       final f = File(file);
-      final limit = _client._s.limit;
-      if (await f.length() > limit) {
+      final max = _client._s.max;
+      if (await f.length() > max) {
         throw ContentException(
-          'response body over $limit bytes: pipe it to a file, or raise Http.client(limit:) '
+          'response body over $max bytes: pipe it to a file, or raise Http.client(max:) '
           '(${names.redact(url())})',
         );
       }
@@ -222,13 +222,13 @@ final class Response with Reader implements Closeable {
   Future<Uint8List> _readAll() async {
     try {
       final out = BytesBuilder(copy: false);
-      final limit = _client._s.limit;
+      final max = _client._s.max;
       await for (final chunk in _preReady != null ? _fromPrefetch() : _bodyStream()) {
         out.add(chunk);
-        if (out.length > limit) {
+        if (out.length > max) {
           await _abandon();
           throw ContentException(
-            'response body over $limit bytes: pipe it to a file, or raise Http.client(limit:) '
+            'response body over $max bytes: pipe it to a file, or raise Http.client(max:) '
             '(${names.redact(url())})',
           );
         }

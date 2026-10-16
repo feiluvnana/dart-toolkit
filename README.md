@@ -42,7 +42,7 @@ Future<void> main() async {
 | Import | For | Highlights |
 |---|---|---|
 | `core` | the shared model | `Reader` (`bytes` `text` `lines`), `Writer`, `Pipe`, `Closeable`, `Origin`, `Cookies` (`load` a session file), `Rate` (`perHost:`), `3.seconds`, `now.format(…)`, `d.human()` |
-| `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, limit:, …)` (Chrome user-agent, `socks5://`), `get(u) \| bar > file` that skips and resumes, safe retries, `cache:` with ETag revalidation, `Body.multipart`, `sent()`, `Http.pool`, `Http.serve` |
+| `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) \| bar > file` that skips and resumes, safe retries, `cache:` with ETag revalidation, `Body.multipart`, `sent()`, `Http.pool`, `Http.serve` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `html()`, `text()` that reads like a page; re-exports `json` |
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()`, `or('')`, `text()`, `max`/`min`, `reader.ndjson()` |
 | `csv` | CSV | RFC 4180 `parse`, `records`, `encode`, `reader.csv()`, streamed `reader.rows()` |

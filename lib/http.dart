@@ -291,7 +291,7 @@ abstract final class Http {
   ///   for the next run, any other failure deletes it. The GET is sent at
   ///   the end of the current synchronous block unless such a pipeline
   ///   claims it first, so awaiting it, or not using it, sends it as usual.
-  /// - [limit]: the most bytes a body read into memory (`bytes`, `text`,
+  /// - [max]: the most bytes a body read into memory (`bytes`, `text`,
   ///   `json`, `html`) may decode to; past it the read fails with a
   ///   [ContentException], so a gzip bomb cannot fill the heap. Piping a
   ///   body into a file has no limit.
@@ -311,9 +311,9 @@ abstract final class Http {
     Duration idle = const Duration(milliseconds: 100),
     int connections = 6,
     bool resume = false,
-    int limit = 256 << 20,
+    int max = 256 << 20,
   }) {
-    if (limit < 0) throw ArgumentError.value(limit, 'limit', 'must not be negative');
+    if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
     if (connections < 1) throw ArgumentError.value(connections, 'connections', 'must be at least 1');
     final settings = _Settings(
@@ -328,7 +328,7 @@ abstract final class Http {
       cache: cache,
       ttl: ttl,
       resume: resume,
-      limit: limit,
+      max: max,
     );
     return _Client(
       settings,
@@ -351,17 +351,17 @@ abstract final class Http {
   /// For a CLI OAuth login (the loopback redirect), a webhook, a folder
   /// preview. A handler error is a 500 with no detail sent, and is logged to
   /// stderr. No routing table: `switch (request.path())` is the router.
-  /// A request body over [limit] bytes is a 413. On a loopback [host] a
+  /// A request body over [max] bytes is a 413. On a loopback [host] a
   /// request whose `Host` is not a loopback name is a 421, so a web page
   /// cannot reach the server by DNS rebinding.
   static Future<Server> serve(
     FutureOr<Reply> Function(Request request) handler, {
     int port = 0,
     String host = '127.0.0.1',
-    int limit = 64 << 20,
+    int max = 64 << 20,
   }) async {
-    if (limit < 0) throw ArgumentError.value(limit, 'limit', 'must not be negative');
-    final server = Server._(await HttpServer.bind(host, port), limit);
+    if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
+    final server = Server._(await HttpServer.bind(host, port), max);
     server.url(); // fix the address while bound
     server._server.listen((req) {
       final done = server._answer(req, handler);
@@ -407,7 +407,7 @@ sealed class Client implements Closeable {
     Duration? idle,
     int? connections,
     bool? resume,
-    int? limit,
+    int? max,
   });
 
   /// The cookie jar: persist it with `cookies().encode()`.
@@ -450,7 +450,7 @@ final class _Settings {
     required this.cache,
     required this.ttl,
     required this.resume,
-    required this.limit,
+    required this.max,
   });
 
   final Uri? base;
@@ -464,7 +464,7 @@ final class _Settings {
   final String? cache;
   final Duration ttl;
   final bool resume;
-  final int limit;
+  final int max;
 }
 
 /// One `HttpClient` with its socket settings, counted by the requests and
@@ -619,7 +619,7 @@ final class _Client extends Client {
     Duration? idle,
     int? connections,
     bool? resume,
-    int? limit,
+    int? max,
   }) {
     final s = _s;
     final conn = _conn.sameAs(insecure: insecure, proxy: proxy, idle: idle, connections: connections, timeout: timeout)
@@ -644,7 +644,7 @@ final class _Client extends Client {
         cache: cache ?? s.cache,
         ttl: ttl ?? s.ttl,
         resume: resume ?? s.resume,
-        limit: limit ?? s.limit,
+        max: max ?? s.max,
       ),
       conn,
       this,
@@ -1060,7 +1060,7 @@ final class _Pool extends Client {
     Duration? idle,
     int? connections,
     bool? resume,
-    int? limit,
+    int? max,
   }) {
     if (proxy != null) {
       throw ArgumentError.value(proxy, 'proxy', 'a pool keeps each member\'s proxy: copy the members, then pool them');
@@ -1082,7 +1082,7 @@ final class _Pool extends Client {
           idle: idle,
           connections: connections,
           resume: resume,
-          limit: limit,
+          max: max,
         ) as _Client,
     ]);
   }

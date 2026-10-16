@@ -1375,7 +1375,7 @@ Future<void> main() async {
     });
 
     test('limit: caps a body read into memory, decoded size included; piping is unlimited', () async {
-      final small = Http.client(limit: 1000);
+      final small = Http.client(max: 1000);
       await expectLater(
         small.get('$url/gzip').text(),
         throwsA(isA<ContentException>().having((e) => e.message, 'message', contains('over 1000 bytes'))),
@@ -1384,7 +1384,7 @@ Future<void> main() async {
       await (small.get('$url/gzip') > sink);
       expect(sink.data, hasLength(5000));
       expect((await Http.client().get('$url/gzip').text()).length, 5000);
-      expect(() => Http.client(limit: -1), throwsArgumentError);
+      expect(() => Http.client(max: -1), throwsArgumentError);
       await small.close();
     });
 

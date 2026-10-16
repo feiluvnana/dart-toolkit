@@ -164,7 +164,7 @@ void main() {
 
     test('bug 5: a body over limit: is cached by streaming and pipes from disk', () async {
       final dir = await temp();
-      final c = Http.client(cache: dir.path, limit: 1000);
+      final c = Http.client(cache: dir.path, max: 1000);
       for (var i = 0; i < 2; i++) {
         final out = _File('${dir.path}/out$i');
         await (c.get('$url/file') > out);
@@ -293,7 +293,7 @@ Future<void> main() async {
   });
 
   test('bug 10: Http.serve caps a request body (413), declared or streamed', () async {
-    final s = await Http.serve((r) async => Reply.text('${(await r.bytes()).length}'), limit: 10);
+    final s = await Http.serve((r) async => Reply.text('${(await r.bytes()).length}'), max: 10);
     addTearDown(s.close);
     final c = Http.client(retries: 0);
     expect(await c.post(s.url(), body: .text('short')).text(), '5');

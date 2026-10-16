@@ -129,7 +129,7 @@ final class Request with Reader {
   @override
   Origin origin() => Origin(url: _req.requestedUri.toString());
 
-  /// The body; past the server's `limit:` the read fails (and the
+  /// The body; past the server's `max:` the read fails (and the
   /// handler's answer becomes a 413).
   @override
   Stream<List<int>> stream() async* {

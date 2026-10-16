@@ -35,7 +35,7 @@ at its call sites than it adds to the surface.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type.                                                                                                                                                                                                                                                 |
 | 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. The exceptions are the unit literals `3.seconds`, `1.5.minutes` (`Durations` on `num`), which spell a constant, and `DateTime.format(…)` / `Duration.human()` (`Times`, `Spans`), which render a value for a person; none reads toolkit state. Each library doc says `Public surface is exactly: …`.                          |
-| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:`, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). |
+| 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through) and `>` (pipe into). |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name.                                                                                                                                                                                                                         |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                                                                                                                                                                                                                                                                   |
 | 6   | **Content leaves as a `Reader` and arrives through a `Writer`.** No method takes an output path: screenshots, PDFs, encoded images, archives and downloads are all `Reader`s, stored with `> Fs.file(…)`.                                                                                                                                                                                                                                                                                   |
@@ -237,7 +237,7 @@ abstract final class Http {
       int retries = 2, Rate? rate, bool check = false, Cookies? cookies, ({String cookie, String header})? csrf,
       String? proxy, String? cache, Duration ttl = const Duration(hours: 1), List<String> insecure = const [],
       Duration idle = const Duration(milliseconds: 100), int connections = 6, bool resume = false,
-      int limit = 256 << 20});                    // limit: bytes a body read into memory may decode to
+      int max = 256 << 20});                      // max: bytes a body read into memory may decode to
   static Client pool(List<Client> members);      // also a Client
 }
 sealed class Client implements Closeable {
@@ -300,10 +300,10 @@ final class Response with Reader implements Closeable {
     A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
     keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
     synchronous block unless such a pipeline claims it, so awaiting it works as always.
-- **`Http.serve(handler, port:, host:, limit:)`** answers loopback requests until `close()`: `Request` (`method`
+- **`Http.serve(handler, port:, host:, max:)`** answers loopback requests until `close()`: `Request` (`method`
   `path` `query(name)` `header`, a `Reader` of the body) → `Reply.text` `.json` `.stream`
   (content-type from a file's name, or `type:`) `.redirect` `.status`. A handler error is a 500, logged;
-  a body over `limit` (64 MB) is a 413.
+  a body over `max` (64 MB) is a 413; on loopback, a `Host` that is not a loopback name is a 421.
   It is meant for a CLI OAuth login, a webhook, or a preview; `switch (r.path())` is the router.
 - `cache: '.cache'` answers a GET within `ttl` from disk (no network, no `Rate` slot), keyed by
   URL, credentials and the request headers the answer `Vary`s on: for developing a scraper. Bodies
