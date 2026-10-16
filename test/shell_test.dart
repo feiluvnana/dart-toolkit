@@ -353,6 +353,31 @@ Future<void> main() async {
       expect(await eventually(() async => !await alive(pid!)), isTrue, reason: 'sleep $pid outlived the cancel');
     });
 
+    test('B2: an onLine that throws fails the run, kills the tree, and stays catchable', () async {
+      if (Platform.isWindows) markTestSkipped('POSIX process tree');
+      final r = await runDart(r'''
+import 'dart:io';
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  String? pid;
+  try {
+    await Shell.run(['sh', '-c', r'sleep 20 & echo $!; echo boom; wait'], onLine: (l) {
+      pid ??= l;
+      if (l == 'boom') throw StateError('bad line');
+    });
+  } on StateError catch (e) {
+    print('caught ${e.message}');
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 300));
+  final ps = await Process.run('ps', ['-p', pid!, '-o', 'pid=']);
+  print('alive=${'${ps.stdout}'.trim().isNotEmpty}');
+}
+''', timeout: const Duration(seconds: 15));
+      expect(r.stdout, contains('caught bad line'), reason: '${r.stderr}');
+      expect(r.stdout, contains('alive=false'));
+      expect(r.exitCode, 0);
+    });
+
     test('a cancel after the run ended changes nothing', () async {
       final stop = Completer<void>();
       final out = await Shell.run(['echo', 'hi'], cancel: stop.future);

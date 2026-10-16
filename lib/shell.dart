@@ -103,12 +103,20 @@ abstract final class Shell {
             : const Utf8Decoder(allowMalformed: true)
                   .startChunkedConversion(const LineSplitter().startChunkedConversion(_LineSink(onLine)));
         final done = Completer<void>();
+        late final StreamSubscription<List<int>> sub;
         subs.add(
-          src.listen(
+          sub = src.listen(
             (chunk) {
               buf.add(chunk);
               tee?.add(chunk);
-              lines?.add(chunk);
+              try {
+                lines?.add(chunk);
+              } catch (e, st) {
+                // [onLine] threw: the run fails with its error (the tree is
+                // killed below), never an uncaught error in this listener.
+                unawaited(sub.cancel());
+                if (!done.isCompleted) done.completeError(e, st);
+              }
             },
             onError: done.completeError,
             onDone: () {
@@ -126,7 +134,7 @@ abstract final class Shell {
           collect(proc.stdout, out, live ? io.stdout : null),
           collect(proc.stderr, err, live ? io.stderr : null),
           proc.exitCode,
-        ]);
+        ], eagerError: true);
         // A cancel kills the tree, then lets the pipes drain briefly: a
         // descendant that escaped the tree must not hold the run open.
         Future<void> stop(Future<void> cancelled) async {
