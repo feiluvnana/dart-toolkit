@@ -492,8 +492,7 @@ final class _Extraction {
       try {
         await done.future;
       } on io.ProcessException catch (e) {
-        final err = e.message.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
-        final why = err.isEmpty ? 'exit ${e.errorCode}' : err.sublist(err.length > 3 ? err.length - 3 : 0).join(' / ');
+        final why = toolTail(e.message);
         throw ContentException(
           why.contains('Wrong password') ? 'wrong password or corrupt archive' : 'corrupt archive: $why',
         );

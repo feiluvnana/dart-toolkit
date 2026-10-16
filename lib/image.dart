@@ -134,7 +134,7 @@ final class Image {
   /// has no encoder). JPEGs keep their EXIF (date, camera; orientation reset)
   /// and colour profile; a lossless WebP stays lossless.
   static Future<(int, int)?> compress(String path, {int quality = 80}) async {
-    _checkQuality(quality);
+    media.checkQuality(quality);
     final file = io.File(path);
     final bytes = await file.readAsBytes();
     final format = sniff(bytes);
@@ -300,13 +300,10 @@ bool _isLosslessWebp(Uint8List b) {
   return false;
 }
 
-void _checkQuality(int quality) {
-  if (quality < 1 || quality > 100) throw ArgumentError.value(quality, 'quality', 'must be 1..100');
-}
 
 /// Refuse what [Image._encode] cannot write, up front.
 void _checkEncode(ImageFormat format, int quality, Image? image) {
-  _checkQuality(quality);
+  media.checkQuality(quality);
   if (format == ImageFormat.heic) {
     throw ArgumentError.value(format, 'format', 'heic can be read, not written: use jpg, webp or avif');
   }

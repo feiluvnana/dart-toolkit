@@ -14,7 +14,6 @@ import 'package:path/path.dart' as p;
 
 import '../shell.dart';
 import 'cache.dart' as cache;
-import 'names.dart' as names;
 import 'posix.dart' as posix;
 import 'tool.dart';
 
@@ -68,7 +67,7 @@ Future<List<int>> ffmpeg(
               }
             },
     );
-    if (!out.ok()) throw ContentException('ffmpeg failed: ${_tail(out.err())}');
+    if (!out.ok()) throw ContentException('ffmpeg failed: ${toolTail(out.err())}');
     return out.bytes();
   });
 }
@@ -88,7 +87,7 @@ Future<Map<String, Object?>> ffprobe(String input) async {
     'json',
     input,
   ]);
-  if (!out.ok()) throw ContentException('not a readable media file: ${_tail(out.err())}');
+  if (!out.ok()) throw ContentException('not a readable media file: ${toolTail(out.err())}');
   try {
     return (jsonDecode(await out.text()) as Map).cast<String, Object?>();
   } on FormatException catch (e) {
@@ -96,15 +95,6 @@ Future<Map<String, Object?>> ffprobe(String input) async {
   }
 }
 
-/// The last lines of a tool's stderr: enough to say why, never a dump.
-/// URLs in it are redacted (a signed URL's token stays out of errors).
-String _tail(String err) {
-  final lines = err.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
-  final tail = lines.length <= 3 ? lines : lines.sublist(lines.length - 3);
-  return tail.isEmpty ? 'no output' : tail.join(' / ').replaceAllMapped(_url, (m) => names.redact(m[0]!));
-}
-
-final _url = RegExp(r'''https?://[^\s'"]+''');
 
 // ── sources ───────────────────────────────────────────────────────────────
 
@@ -422,4 +412,9 @@ Uint8List withMetadata(Uint8List out, Uint8List src) {
         ..add(keep.takeBytes())
         ..add(Uint8List.sublistView(out, at)))
       .takeBytes();
+}
+
+/// A `quality:` is 1–100, else an [ArgumentError].
+void checkQuality(int quality) {
+  if (quality < 1 || quality > 100) throw ArgumentError.value(quality, 'quality', 'must be 1..100');
 }

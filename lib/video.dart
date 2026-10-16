@@ -123,7 +123,7 @@ final class Video {
   /// (bytes before, bytes after), or null when kept: not a video, AVI or
   /// audio only, or no smaller.
   static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec}) async {
-    _checkQuality(quality);
+    media.checkQuality(quality);
     final head = await _head(path);
     final format = sniff(head);
     if (format == null ||
@@ -417,12 +417,9 @@ Future<List<int>> _head(String path) async {
   }
 }
 
-void _checkQuality(int quality) {
-  if (quality < 1 || quality > 100) throw ArgumentError.value(quality, 'quality', 'must be 1..100');
-}
 
 void _checkEncode(VideoFormat format, int? quality, int? width, int? height, VideoCodec? codec) {
-  if (quality != null) _checkQuality(quality);
+  if (quality != null) media.checkQuality(quality);
   if ((width != null && width < 1) || (height != null && height < 1)) {
     throw ArgumentError.value(width ?? height, width != null ? 'width' : 'height', 'must be >= 1');
   }

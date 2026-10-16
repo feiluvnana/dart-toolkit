@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 
 import '../shell.dart';
 import 'cache.dart' as cache;
+import 'names.dart' as names;
 import 'posix.dart' as posix;
 
 /// A tool [tool] can find.
@@ -212,3 +213,13 @@ Future<void> _fetch(_Build build, String dir, String name) async {
   }
   if (failed != null) throw ContentException('download failed: ${build.url}: $failed');
 }
+
+/// The last lines of a tool's stderr: enough to say why, never a dump.
+/// URLs in it are redacted (a signed URL's token stays out of errors).
+String toolTail(String err) {
+  final lines = err.trim().split('\n').where((l) => l.trim().isNotEmpty).toList();
+  final tail = lines.length <= 3 ? lines : lines.sublist(lines.length - 3);
+  return tail.isEmpty ? 'no output' : tail.join(' / ').replaceAllMapped(_url, (m) => names.redact(m[0]!));
+}
+
+final _url = RegExp(r'''https?://[^\s'"]+''');
