@@ -101,8 +101,9 @@ bool absolute(String path) => path.startsWith('/') || path.startsWith('\\') || _
 final _drive = RegExp(r'^[A-Za-z]:');
 
 /// The member path [parts] lead to from the root, following every symlink
-/// of the archive ([symlinks], name to target) on the way, as the OS would
-/// once they exist; null when the walk leaves the root or loops.
+/// of the archive ([symlinks], case-folded name to target) on the way, as
+/// a case-folding filesystem would once they exist; null when the walk
+/// leaves the root or loops.
 List<String>? _resolve(List<String> parts, Map<String, String> symlinks, [int depth = 0]) {
   final at = <String>[];
   for (final s in parts) {
@@ -112,7 +113,7 @@ List<String>? _resolve(List<String> parts, Map<String, String> symlinks, [int de
       continue;
     }
     at.add(s);
-    final target = symlinks[at.join('/')];
+    final target = symlinks[at.join('/').toLowerCase()];
     if (target == null) continue;
     if (depth >= 32 || absolute(target)) return null;
     at.removeLast();
@@ -129,7 +130,9 @@ List<String>? _resolve(List<String> parts, Map<String, String> symlinks, [int de
 /// symlink must resolve inside the root through the archive's own links
 /// (its target is kept as written); a hardlink must name a file of the
 /// archive and lands as a copy of it, with its mode ([modes]) and mtime.
-/// Anything else fails by name before the first link is made. A link never
+/// Anything else fails by name before the first link is made, and a placed
+/// symlink the OS resolves outside [tmp] (a filesystem folding case or
+/// Unicode normalisation) fails once they are in. A link never
 /// replaces a member, and nothing is placed through a link. Returns the
 /// modes of the copies. Shared by every format, and by any extractor that
 /// fills [tmp] itself.
@@ -137,7 +140,7 @@ Modes placeLinks(String tmp, List<Link> links, Modes modes) {
   if (links.isEmpty) return const [];
   final symlinks = {
     for (final l in links)
-      if (!l.hard) segments(l.name).join('/'): l.target,
+      if (!l.hard) segments(l.name).join('/').toLowerCase(): l.target,
   };
   final Modes out = [];
   final planned = <(Link, String, List<String>)>[];
@@ -185,7 +188,32 @@ Modes placeLinks(String tmp, List<Link> links, Modes modes) {
       out.add((dest, modeOf[src] ?? 0, false));
     }
   }
+  // The OS has the last word: a filesystem that folds Unicode
+  // normalisation (or case, past the walk above) can resolve a link
+  // elsewhere than its spelling says.
+  final root = io.Directory(tmp).resolveSymbolicLinksSync();
+  for (final (l, dest, _) in planned) {
+    if (l.hard) continue;
+    final real = _real(p.join(p.dirname(dest), l.target));
+    if (real != root && !p.isWithin(root, real)) {
+      throw ContentException('archive link points outside the folder: ${l.name} -> ${l.target}');
+    }
+  }
   return out;
+}
+
+/// [path] as the OS resolves it: its longest existing prefix through
+/// every link, the rest (not there yet) normalised as written.
+String _real(String path) {
+  final tail = <String>[];
+  for (var head = path;; head = p.dirname(head)) {
+    try {
+      return p.normalize(p.joinAll([io.File(head).resolveSymbolicLinksSync(), ...tail.reversed]));
+    } on io.FileSystemException {
+      if (p.dirname(head) == head) rethrow;
+      tail.add(p.basename(head));
+    }
+  }
 }
 
 final _badPart = RegExp(r'[<>:"|?*\x00-\x1f]');

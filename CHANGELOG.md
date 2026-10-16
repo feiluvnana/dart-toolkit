@@ -30,6 +30,10 @@
 - `fs`: `Link.resolve()` is null only for a broken link (missing target, a loop); a permission error throws instead of reading as broken.
 - `chrome`: a DevTools reply that does not parse fails its call with a `BrowserException` instead of leaving it pending forever, and malformed UTF-8 in a reply is replaced rather than dropping the message.
 
+**Security**
+
+- `archive`: an archive's symlinks can no longer reach outside the target folder on a filesystem that folds case or Unicode normalisation (APFS, NTFS): links are matched case-folded, and every placed symlink is resolved by the OS and refused if it lands outside.
+
 **Performance**
 
 - `yaml`: quoted scalars are copied a run at a time instead of a character at a time: a 3.9 MB quoted value 93 → 8 ms, as fast as a plain one.

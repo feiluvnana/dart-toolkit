@@ -1571,6 +1571,29 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
       );
     });
 
+    test('S1: a link the filesystem folds (case, NFC/NFD) onto another cannot reach past the folder', () async {
+      if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
+      // A pax header carrying a UTF-8 path, then the link itself.
+      List<int> link(String name, String target) {
+        final body = utf8.encode(' path=$name\n');
+        var n = body.length + 1;
+        while ('$n'.length + body.length != n) {
+          n = '$n'.length + body.length;
+        }
+        final pax = [...'$n'.codeUnits, ...body];
+        return [..._tarBlock('PaxHeader', pax.length, 0x78), ..._tarBody(pax), ..._tarLink('x', target)];
+      }
+
+      final cases = {
+        'case': [link('A', '.'), link('up', 'a/..')],
+        if (Platform.isMacOS) 'nfd': [link('\u00e9', '.'), link('up', 'e\u0301/..')],
+      };
+      for (final MapEntry(key: name, value: members) in cases.entries) {
+        await expectLater(Archive.unarchive(p(name)).consume(Stream.value(tarOf(members))), throwsFormatException, reason: name);
+        expect(await Fs.entry(p(name)), isNull, reason: name);
+      }
+    });
+
     test('our tar, zip and 7z store links inside dir and refuse ones outside', () async {
       if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       await Fs.file(p('src/lib/a.txt')).write('a');
