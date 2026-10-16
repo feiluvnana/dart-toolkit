@@ -93,6 +93,66 @@ void main() {
     expect(await io.File('$good/bin/tool').readAsString(), contains('echo hi'));
   });
 
+  // Children with their own HOME and a PATH without 7-Zip; a loopback
+  // HTTPS_PROXY that refuses every tunnel stands in for the network.
+  group('T3: the pinned tool download', () {
+    late String pinned;
+    late Map<String, String> env;
+    setUp(() async {
+      final home = (await fresh('home-${DateTime.now().microsecondsSinceEpoch}')).path;
+      final caches = Platform.isMacOS ? '$home/Library/Caches' : '$home/.cache';
+      pinned = '$caches/dart_toolkit/7zip-26.04/7zz';
+      await Directory('$caches/dart_toolkit/7zip-26.04').create(recursive: true);
+      final refuse = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(refuse.close);
+      refuse.listen((s) => s
+        ..write('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n')
+        ..close());
+      env = {'HOME': home, 'XDG_CACHE_HOME': '', 'PATH': '/usr/bin:/bin', 'HTTPS_PROXY': 'http://127.0.0.1:${refuse.port}'};
+    });
+
+    test('a process waiting on the lock takes the binary the holder placed', () async {
+      final lock = await io.File('${io.File(pinned).parent.path}/.lock').open(mode: FileMode.append);
+      await lock.lock(FileLock.exclusive);
+      final child = await startDart('''
+import 'package:dart_toolkit/src/tool.dart';
+Future<void> main() async {
+  print('start');
+  final sw = Stopwatch()..start();
+  print('got \${await tool(Tool.sevenzip)} after \${sw.elapsedMilliseconds}');
+}
+''', env: env);
+      final lines = linesOf(child);
+      await lines.firstWhere((l) => l == 'start').timeout(const Duration(seconds: 30));
+      await Future<void>.delayed(const Duration(seconds: 1)); // the child blocks on the lock
+      await io.File(pinned).writeAsString('placed');
+      await lock.close(); // releases the lock
+      final got = await lines.firstWhere((l) => l.startsWith('got ')).timeout(const Duration(seconds: 30));
+      expect(got, startsWith('got $pinned after '));
+      expect(int.parse(got.split(' ').last), greaterThanOrEqualTo(900), reason: 'it waited for the lock');
+      expect(await child.exitCode, 0);
+    }, testOn: '!windows');
+
+    test('a failed download leaves no temp folder and is not remembered', () async {
+      final r = await runDart('''
+import 'dart:io';
+import 'package:dart_toolkit/src/tool.dart';
+Future<void> main(List<String> args) async {
+  try {
+    await tool(Tool.sevenzip);
+    print('no failure');
+  } on Exception catch (e) {
+    print('failed: \${'\$e'.contains('download failed')}');
+  }
+  print('temps: \${File(args[0]).parent.listSync().where((e) => e.path.contains('.dl-')).length}');
+  File(args[0]).writeAsStringSync('placed');
+  print('then \${await tool(Tool.sevenzip)}');
+}
+''', args: [pinned], env: env, timeout: const Duration(seconds: 60));
+      expect(r.stdout, 'failed: true\ntemps: 0\nthen $pinned\n', reason: '${r.stderr}');
+    }, testOn: '!windows', tags: 'slow');
+  });
+
   test('P1: no HOME is an error, never a shared temp folder', () async {
     final r = await runDart(
       '''

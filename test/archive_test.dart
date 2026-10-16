@@ -361,7 +361,7 @@ void main() {
         expect((read.done(), read.total()), (size, size), reason: format.name);
         expect(await Fs.file(p('w-${format.name}/b/c.txt')).text(), 'y' * 3000);
       }
-    });
+    }, tags: 'media');
 
     test('our 7z round-trips, with and without a password, and bsdtar reads it', () async {
       await Fs.file(p('src/a.txt')).write('seven ' * 4000);
@@ -389,7 +389,7 @@ void main() {
       await expectLater(Fs.file(p('enc.7z')) > Archive.unarchive(p('o4'), password: 'nope'), throwsFormatException);
       await (Fs.file(p('enc.7z')) > Archive.unarchive(p('o5'), password: 'pw'));
       expect(await Fs.file(p('o5/a.txt')).text(), 'seven ' * 4000);
-    });
+    }, tags: 'media');
 
     test('7-Zip AES archives (data, and header too) open with their password', () async {
       for (final name in ['7z_aes', '7z_aes_header']) {
@@ -540,7 +540,7 @@ void main() {
         expect(await Fs.file(p('out_${format.name}/site/a/b.txt')).text(), 'bee', reason: format.name);
         expect(await Fs.file(p('out_${format.name}/README.md')).text(), 'read me', reason: format.name);
       }
-    });
+    }, tags: 'media');
 
     test('an entry outside from is an ArgumentError; a missing one fails when read', () async {
       await seed();
@@ -635,7 +635,7 @@ void main() {
         expect(await Fs.dir(p('eout')).exists(), isTrue);
         await Fs.dir(p('eout')).delete();
       }
-    });
+    }, tags: 'media');
 
     test('F13: gzip data that is not a tar fails clearly', () async {
       await Fs.file(p('plain.txt')).write('just text, not a tar');
@@ -1514,7 +1514,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.tar).bytes(),
         refused('outside dir'),
       );
-    });
+    }, tags: 'media');
 
     test('zips with symlinks (zip -y) unpack the link', () async {
       if (!await has('zip')) return markTestSkipped('needs zip');
@@ -1546,7 +1546,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         final listing = await Process.run('bsdtar', ['-tvf', p('t.7z')]);
         expect('${listing.stdout}', contains('2001'));
       }
-    });
+    }, tags: 'media');
 
     test('B9: a source that fails mid .tar.bz2 keeps its error, not "corrupt archive"', () async {
       if (Platform.isWindows || !await has('bzip2')) return markTestSkipped('needs bzip2');
@@ -1559,7 +1559,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         _Dropped(bytes.sublist(0, bytes.length ~/ 2)) > Archive.unarchive(p('out')),
         throwsA(isA<SocketException>()),
       );
-    });
+    }, tags: 'media');
 
     test('7-Zip reads .tar.bz2, .tar.zst and ar for us', () async {
       if (Platform.isWindows) return markTestSkipped("Windows' 7zr reads 7z only");
@@ -1577,7 +1577,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
           '${pad('a.txt/', 16)}${pad('0', 12)}${pad('0', 6)}${pad('0', 6)}${pad('100644', 8)}${pad('5', 10)}`\n';
       await (Reader.of(ascii.encode('!<arch>\n${header}hello\n')) > Archive.unarchive(p('out-ar')));
       expect(await Fs.file(p('out-ar/a.txt')).text(), 'hello');
-    });
+    }, tags: 'media');
 
     test('7z bigger than the in-memory limit goes through 7-Zip; a 7z write is LZMA2', () async {
       // Incompressible, so the archive itself passes 32 MiB.
@@ -1601,7 +1601,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         final listing = await Process.run('7zz', ['l', '-slt', p('big.7z')]);
         expect('${listing.stdout}', contains('LZMA2'));
       }
-    });
+    }, tags: 'media');
 
     test('unsupported formats are named, and xz holding no tar says so', () async {
       // bzip2 and zstd go to 7-Zip, which names the broken stream.
@@ -1627,7 +1627,7 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
           .catchError((_) => <int>[]);
       if (xzBytes.isEmpty) return markTestSkipped('needs xz');
       await expectLater(Reader.of(xzBytes) > Archive.unarchive(p('x')), refused('xz data is not a tar'));
-    });
+    }, tags: 'media');
 
     test('an AppleDouble member is dropped however its first bytes are chunked', () async {
       final ad = [0, 5, 0x16, 7, 0, 2, 0, 0];
@@ -1757,7 +1757,6 @@ if (ProcessInfo.maxRss - before > (60 << 20)) throw 'rss \${ProcessInfo.maxRss -
         expect('${r.stdout}', contains('70000 files'));
       }
     });
-
   });
 }
 
