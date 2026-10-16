@@ -14,7 +14,8 @@ import 'resume.dart' show PassThrough;
 /// [ContentException] before the writer commits, so
 /// `http.get(u) | HashUtils.sha256(expect: sum) > Archive.unarchive('opt')`
 /// never unpacks a bad download. It is checked when a run ends (`>`, `|`,
-/// `of`); `hex()` alone does not check.
+/// `of`); `hex()` alone does not check. An [expect] that is not hex of the
+/// digest's length (an md5 for sha256, a typo) is an [ArgumentError] at once.
 ///
 /// With [key] the hasher is an HMAC (RFC 2104) over that secret:
 /// `HashUtils.sha256(key: utf8.encode(secret)).add(payload).hex()` checks a
@@ -55,13 +56,27 @@ enum _State {
 final class Hasher with Writer implements Pipe, PassThrough {
   Hasher._(c.Hash hash, String name, String? expect, List<int>? key)
     : _name = key == null ? name : 'hmac-$name',
-      _expect = expect?.trim().toLowerCase(),
+      _expect = _digest(expect, name),
       _capture = _DigestCapture() {
     _in = key == null ? hash.startChunkedConversion(_capture) : c.Hmac(hash, key).startChunkedConversion(_capture);
   }
 
   final String _name;
   final String? _expect;
+
+  static const _hexLength = {'md5': 32, 'sha256': 64};
+
+  /// [expect] lower-cased, or an [ArgumentError] unless it is hex of
+  /// [name]'s digest length.
+  static String? _digest(String? expect, String name) {
+    if (expect == null) return null;
+    final hex = expect.trim().toLowerCase();
+    final n = _hexLength[name]!;
+    if (hex.length != n || !RegExp(r'^[0-9a-f]+$').hasMatch(hex)) {
+      throw ArgumentError.value(expect, 'expect', 'is not a $name digest ($n hex digits)');
+    }
+    return hex;
+  }
   final _DigestCapture _capture;
   late final ByteConversionSink _in;
   var _state = _State.idle;

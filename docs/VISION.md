@@ -161,6 +161,7 @@ abstract final class HashUtils { static Hasher md5({String? expect, List<int>? k
   static Hasher sha1();  static Hasher sha512(); }   // key: = HMAC
 final class Hasher with Writer implements Pipe { Hasher add(String text);  Hasher addBytes(List<int> data);  String hex();  List<int> bytes(); }
 // expect: (hex) fails the run at its end, before the writer commits: http.get(u) | HashUtils.sha256(expect: sum) > Archive.unarchive('opt')
+// an expect: that is not hex of the digest's length is an ArgumentError when the hasher is made
 ```
 
 - One type has three uses. Incremental: `h.add(a).add(b).hex()`. As a writer: `r > h`. As a

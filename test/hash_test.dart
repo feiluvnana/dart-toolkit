@@ -67,6 +67,13 @@ void main() {
       expect(read.hex(), abc);
     });
 
+    test('E10: an expect: that is not hex of the digest length is an ArgumentError at once', () {
+      expect(() => HashUtils.sha256(expect: 'not a digest'), throwsArgumentError);
+      expect(() => HashUtils.sha256(expect: 'd41d8cd98f00b204e9800998ecf8427e'), throwsArgumentError); // an md5
+      expect(() => HashUtils.md5(expect: 'z' * 32), throwsArgumentError);
+      HashUtils.md5(expect: ' D41D8CD98F00B204E9800998ECF8427E ');
+    });
+
     test('a matching expect: passes through; a mismatch never lands', () async {
       final ok = Fs.file('${tmp.path}/ok');
       await (Reader.of(utf8.encode('abc')) | HashUtils.sha256(expect: abc.toUpperCase()) > ok);
