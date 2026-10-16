@@ -287,6 +287,34 @@ void main() {
       expect(burst, 'pick=blue');
     }, timeout: const Timeout(Duration(seconds: 120)));
 
+    test('M7: interactive pick: arrows move, space ticks, a ticks all, enter returns; escape gives or', () async {
+      // green starts ticked and under the cursor: down, tick blue, enter.
+      expect(
+        await _ptyChoose(mode: 'pick', ready: 'cyan', feeds: const [(1.5, r'\x1b[B'), (2.0, ' '), (2.5, r'\x0d')]),
+        'picked=green,blue',
+      );
+      // untick green, tick red above it.
+      expect(
+        await _ptyChoose(
+          mode: 'pick',
+          ready: 'cyan',
+          feeds: const [(1.5, ' '), (2.0, r'\x1b[A'), (2.5, ' '), (3.0, r'\x0d')],
+        ),
+        'picked=red',
+      );
+      expect(
+        await _ptyChoose(mode: 'pick', ready: 'cyan', feeds: const [(1.5, 'a'), (2.0, r'\x0d')]),
+        'picked=red,green,blue,cyan',
+      );
+      expect(await _ptyChoose(mode: 'pick', ready: 'cyan', feeds: const [(1.5, ' '), (2.0, r'\x1b')]), 'picked=green');
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('M7: pick under TERM=dumb reads numbers and ranges', () async {
+      final out = await _pty(['pick'], feeds: [r'1,3-4\x0d'], env: {'TERM': 'dumb'}, ready: 'cyan');
+      expect(out.$2, 'picked=red,blue,cyan');
+      expect(out.$1, isNot(contains('\x1b[')), reason: out.$1);
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
     test('P8: choose under TERM=dumb is the numbered list; under LC_ALL=C its hint is ASCII', () async {
       final root = Directory.current;
       Future<(String, String)> run(Map<String, String> env, List<String> feeds) async {
@@ -375,6 +403,10 @@ void main() {
       }
 
       expect(await run(['choose'], '2\n'), contains('pick=green'));
+      expect(await run(['pick'], '4 1\n'), contains('picked=red,cyan'));
+      expect(await run(['pick'], 'x\n2-9\n3\n'), contains('picked=blue'), reason: 're-asks until the line reads');
+      expect(await run(['pick'], '\n'), contains('picked=green'), reason: 'an empty line keeps or');
+      expect(await run(['pick'], ''), contains('picked=green'), reason: 'a closed stdin gives or');
       expect(await run(['ask'], 'hello\n'), contains('answer=hello'));
       expect(await run(['secret'], 's3cret\n'), contains('secret=s3cret'));
       // H16: CRLF is one line break, also across two prompts.
@@ -448,8 +480,39 @@ Future<String> _ptyBar({required int cols, String mode = 'bar', Map<String, Stri
   return utf8.decode(res.stdout as List<int>, allowMalformed: true);
 }
 
+/// Run a probe [mode] under a pty with [feeds] (1 s apart, from the first
+/// draw that shows [ready]); return its output and log line.
+Future<(String, String)> _pty(
+  List<String> mode, {
+  required List<String> feeds,
+  required String ready,
+  Map<String, String>? env,
+}) async {
+  final root = Directory.current;
+  final log = tempFile('probe-pty.log');
+  final res = await Process.run(
+    'python3',
+    [
+      '${root.path}/test/console_pty/drive.py',
+      '--size', '24', '80', //
+      '--ready', ready,
+      for (final f in feeds) ...['--feed', '1.0', f],
+      '--',
+      Platform.resolvedExecutable,
+      '${root.path}/test/console_pty/probe.dart',
+      log.path,
+      ...mode,
+    ],
+    workingDirectory: root.path,
+    stdoutEncoding: null,
+    environment: {'LANG': 'en_US.UTF-8', ...?env},
+  );
+  if (res.exitCode != 0) fail('pty driver failed: ${res.stderr}');
+  return (utf8.decode(res.stdout as List<int>, allowMalformed: true), (await log.readAsString()).trim());
+}
+
 /// Run the choose probe under a pty with key feeds; return the log line.
-Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
+Future<String> _ptyChoose({required List<(double, String)> feeds, String mode = 'choose', String ready = 'blue'}) async {
   final root = Directory.current;
   final log = tempFile('console-pty.log');
   final res = await Process.run(
@@ -458,10 +521,10 @@ Future<String> _ptyChoose({required List<(double, String)> feeds}) async {
       '${root.path}/test/console_pty/drive.py',
       '--size', '24', '80',
       // Feeds count from the menu's first draw, not from the process start.
-      '--ready', 'blue',
+      '--ready', ready,
       for (final (delay, bytes) in feeds) ...['--feed', '$delay', bytes],
       '--', Platform.resolvedExecutable,
-      '${root.path}/test/console_pty/probe.dart', log.path, 'choose',
+      '${root.path}/test/console_pty/probe.dart', log.path, mode,
     ],
     workingDirectory: root.path,
     stdoutEncoding: null,

@@ -4,6 +4,7 @@
 // Modes: bar | choose | ask | secret
 //   bar:    a 100-item bar with a long label under the pty, then close.
 //   choose: interactive choose of [red, green, blue]; writes the pick.
+//   pick:   multi-select of [red, green, blue, cyan], green ticked; writes the picks.
 //   stack:  a bar and two spinners live at once.
 //   narrow: two bars live while the test halves the terminal width.
 //   orphan-exit|crash|cancel: start the tty reader, print its pid, then
@@ -125,6 +126,9 @@ Future<void> main(List<String> args) async {
     case 'choose':
       final pick = await Console.choose('Pick', ['red', 'green', 'blue'], (s) => s, or: 'red');
       await log.writeAsString('pick=$pick\n');
+    case 'pick':
+      final picked = await Console.pick('Pick', ['red', 'green', 'blue', 'cyan'], (s) => s, or: ['green']);
+      await log.writeAsString('picked=${picked.join(',')}\n');
     case 'ask':
       final answer = await Console.ask('Name?');
       await log.writeAsString('answer=$answer\n');

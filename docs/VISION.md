@@ -243,7 +243,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `archive` | `Archive.archive` `unarchive` `gzip` `gunzip` · `ArchiveFormat`                                                                                                                                                                                                                                                                                                                                               | `dart:io` (in-house zip, tar)       |
 | `pool`    | `Pool.map` `settle` · `Pool(limit:)` `run` (a `Task`) · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
-| `console` | `Console.ask` `confirm` `choose` `key` `bar` `log` `logged` `table` `notify` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
+| `console` | `Console.ask` `confirm` `choose` `pick` `key` `bar` `log` `logged` `table` `notify` `out` `input` · `Bar` `update`                                                                                                                                                                                                                                                                         | in-house                            |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`, `bars`, `log`) · `Color` · `Style` · `Meter` (core's)                                                                                                                                                                                                                                                       | in-house                            |
 | `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
 | `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `format` `codec` `audioCodec` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
@@ -818,6 +818,7 @@ abstract final class Console {
   static Future<String> ask(String question, {bool secret = false, String or = '', Duration? timeout}); // empty, EOF, timeout: or
   static Future<bool> confirm(String question, {bool or = false, Duration? timeout});
   static Future<T?> choose<T>(String question, List<T> items, String Function(T item) label, {T? or, Duration? timeout});   // Escape: or (null without one)
+  static Future<List<T>> pick<T>(String question, List<T> items, String Function(T item) label, {List<T> or = const [], Duration? timeout});   // ticked, in item order; Escape: or
   static Future<String> key(String prompt, {String? or, Duration? timeout});   // '' = no prompt
   static Bar bar(String label, {bool keep = true});   // a probe: work & Console.bar('build'); keep: false vanishes when done
   static Writer out();  static Reader input();                    // our stdout and stdin, so a script can be a filter
@@ -839,6 +840,9 @@ final class Bar with Probe implements Closeable { Bar update(int done, int? tota
   line also gives `ask` its `or`. The hint shows it: `Name? [Ada]`, `Sure? [y/N]`.
 - `confirm` takes y/yes/n/no, and Enter gives `or`. On a terminal, `choose` uses the arrow keys,
   scrolling when the choices outnumber the rows. Piped, it reads a number.
+- `pick` is the checkbox list: `or` starts ticked; on a terminal the arrows move, Space ticks, `a`
+  ticks all (or none) and Enter returns the ticked items in item order. Piped or `TERM=dumb`, it
+  reads numbers and ranges (`1,3`, `2-4`, `1 3 5`) and an empty line keeps `or`.
 - **Every prompt takes `or:` and `timeout:`**: no answer in time gives `or`, and the reader stops,
   so an unattended script never hangs on a `confirm`.
 - **Live lines** (any number of bars at once, stacked one row each; a finished one
@@ -977,7 +981,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 - **Console inside the Tui.** While `run` is active, `Console.bar` (and a probe on any work) draws in the screen's
   `bars()` region, a row each, and `Console.log` in its `log()` region; a screen that draws neither
   keeps them in the status row (several bars at once). A script watches work the same way with and
-  without a Tui, and without a terminal both print. `Console.ask`/`confirm`/`choose` open a modal popup, where
+  without a Tui, and without a terminal both print. `Console.ask`/`confirm`/`choose`/`pick` open a modal popup, where
   `escape` answers like a closed stdin.
 - **Drawing.**
   - `write` wraps at the edge, `\n` breaks, `\t` expands, controls show as `�`, and text past the

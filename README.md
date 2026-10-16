@@ -62,7 +62,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:, terminal:)` (a `Task`; `.check()`; `terminal: true` gives the child our tty), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `isolates:`, held `Pool(limit:).run(job)` lanes (a `Task` too) |
 | `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest` (`Opt<DateTime>` takes `7d` as a week ago), `min:`/`max:`, subcommands, `env:`, `version:`, suggestions |
-| `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify`, `out()`/`input()` for stdout/stdin |
+| `console` | prompts and progress | `ask` `confirm` `choose` `pick` (multi-select) `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify`, `out()`/`input()` for stdout/stdin |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, `bars()` and `log()` panes for Console's bars and log, mouse, markdown, ASCII and no-colour fallbacks |
 | `image` | read, resize, crop, encode, compress | ffmpeg engine: HEIC/AVIF/WebP, EXIF kept |
 | `video` | probe, remux, encode, trim, frames, compress | h264/h265/AV1/VP9, HLS/DASH, encodes a probe watches in media time; pinned FFmpeg |

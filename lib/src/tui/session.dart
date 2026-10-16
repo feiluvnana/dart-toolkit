@@ -548,6 +548,15 @@ final class _Session<S> implements term.TuiBridge {
     return _open(p, p.done, timeout);
   }
 
+  @override
+  Future<List<int>?> promptPick(String question, List<String> choices, Set<int> initial, {Duration? timeout}) {
+    if (choices.isEmpty) {
+      throw ArgumentError.value(choices, 'choices', 'must not be empty');
+    }
+    final p = _Choose(question, choices, initial.isEmpty ? 0 : initial.reduce(math.min), marked: {...initial});
+    return _open(p, p.picks, timeout);
+  }
+
   /// Show prompt [p]; after [timeout] with no answer it closes like Escape.
   Future<T?> _open<T>(_Prompt p, Completer<T?> done, Duration? timeout) {
     if (_done || _quitFlag) p.cancel(); // after quit: no screen to answer on

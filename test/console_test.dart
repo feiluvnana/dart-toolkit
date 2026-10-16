@@ -160,6 +160,13 @@ void main() => Console.table([['\x1b[32mok\x1b[0m', 'a'], ['x\ty', 'b'], ['long'
     });
   });
 
+  group('Console.pick', () {
+    test('empty items or an or: that is not all items is an ArgumentError', () {
+      expect(Console.pick('Pick', <String>[], (s) => s), throwsArgumentError);
+      expect(Console.pick('Pick', ['a', 'b'], (s) => s, or: ['a', 'z']), throwsArgumentError);
+    });
+  });
+
   test('confirm on stdin from /dev/null gives its default instead of hanging', () async {
     final dir = await Directory.systemTemp.createTemp('devnull');
     addTearDown(() => dir.delete(recursive: true));

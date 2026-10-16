@@ -12,7 +12,7 @@ typedef BarState = ({String? label, int done, int? total, Unit unit, double rate
 
 /// Console-in-Tui routing: while a state-driven [Tui.run] is active,
 /// `Console.bar` draws in the status row (several at once) and
-/// `ask`/`confirm`/`choose` open modal popups. The active session publishes
+/// `ask`/`confirm`/`choose`/`pick` open modal popups. The active session publishes
 /// itself here; `console.dart` delegates when it is non-null.
 abstract class TuiBridge {
   static TuiBridge? current;
@@ -31,6 +31,9 @@ abstract class TuiBridge {
   Future<String?> promptAsk(String question, {required bool secret, Duration? timeout});
   Future<bool?> promptConfirm(String question, bool or, {Duration? timeout});
   Future<String?> promptChoose(String question, List<String> choices, int initial, {Duration? timeout});
+
+  /// The indexes ticked when Enter closes the checkbox popup.
+  Future<List<int>?> promptPick(String question, List<String> choices, Set<int> initial, {Duration? timeout});
 }
 
 

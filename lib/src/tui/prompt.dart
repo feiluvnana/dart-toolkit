@@ -43,17 +43,27 @@ final class _Confirm extends _Typed {
   Completer<Object?> get _done => done;
 }
 
+/// `choose` (one row) or, with [marked], `pick` (Space ticks rows).
 final class _Choose extends _Prompt {
-  _Choose(super.question, this.choices, int initial)
+  _Choose(super.question, this.choices, int initial, {this.marked})
     : pick = Pick<int>()
         ..set(List<int>.generate(choices.length, (k) => k))
         ..select(initial);
 
   final List<String> choices;
   final Pick<int> pick;
+
+  /// The ticked rows of a `pick`; null for a `choose`.
+  final Set<int>? marked;
   final done = Completer<String?>();
+  final picks = Completer<List<int>?>();
   @override
-  Completer<Object?> get _done => done;
+  Completer<Object?> get _done => marked == null ? done : picks;
+
+  void toggle(int k) {
+    final m = marked!;
+    if (!m.remove(k)) m.add(k);
+  }
 
   /// First visible choice, rows shown, screen row of the first.
   int start = 0, shown = 0, top = 0;
@@ -77,6 +87,14 @@ extension on _Session<dynamic> {
             p.pick.select(0);
           case 'end':
             p.pick.select(n - 1);
+          case 'space' when p.marked != null:
+            p.toggle(p.pick.index());
+          case 'a' || 'A' when p.marked != null:
+            final m = p.marked!;
+            m.length == n ? m.clear() : m.addAll(List.generate(n, (k) => k));
+          case 'enter' when p.marked != null:
+            _prompts.remove(p);
+            if (!p.picks.isCompleted) p.picks.complete(p.marked!.toList()..sort());
           case 'enter':
             _prompts.remove(p);
             if (!p.done.isCompleted) {
@@ -161,11 +179,13 @@ extension on _Session<dynamic> {
     }
   }
 
-  /// Route typed text to the topmost prompt (ask/confirm only).
+  /// Route typed text to the topmost prompt: ask/confirm type it, a pick
+  /// takes Space and `a` as keys.
   void _promptRouteText(String text, bool paste) {
     if (_prompts.isEmpty) return;
     final p = _prompts.last;
     if (p is _Typed) _promptText(p, text, paste);
+    if (p is _Choose && p.marked != null && !paste) _promptKey(p, text == ' ' ? 'space' : text);
   }
 
   /// Route a mouse event to the topmost prompt. Always consumes (modal).
@@ -177,7 +197,9 @@ extension on _Session<dynamic> {
       final row = y - p.top;
       if (row >= 0 && row < p.shown) {
         p.pick.select(p.start + row);
-        if (kind == 'doubleclick') {
+        if (p.marked != null) {
+          p.toggle(p.start + row); // a click ticks; Enter closes
+        } else if (kind == 'doubleclick') {
           _prompts.remove(p);
           if (!p.done.isCompleted) p.done.complete(p.choices[p.pick.index()]);
         }
@@ -225,10 +247,17 @@ extension on _Session<dynamic> {
       if (sel < p.start) p.start = sel;
       if (sel >= p.start + p.shown) p.start = sel - p.shown + 1;
       p.start = p.start.clamp(0, n - p.shown);
+      final m = p.marked;
       for (var k = p.start; k < p.start + p.shown; k++) {
-        lines.add(('${k == sel ? '❯ ' : '  '}${p.choices[k]}', 0));
+        final box = m == null
+            ? ''
+            : m.contains(k)
+            ? (_caps.ascii ? '[x] ' : '◉ ')
+            : (_caps.ascii ? '[ ] ' : '○ ');
+        lines.add(('${k == sel ? '❯ ' : '  '}$box${p.choices[k]}', 0));
       }
       p.top = head; // made absolute once the popup is placed
+      if (m != null) lines.add(('space tick · a all · enter done', _pack(null, null, {Style.dim})));
     } else if (p is _Typed) {
       wrapped(p.question, _pack(null, null, {Style.bold}));
       lines.add(('', 0));

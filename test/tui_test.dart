@@ -1366,6 +1366,55 @@ Future<void> main() async {
     });
   });
 
+  test('M7: pick popup: space and a click tick rows, a ticks all, enter returns, escape gives or', () async {
+    final picks = <List<String>>[];
+    final t = testSession<int>(
+      0,
+      (s, app) => Screen(
+        (r) {},
+        keys: {
+          'p': (
+            '',
+            () async => picks.add(await Console.pick('which?', ['one', 'two', 'three'], (s) => s, or: ['two'])),
+          ),
+        },
+      ),
+      width: 40,
+      height: 12,
+    );
+    Future<void> send(String bytes) async {
+      t.bytes(utf8.encode(bytes));
+      await t.pump();
+    }
+
+    String screen() => [for (var y = 0; y < 12; y++) t.row(y)].join('\n');
+    await t.pump();
+    await send('p');
+    expect(screen(), contains('◉ two'));
+    expect(screen(), contains('○ one'));
+    await send('\x1b[B'); // to three
+    await send(' ');
+    await send('\r');
+    expect(picks.last, ['two', 'three']);
+    await send('p');
+    var y = 0;
+    while (!t.row(y).contains('one')) {
+      y++;
+    }
+    await send('\x1b[<0;${t.row(y).indexOf('one') + 1};${y + 1}M');
+    await send('\r');
+    expect(picks.last, ['one', 'two']);
+    await send('p');
+    await send('a');
+    await send('\r');
+    expect(picks.last, ['one', 'two', 'three']);
+    await send('p');
+    await send(' ');
+    await send('\x1b\x1b'); // a lone ESC waits for more; two read as Escape
+    expect(picks.last, ['two']);
+    t.close();
+  });
+
   group('prompts and ctrl+c', () {
     test('quitting answers open prompts (ask with or, choose with null) so callers finish', () async {
       final log = <String>[];

@@ -9,7 +9,7 @@
 /// ```
 ///
 /// Public surface is exactly: [Console], [Bar].
-/// - `Console.ask/confirm/choose/key/bar/log/logged/table/notify/copy/out/input()`
+/// - `Console.ask/confirm/choose/pick/key/bar/log/logged/table/notify/copy/out/input()`
 ///   prompt, read keys, show progress, print above it or as columns, reach
 ///   the desktop, or read and write the script's own stdin and stdout.
 /// - [Bar] is a [Probe] (attach it with `&`) that supports `update`
@@ -316,6 +316,98 @@ abstract final class Console {
     } on TimeoutException {
       return or;
     }
+  }
+
+  /// Pick any of [items] (a checkbox list), returned in item order. [label]
+  /// names each item as in [choose]; [or] is ticked to begin with (an
+  /// [ArgumentError] unless each is one of [items]) and is what Escape, a
+  /// closed stdin, a cancelled Tui popup and no answer within [timeout] give.
+  ///
+  /// On a terminal with working raw mode, `↑`/`↓` (or `w`/`s`, `j`/`k`) move,
+  /// Space ticks or unticks, `a` ticks all (or none when all are), and Enter
+  /// returns the ticked items. Where raw mode is unavailable (or piped, or
+  /// `TERM=dumb`), a numbered list and a line of numbers and ranges:
+  /// `1,3`, `2-4`, `1 3 5`; an empty line keeps [or]. Empty [items] is an
+  /// [ArgumentError]. While a state-driven `Tui.run` is active, shows as a popup.
+  static Future<List<T>> pick<T>(
+    String question,
+    List<T> items,
+    String Function(T item) label, {
+    List<T> or = const [],
+    Duration? timeout,
+  }) async {
+    if (items.isEmpty) {
+      throw ArgumentError.value(items, 'items', 'must not be empty');
+    }
+    final labels = [for (final item in items) term.plainLabel(label(item))];
+    final ticked = <int>{};
+    for (final item in or) {
+      final at = items.indexOf(item);
+      if (at < 0) throw ArgumentError.value(or, 'or', 'must all be in items');
+      ticked.add(at);
+    }
+    List<T> picked(Iterable<int> at) => [for (final k in at.toSet().toList()..sort()) items[k]];
+    final bridge = term.TuiBridge.current;
+    if (bridge != null) {
+      final at = await bridge.promptPick(question, labels, ticked, timeout: timeout);
+      return at == null ? or : picked(at);
+    }
+    try {
+      return picked(
+        await _parkedFor(() async {
+          if (!term.stdinTty || !io.stderr.hasTerminal || !_animated || !term.rawModeSticks()) {
+            return await _pickNumbered(question, labels, ticked, timeout);
+          }
+          return await _pickInteractive(question, labels, ticked, timeout);
+        }),
+      );
+    } on io.StdinException {
+      return or;
+    } on TimeoutException {
+      return or;
+    }
+  }
+
+  /// Numbered pick: print the list, read numbers and ranges (`1,3 5-7`);
+  /// an empty line keeps [ticked].
+  static Future<Set<int>> _pickNumbered(
+    String question,
+    List<String> labels,
+    Set<int> ticked,
+    Duration? timeout,
+  ) async {
+    final deadline = timeout == null ? null : DateTime.now().add(timeout);
+    term.setLineModes();
+    io.stderr.writeln(term.safeText(question));
+    for (var i = 0; i < labels.length; i++) {
+      io.stderr.writeln('  ${i + 1}. ${labels[i]}');
+    }
+    final kept = ticked.isEmpty ? '' : ', Enter keeps ${[for (final k in ticked.toList()..sort()) k + 1].join(',')}';
+    for (;;) {
+      final left = deadline?.difference(DateTime.now());
+      if (left != null && left <= Duration.zero) throw TimeoutException('no answer', timeout);
+      final line = await _ask('Enter numbers (1,3 or 2-4$kept):', secret: false, timeout: left);
+      if (line == null) throw const io.StdinException('stdin is closed');
+      if (line.trim().isEmpty) return ticked;
+      final at = _numbers(line, labels.length);
+      if (at != null) return at;
+    }
+  }
+
+  /// `1,3 5-7` as zero-based indexes below [n], or null when any part is
+  /// not a number or range within 1..[n].
+  static Set<int>? _numbers(String line, int n) {
+    final out = <int>{};
+    for (final part in line.trim().split(RegExp(r'[\s,]+'))) {
+      final range = RegExp(r'^(\d+)(?:-(\d+))?$').firstMatch(part);
+      if (range == null) return null;
+      final from = int.parse(range[1]!), to = int.parse(range[2] ?? range[1]!);
+      if (from < 1 || to > n || from > to) return null;
+      for (var k = from; k <= to; k++) {
+        out.add(k - 1);
+      }
+    }
+    return out;
   }
 
   /// Numbered choose: print the list, read a number. Used piped and
@@ -691,6 +783,59 @@ abstract final class Console {
     });
   }
 
+  static Future<Set<int>> _pickInteractive(
+    String question,
+    List<String> labels,
+    Set<int> ticked,
+    Duration? timeout,
+  ) async {
+    final marked = {...ticked};
+    var current = ticked.isEmpty ? 0 : (ticked.toList()..sort()).first;
+    final n = labels.length;
+    return _withKeys(timeout: timeout, (found) async {
+      var painted = const <int>[];
+      io.stderr.writeln(_emph(term.safeText(question)));
+      for (;;) {
+        painted = _paintChoices(labels, current, painted, marked: marked);
+        final keyName = await found.nextKey();
+        if (keyName == null) {
+          throw const io.StdinException('stdin is closed');
+        }
+        switch (keyName) {
+          case 'up' || 'w' || 'W' || 'k' || 'K' || 'wheelup':
+            current = (current - 1 + n) % n;
+          case 'down' || 's' || 'S' || 'j' || 'J' || 'wheeldown':
+            current = (current + 1) % n;
+          case 'home':
+            current = 0;
+          case 'end':
+            current = n - 1;
+          case 'pageup':
+            current = (current - 10).clamp(0, n - 1);
+          case 'pagedown':
+            current = (current + 10).clamp(0, n - 1);
+          case 'space' || ' ':
+            if (!marked.remove(current)) marked.add(current);
+          case 'a' || 'A':
+            if (marked.length == n) {
+              marked.clear();
+            } else {
+              marked.addAll(List.generate(n, (k) => k));
+            }
+          case 'enter':
+            io.stderr.writeln();
+            return marked;
+          case 'escape':
+            io.stderr.writeln();
+            return ticked;
+          default:
+            final k = int.tryParse(keyName);
+            if (k != null && k >= 1 && k <= 9 && k <= n) current = k - 1;
+        }
+      }
+    });
+  }
+
   /// Run [body] with stdin in raw mode (no echo, no line buffering) and the
   /// terminal-restore hook armed; restores the terminal modes afterwards.
   /// Shared by the interactive [choose] menu and [key]. Signals run
@@ -735,7 +880,7 @@ abstract final class Console {
   /// each choice cut to fit. The selection draws bold.
   /// Returns the cell width of each row painted, for the next repaint's
   /// move-up.
-  static List<int> _paintChoices(List<String> choices, int selected, List<int> painted) {
+  static List<int> _paintChoices(List<String> choices, int selected, List<int> painted, {Set<int>? marked}) {
     final cols = _columns();
     final lines = _lines();
     final rows = lines - 3; // question, hint, and a spare row
@@ -748,8 +893,13 @@ abstract final class Console {
     final widths = <int>[];
     for (var r = 0; r < visible; r++) {
       final current = start + r == selected;
-      final choice = term.truncateWidth(choices[start + r], width);
-      final row = '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
+      final box = marked == null
+          ? ''
+          : marked.contains(start + r)
+          ? (_ascii ? ' [x]' : ' ◉')
+          : (_ascii ? ' [ ]' : ' ○');
+      final choice = term.truncateWidth(choices[start + r], (width - box.length).clamp(0, width));
+      final row = '${current ? (_ascii ? '>' : '❯') : ' '}$box${choice.isEmpty ? '' : ' $choice'}';
       widths.add(term.displayWidth(row));
       if (_styled && current) {
         io.stderr.writeln('$_bold$row$_reset\x1b[K');
@@ -757,9 +907,12 @@ abstract final class Console {
         io.stderr.writeln('$row\x1b[K');
       }
     }
-    final hint = _ascii
-        ? 'w/s or arrows move - 1-9 jump - enter select - esc cancel'
-        : 'w/s or ↑↓ move · 1-9 jump · enter select · esc cancel';
+    final hint = switch ((marked != null, _ascii)) {
+      (false, true) => 'w/s or arrows move - 1-9 jump - enter select - esc cancel',
+      (false, false) => 'w/s or ↑↓ move · 1-9 jump · enter select · esc cancel',
+      (true, true) => 'w/s or arrows move - space tick - a all - enter done - esc cancel',
+      (true, false) => 'w/s or ↑↓ move · space tick · a all · enter done · esc cancel',
+    };
     final hintRow = term.truncateWidth(hint, cols > 0 ? cols : hint.length);
     widths.add(term.displayWidth(hintRow));
     if (_styled) {
