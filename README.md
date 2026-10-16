@@ -49,7 +49,7 @@ Future<void> main() async {
 | `yaml` | reading YAML | in-house YAML 1.2 reader, `file.yaml().$('version').text()`: the `json` reading API |
 | `fs` | files and folders | sealed `File`/`Dir`/`Link`, atomic writes, `text(or:)`, `list(match: '**/*.jpg')`, `watch()`, `dir.size()`, `Fs.tempDir`, `file.lock`, `modified()`/`touch(t)`, `Fs.sanitize(name)` |
 | `archive` | zip, tar, tgz, 7z, RAR, bz2/zst, cab/ar/xar | `archive(paths, password:)` (zip and tar stream, 7z via 7-Zip LZMA2), `unarchive(dir)` for zip/tar/tgz/.tar.xz/7z/RAR4/RAR5 in Dart, big or exotic ones via 7-Zip; modes, mtimes and inside links kept |
-| `hash` | md5 … sha512, HMAC | in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `base64()` `bytes()`, `of(reader)` |
+| `hash` | md5 … sha512, HMAC | in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()` |
 | `shell` | programs | `Shell.run(cmd, check:, timeout:, cancel:, onLine:)`, `Shell.which`, `Shell.filter` as a `Pipe`, `Shell.open` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), `retries:` `rate:` `isolates:`, held `Pool(limit:).run(job)` lanes |
 | `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `dotenv:`, `version:`, suggestions |
