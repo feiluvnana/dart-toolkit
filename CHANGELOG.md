@@ -24,6 +24,7 @@
 - `csv`: `Csv.encode` writes a row whose only cell is empty or null as `""`, so `parse` keeps it (it wrote a blank line, which is no row).
 - `html`: a selector that leads with `+` or `~` matches the receiver's later siblings: `h2.$('+ p')` is the paragraph after the heading (it parsed and never matched).
 - `core`: `Cookies.parse` (and `reader.cookies()`) of text that has lines but no `cookies.txt` line (a space-separated paste, a JSON export) is a `ContentException` instead of a silently empty jar.
+- `json`: `value<DateTime>()` reads microsecond and nanosecond epochs (they read as milliseconds: the year 57742).
 
 **Performance**
 

@@ -180,7 +180,7 @@ final class Json extends Iterable<Json> {
   /// JSON array) is an [ArgumentError] in every build mode: that read is
   /// [asList]/[asMap]. The raw shapes (`value<List>()`, `value<Map>()`)
   /// read as they are. A `DateTime` reads an ISO 8601 string or a Unix
-  /// time in seconds or milliseconds (a number or a string of digits), as
+  /// time in s, ms, µs or ns (a number or a string of digits), as
   /// APIs and embedded page data write it.
   T? value<T>() {
     final v = _v;
@@ -508,8 +508,10 @@ final class _MapJsonIterator implements Iterator<Json> {
   Json get current => _current ?? (throw StateError('no current element'));
 }
 
-/// [v] as a time: ISO 8601 text, or Unix seconds or milliseconds (a number,
-/// or digits as text). Below 10^11 it is seconds (until the year 5138).
+/// [v] as a time: ISO 8601 text, or a Unix epoch in seconds, milliseconds,
+/// microseconds or nanoseconds (a number, or digits as text), told apart by
+/// size: below 10^11 seconds (until the year 5138), then ms below 10^14, µs
+/// below 10^17 and ns below 10^19.
 DateTime? _date(Object? v) {
   final n = switch (v) {
     final num n => n,
@@ -517,7 +519,16 @@ DateTime? _date(Object? v) {
     _ => null,
   };
   if (n == null) return v is String ? DateTime.tryParse(v.trim()) : null;
-  final ms = n.abs() < 1e11 ? n * 1000 : n;
+  final size = n.abs();
+  final ms = size < 1e11
+      ? n * 1000
+      : size < 1e14
+      ? n
+      : size < 1e17
+      ? n / 1000
+      : size < 1e19
+      ? n / 1e6
+      : double.infinity;
   // DateTime holds ±8.64e15 ms: past that (a snowflake id) it is not a time.
   if (!ms.isFinite || ms.abs() > 8.64e15) return null;
   return DateTime.fromMillisecondsSinceEpoch(ms.round());

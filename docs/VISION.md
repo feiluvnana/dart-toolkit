@@ -468,7 +468,7 @@ final class Json extends Iterable<Json> {
   T? value<T>();  T or<T>(T fallback);           // typed read, null / the fallback when absent or mistyped
   String? text();                                // any scalar as a String; null for null, a miss, a collection
   List<String> texts();                          // every item's text, misses dropped (as Elements.texts)
-  // value<DateTime>() reads ISO text and Unix seconds or milliseconds
+  // value<DateTime>() reads ISO text and Unix s, ms, µs or ns (told apart by size)
   Json max(num Function(Json item) by);  Json min(num Function(Json item) by);   // a null Json when empty
   List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
