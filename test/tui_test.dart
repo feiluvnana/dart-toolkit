@@ -449,6 +449,12 @@ Future<void> main() async {
       expect(f.text(), '');
     });
 
+    test('E6: a misspelt binding name is an ArgumentError where the map is built', () {
+      expect(() => Screen((r) {}, keys: {'escpae': ('quit', () {})}), throwsArgumentError);
+      expect(() => Screen((r) {}, keys: {'b escpae': ('back', () {})}), throwsArgumentError);
+      Screen((r) {}, keys: {'b escape': ('', () {}), 'ctrl+c': ('', () {}), 'Click': ('', () {}), 'resize': ('', () {})});
+    });
+
     test('a toolkit error shows its message; SDK prefixes are dropped', () async {
       Object toThrow = const ContentException('invalid JSON at 3');
       final t = testSession<int>(

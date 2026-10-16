@@ -18,6 +18,24 @@ const _unbounded = 1 << 20;
 bool _isMouse(String name) => _mouseNames.contains(name);
 bool _isLifecycle(String name) => _lifecycleNames.contains(name);
 
+final _checkedMaps = Expando<bool>('checked bindings');
+
+/// [map] with every binding name checked where it is built: each
+/// alternative is a key (`keys.canonicalize`), a mouse or a lifecycle
+/// event, so a typo (`'escpae'`) is an [ArgumentError] instead of a key
+/// that shows in the help and never fires.
+Map<String, Binding> _checked(Map<String, Binding> map) {
+  if (_checkedMaps[map] == true) return map;
+  for (final name in map.keys) {
+    for (final alt in keys.splitBinding(name)) {
+      final lower = alt.toLowerCase();
+      if (!_isMouse(lower) && !_isLifecycle(lower)) keys.canonicalize(alt);
+    }
+  }
+  _checkedMaps[map] = true;
+  return map;
+}
+
 bool _sameId(Object? a, Object? b) => identical(a, b) || (a is String && b is String && a == b);
 
 /// The app handle handed to `screen` and bindings.
@@ -38,6 +56,7 @@ final class App<S> {
 
 /// One screen description: a draw function plus title, status mode line and
 /// key bindings.
+/// An unknown binding name in [keys] is an [ArgumentError].
 final class Screen {
   // ignore: prefer_initializing_formals – the public arguments keep their names.
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}})
@@ -46,8 +65,7 @@ final class Screen {
       _title = title,
       // ignore: prefer_initializing_formals
       _status = status,
-      // ignore: prefer_initializing_formals
-      _keys = keys;
+      _keys = _checked(keys);
 
   final void Function(Region r) _draw;
   final String? _title;
@@ -578,7 +596,7 @@ final class _Session<S> implements term.TuiBridge {
     bool Function(_Ev ev)? tryKey, {
     Map<String, Binding>? onMap,
   }) {
-    _focusables.add(_F(id, x, y, w, h, order, tryKey, onMap: onMap));
+    _focusables.add(_F(id, x, y, w, h, order, tryKey, onMap: onMap == null ? null : _checked(onMap)));
   }
 
   int _listStart(Object id, int n, int h) => _listStarts[id]?.clamp(0, math.max<int>(0, n - h)) ?? 0;

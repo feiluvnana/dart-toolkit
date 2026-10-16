@@ -921,7 +921,7 @@ enum Style { bold, dim, italic, underline, strike, reverse }
 - **One `Binding` map for every event**, in `Screen(keys:)` and `Region.on`: key names (below, plus
   `shift+enter`/`ctrl+enter` where the terminal reports them), `click` `doubleclick` `rightclick`
   `middleclick` `wheelup` `wheeldown`, and `show` `resize` `focus` `blur`. A name may list
-  alternatives (`'b escape'`). Hover is a reading: `if (r.hovered()) …`. `keys:` is rebuilt with
+  alternatives (`'b escape'`); an unknown name (`'escpae'`) is an `ArgumentError` where the map is built. Hover is a reading: `if (r.hovered()) …`. `keys:` is rebuilt with
   the screen, so collection `if` makes bindings and help depend on the state.
 - **Routing.** A key goes to the first taker: an open popup (a `Console` prompt, a `suggest` list);
   the focused widget or `on` region; `tab`/`shift+tab` moving the focus unless bound; the `Screen`
