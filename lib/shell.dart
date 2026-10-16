@@ -81,10 +81,10 @@ abstract final class Shell {
         e.errorCode,
       );
     }
+    _watch(proc);
     // A SIGINT/SIGTERM/SIGHUP that ends this script ends the child and
     // its descendants too, instead of leaving them orphaned under init.
     final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
-    // Once reaped, its pid may belong to someone else: never signal it then.
     var exited = false;
     unawaited(proc.exitCode.then((_) => exited = true));
     try {
@@ -390,11 +390,18 @@ extension OutputFuture on Future<Output> {
   Future<String> err() async => (await this).err();
 }
 
+/// Which started processes have exited (and been reaped), for [_killTree].
+final _reaped = Expando<bool>();
+
+void _watch(io.Process proc) => unawaited(proc.exitCode.then((_) => _reaped[proc] = true));
+
 /// Signal [proc] and every process below it, deepest first, so a `sh -c`
 /// or a build tool cannot leave grandchildren running under init. The tree
 /// is read before anything dies (an orphan loses its parent link). Windows
 /// has no `ps`: only [proc] is signalled there.
 Future<void> _killTree(io.Process proc, io.ProcessSignal signal) async {
+  // Once reaped, its pid may belong to someone else: never signal it then.
+  if (_reaped[proc] ?? false) return;
   final below = <int>[];
   if (!io.Platform.isWindows) {
     try {
@@ -455,6 +462,7 @@ final class _Filter implements Pipe {
         e.errorCode,
       );
     }
+    _watch(proc);
     // A signal that ends this script ends the child too; the hook goes
     // when the child exits.
     final token = exit.onExit(() => _killTree(proc, io.ProcessSignal.sigterm));
