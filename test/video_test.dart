@@ -217,21 +217,20 @@ void main() {
   group('Video.compress', () {
     test('replaces only when smaller, then keeps the file', () async {
       final path = await make('big.mp4', ['-i', clip, '-c:v', 'libx264', '-crf', '5', '-c:a', 'copy']);
-      final saved = await Video.compress(path, quality: 50);
-      expect(saved, isNotNull);
-      expect(saved!.$2, lessThan(saved.$1));
-      expect(await io.File(path).length(), saved.$2);
+      final saved = await Video.compress(path, quality: 50) as Compressed;
+      expect(saved.after, lessThan(saved.before));
+      expect(await io.File(path).length(), saved.after);
       expect(await Fs.file(path).video().audio(), 'aac');
-      expect(await Video.compress(path, quality: 50), isNull);
+      expect(await Video.compress(path, quality: 50), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller));
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
 
     test('audio-only and non-video files are left alone', () async {
       final audio = await make('only.m4a', ['-i', clip, '-vn', '-c', 'copy']);
-      expect(await Video.compress(audio), isNull);
+      expect(await Video.compress(audio), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.lossy));
       final txt = '${tmp.path}/x.txt';
       await io.File(txt).writeAsString('not a video at all, really not');
-      expect(await Video.compress(txt), isNull);
+      expect(await Video.compress(txt), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.unknown));
     });
   });
 }

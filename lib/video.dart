@@ -8,11 +8,12 @@
 /// await (clip.encode(.mp4, quality: 70, height: 720, start: 10.seconds, onProgress: bar.update)
 ///     > Fs.file('small.mp4'));
 /// await (clip.frame(at: 5.seconds).encode(.jpg) > Fs.file('thumb.jpg'));
-/// final saved = await Video.compress('in.mp4', quality: 70);     // (before, after) or null
+/// final saved = await Video.compress('in.mp4', quality: 70);     // Compressed(before, after) or Kept(reason)
 /// final live = await Video.open('https://…/master.m3u8');        // HLS/DASH, or split video + audio
 /// ```
 ///
-/// Public surface is exactly: [Video], [VideoFormat], [VideoCodec].
+/// Public surface is exactly: [Video], [VideoFormat], [VideoCodec], and
+/// `compress`'s [Compression] ([Compressed] or [Kept] with a [KeptReason]).
 /// - `Reader.video()` reads any reader (a file in place, bytes or a stream
 ///   spooled once), `Video.open()` a path or URL (HLS/DASH manifests, a separate `audio:`).
 /// - `Video.sniff()` names the format from the header bytes.
@@ -33,6 +34,7 @@ import 'src/media.dart' as media;
 import 'src/media_proxy.dart' as proxy;
 
 export 'core.dart';
+export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 
 /// Containers [Video.encode] writes and [Video.sniff] names; `.name` is the
 /// extension. [m4a], [mp3] and [opus] keep the audio only. [avi] is read,
@@ -120,18 +122,18 @@ final class Video {
   /// Re-encode the video at [path] in its own container (h264 for MP4/MOV/
   /// MKV, VP9 for WebM; [codec] overrides) and replace it, atomically, only
   /// when at least 5% smaller. Audio is copied, not re-encoded. Returns
-  /// (bytes before, bytes after), or null when kept: not a video, AVI or
-  /// audio only, or no smaller.
-  static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec}) async {
+  /// [Compressed] with the sizes before and after, or [Kept] with the
+  /// reason: not a video, AVI or audio only, or no smaller.
+  static Future<Compression> compress(String path, {int quality = 70, VideoCodec? codec}) async {
     media.checkQuality(quality);
     final head = await _head(path);
     final format = sniff(head);
-    if (format == null ||
-        const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
-      return null;
+    if (format == null) return const Kept(KeptReason.unknown);
+    if (const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
+      return const Kept(KeptReason.lossy);
     }
     final video = await open(path);
-    if (video._info.width == null) return null;
+    if (video._info.width == null) return const Kept(KeptReason.lossy);
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     try {
       await video._encodeTo(tmp, format, quality: quality, codec: codec);

@@ -92,11 +92,13 @@ final class Queue {
     if (quality == null) return downloaded;
     t.status = 'compressing';
     try {
-      final r = video ? await Video.compress(path, quality: quality) : await Image.compress(path, quality: quality);
-      if (r == null) return '$downloaded (kept: compressing would not make it smaller)';
-      final (before, after) = r;
-      t.part.bytes += after - before;
-      return '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
+      switch (video ? await Video.compress(path, quality: quality) : await Image.compress(path, quality: quality)) {
+        case Kept(:final reason):
+          return '$downloaded (kept: ${reason.text})';
+        case Compressed(:final before, :final after):
+          t.part.bytes += after - before;
+          return '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
+      }
     } on ToolkitException catch (e) {
       return '$downloaded (not compressed: ${e.message})';
     } finally {

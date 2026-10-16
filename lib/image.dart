@@ -4,11 +4,12 @@
 /// ```dart
 /// final photo = await Fs.file('photo.heic').image();          // reads the header, decodes nothing
 /// await (photo.crop(0, 0, 512, 512).resize(width: 256).encode(.webp) > Fs.file('a.webp'));
-/// final saved = await Image.compress('photo.jpg', quality: 80);  // (before, after) or null
+/// final saved = await Image.compress('photo.jpg', quality: 80);  // Compressed(before, after) or Kept(reason)
 /// r.picture(await photo.pixels());                             // draw it in a Tui
 /// ```
 ///
-/// Public surface is exactly: [Image], [ImageFormat].
+/// Public surface is exactly: [Image], [ImageFormat], and `compress`'s
+/// [Compression] ([Compressed] or [Kept] with a [KeptReason]).
 /// - `Reader.image()` reads any reader: a file in place (never copied into
 ///   memory), bytes (`Reader.of(bytes).image()`) or a stream spooled once.
 /// - `Image.sniff()` names the format from the header bytes.
@@ -29,8 +30,10 @@ import 'package:path/path.dart' as p;
 
 import 'core.dart';
 import 'src/media.dart' as media;
+import 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 import 'src/pixels.dart';
 export 'core.dart';
+export 'src/media.dart' show Compression, Compressed, Kept, KeptReason;
 
 /// Images over this many pixels are refused (from the header, before
 /// anything decodes): 16384 × 16384.
@@ -128,22 +131,22 @@ final class Image {
 
   /// Re-encode the image at [path] in its own format and replace it, atomically,
   /// only when the result is at least 5% smaller (so a second run is a no-op
-  /// instead of another generation of loss). Returns (bytes before, bytes after), or
-  /// null when the file is kept: not an image, already smaller, or one a
+  /// instead of another generation of loss). Returns [Compressed] with the
+  /// sizes before and after, or [Kept] with the reason: not an image, one a
   /// re-encode would degrade (animated GIF/WebP/APNG, CMYK JPEG, HEIC, which
-  /// has no encoder). JPEGs keep their EXIF (date, camera; orientation reset)
+  /// has no encoder), or no smaller. JPEGs keep their EXIF (date, camera; orientation reset)
   /// and colour profile; a lossless WebP stays lossless.
-  static Future<(int, int)?> compress(String path, {int quality = 80}) async {
+  static Future<Compression> compress(String path, {int quality = 80}) async {
     media.checkQuality(quality);
     final file = io.File(path);
     final bytes = await file.readAsBytes();
     final format = sniff(bytes);
-    if (format == null ||
-        !const {ImageFormat.jpg, ImageFormat.png, ImageFormat.webp, ImageFormat.avif}.contains(format)) {
-      return null;
+    if (format == null) return const Kept(KeptReason.unknown);
+    if (!const {ImageFormat.jpg, ImageFormat.png, ImageFormat.webp, ImageFormat.avif}.contains(format)) {
+      return const Kept(KeptReason.lossy);
     }
     final h = media.header(bytes);
-    if (h != null && (h.animated || h.components == 4)) return null;
+    if (h != null && (h.animated || h.components == 4)) return const Kept(KeptReason.lossy);
     final image = await _open(path, format, bytes);
     final lossless = format == ImageFormat.webp && _isLosslessWebp(bytes);
     var out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));

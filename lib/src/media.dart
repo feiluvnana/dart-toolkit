@@ -174,18 +174,50 @@ Stream<List<int>> readAndDelete(String path) async* {
   }
 }
 
-/// Replace [path] with [newer] (same folder rename, atomic) only when
-/// [newer] is smaller by at least the fraction [by]; returns
-/// (before, after) or null when kept.
-Future<(int, int)?> replaceIfSmaller(String path, String newer, {double by = 0}) async {
+/// What `Image.compress` and `Video.compress` did to a file.
+sealed class Compression {
+  const Compression();
+}
+
+/// The file was replaced by its re-encode: [before] and [after] bytes.
+final class Compressed extends Compression {
+  const Compressed(this.before, this.after);
+  final int before, after;
+}
+
+/// The file was left as it was, for [reason].
+final class Kept extends Compression {
+  const Kept(this.reason);
+  final KeptReason reason;
+}
+
+/// Why a file was [Kept]; [text] says it in words.
+enum KeptReason {
+  /// Not an image (or a video) this can read.
+  unknown('not a supported image or video'),
+
+  /// Re-encoding would lose something: animation, CMYK, a format with no
+  /// encoder (HEIC, AVI), a file with no picture.
+  lossy('re-encoding would lose something'),
+
+  /// The re-encode was not at least 5% smaller.
+  notSmaller('re-encoding would not make it smaller');
+
+  const KeptReason(this.text);
+  final String text;
+}
+
+/// Replace [path] with [newer] when it is [by] (a fraction) smaller,
+/// else delete [newer].
+Future<Compression> replaceIfSmaller(String path, String newer, {double by = 0}) async {
   final before = await io.File(path).length();
   final after = await io.File(newer).length();
   if (after >= before || after > before * (1 - by)) {
     await io.File(newer).delete().catchError((_) => io.File(newer));
-    return null;
+    return const Kept(KeptReason.notSmaller);
   }
   await io.File(newer).rename(path);
-  return (before, after);
+  return Compressed(before, after);
 }
 
 // ── header facts ──────────────────────────────────────────────────────────

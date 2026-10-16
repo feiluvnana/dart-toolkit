@@ -921,7 +921,7 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
 final class Image {
   static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension
-  static Future<(int, int)?> compress(String path, {int quality = 80});
+  static Future<Compression> compress(String path, {int quality = 80});   // Compressed(before, after) | Kept(reason)
   int width();  int height();  ImageFormat format();
   Image resize({int? width, int? height});  Image crop(int x, int y, int width, int height);
   Reader encode(ImageFormat format, {int quality = 90});
@@ -940,7 +940,8 @@ extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).imag
   `crop` outside the image a `RangeError`. `quality` (1–100) applies to JPEG, WebP and AVIF. `.heic`
   (read only) and `.ico` above 256 px are an `ArgumentError`.
 - `compress` re-encodes a file in its own format and replaces it atomically only when ≥ 5% smaller,
-  returning (before, after); null leaves it alone: not an image, animated, CMYK, HEIC, or no gain. JPEG
+  returning `Compressed(before, after)`; `Kept(reason)` leaves it alone and says why (`KeptReason.unknown`
+  not an image, `.lossy` animated/CMYK/HEIC, `.notSmaller` no gain; `reason.text` in words). JPEG
   EXIF and ICC survive (orientation reset), a lossless WebP stays lossless.
 - `pixels` decodes RGB for `Region.picture`: `r.picture(await img.pixels(width: 80))`.
 
@@ -952,7 +953,7 @@ enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // path or URL, HLS/DASH
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
-  static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec});
+  static Future<Compression> compress(String path, {int quality = 70, VideoCodec? codec});
   int? width();  int? height();  Duration duration();  double fps();
   String? codec();  String? audio();  int? bitrate();
   Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,

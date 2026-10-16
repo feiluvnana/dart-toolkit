@@ -251,13 +251,12 @@ void main() {
       final path = '${tmp.path}/big.jpg';
       final jpeg = await draw('testsrc2=s=640x480', 'jpg', args: ['-q:v', '1']);
       await io.File(path).writeAsBytes(withOrientation(jpeg, 1));
-      final saved = await Image.compress(path, quality: 60);
-      expect(saved, isNotNull);
-      expect(saved!.$2, lessThan(saved.$1));
+      final saved = await Image.compress(path, quality: 60) as Compressed;
+      expect(saved.after, lessThan(saved.before));
       final out = await io.File(path).readAsBytes();
-      expect(out.length, saved.$2);
+      expect(out.length, saved.after);
       expect(latin1.decode(out.sublist(0, 64), allowInvalid: true), contains('Exif'));
-      expect(await Image.compress(path, quality: 60), isNull);
+      expect(await Image.compress(path, quality: 60), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.notSmaller));
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
 
@@ -265,14 +264,14 @@ void main() {
       final gif = '${tmp.path}/anim.gif';
       await media.ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=s=32x32:d=0.5:r=10', '-y', gif]);
       final before = await io.File(gif).readAsBytes();
-      expect(await Image.compress(gif), isNull);
+      expect(await Image.compress(gif), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.lossy));
       expect(await io.File(gif).readAsBytes(), before);
       final txt = '${tmp.path}/a.txt';
       await io.File(txt).writeAsString('hello');
-      expect(await Image.compress(txt), isNull);
+      expect(await Image.compress(txt), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.unknown));
       final heic = '${tmp.path}/x.heic';
       await io.File(heic).writeAsBytes([0, 0, 0, 16, ...'ftypheic'.codeUnits, 0, 0, 0, 0]);
-      expect(await Image.compress(heic), isNull);
+      expect(await Image.compress(heic), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.lossy));
     });
   });
 }
