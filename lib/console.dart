@@ -7,10 +7,9 @@
 /// await Pool.map(urls, fetch, onDone: bar.tick); // closes at its total
 /// ```
 ///
-/// Public surface is exactly: [Console], [Bar], [Speed], [Color].
-/// - `Console.ask/confirm/choose/key/spin/bar/log/table/notify/copy/clear()` prompt,
-///   read keys, show progress, print above it or as columns, or reach the desktop;
-///   `Console.accent` colours live lines.
+/// Public surface is exactly: [Console], [Bar], [Speed].
+/// - `Console.ask/confirm/choose/key/spin/bar/log/table/notify/copy()` prompt,
+///   read keys, show progress, print above it or as columns, or reach the desktop.
 /// - [Bar] supports `tick` `update` (plus [Pipe]/[Closeable]).
 /// - [Speed] supports `add` `rate` (plus [Pipe]): a rate meter for progress
 ///   drawn by hand, as in a Tui.
@@ -30,8 +29,6 @@ import 'src/keys.dart' as keys;
 import 'src/resume.dart' show PassThrough, replays, sizers;
 import 'dart:math' as math;
 import 'src/terminal.dart' as term;
-import 'src/terminal.dart' show Color;
-export 'src/terminal.dart' show Color;
 
 const _bold = '\x1b[1m';
 const _dim = '\x1b[2m';
@@ -39,12 +36,6 @@ const _reset = '\x1b[0m';
 
 /// Entry point: prompts and progress, all on stderr.
 abstract final class Console {
-  /// Colour of live lines (spinners, bars) and the `choose` selection;
-  /// null (default) stays monochrome; e.g. [Color.orange].
-  static Color? accent;
-
-  static String get _accentOn => _styled && accent != null ? '\x1b[38;5;${term.colorCode(accent!)}m' : '';
-
   /// The live lines (spinners, bars) stacked at the bottom, oldest first.
   /// Only used when animated; otherwise each prints one final line.
   static final _lives = <_Live>[];
@@ -253,7 +244,7 @@ abstract final class Console {
   /// On a terminal with working raw mode, `↑`/`↓` arrows (or `w`/`s`, `j`/`k`
   /// where arrows don't reach, e.g. Windows consoles where arrow keys never
   /// arrive at all) move, `1`-`9` jump to that row, and Enter picks, in the
-  /// [Console.accent] (bold by default) with a scrolling window when the items outnumber the
+  /// bold with a scrolling window when the items outnumber the
   /// rows. [keys] maps bindings to values that return immediately without
   /// Enter (`{'b escape': Next.back, 'q': Next.quit}` — one typed map for
   /// shortcuts and Escape together); each binding lists space-separated
@@ -402,15 +393,6 @@ abstract final class Console {
         }
       }
     });
-  }
-
-  /// Clear the terminal screen. Everything [Console] draws goes to stderr,
-  /// so this clears exactly that. No-op without a terminal. The one way to
-  /// clear: prompts take no `clear:` parameter.
-  static void clear() {
-    try {
-      if (io.stderr.hasTerminal) io.stderr.write('\x1b[2J\x1b[H');
-    } catch (_) {}
   }
 
   /// A desktop notification ("done", "needs you"): OSC 9/777 plus a bell,
@@ -784,7 +766,7 @@ abstract final class Console {
   }
 
   /// Paint the scrolling window around [selected] plus a dim key-hint row;
-  /// each choice cut to fit. The selection draws in [accent] (bold by default).
+  /// each choice cut to fit. The selection draws bold.
   /// Returns the cell width of each row painted, for the next repaint's
   /// move-up.
   static List<int> _paintChoices(List<String> choices, int selected, List<int> painted) {
@@ -804,7 +786,7 @@ abstract final class Console {
       final row = '${current ? (_ascii ? '>' : '❯') : ' '}${choice.isEmpty ? '' : ' $choice'}';
       widths.add(term.displayWidth(row));
       if (_styled && current) {
-        io.stderr.writeln(accent == null ? '$_bold$row$_reset\x1b[K' : '$_accentOn$row$_reset\x1b[K');
+        io.stderr.writeln('$_bold$row$_reset\x1b[K');
       } else {
         io.stderr.writeln('$row\x1b[K');
       }
@@ -1168,11 +1150,8 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
 
   @override
   String _text(int cols) {
-    // The live line draws in [Console.accent] (empty unless styled). The
-    // colour wraps the fitted text, so every width fit measures the plain
-    // line. The last column stays empty (a full row would autowrap).
-    final on = Console._accentOn;
-    final line = term.barLine(
+    // The last column stays empty (a full row would autowrap).
+    return term.barLine(
       cols - 1,
       label: _label,
       done: _done,
@@ -1181,7 +1160,6 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
       rate: _meter.rate(),
       ascii: Console._ascii,
     );
-    return '$on$line${on.isEmpty ? '' : _reset}';
   }
 }
 

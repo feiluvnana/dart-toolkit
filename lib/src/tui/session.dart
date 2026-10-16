@@ -26,9 +26,6 @@ final class App<S> {
 
   final _Session<S> _s;
 
-  /// The current state object.
-  S state() => _s._state;
-
   /// Switch state; the next redraw calls `screen` with it.
   void go(S state) => _s._go(state);
 
@@ -64,7 +61,7 @@ abstract final class Tui {
 
   /// Own the loop: redraw (coalesced to 60 fps) after input, handler work,
   /// `go`/`status` and resize; spinners tick every 80 ms. Returns
-  /// `app.state()` once [App.quit] is called. A second [run] while
+  /// the state once [App.quit] is called. A second [run] while
   /// one is active throws [StateError]. Throws `StdoutException` when stdout
   /// is not a terminal.
   static Future<S> run<S>(S state, Screen Function(S state, App<S> app) screen, {Color? accent}) {

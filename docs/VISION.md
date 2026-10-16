@@ -160,7 +160,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `hash`    | `Hash.md5` `sha1` `sha256` `sha512` (`expect:`, `key:` for HMAC) · `Hasher` `add` `addBytes` `hex` `base64` `bytes` `of`                                                                                                                                                                                                                                                                                      | `package:crypto`                    |
 | `pool`    | `Pool.map` `settle` · `Outcome` `Done` `Failed` · `values` `failures`                                                                                                                                                                                                                                                                                                                                         | `dart:isolate`                      |
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
-| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` `clear` `accent` · `Bar` `tick` `update` `setTotal`                                                                                                                                                                                                                                                                         | in-house                            |
+| `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` · `Bar` `tick` `update` · `Speed`                                                                                                                                                                                                                                                                         | in-house                            |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style`                                                                                                                                                                                                                                                       | in-house                            |
 | `image`   | `Image.decode` `sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
 | `video`   | `Video.decode` `open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
@@ -699,7 +699,6 @@ await Command('fetch', 'Fetch pages.', params: [verbose, out], commands: [
 
 ```dart
 abstract final class Console {
-  static Color? accent;  // null (default) = no colour; e.g. Color.orange for live lines and the choose row
   static Future<String?> ask(String question, {bool secret = false, String? or, Duration? timeout}); // timeout: gives or
   static Future<bool> confirm(String question, {bool or = false});
   static Future<T?> choose<T>(String question, List<T> items, {String Function(T)? label, T? or, Map<String, T>? keys});
@@ -710,7 +709,6 @@ abstract final class Console {
   static void table(List<List<Object?>> rows, {List<String>? header});   // aligned columns on stdout
   static void notify(String message);              // OSC 9/777 + bell; through the app inside Tui.run (silent while focused)
   static void copy(String text);                   // OSC 52; through the app inside Tui.run
-  static void clear();
 }
 final class Bar implements Pipe, Closeable { Bar tick([int count = 1]);  Bar update(int done, int? total); }
 final class Speed implements Pipe { Speed();  Speed add(int count);  double rate(); }   // per second over the last 5 s
@@ -752,8 +750,8 @@ abstract final class Tui {
       {Color? accent});   // null = monochrome (bold/dim/reverse only); an accent adds colour
 }
 final class App<S> {
-  S state();  void go(S state);  void status(String message);
-  void quit();                                     // run() returns state()
+  void go(S state);  void status(String message);
+  void quit();                                     // run() returns the state
 }
 final class Screen {
   Screen(void Function(Region r) draw, {String? title, String? status, Map<String, Binding> keys = const {}});

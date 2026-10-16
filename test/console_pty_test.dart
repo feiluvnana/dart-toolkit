@@ -151,10 +151,10 @@ void main() {
       expect(plain, isNot(contains('\x1b[3')));
     }, timeout: const Timeout(Duration(seconds: 90)));
 
-    test('no accent by default: bar, spinner and choose emit no colour codes; accent restores it', () async {
+    test('bar, spinner and choose emit no colour codes', () async {
       if (Platform.isWindows) markTestSkipped('needs a POSIX pty');
       final root = Directory.current;
-      Future<String> run(String mode, {bool accent = false}) async {
+      Future<String> run(String mode) async {
         final res = await Process.run(
           'python3',
           [
@@ -164,7 +164,6 @@ void main() {
             '80',
             if (mode == 'choose') ...['--ready', 'blue', '--feed', '1.0', r'\x0d'],
             '--',
-            if (accent) ...['env', 'PROBE_ACCENT=1'],
             Platform.resolvedExecutable,
             '${root.path}/test/console_pty/probe.dart',
             '${Directory.systemTemp.path}/probe_nosuch.log',
@@ -191,8 +190,6 @@ void main() {
         expect(out, isNotEmpty, reason: mode);
         expect(hasColour(out), isFalse, reason: mode);
       }
-      expect(await run('bar', accent: true), contains('38;5;173'));
-      expect(await run('choose', accent: true), contains('38;5;173'));
     }, timeout: const Timeout(Duration(seconds: 120)));
 
     test('live lines stack: a bar and two spinners each keep a row', () async {

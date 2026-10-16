@@ -1921,7 +1921,7 @@ final class Color {
   static const gray = Color._(8, null);
 
   /// The shared live accent (xterm 173, a muted orange):
-  /// a ready-made value for `Tui.run(accent:)` and `Console.accent`.
+  /// a ready-made value for `Tui.run(accent:)`.
   static const orange = Color._(173, null);
 
   /// 0–255, else [ArgumentError].

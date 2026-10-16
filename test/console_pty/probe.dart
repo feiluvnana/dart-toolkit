@@ -28,7 +28,6 @@ import 'package:dart_toolkit/src/terminal.dart' as term;
 Future<void> main(List<String> args) async {
   final log = File(args[0]);
   final mode = args[1];
-  if (Platform.environment['PROBE_ACCENT'] != null) Console.accent = Color.orange;
   switch (mode) {
     case 'bar':
       final bar = Console.bar(100, label: 'a very long label that must be cut somewhere along the way');
