@@ -291,7 +291,7 @@ abstract final class Console {
     final bindings = _canonicalBindings(keys);
     try {
       return await _parkedFor(() async {
-        if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
+        if (!term.stdinTty || !io.stderr.hasTerminal || !term.rawModeSticks()) {
           return await _chooseNumbered(question, items, labels);
         }
         return await _chooseInteractive(question, items, labels, selected, bindings, or);
@@ -331,24 +331,6 @@ abstract final class Console {
     }
   }
 
-  /// True when single keypresses (arrows included) will actually arrive:
-  /// raw mode engages and sticks. Restores the terminal modes either way.
-  /// A half-applied raw mode (echo off, line buffering still on) is the
-  /// worst case — invisible typing that only arrives on Enter — so that
-  /// counts as unavailable too.
-  static bool _rawKeys() {
-    final modes = term.captureModes();
-    term.setRawModes();
-    try {
-      if (io.stdin.lineMode) return false;
-    } catch (_) {
-      return false;
-    } finally {
-      term.restoreModes(modes);
-    }
-    return true;
-  }
-
   /// Read a single keypress, without waiting for Enter. Prints [prompt]
   /// first when given. Returns the key: a printable key as itself (`'q'`,
   /// `'Q'`, `'1'` — case is preserved, only the first rune of a burst),
@@ -369,7 +351,7 @@ abstract final class Console {
   static Future<String> key({String? prompt}) => _parkedFor(() => _key(prompt));
 
   static Future<String> _key(String? prompt) async {
-    if (!term.stdinTty || !io.stderr.hasTerminal || !_rawKeys()) {
+    if (!term.stdinTty || !io.stderr.hasTerminal || !term.rawModeSticks()) {
       term.setLineModes(); // undo a half-applied raw mode: fallback prompts stay visible
       final line = await _ask(prompt ?? 'Press a key, then Enter:', secret: false);
       if (line == null) throw const io.StdinException('stdin is closed');

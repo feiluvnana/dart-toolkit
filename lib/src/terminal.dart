@@ -876,6 +876,24 @@ void setRawModes([TermModes? modes, bool signals = true]) {
   if (!signals && modes != null) modes.isigCleared = _isig(false);
 }
 
+/// True when single keypresses (arrows included) will actually arrive:
+/// raw mode engages and sticks. Restores the terminal modes either way.
+/// A half-applied raw mode (echo off, line buffering still on) is the
+/// worst case (invisible typing that only arrives on Enter), so that
+/// counts as unavailable too.
+bool rawModeSticks() {
+  final modes = captureModes();
+  setRawModes();
+  try {
+    if (io.stdin.lineMode) return false;
+  } catch (_) {
+    return false;
+  } finally {
+    restoreModes(modes);
+  }
+  return true;
+}
+
 /// Cooked input, line by line, echoed unless [echo] is false (a secret).
 /// Best-effort: a stdin that is not a terminal keeps its modes.
 void setLineModes({bool echo = true}) {
