@@ -150,13 +150,13 @@ final class Video {
   static Future<Compression> _compress(String path, int quality, Run run) async {
     final head = await _head(path);
     final format = sniff(head);
-    if (format == null) return const Kept(KeptReason.unknown);
+    if (format == null) return media.kept(KeptReason.unknown);
     if (const {VideoFormat.avi, VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format)) {
-      return const Kept(KeptReason.lossy);
+      return media.kept(KeptReason.lossy);
     }
     try {
       final video = await _open(path);
-      if (video._info.width == null) return const Kept(KeptReason.lossy);
+      if (video._info.width == null) return media.kept(KeptReason.lossy);
       final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
       return await media.deletedOnExit(tmp, () async {
         try {
@@ -168,7 +168,7 @@ final class Video {
         return media.replaceIfSmaller(path, tmp, by: 0.05);
       });
     } on ContentException {
-      return const Kept(KeptReason.broken);
+      return media.kept(KeptReason.broken);
     }
   }
 

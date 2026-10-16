@@ -232,18 +232,19 @@ sealed class Compression {
   String text();
 }
 
-/// The file was replaced by its re-encode: [before] and [after] bytes.
+/// The file was replaced by its re-encode: [before] and [after] bytes
+/// (`after < before`). Only `compress` makes one.
 final class Compressed extends Compression {
-  const Compressed(this.before, this.after);
+  const Compressed._(this.before, this.after);
   final int before, after;
 
   @override
   String text() => '${after.size()} (compressed from ${before.size()}, -${((before - after) * 100 / before).round()}%)';
 }
 
-/// The file was left as it was, for [reason].
+/// The file was left as it was, for [reason]. Only `compress` makes one.
 final class Kept extends Compression {
-  const Kept(this.reason);
+  const Kept._(this.reason);
   final KeptReason reason;
 
   @override
@@ -272,6 +273,9 @@ enum KeptReason {
   String text() => _text;
 }
 
+/// A [Kept] for [reason] (the constructors are private: rule 2).
+Kept kept(KeptReason reason) => Kept._(reason);
+
 /// Replace [path] with [newer] when it is [by] (a fraction) smaller,
 /// else delete [newer].
 Future<Compression> replaceIfSmaller(String path, String newer, {double by = 0}) async {
@@ -279,10 +283,10 @@ Future<Compression> replaceIfSmaller(String path, String newer, {double by = 0})
   final after = await io.File(newer).length();
   if (after >= before || after > before * (1 - by)) {
     await io.File(newer).delete().catchError((_) => io.File(newer));
-    return const Kept(KeptReason.notSmaller);
+    return const Kept._(KeptReason.notSmaller);
   }
   await io.File(newer).rename(path);
-  return Compressed(before, after);
+  return Compressed._(before, after);
 }
 
 // ── header facts ──────────────────────────────────────────────────────────

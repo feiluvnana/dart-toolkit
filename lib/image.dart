@@ -144,19 +144,19 @@ final class Image {
     final file = io.File(path);
     final bytes = await file.readAsBytes();
     final format = sniff(bytes);
-    if (format == null) return const Kept(KeptReason.unknown);
+    if (format == null) return media.kept(KeptReason.unknown);
     if (!const {ImageFormat.jpg, ImageFormat.png, ImageFormat.webp, ImageFormat.avif}.contains(format)) {
-      return const Kept(KeptReason.lossy);
+      return media.kept(KeptReason.lossy);
     }
     final h = media.header(bytes);
-    if (h != null && (h.animated || h.components == 4)) return const Kept(KeptReason.lossy);
+    if (h != null && (h.animated || h.components == 4)) return media.kept(KeptReason.lossy);
     final Uint8List out;
     try {
       final image = await _open(path, format, bytes);
       final lossless = format == ImageFormat.webp && _isLosslessWebp(bytes);
       out = Uint8List.fromList(await image._encode(format, quality, lossless: lossless));
     } on ContentException {
-      return const Kept(KeptReason.broken);
+      return media.kept(KeptReason.broken);
     }
     final tmp = p.join(p.dirname(path), '.${p.basename(path)}.compress');
     return media.deletedOnExit(tmp, () async {
