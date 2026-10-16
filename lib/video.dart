@@ -142,7 +142,7 @@ final class Video {
   /// reason: not a video, AVI or audio only, one that does not decode, or
   /// no smaller (a disk or ffmpeg start failure still throws). A [Task]: a
   /// probe shows the encode in media time (`1:12/4:30  3.4×`).
-  static Task<Compression> compress(String path, {int quality = 70}) {
+  static Task<Compression> compress(String path, {int quality = 75}) {
     media.checkQuality(quality);
     return task((run) => _compress(path, quality, run));
   }
@@ -204,7 +204,7 @@ final class Video {
   /// With no [quality], [width], [height] or [codec] the streams are
   /// **copied** into the new container when it can hold them (seconds,
   /// not minutes, and no loss); [start]/[end] then cut at keyframes.
-  /// Otherwise the video is encoded: [quality] 1–100 (default 80) maps to
+  /// Otherwise the video is encoded: [quality] 1–100 (default 90, as `Image.encode`) maps to
   /// the codec's CRF, [width]/[height] scale keeping the aspect ratio when
   /// one is given, [codec] picks the encoder (default: h264, VP9 for WebM).
   /// Audio is copied when the container takes it, else AAC (Opus for WebM).
@@ -304,7 +304,7 @@ final class Video {
     final audioOnly = const {VideoFormat.m4a, VideoFormat.mp3, VideoFormat.opus}.contains(format);
     final encodeVideo = !audioOnly && (quality != null || width != null || height != null || codec != null);
     final vcodec = codec ?? (format == VideoFormat.webm ? VideoCodec.vp9 : VideoCodec.h264);
-    final q = quality ?? 80;
+    final q = quality ?? 90;
     final args = <String>[
       for (final input in inputs) ...[
         if (start != null) ...['-ss', _secs(start)],

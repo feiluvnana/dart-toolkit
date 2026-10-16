@@ -1026,7 +1026,7 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
 final class Image {
   static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension
-  static Future<Compression> compress(String path, {int quality = 80});   // Compressed(before, after) | Kept(reason)
+  static Future<Compression> compress(String path, {int quality = 75});   // Compressed(before, after) | Kept(reason)
   int width();  int height();  ImageFormat format();
   Image resize({int? width, int? height});  Image crop(int x, int y, int width, int height);
   Reader encode(ImageFormat format, {int quality = 90});
@@ -1042,7 +1042,7 @@ extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).imag
   16384², are a `ContentException`.
 - `resize`/`crop` record a step; `encode` (a lazy `Reader`) runs them all in one ffmpeg call. `resize`
   keeps the aspect ratio when one side is given; a missing or non-positive size is an `ArgumentError`,
-  `crop` outside the image a `RangeError`. `quality` (1–100) applies to JPEG, WebP and AVIF. `.heic`
+  `crop` outside the image a `RangeError`. `quality` (1–100) applies to JPEG, WebP and AVIF. One scale for both modules: `encode` defaults to 90, `compress` to 75. `.heic`
   (read only) and `.ico` above 256 px are an `ArgumentError`.
 - `compress` re-encodes a file in its own format and replaces it atomically only when ≥ 5% smaller,
   returning `Compressed(before, after)`; `Kept(reason)` leaves it alone and says why (`KeptReason.unknown`
@@ -1058,7 +1058,7 @@ enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // a URL (HLS/DASH); a file is file.video()
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
-  static Task<Compression> compress(String path, {int quality = 70});   // a probe sees media time
+  static Task<Compression> compress(String path, {int quality = 75});   // a probe sees media time
   int? width();  int? height();  Duration? duration();  double? fps();   // null when unknown, as width/height
   VideoFormat? format();  String? codec();  String? audioCodec();  int? bitrate();
   Reader encode(VideoFormat format, {int? quality, int? width, int? height, VideoCodec? codec,
@@ -1072,7 +1072,7 @@ extension on Reader { Future<Video> video(); }
   place; other readers go to a temp file once.
 - `encode` with no `quality`/`width`/`height`/`codec` **copies** the streams into the new container
   when it holds them (seconds, lossless; `start`/`end` cut at keyframes); otherwise it encodes (default
-  h264, VP9 for WebM; `quality` 1–100 maps to the codec's CRF). Audio is copied when the container takes
+  h264, VP9 for WebM; `quality` 1–100, 90 by default, maps to the codec's CRF). Audio is copied when the container takes
   it, else AAC (Opus for WebM). `encode(…) & Console.bar('encode') > file` shows the encode itself
   (`1:12/4:30  3.4×`), not the copy that follows it.
 - `compress` follows `Image.compress`: own container, audio copied, replaced only when ≥ 5% smaller.

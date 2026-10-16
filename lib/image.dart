@@ -139,7 +139,7 @@ final class Image {
   /// has no encoder), one that does not decode, or no smaller (a disk or
   /// ffmpeg start failure still throws). JPEGs keep their EXIF (date, camera; orientation reset)
   /// and colour profile; a lossless WebP stays lossless.
-  static Future<Compression> compress(String path, {int quality = 80}) async {
+  static Future<Compression> compress(String path, {int quality = 75}) async {
     media.checkQuality(quality);
     final file = io.File(path);
     final bytes = await file.readAsBytes();
