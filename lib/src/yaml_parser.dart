@@ -399,14 +399,12 @@ final class _Parser {
       return _Candidate(start, _anchors[name], flow: true);
     }
     if (c == 0x22 || c == 0x27) {
-      final line = _lineOf(i);
       final v = c == 0x22 ? _double() : _single();
-      return _Candidate(start, v, quoted: true, multiline: _lineOf(i) != line);
+      return _Candidate(start, v, quoted: true, multiline: _newline(start) < i);
     }
     if (c == 0x5B || c == 0x7B) {
-      final line = _lineOf(i);
       final v = _flowCollection();
-      return _Candidate(start, v, flow: true, multiline: _lineOf(i) != line);
+      return _Candidate(start, v, flow: true, multiline: _newline(start) < i);
     }
     if (!_plainStart(i, flow: flow)) {
       throw _error(c < 0 ? 'unexpected end of input' : 'unexpected "${s[i]}"');
@@ -414,7 +412,28 @@ final class _Parser {
     return _Candidate(start, null, plain: true, text: _plainLine(flow: flow));
   }
 
-  int _lineOf(int at) => at == 0 ? -1 : s.lastIndexOf('\n', at - 1);
+  /// The first newline at or after [from] (`s.length` when none). One span
+  /// `[_nlFrom, _nlAt)` known to hold none is kept and grown, so the lookups
+  /// of nested candidates (inner first, then outer) scan each character once.
+  int _newline(int from) {
+    if (from > _nlAt) {
+      final at = s.indexOf('\n', from);
+      _nlAt = at < 0 ? s.length : at;
+    } else if (from < _nlFrom) {
+      for (var j = from; j < _nlFrom; j++) {
+        if (s.codeUnitAt(j) == 0x0A) {
+          _nlAt = j;
+          break;
+        }
+      }
+    } else {
+      return _nlAt;
+    }
+    _nlFrom = from;
+    return _nlAt;
+  }
+
+  var _nlFrom = 0, _nlAt = -1;
 
   bool _plainStart(int at, {required bool flow}) {
     final c = _c(at);

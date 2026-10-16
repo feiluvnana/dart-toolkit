@@ -189,6 +189,20 @@ url: http://e.com:8080/x#frag
     expect(() => Yaml.parse('${'[' * 20000}${']' * 20000}'), throwsA(isA<ContentException>()));
     expect(Yaml.parse('a: &x [1, 2]\nb: *x').$('b').length, 2); // ordinary aliases still resolve
   });
+
+  test('a one-line flow document (minified JSON) parses in linear time (B6)', () {
+    String doc(int n) => '[${List.generate(n, (i) => '{"id": $i, "name": "item $i", "tags": ["a", "b"]}').join(', ')}]';
+    final small = doc(1000), big = doc(4000);
+    Yaml.parse(small); // warm up
+    final sw = Stopwatch()..start();
+    expect(Yaml.parse(small).length, 1000);
+    final t1 = sw.elapsedMicroseconds;
+    sw.reset();
+    expect(Yaml.parse(big).length, 4000);
+    final t4 = sw.elapsedMicroseconds;
+    expect(t4, lessThan(t1 * 9 + 20000), reason: '4x the input took ${t4 / t1}x the time'); // quadratic: 16x
+    expect(t4, lessThan(1000000)); // was 7 s at 230 KB
+  });
 }
 
 final class _Src with Reader {

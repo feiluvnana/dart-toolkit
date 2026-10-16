@@ -8,6 +8,7 @@
 - `fs`: unawaited `file.write(...)` / `> file` calls to one path land in call order, so the last one wins (they could finish in any order and keep a stale state). medialoader drops its own save chain.
 - `http`: a body with no length (SSE, NDJSON) reaches `lines()`/`stream()` as it arrives instead of after 64 KB or its end, and a paused consumer pauses the socket instead of buffering the rest of the body in memory.
 - `core`: a `Rate` shared by a `Pool` and an `Http.client` never lets more than its count start in one window (a start that waited could drop a live one from the window), and a start cancelled by a closed client or a failed `Pool.map` no longer counts.
+- `yaml`: a one-line flow document (minified JSON read as YAML) parses in linear time; 230 KB took 7 s.
 
 **Changed**
 
