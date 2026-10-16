@@ -64,6 +64,9 @@ In `lib/fs.dart` `_atomicWrite` and `lib/archive.dart` unpack, run `attrib +h <t
 ### W13. Chrome for Testing on Windows arm64
 `testingPlatform()` in `lib/src/chrome_find.dart` maps `Abi.windowsArm64` to nothing, so with no Chrome installed a Windows arm64 PC throws. Chrome for Testing has no arm64 Windows build, but `win64` runs emulated: add `Abi.windowsArm64 => 'win64'`. Check on a Windows arm64 PC with no Chrome: `dart test test/chrome_test.dart` downloads `win64` once and passes. CDP over a pipe (`--remote-debugging-pipe`) is POSIX only; Windows keeps the TCP port, so check the port is bound to `127.0.0.1` only (`netstat -ano | findstr <chrome pid>`).
 
+### W14. `Link.resolve` on a broken chain (B27)
+`Link.resolve()` in `lib/fs.dart` returns null only for a broken link and throws on anything else (permission denied); which errors mean broken comes from `_broken`, which is empty on Windows, so only a `PathNotFoundException` is null there. On Windows (Developer Mode, so links can be made) run: `mklink loop loop`, `mklink /D dirlink nofolder`, and a link to `file.txt\x`; then `await Fs.link('loop').resolve()` and the others. Each should be null: if one throws, add its `osError.errorCode` (likely 1921 ERROR_CANT_RESOLVE_FILENAME, 3 path not found, 267 ERROR_DIRECTORY) to the Windows set and run `dart test test/fs_test.dart -N B27`.
+
 ## §2 Linux
 
 ### L1. M11: `Shell.open` with a foreground launcher keeps the script alive

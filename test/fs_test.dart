@@ -696,6 +696,16 @@ Future<void> expectThrows(Future<void> f, String what) async {
       expect(await Fs.link(p('broken')).resolve(), isNull);
     });
 
+    test('resolve is null only for a broken link; permission denied throws (B27)', () async {
+      await io.Link(p('loop')).create(p('loop'));
+      expect(await Fs.link(p('loop')).resolve(), isNull, reason: 'a loop is broken');
+      await io.File(p('locked/x.txt')).create(recursive: true);
+      await io.Link(p('behind')).create(p('locked/x.txt'));
+      await io.Process.run('chmod', ['000', p('locked')]);
+      addTearDown(() => io.Process.run('chmod', ['755', p('locked')]));
+      await expectLater(Fs.link(p('behind')).resolve(), throwsA(isA<io.FileSystemException>()));
+    }, skip: io.Platform.isWindows ? 'POSIX modes' : null);
+
     test('create replaces an existing link', () async {
       await Fs.file(p('a.txt')).write('a');
       await Fs.file(p('b.txt')).write('b');

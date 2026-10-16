@@ -649,14 +649,19 @@ final class Link extends Entry {
   /// The stored target string.
   Future<String> target() => io.Link(_path).target();
 
-  /// Follow the chain to what is finally there, or null when broken.
-  /// Returns a handle AT THE TARGET path (not the link's own path).
+  /// Follow the chain to what is finally there, or null when broken (a
+  /// missing target or a loop); any other failure, such as permission
+  /// denied, throws. Returns a handle AT THE TARGET path (not the link's
+  /// own path).
   Future<Entry?> resolve() async {
     String resolved;
     try {
       resolved = await io.Link(_path).resolveSymbolicLinks();
-    } catch (_) {
+    } on io.PathNotFoundException {
       return null;
+    } on io.FileSystemException catch (e) {
+      if (_broken.contains(e.osError?.errorCode)) return null;
+      rethrow;
     }
     final t = await io.FileSystemEntity.type(resolved, followLinks: false);
     return switch (t) {
@@ -803,6 +808,10 @@ extension LinkFuture on Future<Link> {
   Future<Entry?> resolve() async => (await this).resolve();
   Future<Link> create(String target) async => (await this).create(target);
 }
+
+/// The errors besides not-found that mean a link chain is broken: ENOTDIR
+/// and ELOOP (macOS 62, Linux 40). Windows: see docs/PLAN.md W14.
+final _broken = io.Platform.isWindows ? const <int>{} : {20, io.Platform.isMacOS ? 62 : 40};
 
 Future<void> _ensureParent(String path) async {
   final dir = p.dirname(path);
