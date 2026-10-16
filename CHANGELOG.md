@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Added**
+
+- `shell`: `Shell.run(cmd, terminal: true)` runs the child on our terminal (`git commit` opening `$EDITOR`, `ssh`, `dart test` in colour) and keeps `timeout:`, `cancel:` and the kill of its tree on Ctrl-C; the `Output` has the exit code and no text.
+
 **Fixed**
 
 - `fs`: two `file.lock(...)` calls in one process are granted in call order; the second one no longer wins while the first creates the lock's folder.

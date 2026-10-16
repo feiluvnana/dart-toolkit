@@ -615,7 +615,7 @@ final class Link extends Entry {
 
 ```dart
 abstract final class Shell {
-  static Task<Output> run(List<String> command, {String? dir, Map<String, String?>? env, Duration? timeout, Future<void>? cancel});
+  static Task<Output> run(List<String> command, {String? dir, Map<String, String?>? env, Duration? timeout, Future<void>? cancel, bool terminal = false});
   static Reader read(List<String> command, {String? dir, Map<String, String?>? env});   // stdout as it prints
   static Pipe filter(List<String> command, {String? dir, Map<String, String?>? env});
 }
@@ -629,6 +629,8 @@ final class Output with Reader { int code();  bool ok();  String err();  Output 
   has no `ps`: only the child itself).
 - `command[0]` is the program, looked up on `PATH`, and there is no shell, so arguments are safe.
   Use `['sh', '-c', …]` for shell syntax.
+- `run(cmd, terminal: true)` gives the child our terminal (`git commit` opens `$EDITOR`, `ssh`
+  asks for a password, tools print in colour); its `Output` has the exit code and no text.
 - `run` closes stdin and waits for the exit. `text()` drops one trailing newline, as `$(…)` does
   in a shell; `> file` and `bytes()` stay verbatim. A non-zero exit is an `Output`; a program that
   can't start throws `ProcessException`, with the OS error code. An `Output` is in memory, so it
@@ -644,6 +646,7 @@ final class Output with Reader { int code();  bool ok();  String err();  Output 
 ```dart
 final head = await Shell.run(['git', 'rev-parse', 'HEAD']).check().text(); // a non-zero exit throws
 await (Shell.run(['make', '-j8']) & Console.bar('build'));                   // a spinner
+await Shell.run(['git', 'commit'], terminal: true).check();                 // on our terminal
 await for (final line in Shell.read(['yt-dlp', url]).lines()) { … }
 await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
 ```

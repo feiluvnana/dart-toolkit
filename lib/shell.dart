@@ -7,6 +7,7 @@
 /// await (Shell.run(['make', '-j8']) & Console.bar('build'));            // a spinner
 /// await (Fs.file('big.log') | Shell.filter(['grep', 'ERROR']) > Fs.file('errors.log'));
 /// await (Shell.read(['make']) > Console.out());                         // live
+/// await Shell.run(['git', 'commit'], terminal: true).check();           // our tty
 /// await for (final line in Shell.read(['yt-dlp', url]).lines()) { … }
 /// ```
 ///
@@ -62,6 +63,12 @@ abstract final class Shell {
   /// returns what was captured, as an [Output] with the kill's exit code
   /// (`-9` on POSIX): the caller asked, so nothing throws.
   ///
+  /// With [terminal] the program gets our terminal (stdin, stdout and
+  /// stderr: `git commit` opens `$EDITOR`, `ssh` asks for a password,
+  /// tools print in colour) and its [Output] has an empty text and stderr,
+  /// only the exit code; [timeout], [cancel] and the kill of its tree on
+  /// Ctrl-C work as without it.
+  ///
   /// To see the output while it runs, read it instead: `Shell.read`.
   static Task<Output> run(
     List<String> command, {
@@ -69,12 +76,13 @@ abstract final class Shell {
     Map<String, String?>? env,
     Duration? timeout,
     Future<void>? cancel,
+    bool terminal = false,
   }) {
     _checkCommand(command);
     // Listened to now, before the task starts: an error-completed cancel
     // is a cancel, never an unhandled error.
     final cancelled = cancel?.then((_) {}, onError: (Object _) {});
-    return task((_) => _run(command, dir, env, timeout, cancelled));
+    return task((_) => _run(command, dir, env, timeout, cancelled, terminal));
   }
 
   static Future<Output> _run(
@@ -83,6 +91,7 @@ abstract final class Shell {
     Map<String, String?>? env,
     Duration? timeout,
     Future<void>? cancelled,
+    bool terminal,
   ) async {
     io.Process proc;
     try {
@@ -92,6 +101,7 @@ abstract final class Shell {
         workingDirectory: dir,
         environment: _resolveEnv(env),
         includeParentEnvironment: env == null,
+        mode: terminal ? io.ProcessStartMode.inheritStdio : io.ProcessStartMode.normal,
       );
     } on io.ProcessException catch (e) {
       throw io.ProcessException(
@@ -108,20 +118,25 @@ abstract final class Shell {
     var exited = false;
     unawaited(proc.exitCode.then((_) => exited = true));
     try {
-      try {
-        await proc.stdin.close();
-      } catch (_) {}
+      if (!terminal) {
+        try {
+          await proc.stdin.close();
+        } catch (_) {}
+      }
       final out = BytesBuilder(copy: false);
       final err = BytesBuilder(copy: false);
       // Subscriptions, not `await for`: a timeout cancels them, so a
       // descendant that still holds the pipes cannot keep the VM alive.
       final subs = <StreamSubscription<List<int>>>[];
       try {
-        final work = Future.wait([
-          _collect(proc.stdout, out, subs),
-          _collect(proc.stderr, err, subs),
-          proc.exitCode,
-        ], eagerError: true);
+        // On our terminal there are no pipes: the exit is the end.
+        final work = terminal
+            ? proc.exitCode
+            : Future.wait([
+                _collect(proc.stdout, out, subs),
+                _collect(proc.stderr, err, subs),
+                proc.exitCode,
+              ], eagerError: true);
         // A cancel kills the tree, then lets the pipes drain briefly: a
         // descendant that escaped the tree must not hold the run open.
         Future<void> stop(Future<void> cancelled) async {

@@ -445,4 +445,100 @@ Future<void> main() async {
       expect(await eventually(() async => !await alive(child)), isTrue, reason: 'sleep $child outlived the script');
     });
   });
+
+  group('Shell.run(terminal: true)', () {
+    /// Run [source] (DIR replaced by a fresh temp dir) as a child script
+    /// under a real pty (the test/console_pty driver), the clock starting
+    /// at [ready]: the capture, the exit code and the dir.
+    Future<(String, int?, String)> underPty(String source, {List<String> feed = const []}) async {
+      final dir = await Directory.systemTemp.createTemp('terminal');
+      addTearDown(() => dir.delete(recursive: true));
+      final script = '${dir.path}/main.dart';
+      await Fs.file(script).write(source.replaceAll('DIR', dir.path));
+      final root = Directory.current.path;
+      final res = await Process.run(
+        'python3',
+        [
+          '$root/test/console_pty/drive.py',
+          '--size', '24', '80', //
+          '--ready', 'ready',
+          ...feed,
+          '--',
+          Platform.resolvedExecutable,
+          '--packages=$root/.dart_tool/package_config.json',
+          script,
+        ],
+        environment: {'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color'},
+      );
+      final code = RegExp(r'exit=(-?\d+)').firstMatch('${res.stderr}')?.group(1);
+      return ('${res.stdout}', code == null ? null : int.parse(code), dir.path);
+    }
+
+    test(
+      'the child gets our tty; the Output has the exit code and no text',
+      () async {
+        final (out, code, _) = await underPty(r'''
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  print('ready');
+  final o = await Shell.run(['sh', '-c', '[ -t 0 ] && [ -t 1 ] && [ -t 2 ] && echo TTY-YES; exit 3'], terminal: true);
+  print('code=${o.code()} text=[${await o.text()}] err=[${o.err()}]');
+}
+''');
+        expect(out, contains('TTY-YES'));
+        expect(out, contains('code=3 text=[] err=[]'));
+        expect(code, 0);
+      },
+      tags: ['pty'],
+      skip: noPty,
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+
+    test(
+      'Ctrl-C ends the script with 130 and kills the tree, background jobs too',
+      () async {
+        final (out, code, dir) = await underPty(
+          r'''
+import 'dart:io';
+import 'package:dart_toolkit/shell.dart';
+Future<void> main() async {
+  final run = Shell.run(['sh', '-c', r'sleep 30 & echo $! > DIR/pid; wait'], terminal: true);
+  final pid = File('DIR/pid');
+  while (!pid.existsSync() || pid.readAsStringSync().trim().isEmpty) {
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+  print('ready');
+  await run;
+}
+''',
+          feed: ['--feed', '0.3', r'\x03'],
+        );
+        expect(code, 130, reason: out);
+        // A non-interactive sh starts `&` jobs ignoring SIGINT: only the
+        // tree kill ends this one.
+        final pid = (await Fs.file('$dir/pid').text()).trim();
+        Future<bool> alive() async =>
+            '${(await Process.run('ps', ['-p', pid, '-o', 'pid='])).stdout}'.trim().isNotEmpty;
+        expect(await eventually(() async => !await alive()), isTrue, reason: 'sleep $pid outlived Ctrl-C');
+      },
+      tags: ['pty'],
+      skip: noPty,
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+
+    test('timeout: and cancel: still end the run', () async {
+      final sw = Stopwatch()..start();
+      await expectLater(
+        Shell.run(['sleep', '5'], terminal: true, timeout: 200.milliseconds),
+        throwsA(isA<TimeoutException>()),
+      );
+      final stop = Completer<void>();
+      final run = Shell.run(['sleep', '5'], terminal: true, cancel: stop.future);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      stop.complete();
+      final out = await run;
+      expect((out.ok(), await out.text()), (false, ''));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+    });
+  });
 }
