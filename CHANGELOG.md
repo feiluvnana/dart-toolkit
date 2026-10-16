@@ -30,6 +30,7 @@
 - `fs`: `Link.resolve()` is null only for a broken link (missing target, a loop); a permission error throws instead of reading as broken.
 - `chrome`: a DevTools reply that does not parse fails its call with a `BrowserException` instead of leaving it pending forever, and malformed UTF-8 in a reply is replaced rather than dropping the message.
 - `archive`: zip member names without the UTF-8 flag that are not UTF-8 read as CP437, the zip default (`caf\x82.txt` from Windows is `café.txt`, not a C1 control), and an Info-ZIP Unicode Path field wins when its CRC matches.
+- `tui`: CRLF text (a Windows file, an HTTP body) draws as lines in `write`, `markdown`, `diff` and inputs; every `\r` drew as `�`. A `Field` keeps its text with `\n` line ends.
 
 **Security**
 

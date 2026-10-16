@@ -21,7 +21,7 @@ extension RegionDiff on Region {
     final top = _cursor;
     final paint = (removed: removed, added: added, color: color, background: background, style: style);
     final key = (before, after);
-    final rows = _diffMemo.remove(key) ?? _diffHunks(before.split('\n'), after.split('\n'));
+    final rows = _diffMemo.remove(key) ?? _diffHunks(_lines(before), _lines(after));
     _diffMemo[key] = rows; // most recent last
     if (_diffMemo.length > 8) _diffMemo.remove(_diffMemo.keys.first);
     for (final line in rows) {

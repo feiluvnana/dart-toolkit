@@ -674,6 +674,31 @@ Future<void> main() async {
       expect(t.row(3), contains('hello there'));
     });
 
+    test('P3: CRLF text draws as lines, never a replacement glyph: write, markdown, diff, input', () async {
+      final f = Field(text: 'f1\r\nf2');
+      final t = testSession<int>(
+        0,
+        (s, app) => Screen((r) {
+          r.write('w1\r\nw2\r\n');
+          r.markdown('m1\r\n\r\nm2\r\n');
+          r.diff('d1\r\nd2', 'd1\r\nd3');
+          r.input(f, lines: 2);
+        }),
+        width: 30,
+        height: 20,
+      );
+      await t.pump();
+      final rows = [for (var y = 0; y < 20; y++) t.row(y).trimRight()];
+      expect(rows.join('|'), isNot(contains('\ufffd')), reason: '$rows');
+      expect(rows.join('|'), isNot(contains('\r')), reason: '$rows');
+      for (final line in ['w1', 'w2', 'm1', 'm2', 'f1', 'f2']) {
+        expect(rows.where((r) => r.trim() == line), hasLength(1), reason: '$line in $rows');
+      }
+      expect(rows.where((r) => r.contains('d2')), isNotEmpty, reason: '$rows');
+      expect(f.text(), 'f1\nf2');
+      t.close();
+    });
+
     test('markdown breaks a too-long word, keeps parens in link URLs, and nests ***bold italic***', () async {
       final t = testSession<int>(
         0,

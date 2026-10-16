@@ -247,7 +247,7 @@ List<List<_MdSeg>> _mdHard(List<_MdSeg> segs, int width) {
 /// Split [source] into raw lines, dropping one trailing newline like
 /// `Region.write` does, so full and incremental layouts share line space.
 List<String> _mdLines(String source) {
-  var src = source;
+  var src = _lf(source);
   if (src.endsWith('\n')) src = src.substring(0, src.length - 1);
   return src.split('\n');
 }

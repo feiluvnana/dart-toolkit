@@ -122,7 +122,7 @@ final class Region {
     final top = _row;
     var col = _col;
     final st = _s._pack(color, background, style);
-    final parts = text.split('\n');
+    final parts = _lines(text);
     final lines = parts.isNotEmpty && parts.last.isEmpty && !inline ? parts.sublist(0, parts.length - 1) : parts;
     var overflow = false;
     var end = _gx;

@@ -13,6 +13,13 @@ const _fallbackCaps = term.TerminalCaps(
   animated: false,
 );
 
+/// [s] with CRLF line ends as `\n` (the `\r` would draw as a replacement
+/// glyph); a lone `\r` stays a control character.
+String _lf(String s) => s.contains('\r\n') ? s.replaceAll('\r\n', '\n') : s;
+
+/// [s]'s lines, `\n` or CRLF ended.
+List<String> _lines(String s) => _lf(s).split('\n');
+
 /// Text styles.
 enum Style { bold, dim, italic, underline, strike, reverse }
 

@@ -83,9 +83,9 @@ final class Pick<T> {
 /// An input's text, cursor and history. Lives in the app's state object.
 final class Field {
   Field({String text = '', List<String> history = const []})
-    : _text = text,
+    : _text = _lf(text),
       _history = List<String>.unmodifiable(history) {
-    _cursor = text.runes.length;
+    _cursor = _text.runes.length;
   }
 
   String _text;
@@ -104,8 +104,8 @@ final class Field {
 
   /// Replace the text; the cursor goes to the end.
   Field set(String text) {
-    _text = text;
-    _cursor = text.runes.length;
+    _text = _lf(text);
+    _cursor = _text.runes.length;
     _histAt = -1;
     _wantCol = -1;
     return this;
@@ -869,7 +869,8 @@ extension RegionWidgets on Region {
     return i;
   }
 
-  void _insertText(Field field, String s) {
+  void _insertText(Field field, String text) {
+    final s = _lf(text);
     field._histAt = -1;
     final runes = field._text.runes.toList();
     final at = field._cursor.clamp(0, runes.length);
