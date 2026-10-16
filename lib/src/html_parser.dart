@@ -1571,13 +1571,19 @@ final class _Open extends ListBase<Element> {
   final _items = <Element>[];
   final _count = <String, int>{};
 
+  /// The same elements, for an O(1) [contains]: formatting reconstruction
+  /// asks per token, and a hostile page nests 100,000 deep.
+  final _set = HashSet<Element>.identity();
+
   bool has(String name) => (_count[name] ?? 0) > 0;
 
   void _in(Element e) {
+    _set.add(e);
     if (e.space == Space.html) _count[e.localName] = (_count[e.localName] ?? 0) + 1;
   }
 
   void _out(Element e) {
+    _set.remove(e);
     if (e.space == Space.html) _count[e.localName] = _count[e.localName]! - 1;
   }
 
@@ -1635,5 +1641,5 @@ final class _Open extends ListBase<Element> {
   int indexOf(Object? e, [int start = 0]) => _items.indexOf(e as Element, start);
 
   @override
-  bool contains(Object? e) => _items.contains(e);
+  bool contains(Object? e) => _set.contains(e);
 }

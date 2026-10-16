@@ -223,6 +223,12 @@ void main() {
       expect(kept.$('i'), hasLength(50000));
     });
 
+    test('S6: 120,000 unclosed formatting tags parse in linear time', () {
+      final sw = Stopwatch()..start();
+      expect(Html.parse('${'<b><i><u>' * 40000}x').text(), 'x');
+      expect(sw.elapsedMilliseconds, lessThan(1500)); // ~90 ms; quadratic was 3 s
+    });
+
     test('nested roots are walked once (regression: one walk per root)', () {
       final doc = Html.parse('${'<div>' * 3000}<a>x</a>${'</div>' * 3000}<div><a>y</a></div>');
       final divs = doc.$('div');
