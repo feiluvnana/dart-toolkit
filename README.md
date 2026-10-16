@@ -62,7 +62,7 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 | `hash` | md5 … sha512, HMAC | in a pipe, `expect:` to verify, `key:` for HMAC, `hex()` `bytes()` |
 | `shell` | programs | `Shell.run(cmd, timeout:, cancel:)` (a `Task`; `.check()`), `Shell.read(cmd)` live as a `Reader`, `Shell.filter` as a `Pipe`, `Shell.which`, `Shell.open` |
 | `pool` | fan-out | `Pool.map` (fail fast), `Pool.settle` (an outcome per item), both watchable `Task`s, `retries:` `isolates:`, held `Pool(limit:).run(job)` lanes (a `Task` too) |
-| `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `dotenv:`, `version:`, suggestions |
+| `cli` | command lines | typed `Opt`/`Flag`/`Arg`/`Rest`, `min:`/`max:`, subcommands, `env:`, `version:`, suggestions |
 | `console` | prompts and progress | `ask` `confirm` `choose` `key` (all take `or:` and `timeout:`), `bar(label)` (a probe), `log(failed:)`, `logged()` (the run's log as content), `table` `notify` `copy`, `out()`/`input()` for stdout/stdin |
 | `tui` | full-screen apps | state-driven `Tui.run`, widgets, `write(inline:)` spans, `bar(meter)`, `bars()` and `log()` panes for Console's bars and log, mouse, markdown, ASCII and no-colour fallbacks |
 | `image` | read, resize, crop, encode, compress | ffmpeg engine: HEIC/AVIF/WebP, EXIF kept |

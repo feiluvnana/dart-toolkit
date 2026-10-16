@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:dart_toolkit/cli.dart';
 import 'package:test/test.dart';
@@ -340,7 +339,7 @@ void main() {
   });
 
   group('commands', () {
-    test('dispatch by name and alias; ancestor options work after', () async {
+    test('dispatch by name; ancestor options work after', () async {
       final tag = Multi<String>('tag', 'A tag.', short: 't');
       final file = Arg<String>('file', 'F.', required: true);
       var built = '';
@@ -353,7 +352,6 @@ void main() {
           Command(
             'build',
             'Builds.',
-            aliases: ['b'],
             params: [file],
             handler: (ctx) {
               built = ctx(file);
@@ -365,8 +363,6 @@ void main() {
       expect(await cli.run(['build', '--tag', 'a', 'f1']), 0);
       expect(built, 'f1');
       expect(tags, ['a']);
-      expect(await cli.run(['b', 'f1']), 0);
-      expect(built, 'f1');
     });
 
     test('C6: help works at depth; unknown help names suggest', () async {
@@ -567,59 +563,6 @@ Future<void> main(List<String> a) async {
       expect(bad.stderr, isNot(contains('hunter2'))); // a value from the environment is never echoed
       expect((await runDart(script, args: ['--help'])).stdout, contains('[env: APP_TOKEN]'));
     });
-
-    test('dotenv: loads KEY=VALUE before parsing, never over the real environment', () async {
-      final dir = await Directory.systemTemp.createTemp('dotenv');
-      addTearDown(() => dir.delete(recursive: true));
-      await File('${dir.path}/.env')
-          .writeAsString('# comment\nexport APP_TOKEN="from file"\nAPP_N=5 # five\nAPP_X=\'raw \\n\'\n');
-      const script = '''
-import 'dart:io';
-import 'package:dart_toolkit/cli.dart';
-Future<void> main(List<String> a) async {
-  final token = Opt<String?>('token', 'API token.', env: 'APP_TOKEN');
-  final n = Opt('n', 'Count.', or: 1, env: 'APP_N');
-  final x = Opt<String?>('x', 'Raw.', env: 'APP_X');
-  await Command('app', 'X.', params: [token, n, x], dotenv: '.env', handler: (c) => print('\${c(token)} \${c(n)} \${c(x)}')).run(a);
-}
-''';
-      expect((await runDart(script, cwd: dir.path)).stdout, 'from file 5 raw \\n\n');
-      expect((await runDart(script, cwd: dir.path, env: {'APP_N': '9'})).stdout, startsWith('from file 9 '));
-      await File('${dir.path}/.env').delete();
-      expect((await runDart(script, cwd: dir.path)).stdout, 'null 1 null\n');
-    });
-  });
-
-  test('dotenv: a quoted value ends at its quote, comments after it go, escapes decode once', () async {
-    final dir = await Directory.systemTemp.createTemp('dotenv2');
-    addTearDown(() => dir.delete(recursive: true));
-    await File('${dir.path}/.env')
-        .writeAsString('A="abc123" # prod token\nB="C:\\\\new\\\\dir"\nC="say \\"hi\\"\\tok"\nD=\'it\'\'s\'\n');
-    const script = '''
-import 'package:dart_toolkit/cli.dart';
-Future<void> main(List<String> a) async {
-  final opts = [for (final k in ['a', 'b', 'c', 'd']) Opt<String?>(k, k, env: k.toUpperCase())];
-  await Command('app', 'X.', params: opts, dotenv: '.env', handler: (c) => print([for (final o in opts) '[\${c(o)}]'].join())).run(a);
-}
-''';
-    expect((await runDart(script, cwd: dir.path)).stdout, '[abc123][C:\\new\\dir][say "hi"\tok][it]\n');
-  });
-
-  // Regression: the dotenv values were one global, so a second Command run
-  // in the same process saw the first one's file.
-  test('dotenv: values belong to their run, not to the process', () async {
-    final dir = await Directory.systemTemp.createTemp('dotenv3');
-    addTearDown(() => dir.delete(recursive: true));
-    await File('${dir.path}/.env').writeAsString('APP_T=from-file\n');
-    const script = '''
-import 'package:dart_toolkit/cli.dart';
-Future<void> main(List<String> a) async {
-  final t = Opt<String?>('t', 'T.', env: 'APP_T');
-  await Command('one', 'X.', params: [t], dotenv: '.env', handler: (c) => print(c(t))).run(a);
-  await Command('two', 'X.', params: [t], handler: (c) => print(c(t))).run(a);
-}
-''';
-    expect((await runDart(script, cwd: dir.path)).stdout, 'from-file\nnull\n');
   });
 
   group('Opt(min:, max:)', () {

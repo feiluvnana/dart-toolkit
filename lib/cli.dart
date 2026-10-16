@@ -18,7 +18,6 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math';
 
@@ -257,16 +256,13 @@ final class Command {
     List<Param<Object?>> params = const [],
     List<Command> commands = const [],
     FutureOr<void> Function(Context context)? handler,
-    List<String> aliases = const [],
-    this._dotenv,
     this._version,
   }) : _name = name,
        _help = help,
        _params = params,
        _commands = commands,
        // ignore: prefer_initializing_formals – the public argument stays `handler`.
-       _handler = handler,
-       _aliases = aliases {
+       _handler = handler {
     if (name.isEmpty) {
       throw ArgumentError.value(name, 'name', 'Invalid name: empty');
     }
@@ -274,9 +270,6 @@ final class Command {
       throw ArgumentError.value('version', 'params', 'Invalid params: --version is reserved by version:');
     }
     _checkName(name);
-    for (final alias in aliases) {
-      _checkName(alias);
-    }
     final names = <String>{};
     final shorts = <String, String>{};
     final argDefs = <Param<Object?>>[];
@@ -311,16 +304,10 @@ final class Command {
       }
       optional |= !required;
     }
-    final seen = <String>{name, ...aliases};
-    if (seen.length != aliases.length + 1) {
-      throw ArgumentError.value(aliases, 'aliases', 'Invalid aliases: duplicate name');
-    }
     final subSeen = <String>{};
     for (final c in commands) {
-      for (final n in [c._name, ...c._aliases]) {
-        if (!subSeen.add(n)) {
-          throw ArgumentError.value(n, 'commands', 'Invalid commands: "$n" twice');
-        }
+      if (!subSeen.add(c._name)) {
+        throw ArgumentError.value(c._name, 'commands', 'Invalid commands: "${c._name}" twice');
       }
     }
     // A child cannot redeclare an ancestor's --name or -s with a different
@@ -336,10 +323,6 @@ final class Command {
   final List<Param<Object?>> _params;
   final List<Command> _commands;
   final FutureOr<void> Function(Context context)? _handler;
-  final List<String> _aliases;
-
-  /// A `KEY=VALUE` file loaded before parsing (see [run]).
-  final String? _dotenv;
 
   /// What `--version` prints after the name (`fetch 1.2.3`), for this
   /// command and every command under it.
@@ -374,23 +357,17 @@ final class Command {
   /// the handler set it). Never calls `exit()`, so pending output and exit
   /// hooks still run. The code is also returned, for tests and embedding.
   ///
-  /// With `dotenv:` (`Command(…, dotenv: '.env')`), that file's `KEY=VALUE`
-  /// lines are read first (`#` comments, `export `, quotes allowed; a
-  /// missing file is skipped) and an `Opt(env:)` sees them, never over the
-  /// real environment.
-  ///
   /// With `version:` (`Command('fetch', …, version: '1.2.3')`), `--version`
   /// prints `fetch 1.2.3` to stdout and exits 0, here and in every
   /// subcommand; usage lists it.
   Future<int> run(List<String> argv) async {
-    final file = _dotenv;
-    final code = await _run(argv, file == null ? const {} : _readDotenv(file));
+    final code = await _run(argv);
     if (code != 0) io.exitCode = code;
     return code;
   }
 
-  Future<int> _run(List<String> argv, Map<String, String> dotenv) async {
-    final deepest = _Deepest(dotenv);
+  Future<int> _run(List<String> argv) async {
+    final deepest = _Deepest();
     late final _Parsed parsed;
     try {
       parsed = _parseCommand(this, argv, const [], deepest);
@@ -731,18 +708,13 @@ String _lines(String s) => s.trimRight().split('\n').map((l) => term.plainLabel(
 
 Command? _findSub(List<Command> commands, String token) {
   for (final c in commands) {
-    if (c._name == token || c._aliases.contains(token)) return c;
+    if (c._name == token) return c;
   }
   return null;
 }
 
 /// The deepest command reached so far, for the "Run … --help" hint.
 final class _Deepest {
-  _Deepest(this.dotenv);
-
-  /// What the running command's `dotenv:` file holds: per run, never
-  /// shared between runs.
-  final Map<String, String> dotenv;
   List<Command> chain = const [];
 
   void touch(List<Command> c) {
@@ -781,7 +753,7 @@ _Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
     final sub = _findSub(cmd._commands, t);
     if (sub == null) {
       final guess = _closest(t, [
-        for (final c in cmd._commands) ...[c._name, ...c._aliases],
+        for (final c in cmd._commands) c._name,
       ]);
       throw ContentException('Unknown command "$t"${guess == null ? '' : '. Did you mean "$guess"?'}');
     }
@@ -798,7 +770,6 @@ _Parsed _helpParsed(Command root, List<Command> chain, List<String> argv) {
 /// Arg fails here.
 _Parsed _mergeParent(
   Command root,
-  Map<String, String> dotenv,
   Map<Param<Object?>, Object?> singles,
   Map<Param<Object?>, List<String>> multiRaws,
   _Parsed child,
@@ -813,7 +784,7 @@ _Parsed _mergeParent(
     final what = s == null ? 'option "--${key._name}"' : 'option "--${key._name}"/"-$s"';
     merged[key] = key._mergeMany!(e.value, what, merged[key]);
   }
-  _fromEnv(root, merged, dotenv);
+  _fromEnv(root, merged);
   // Required checks run at every level, parent included (skipped for --help).
   if (!child.shown) {
     for (final v in root._params) {
@@ -910,12 +881,12 @@ final class _Parse {
         // Carry parsed-so-far params into the child; the parent's
         // definitions bind and validate first.
         final child = _parseCommand(sub, argv.sublist(i + 1), chain, deepest);
-        return _mergeParent(root, deepest.dotenv, params, multiRaws, child.withHelp(help, version));
+        return _mergeParent(root, params, multiRaws, child.withHelp(help, version));
       }
       // No subcommand named and no Arg defs: unknown command.
       if (argDefs.isEmpty) {
         final guess = _closest(token, [
-          for (final c in root._commands) ...[c._name, ...c._aliases],
+          for (final c in root._commands) c._name,
         ]);
         throw ContentException('Unknown command "$token"${guess == null ? '' : '. Did you mean "$guess"?'}');
       }
@@ -1071,7 +1042,7 @@ final class _Parse {
       if (at < extraArgs.length) throw ContentException('Unexpected argument "${extraArgs[at]}"');
       extraArgs.clear();
     }
-    _fromEnv(root, params, deepest.dotenv);
+    _fromEnv(root, params);
     // Required valued checks (before the handler runs; skipped for --help).
     if (!shown) {
       for (final v in root._params) {
@@ -1088,56 +1059,12 @@ final class _Parse {
   }
 }
 
-/// `KEY=VALUE` lines of [path]; empty when it does not exist.
-Map<String, String> _readDotenv(String path) {
-  final String text;
-  try {
-    text = io.File(path).readAsStringSync();
-  } on io.PathNotFoundException {
-    return const {};
-  }
-  final out = <String, String>{};
-  for (var line in const LineSplitter().convert(text)) {
-    line = line.trim();
-    if (line.isEmpty || line.startsWith('#')) continue;
-    if (line.startsWith('export ')) line = line.substring(7).trimLeft();
-    final eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    var value = line.substring(eq + 1).trim();
-    if (value.isNotEmpty && (value[0] == '"' || value[0] == "'")) {
-      // A quoted value ends at its matching quote; a comment may follow.
-      // Double quotes decode \n, \t, \" and \\ in one left-to-right pass.
-      final quote = value[0];
-      final out = StringBuffer();
-      var i = 1;
-      for (; i < value.length && value[i] != quote; i++) {
-        if (quote == '"' && value[i] == r'\' && i + 1 < value.length) {
-          final c = value[++i];
-          out.write(switch (c) {
-            'n' => '\n',
-            't' => '\t',
-            _ => c,
-          });
-        } else {
-          out.write(value[i]);
-        }
-      }
-      value = i < value.length ? out.toString() : value; // unterminated: kept as written
-    } else {
-      final hash = value.indexOf(' #');
-      if (hash >= 0) value = value.substring(0, hash).trimRight();
-    }
-    out[line.substring(0, eq).trim()] = value;
-  }
-  return out;
-}
-
 /// Options not given fall back to their environment variable.
-void _fromEnv(Command root, Map<Param<Object?>, Object?> params, Map<String, String> dotenv) {
+void _fromEnv(Command root, Map<Param<Object?>, Object?> params) {
   for (final v in root._params) {
     if (v is Opt<Object?> && !params.containsKey(v)) {
       final name = v._env;
-      final raw = name == null ? null : io.Platform.environment[name] ?? dotenv[name];
+      final raw = name == null ? null : io.Platform.environment[name];
       if (raw == null || raw.isEmpty) continue;
       try {
         params[v] = v._readOne!(raw, 'environment variable \$$name');
@@ -1197,7 +1124,7 @@ String _commandUsage(Command target, List<Command> chain) {
 
   section('Arguments:', [for (final a in argDefs) (_argPlaceholder(a), _describeArg(a))]);
   section('Commands:', [
-    for (final c in target._commands) ([c._name, ...c._aliases].join(', '), c._help),
+    for (final c in target._commands) (c._name, c._help),
   ]);
   final optionRows = _optionRows(target);
   optionRows.add(_helpRow(target, chain));

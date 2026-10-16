@@ -168,8 +168,8 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 Named parameters, each with one meaning: `headers` `body` `timeout` `base` `headless`
 `path` `profile` `proxy` `block` `width` `height` `fullPage` `dir` `env`
 `json` `pretty` `limit` `max` `retries` `check` `short` `or` `rate` `cookies` `csrf`
-`isolates` `match` `dotenv` `sep` `resume`
-`required` `parse` `params` `commands` `aliases` `handler` `secret` `label` `quality` `color`
+`isolates` `match` `sep` `resume`
+`required` `parse` `params` `commands` `handler` `secret` `label` `quality` `color`
 `background` `style` `link` `title` `status` `keys` `accent` `hint` `lines` `suggest`
 `empty` `header` `onSubmit` `since` `history` `query` `live` `total` `keep`
 `password` `format` `expect` `from`.
@@ -714,7 +714,7 @@ final class Arg<T> extends Param<T> { Arg(String name, String help, {T? or, bool
 final class Rest<T> extends Param<List<T>> { Rest(String name, String help, {bool required = false, T Function(String)? parse, List<T>? values}); } // the positionals after the Args, declared last
 final class Command {
   Command(String name, String help, {List<Param<Object?>> params = const [], List<Command> commands = const [],
-      FutureOr<void> Function(Context context)? handler, List<String> aliases = const [], String? dotenv, String? version});
+      FutureOr<void> Function(Context context)? handler, String? version});
   Future<int> run(List<String> argv);                     // sets exitCode: 64 usage, 1 failure (also returned)
 }
 final class Context { T call<T>(Param<T> param);  String usage(); }
@@ -731,13 +731,11 @@ final class UsageException extends ToolkitException { const UsageException(Strin
   The positionals after the `Arg`s go to a `Rest<T>` (`<file>...` in usage, `List<T>`); one that
   nothing takes is an error.
 - `version: '1.2.3'` makes `--version` print `name 1.2.3` and exit 0, in every subcommand too.
-- `dotenv: '.env'` loads `KEY=VALUE` lines (`#` comments, `export `, quotes) before parsing, so an
-  `Opt(env:)` sees them; the real environment always wins, and a missing file is skipped.
 - **Syntax:**
   - `--x v`, `--x=v`, `-x v`, `-xv`, grouped `-vq`, and `--no-x` for a flag whose `or` is `true`.
   - `--` ends the options. `-5` stays positional when no short answers to it.
 - **Subcommands:**
-  - Dispatch is by name or alias, to any depth.
+  - Dispatch is by name, to any depth.
   - A parent's options can be given before or after the subcommand. The `Multi` values merge, and
     `required` is checked at every level.
   - A child can't redeclare an ancestor's name or short.
