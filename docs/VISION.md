@@ -98,7 +98,7 @@ final class Origin { const Origin({String? url, int? status, String? name, Strin
 | ------------------------------------------------------------------ | :----: | :----: | :--: | :-------: |
 | `Response` (http)                                                  |   ✓    |        |      |     ✓     |
 | `File` (fs)                                                        |   ✓    |   ✓    |      |           |
-| `Output` `Shell.read()` (shell), `Download` `Capture` (chrome), `Request` (http), `Console.input()` |   ✓    |        |      |           |
+| `Output` `Shell.read()` (shell), `Download` `Capture` (chrome), `Console.input()` |   ✓    |        |      |           |
 | `page.screenshot()` `pdf()`, `image.encode()`, `Archive.archive()` |   ✓    |        |      |           |
 | `Archive.unarchive(dir)`, `Console.out()`                           |        |   ✓    |      |           |
 | `Hasher`                                                           |        |   ✓    |  ✓   |           |
@@ -180,7 +180,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `header` `agent` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
-| `http`    | `Http.client` `pool` `serve` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Server` `url` · `Request` `method` `path` `query` `header` · `Reply` `text` `json` `stream` `redirect` `status` · `Feed` `run` · `FeedPage` `items` `add` `follow` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
+| `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `follow` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
 | `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `csv`     | `Csv.parse` `records` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
@@ -349,11 +349,6 @@ final class Response with Reader implements Closeable {
     A pipe that isn't a pass-through (gzip, a filter) downloads from scratch. A transport failure
     keeps the `.part`; any other failure deletes it. The GET is sent at the end of the current
     synchronous block unless such a pipeline claims it, so awaiting it works as always.
-- **`Http.serve(handler, port:, host:, max:)`** answers loopback requests until `close()`: `Request` (`method`
-  `path` `query(name)` `header`, a `Reader` of the body) → `Reply.text` `.json` `.stream`
-  (content-type from a file's name, or `type:`) `.redirect` `.status`. A handler error is a 500, logged;
-  a body over `max` (64 MB) is a 413; on loopback, a `Host` that is not a loopback name is a 421.
-  It is meant for a CLI OAuth login, a webhook, or a preview; `switch (r.path())` is the router.
 - `cache: '.cache'` answers a GET within `ttl` from disk (no network, no `Rate` slot), keyed by
   URL, credentials and the request headers the answer `Vary`s on: for developing a scraper. Bodies
   stream to disk; past `ttl` an `ETag`/`Last-Modified` is revalidated (a 304 keeps the copy).
@@ -379,7 +374,10 @@ final page = await shop.get('list.php', query: {'page': p}).html();
 final me = await api.get('me').check().json();
 final ig = Http.client(base: _ig, cookies: session, csrf: (cookie: 'csrftoken', header: 'x-csrftoken'));
 await (cdn.get(url) & Console.bar(name) > Fs.dir('imgs').file(name));   // skip, resume, atomic
-final server = await Http.serve((r) => Reply.text('code ${r.query('code')}'));
+final login = await HttpServer.bind('127.0.0.1', 0);   // an OAuth loopback redirect is plain dart:io
+final req = await login.first;
+final code = req.uri.queryParameters['code'];
+await (req.response..write('Signed in; close this tab.')).close();
 ```
 
 ### 4.3 chrome

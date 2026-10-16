@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Removed**
+
+- `http`: `Http.serve` and `Server`/`Request`/`Reply`; the library is not a server. An OAuth loopback redirect is a few lines of `dart:io` `HttpServer` (docs/VISION.md §4.2).
+
 ## 0.1.0
 
 Scripts without chores: the plumbing a gallery-dl-class downloader wrote by hand is now the

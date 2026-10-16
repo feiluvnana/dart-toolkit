@@ -299,15 +299,6 @@ Future<void> main() async {
     expect(r.exitCode, 0, reason: 'still running 10 s later: \${r.stderr}');
   });
 
-  test('bug 10: Http.serve caps a request body (413), declared or streamed', () async {
-    final s = await Http.serve((r) async => Reply.text('${(await r.bytes()).length}'), max: 10);
-    addTearDown(s.close);
-    final c = Http.client(retries: 0);
-    expect(await c.post(s.url(), body: .text('short')).text(), '5');
-    expect(await c.post(s.url(), body: .text('x' * 100)).status(), 413);
-    expect(await c.post(s.url(), body: .stream(Reader.of(List.filled(100, 65)))).status(), 413);
-  });
-
   group('tls', () {
     late SecurityContext ctx;
     late Directory dir;

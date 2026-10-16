@@ -10,8 +10,7 @@
 ///
 /// Public surface is exactly: [Http], [Client], [Response], [Body],
 /// [HttpStatusException], [HttpRequestException], [RequestFailure],
-/// [SessionException], [Browser],
-/// [Server], [Request], [Reply], [Feed], [FeedPage].
+/// [SessionException], [Browser], [Feed], [FeedPage].
 /// - `Http.client(...)` holds the settings a script states once (base,
 ///   headers, cookies, retries, pacing); `client.copy(...)` is a variant
 ///   that stays one session. `Http.pool([...])` spreads requests over
@@ -31,9 +30,6 @@
 /// - [HttpStatusException] is what `check` and piping a non-2xx body throw;
 ///   [HttpRequestException] is a request that was aborted or could not
 ///   follow a redirect.
-/// - `Http.serve(handler)` answers requests ([Request] `method` `path`
-///   `query` `header`, a [Reader] of the body) with a [Reply] (`.text`
-///   `.json` `.stream` `.redirect` `.status`) until [Server.close].
 /// A non-2xx status is still a [Response] unless the client says `check:`;
 /// only network failures and timeouts throw. Everything else is private.
 library;
@@ -60,7 +56,6 @@ part 'src/http/cache.dart';
 part 'src/http/feed.dart';
 part 'src/http/proxy.dart';
 part 'src/http/response.dart';
-part 'src/http/server.dart';
 
 /// A request body. The compiler rejects a wrong shape; there is no
 /// `body:`/`json:` pair to pass together and no runtime `ArgumentError`.
@@ -403,31 +398,6 @@ abstract final class Http {
   static Client pool(List<Client> members) {
     if (members.isEmpty) throw ArgumentError.value(members, 'members', 'must not be empty');
     return _Pool([for (final m in members) ..._flat(m)]);
-  }
-
-  /// Serve HTTP on [host]:[port] (loopback, a free port by default) until
-  /// [Server.close]: one [handler] call per request, whose [Reply] is sent.
-  /// For a CLI OAuth login (the loopback redirect), a webhook, a folder
-  /// preview. A handler error is a 500 with no detail sent, and is logged to
-  /// stderr. No routing table: `switch (request.path())` is the router.
-  /// A request body over [max] bytes is a 413. On a loopback [host] a
-  /// request whose `Host` is not a loopback name is a 421, so a web page
-  /// cannot reach the server by DNS rebinding.
-  static Future<Server> serve(
-    FutureOr<Reply> Function(Request request) handler, {
-    int port = 0,
-    String host = '127.0.0.1',
-    int max = 64 << 20,
-  }) async {
-    if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
-    final server = Server._(await HttpServer.bind(host, port), max);
-    server.url(); // fix the address while bound
-    server._server.listen((req) {
-      final done = server._answer(req, handler);
-      server._inFlight.add(done);
-      done.whenComplete(() => server._inFlight.remove(done));
-    }, onError: (_) {});
-    return server;
   }
 
   static List<_Client> _flat(Client c) => switch (c) {
@@ -1581,4 +1551,29 @@ Future<void> _detach(HttpClientResponse resp) async {
   try {
     (await resp.detachSocket()).destroy();
   } catch (_) {}
+}
+
+/// `content-type` for a file name, for the common web types.
+String? _typeFor(String? name) {
+  if (name == null) return null;
+  final dot = name.lastIndexOf('.');
+  if (dot < 0) return null;
+  return switch (name.substring(dot + 1).toLowerCase()) {
+    'html' || 'htm' => 'text/html; charset=utf-8',
+    'css' => 'text/css; charset=utf-8',
+    'js' || 'mjs' => 'text/javascript; charset=utf-8',
+    'json' => 'application/json',
+    'txt' || 'md' => 'text/plain; charset=utf-8',
+    'svg' => 'image/svg+xml',
+    'png' => 'image/png',
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'gif' => 'image/gif',
+    'webp' => 'image/webp',
+    'ico' => 'image/x-icon',
+    'pdf' => 'application/pdf',
+    'wasm' => 'application/wasm',
+    'mp4' => 'video/mp4',
+    'zip' => 'application/zip',
+    _ => null,
+  };
 }

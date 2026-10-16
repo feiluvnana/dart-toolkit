@@ -9,7 +9,6 @@ import 'package:dart_toolkit/src/resume.dart' show PassThrough, replays;
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
-import 'support/capture.dart';
 import 'support/child.dart';
 
 /// Python-generated fixtures (codecs with the same names): `python3 -c
@@ -1487,107 +1486,6 @@ void serveTests() {
     expect(err, isA<HttpException>());
     expect('$err', allOf(contains('token=***'), isNot(contains('SECRET')), isNot(contains('pw'))));
   });
-
-  group('Http.serve', () {
-    test('answers text, json, streams, redirects and statuses; a handler error is a 500', () async {
-      final log = await capture(() async {
-        final dir = await Directory.systemTemp.createTemp('serve');
-        addTearDown(() => dir.delete(recursive: true));
-        await File('${dir.path}/page.html').writeAsString('<p>hi</p>');
-        final server = await Http.serve(
-          (r) async => switch (r.path()) {
-            '/callback' => Reply.text('code ${r.query('code')}'),
-            '/json' => Reply.json({'method': r.method(), 'agent': r.header('x-a')}),
-            '/echo' => Reply.text('got ${await r.text()}', status: 201),
-            '/page' => Reply.stream(_Mem('<p>hi</p>'), type: 'text/html'),
-            '/go' => const Reply.redirect('/callback?code=7'),
-            '/boom' => throw StateError('handler failed'),
-            _ => const Reply.status(404),
-          },
-        );
-        addTearDown(server.close);
-        final c = Http.client(headers: {'x-a': 'me'});
-        final u = server.url();
-        expect(u, startsWith('http://127.0.0.1:'));
-        expect(await c.get('${u}callback?code=42').text(), 'code 42');
-        expect((await c.get('${u}json').json()).$('agent').text(), 'me');
-        final echo = await c.post('${u}echo', body: .text('body'));
-        expect((echo.status(), await echo.text()), (201, 'got body'));
-        final page = await c.get('${u}page');
-        expect((page.header('content-type'), await page.text()), ('text/html', '<p>hi</p>'));
-        expect(await c.get('${u}go').text(), 'code 7');
-        expect(await c.get('${u}boom?code=SECRET').status(), 500);
-        expect(await c.get('${u}nope').status(), 404);
-        await c.close();
-      });
-      expect(log.err, contains('✗ GET /boom?code=***: Bad state: handler failed'));
-    });
-
-    test('S10: a loopback server answers only loopback Host names (DNS rebinding)', () async {
-      final server = await Http.serve((r) => const Reply.text('ok'));
-      addTearDown(server.close);
-      final port = Uri.parse(server.url()).port;
-      Future<int> as(String host) async {
-        final c = HttpClient();
-        try {
-          final req = await c.get('127.0.0.1', port, '/');
-          req.headers.host = host;
-          return (await req.close()).statusCode;
-        } finally {
-          c.close(force: true);
-        }
-      }
-
-      expect(await as('127.0.0.1'), 200);
-      expect(await as('localhost'), 200);
-      expect(await as('evil.example'), 421);
-    });
-
-    test('B8: a reply that fails after the handler is logged; bad JSON is a 500', () async {
-      final log = await capture(() async {
-        final server = await Http.serve(
-          (r) async => switch (r.path()) {
-            '/json' => Reply.json({'when': DateTime(2026)}), // jsonEncode cannot take a DateTime
-            _ => Reply.stream(_Failing()),
-          },
-        );
-        addTearDown(server.close);
-        final c = Http.client(retries: 0);
-        expect(await c.get('${server.url()}json').status(), 500);
-        try {
-          await c.get('${server.url()}stream').text();
-        } catch (_) {}
-        await c.close();
-      });
-      expect(log.err, contains('✗ GET /json: Converting object to an encodable object failed'));
-      expect(log.err, contains('✗ GET /stream: Bad state: disk gone'));
-    });
-
-    test('close waits for a request in flight, then refuses new ones', () async {
-      final gate = Completer<void>();
-      final server = await Http.serve((r) async {
-        await gate.future;
-        return const Reply.text('late');
-      });
-      final c = Http.client(retries: 0);
-      final pending = c.get(server.url()).text();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      final closing = server.close();
-      gate.complete();
-      expect(await pending, 'late');
-      await closing;
-      await expectLater(c.get(server.url()), throwsA(isA<IOException>()));
-    });
-  });
-}
-
-/// A body that fails after its first chunk.
-final class _Failing with Reader {
-  @override
-  Stream<List<int>> stream() async* {
-    yield 'partial'.codeUnits;
-    throw StateError('disk gone');
-  }
 }
 
 /// A pipe that fails on its first chunk (not a transport error).
