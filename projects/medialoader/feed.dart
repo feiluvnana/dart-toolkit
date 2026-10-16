@@ -40,7 +40,7 @@ Future<void> feed(
   final mark = j.cursor(kind);
   final resumed = !full && !j.o.dry && (await mark.text(or: '')).trim().isNotEmpty;
   final listed = <String, int>{};
-  var pages = 0, ok = true;
+  var pages = 0;
 
   // The page's files, noting carousels/threads whose items changed.
   List<Download> filesOf(List<Json> page) {
@@ -81,13 +81,12 @@ Future<void> feed(
       j.add(list).then((r) async {
         final done = r.failures().isEmpty;
         if (done && !j.o.dry) await index.save();
-        ok = ok && done;
         return done;
       }),
     );
   });
   index.newest = listed.values.fold(newest, max);
-  if (complete && ok) index.checked = DateTime.now();
+  if (complete) index.checked = DateTime.now();
   if (complete && !resumed) {
     final seen = listed.keys.toSet();
     final shown = {

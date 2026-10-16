@@ -53,10 +53,20 @@ void main() {
     work[0].complete(true);
     expect(await eventually(() => File(cursor).existsSync() && File(cursor).readAsStringSync() == 'p1'), isTrue);
     work[1].complete(false); // a failed download: a rerun starts from here
-    work[2].completeError(StateError('boom')); // a throwing one is a failure, never an unhandled error
+    work[2].completeError(StateError('boom')); // a throwing one fails the run once all work is done
     work[3].complete(true);
-    expect(await run, isFalse);
+    await expectLater(run, throwsA(isA<StateError>()));
     expect(File(cursor).readAsStringSync(), 'p1');
+  });
+
+  test('work that fails makes the run fail: the first error is rethrown after every page, false is not complete (B11)', () async {
+    var saves = 0;
+    final thrown = Feed((c) async => _page(c, 2)).run(
+      (page) => page.add(Future(() => throw StateError('save ${++saves} failed'))),
+    );
+    await expectLater(thrown, throwsA(isA<StateError>().having((e) => e.message, 'message', 'save 1 failed')));
+    expect(saves, 3);
+    expect(await Feed((c) async => _page(c, 2)).run((page) => page.add(Future.value(false))), isFalse);
   });
 
   test('an interrupted run continues: the top first, up to what is known, then the saved cursor', () async {

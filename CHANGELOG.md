@@ -12,6 +12,7 @@
 - `html`: `form()` reads the controls a browser posts: a form wrapped in a table (whose controls the parser places after it) and `form="id"` controls elsewhere in the page no longer give `fields: {}`.
 - `chrome`: `Chrome.connect` to an endpoint that accepts and never answers fails with a `BrowserException` after 30 s instead of hanging.
 - `image`/`video`/`archive`/`chrome`: a source that fails while it is spooled to a temp file (`reader.image()`, `reader.video()`, a 7-Zip unarchive, a page upload) surfaces its own error instead of `FileSystemException: File closed` naming a hidden temp.
+- `http`: `Feed.run` no longer reports success when page work failed: it is `false` unless the end was reached with every `page.add(work)` true, and a work that threw fails the run with the first error once every page's work is done (it was mapped to `false` and dropped). medialoader drops its own `ok` flag.
 
 **Changed**
 

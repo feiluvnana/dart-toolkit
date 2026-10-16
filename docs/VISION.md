@@ -288,7 +288,7 @@ sealed class Body {                              // stream (or multipart with fi
 }
 final class Feed<T> {                            // a newest-first listing, one page at a time
   Feed(Future<({List<T> items, String? next})> Function(String? cursor) page, {String? cursor});   // cursor: a file that survives a run
-  Future<bool> run(FutureOr<void> Function(FeedPage<T> page) onPage, {bool all = false});   // true: the end was reached
+  Future<bool> run(FutureOr<void> Function(FeedPage<T> page) onPage, {bool all = false});   // true: the end was reached, all work succeeded; a work's throw is rethrown
 }
 final class FeedPage<T> { List<T> items();  FeedPage<T> add(Future<bool> work);  FeedPage<T> follow(String cursor);  void stop(); }
 final class Response with Reader implements Closeable {
@@ -322,7 +322,9 @@ final class Response with Reader implements Closeable {
   where the rest is known (or older than wanted), `page.add(work)` hands over what the page starts
   while the next page is fetched, and the cursor file moves past a page only once its work (and
   every earlier page's) succeeded, so an interrupted run continues: it lists the top up to what is
-  known, then resumes. `all: true` re-lists from the top.
+  known, then resumes. `all: true` re-lists from the top. `run` is true only when the end was
+  reached with every page's work done; a work that throws fails the run (its first error) once all
+  work has finished.
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws what `check()` throws, so an
   error page is never saved. The readings (`text()`, `lines()`, `json()`, `html()`) work on any
   status.

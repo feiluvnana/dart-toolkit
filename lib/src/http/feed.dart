@@ -24,11 +24,13 @@ final class Feed<T> {
   final Future<({List<T> items, String? next})> Function(String? cursor) _page;
   final String? _cursor;
 
-  /// Walk the pages; true when the end was reached.
+  /// Walk the pages; true when the end was reached and every page's work
+  /// succeeded.
   ///
   /// [onPage] gets each non-empty page as a [FeedPage]: its `items()`,
   /// `add(work)` for what the page starts (a download, a save; `true` when
-  /// it succeeded), `follow(cursor)` for another start point, and `stop()`
+  /// it succeeded; a throw fails the run with the first error, once every
+  /// page's work is done), `follow(cursor)` for another start point, and `stop()`
   /// to end the walk there (the rest is known, or older than wanted). A
   /// cursor is visited once a run, so a feed that loops back ends. A page
   /// with no items ends its chain; the walk goes on with what was followed. [run] waits for [onPage], not for the work: the
@@ -41,7 +43,9 @@ final class Feed<T> {
     final file = _cursor == null ? null : File(_cursor);
     final saved = all || file == null || !await file.exists() ? '' : (await file.readAsString()).trim();
     var chain = Future<void>.value();
-    var ok = true;
+    var ok = true, every = true; // the tracked pages' work, every page's work
+    (Object, StackTrace)? failed; // the first work that threw
+    void fail(Object e, StackTrace st) => failed ??= (e, st);
 
     // Remember [next] (null: done, nothing to continue) once [page]'s work
     // is; the catch-up from the top only waits for its work.
@@ -49,6 +53,7 @@ final class Feed<T> {
       final done = page == null ? Future.value(true) : page._done();
       chain = chain.then((_) async {
         final succeeded = await done;
+        every = every && succeeded;
         if (!tracked) return;
         ok = ok && succeeded;
         if (!ok || file == null) return;
@@ -69,7 +74,7 @@ final class Feed<T> {
       visited.add(cursor);
       for (;;) {
         final p = await _page(cursor);
-        final page = p.items.isEmpty ? null : FeedPage<T>._(p.items, followed);
+        final page = p.items.isEmpty ? null : FeedPage<T>._(p.items, followed, fail);
         if (page != null) await onPage(page);
         if (page != null && page._stopped) {
           track(page, null, tracked: tracked);
@@ -88,9 +93,11 @@ final class Feed<T> {
     }
 
     try {
-      if (saved.isEmpty) return await walk(null, tracked: true);
-      await walk(null, tracked: false);
-      return await walk(saved, tracked: true);
+      if (saved.isNotEmpty) await walk(null, tracked: false);
+      final end = await walk(saved.isEmpty ? null : saved, tracked: true);
+      await chain;
+      if (failed case (final e, final st)) Error.throwWithStackTrace(e, st);
+      return end && every;
     } finally {
       await chain;
     }
@@ -100,10 +107,11 @@ final class Feed<T> {
 /// One page of a [Feed] walk: its items, the work it starts, the cursors
 /// it adds to the walk, and whether the walk ends here.
 final class FeedPage<T> {
-  FeedPage._(this._items, this._followed);
+  FeedPage._(this._items, this._followed, this._fail);
 
   final List<T> _items;
   final List<String> _followed;
+  final void Function(Object error, StackTrace stack) _fail;
   final _work = <Future<bool>>[];
   var _stopped = false;
 
@@ -111,10 +119,16 @@ final class FeedPage<T> {
   List<T> items() => _items;
 
   /// [work] this page started; the cursor moves past the page once all of
-  /// it is `true`. Returns this page.
+  /// it is `true`. A throw fails the run (the first one, after every
+  /// page's work). Returns this page.
   FeedPage<T> add(Future<bool> work) {
-    // Heard at once: a failure is this page's, never an unhandled error.
-    _work.add(work.catchError((Object _) => false));
+    // Heard at once: a failure is the run's, never an unhandled error.
+    _work.add(
+      work.catchError((Object e, StackTrace st) {
+        _fail(e, st);
+        return false;
+      }),
+    );
     return this;
   }
 
