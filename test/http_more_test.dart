@@ -126,6 +126,20 @@ void main() {
     expect(await Http.client().get('$url/sjis').lines().toList(), ['日本語テスト', '日本語テスト']);
   });
 
+  test('lines() joins a character the server flushed in two halves', () async {
+    for (final (charset, bytes) in [('shift_jis', _sjisLine), ('utf-8', utf8.encode('日本語テスト'))]) {
+      final (_, split) = await serve((r) async {
+        r.response.headers.set('content-type', 'text/plain; charset=$charset');
+        r.response.add(bytes.sublist(0, 5)); // mid-character in both
+        await r.response.flush();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        r.response.add([...bytes.sublist(5), 10, ...bytes]);
+        await r.response.close();
+      });
+      expect(await Http.client().get(split).lines().toList(), ['日本語テスト', '日本語テスト'], reason: charset);
+    }
+  });
+
   group('resume', () {
     test('bug 4: Http.pool honours resume: true', () async {
       final dir = await temp();
