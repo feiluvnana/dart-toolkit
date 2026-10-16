@@ -115,7 +115,7 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 | content as text / bytes                | `text()` / `bytes()`                                                    | every `Reader`, `Element(s)`, `Page`                                         |
 | bytes → value                          | `html()` `json()` `image()`                                             | readings on `Reader`                                                         |
 | text → value / value → text or bytes   | `parse` / `encode`                                                      | `Html`, `Json`, `Csv`, `Yaml`, `Cookies` / `Json`, `Csv`, `Cookies`, `Image` |
-| query a tree / typed read, null if not | `$` / `value<T>()`, `run<T>()`                                          | `Elements`, `Element`, `Json` / `Json`, `Page`                               |
+| query a tree / typed read, null if not | `$` / `value<T>()`, `run()`                                             | `Elements`, `Element`, `Json` / `Json`, `Page`                               |
 | an attribute / every match's attribute | `attr` / `attrs`                                                        | `Element(s)`                                                                 |
 | a tree without some parts              | `not(selector)`                                                         | `Element(s)`                                                                 |
 | feed data / count progress             | `add(data)` / `tick(n)`                                                 | `Hasher` / `Bar`                                                             |
@@ -166,7 +166,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
 
 A module imports only core and its engine. The exceptions are `video`, which imports `image` for `frame()`, `chrome`, which imports `html`
-for `Elements` and `json` for the `run<T>` coercion rules, and `html`, which imports `json` for
+for `Elements` and `json` for `run`'s `Json` result, and `html`, which imports `json` for
 `Elements.json()` (embedded data) and re-exports it, and `yaml`, which imports and re-exports `json` (its `parse`
 returns a `Json`). `console` and `tui`
 share one private terminal layer: stdin, key decoding, signal handling and restoring the terminal.
@@ -349,7 +349,7 @@ final class Page implements Closeable {
   Future<Page> go(String url, {Duration? timeout});                                  // wait for load
   Future<Page> back({Duration? timeout});  Future<Page> reload({Duration? timeout});
   Future<String> url();  Future<Elements> html();  Future<String> text();
-  Future<T?> run<T>(String js);  Future<Cookies> cookies({bool all = false});          // the current URL's jar
+  Future<Json> run(String js);   Future<Cookies> cookies({bool all = false});          // the current URL's jar
   Future<String> cookie(String name, {Duration? timeout});                              // waits until set
   Stream<Capture> responses(String pattern);                                            // XHR/fetch matching a glob
   Future<Page> click(String selector, {Duration? timeout});                             // auto-wait
@@ -382,9 +382,9 @@ final class Capture with Reader { int status();  String url();  String? header(S
 - `idle` waits for 500 ms with no request in flight. `download` credits a download started in the
   tab or any of its frames; downloads share one folder per browser, told apart by their DevTools
   guid, so concurrent downloads don't clash.
-- `run<T>` takes an expression or a function source (called), awaits promises, throws
-  `BrowserException` when the script throws, and reads the result with the `Json.value<T>()` rules (use
-  `List<Object?>`/`Map<String, Object?>` for collections). `press` takes the key names of §4.12;
+- `run` evaluates an expression or statements once (a function result is called once), awaits
+  promises, throws `BrowserException` when the script throws, and returns the result as `Json`:
+  `await page.run('document.title').or('')`, `.value<int>()`, `.$('a.b')`, `.asList<String>()`. `press` takes the key names of §4.12;
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
 - **The session is a value:** `cookies()` is a core `Cookies` jar (domain, path, expiry kept;

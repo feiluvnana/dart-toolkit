@@ -283,7 +283,7 @@ void main() {
         height: 600,
       );
       expect(await page.text(), contains('hi'));
-      expect(await page.run<int>('window.innerWidth'), 800);
+      expect(await page.run('window.innerWidth').value<int>(), 800);
       await page.close();
       expect(hits.any((h) => h.endsWith('/img.png')), isFalse);
     });
@@ -347,21 +347,21 @@ void main() {
 
     test('evaluate<T>() evaluates, awaits, and nulls mistypes', () async {
       final page = await browser.open(dataUrl(testHtml));
-      expect(await page.run<String>('document.title'), 'T');
-      expect(await page.run<int>('1 + 1'), 2);
-      expect(await page.run<String>('1 + 1'), isNull);
-      expect(await page.run<String>('null'), isNull);
-      expect(await page.run<String>('undefined'), isNull);
-      expect(await page.run<String>('document.title'), 'T');
+      expect(await page.run('document.title').value<String>(), 'T');
+      expect(await page.run('1 + 1').value<int>(), 2);
+      expect(await page.run('1 + 1').value<String>(), isNull);
+      expect(await page.run('null').value<String>(), isNull);
+      expect(await page.run('undefined').value<String>(), isNull);
+      expect(await page.run('document.title').value<String>(), 'T');
       await page.close();
     });
 
     test('B5: evaluate coerces numbers like Json.value; collections read via asList', () async {
       final page = await browser.open(dataUrl(testHtml));
-      expect(await page.run<double>('1.0'), 1.0);
-      expect(await page.run<int>('1.0'), 1);
-      expect(Json.of(await page.run<dynamic>('["a", "b"]')).asList<String>(), ['a', 'b']);
-      expect(await page.run<Map<String, Object?>>('({"x": 1})'), {'x': 1});
+      expect(await page.run('1.0').value<double>(), 1.0);
+      expect(await page.run('1.0').value<int>(), 1);
+      expect(await page.run('["a", "b"]').asList<String>(), ['a', 'b']);
+      expect(await page.run('({"x": 1})').asMap<Object?>(), {'x': 1});
       await page.close();
     });
 
@@ -386,13 +386,23 @@ void main() {
       await page.close();
     });
 
+    test('E3: run evaluates its source once, calls a function result once, returns Json', () async {
+      final page = await browser.open(dataUrl(testHtml));
+      await page.run('window.n = 0');
+      expect(await page.run('window.n++; () => ++window.n').value<int>(), 2);
+      expect(await page.run('window.n').value<int>(), 2, reason: 'the source ran once, its function once');
+      expect(await page.run('({a: {b: [1, 2]}})').$('a.b').asList<int>(), [1, 2]);
+      expect(await page.run('undefined').value<int>(), isNull);
+      await page.close();
+    });
+
     test('run calls a function source; a script that throws is BrowserException', () async {
       final page = await browser.open(dataUrl(testHtml));
-      expect(await page.run<String>('() => document.title'), 'T');
-      expect(await page.run<int>('new Promise((r) => setTimeout(() => r(7), 10))'), 7);
-      expect(await page.run<double>('NaN'), isNaN);
+      expect(await page.run('() => document.title').value<String>(), 'T');
+      expect(await page.run('new Promise((r) => setTimeout(() => r(7), 10))').value<int>(), 7);
+      expect(await page.run('NaN').value<double>(), isNaN);
       await expectLater(
-        page.run<int>('null.x'),
+        page.run('null.x').value<int>(),
         throwsA(isA<BrowserException>().having((e) => e.message, 'message', contains('TypeError'))),
       );
       await page.close();
@@ -429,7 +439,7 @@ void main() {
     test('click drives the page', () async {
       final page = await browser.open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'));
       await page.click('#b');
-      expect(await page.run<String>('document.title'), 'C');
+      expect(await page.run('document.title').value<String>(), 'C');
       await page.close();
     });
 
@@ -472,7 +482,7 @@ void main() {
     test('fill replaces the value with keystrokes', () async {
       final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', 'hi');
-      expect(await page.run<String>("document.querySelector('#q').value"), 'hi');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), 'hi');
       await page.close();
     });
 
@@ -484,11 +494,11 @@ void main() {
         ),
       );
       await page.fill('#e', 'new');
-      expect(await page.run<String>("document.querySelector('#e').innerText"), 'new');
-      expect(await page.run<int>('window.n'), greaterThan(0));
+      expect(await page.run("document.querySelector('#e').innerText").value<String>(), 'new');
+      expect(await page.run('window.n').value<int>(), greaterThan(0));
       await page.fill('#e', '');
       expect(
-        (await page.run<String>("document.querySelector('#e').innerText"))!.trim(),
+        (await page.run("document.querySelector('#e').innerText").value<String>())!.trim(),
         '',
       ); // as a user's delete leaves it
       await page.close();
@@ -502,15 +512,15 @@ void main() {
         ),
       );
       await page.fill('#q', 'héllo 世界');
-      expect(await page.run<String>("document.querySelector('#q').value"), 'héllo 世界');
-      expect(await page.run<int>('window.ks'), 5); // h l l o and the space
+      expect(await page.run("document.querySelector('#q').value").value<String>(), 'héllo 世界');
+      expect(await page.run('window.ks').value<int>(), 5); // h l l o and the space
       await page.close();
     });
 
     test('B5: fill with an empty value clears the field', () async {
       final page = await browser.open(dataUrl('<input id="q" value="old">'));
       await page.fill('#q', '');
-      expect(await page.run<String>("document.querySelector('#q').value"), '');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), '');
       await page.close();
     });
 
@@ -525,11 +535,11 @@ void main() {
       await page.click('#q');
       await page.press('a');
       await page.press('b');
-      expect(await page.run<String>("document.querySelector('#q').value"), 'ab');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), 'ab');
       await page.press('ctrl+a');
-      expect(await page.run<String>('JSON.stringify(window.ks)'), contains('a|true'));
+      expect(await page.run('JSON.stringify(window.ks)').value<String>(), contains('a|true'));
       await page.press('backspace');
-      expect(await page.run<String>("document.querySelector('#q').value"), 'a');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), 'a');
       await page.press('enter');
       await page.close();
     });
@@ -538,10 +548,10 @@ void main() {
       final page = await browser.open(dataUrl('<input id="q">'));
       await page.click('#q');
       await page.press('Enter');
-      expect(await page.run<String>("document.querySelector('#q').value"), '');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), '');
       await page.press('esc');
       await page.press('+');
-      expect(await page.run<String>("document.querySelector('#q').value"), '+');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), '+');
       expect(page.press('frobnicate'), throwsA(isA<ArgumentError>()));
       await page.close();
     });
@@ -554,7 +564,7 @@ void main() {
         ),
       );
       await page.select('#s', 'b');
-      expect(await page.run<String>("document.querySelector('#s').value"), 'b');
+      expect(await page.run("document.querySelector('#s').value").value<String>(), 'b');
       // Regression: a missing option threw TimeoutException at once.
       await expectLater(
         page.select('#s', 'zzz'),
@@ -574,8 +584,8 @@ void main() {
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
         await page.upload('#f', Fs.file('${dir.path}/note.txt'));
-        expect(await page.run<String>("document.querySelector('#f').files[0].name"), 'note.txt');
-        expect(await page.run<String>('window.seen.join()'), 'input,change');
+        expect(await page.run("document.querySelector('#f').files[0].name").value<String>(), 'note.txt');
+        expect(await page.run('window.seen.join()').value<String>(), 'input,change');
       } finally {
         await dir.delete(recursive: true);
       }
@@ -588,7 +598,7 @@ void main() {
       try {
         await Fs.file('${dir.path}/note.txt').write('up-bytes');
         await page.upload('#f', Fs.file('${dir.path}/note.txt'));
-        expect(await page.run<String>("document.querySelector('#f').files[0].name"), 'note.txt');
+        expect(await page.run("document.querySelector('#f').files[0].name").value<String>(), 'note.txt');
       } finally {
         await dir.delete(recursive: true);
       }
@@ -598,7 +608,7 @@ void main() {
     test('scroll goes to the bottom, scroll(sel) brings an element into view', () async {
       final page = await browser.open(dataUrl('<div style="height:3000px">top</div><div id="bottom">bot</div>'));
       await page.scroll();
-      expect(await page.run<bool>('window.scrollY > 0'), isTrue);
+      expect(await page.run('window.scrollY > 0').value<bool>(), isTrue);
       await page.scroll(to: '#bottom');
       await page.close();
     });
@@ -767,7 +777,7 @@ void main() {
           .open(dataUrl('<button id="b" onclick="document.title=\'C\'">x</button>'))
           .click('#b')
           .idle();
-      expect(await page.run<String>('document.title'), 'C');
+      expect(await page.run('document.title').value<String>(), 'C');
       expect(await browser.open(dataUrl(testHtml)).html().$('p').text(), 'Hi L');
       await page.close();
     });

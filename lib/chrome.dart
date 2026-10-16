@@ -595,31 +595,42 @@ final class Page implements Closeable {
   /// The rendered DOM as [Elements], with the page's URL as the base.
   /// Chain into it: `page.html().$('a')`.
   Future<Elements> html() async => Html.parse(
-    await run<String>(
-          '(document.doctype ? new XMLSerializer().serializeToString(document.doctype) : "")'
-          ' + (document.documentElement ? document.documentElement.outerHTML : "")',
-        ) ??
-        '',
+    await run(
+      '(document.doctype ? new XMLSerializer().serializeToString(document.doctype) : "")'
+      ' + (document.documentElement ? document.documentElement.outerHTML : "")',
+    ).or(''),
     base: _url,
   );
 
   /// The page's `innerText`.
-  Future<String> text() async => await run<String>('document.documentElement.innerText') ?? '';
+  Future<String> text() => run('document.documentElement.innerText').or('');
 
-  /// Evaluate [js] (an expression, or a function source that is then
-  /// called), awaiting it if it is a promise, reading the result with the
-  /// `Json.value<T>()` rules (`null` for `null`, `undefined`, or a result
-  /// that is not a `T`, so `??` gives the default; integral numbers read as
-  /// both `int` and `double`). A script that throws is a [BrowserException].
+  /// Evaluate [js] once (an expression or statements; a function source is
+  /// then called once), awaiting a promise, and return the result as [Json]
+  /// (`null` and `undefined` read as null). A script that throws is a
+  /// [BrowserException].
   ///
   /// ```dart
-  /// final title = await page.run<String>('document.title') ?? '';
-  /// final tags = Json.of(await page.run<dynamic>('["a", "b"]')).asList<String>();
+  /// final title = await page.run('document.title').or('');
+  /// final tags = await page.run('[...document.querySelectorAll("a")].map(a => a.href)').asList<String>();
   /// ```
-  Future<T?> run<T>(String js) async {
-    var v = await _eval(js);
-    if (v['type'] == 'function') v = await _eval('($js)()');
-    return Json.of(_value(v)).value<T>();
+  Future<Json> run(String js) async {
+    var v = await _eval(js, byValue: false);
+    // An object or function stays in the page: read it (calling a function
+    // first) by reference, so the source never runs twice.
+    if (v['objectId'] case final String id) {
+      final r = await _s.send('Runtime.callFunctionOn', {
+        'objectId': id,
+        'functionDeclaration': 'function() { return typeof this === "function" ? this() : this; }',
+        'awaitPromise': true,
+        'returnByValue': true,
+        'userGesture': true,
+      });
+      unawaited(_s.send('Runtime.releaseObject', {'objectId': id}).then<void>((_) {}, onError: (Object _) {}));
+      _thrown(r, 'run');
+      v = r['result']! as Map<String, Object?>;
+    }
+    return Json.of(_value(v));
   }
 
   Future<Map<String, Object?>> _eval(String js, {bool byValue = true}) async {
@@ -1359,7 +1370,7 @@ extension PageFuture on Future<Page> {
   Future<String> url() async => (await this).url();
   Future<Elements> html() async => (await this).html();
   Future<String> text() async => (await this).text();
-  Future<T?> run<T>(String js) async => (await this).run<T>(js);
+  Future<Json> run(String js) async => (await this).run(js);
   Future<Cookies> cookies({bool all = false}) async => (await this).cookies(all: all);
   Future<String> cookie(String name, {Duration? timeout}) async => (await this).cookie(name, timeout: timeout);
   Stream<Capture> responses(String pattern) => Stream.fromFuture(this).asyncExpand((p) => p.responses(pattern));
