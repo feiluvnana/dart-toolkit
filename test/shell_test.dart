@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/shell.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';

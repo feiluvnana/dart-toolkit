@@ -32,6 +32,7 @@ import 'src/exit.dart' as exit;
 import 'src/names.dart' as names;
 import 'src/progress.dart' show task;
 import 'src/quiet.dart';
+import 'src/time.dart' show SpanUtils;
 import 'src/timeout.dart';
 import 'src/which.dart' as paths;
 export 'core.dart';

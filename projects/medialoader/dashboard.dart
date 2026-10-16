@@ -8,6 +8,7 @@ import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/tui.dart';
+import 'package:dart_toolkit/utils.dart';
 
 // The one board of this run: every module reports into it.
 final board = Board();

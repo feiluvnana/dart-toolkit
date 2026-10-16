@@ -5,6 +5,7 @@ import 'dart:io' as io;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/posix.dart' as posix;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/child.dart';

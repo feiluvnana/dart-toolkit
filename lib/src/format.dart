@@ -14,7 +14,7 @@ String fmtSize(num bytes) {
 }
 
 /// Byte counts as humans read them: `bytes.size()` → `12.1 MB`.
-extension Sizes on num {
+extension SizeUtils on num {
   /// `0 B`, `200.0 KB`, `12.1 MB`, `1.5 GB`.
   String size() => fmtSize(this);
 }

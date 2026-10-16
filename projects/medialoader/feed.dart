@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/utils.dart';
 
 import 'job.dart';
 import 'platform.dart';

@@ -45,11 +45,14 @@ export 'core.dart';
 
 import 'src/charset.dart' as charset;
 import 'src/cookies.dart' as jar;
+import 'src/cookies.dart' show Cookies;
 import 'src/decoders.dart';
 import 'src/origin.dart' as names;
 import 'src/rate.dart' as rate;
+import 'src/rate.dart' show Rate;
 import 'src/resume.dart';
 import 'src/retry.dart' as retry;
+import 'src/time.dart' show SpanUtils;
 import 'src/timeout.dart';
 
 part 'src/http/feed.dart';

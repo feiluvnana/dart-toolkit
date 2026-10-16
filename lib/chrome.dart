@@ -34,6 +34,7 @@ import 'html.dart';
 import 'src/cdp.dart';
 import 'src/chrome_find.dart';
 import 'src/cookies.dart' as jar;
+import 'src/cookies.dart' show Cookies;
 import 'src/exit.dart' as exit;
 import 'src/format.dart' show Unit;
 import 'src/glob.dart';
@@ -42,6 +43,7 @@ import 'src/names.dart' as names;
 import 'src/origin.dart' as origins;
 import 'src/posix.dart' as posix;
 import 'src/progress.dart' show Run, working;
+import 'src/time.dart' show SpanUtils;
 
 export 'core.dart';
 export 'html.dart';

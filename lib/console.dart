@@ -31,6 +31,7 @@ import 'src/logbook.dart';
 import 'src/progress.dart' as progress show Tally, Watcher;
 import 'src/progress.dart' show watchers;
 import 'src/terminal.dart' as term;
+import 'src/time.dart' show TimeUtils;
 
 const _bold = '\x1b[1m';
 const _dim = '\x1b[2m';

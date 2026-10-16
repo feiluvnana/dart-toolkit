@@ -9,32 +9,21 @@
 /// ```
 ///
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Probe], [Meter],
-/// [Task], [Watch], [Closeable], [Origin], [Cookies], [Rate], [Durations],
-/// [Sizes], [Times], [Spans], [ToolkitException], [ContentException],
-/// [PasswordException].
-/// - [Reader]: `stream` `bytes` `text` `lines` `cookies` `|` `&` `>` (+ `origin`, `of`).
+/// [Task], [Watch], [Closeable], [Origin], [ToolkitException],
+/// [ContentException], [PasswordException]. Helpers (unit literals, sizes,
+/// times, `Rate`, `Cookies`) are `package:dart_toolkit/utils.dart`.
+/// - [Reader]: `stream` `bytes` `text` `lines` `|` `&` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
 /// - [Probe]: `update`; `&` attaches one to a reader, a [Task] or (via
 ///   [Watch]) any future, and it shows the whole run.
 /// - [Meter]: a probe to draw by hand: `done` `total` `rate`.
 /// - [Task]: a future that counts (`Pool.map`, `Dir.copy`): `&`.
-/// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `encode` `[]` `header` `set` `agent`.
-/// - [Rate]: paces the work that shares it (`wait`; `perHost:` paces each host apart).
-/// - [Durations]: `3.seconds`, `11.minutes`: unit literals for every timeout.
-/// - [Sizes]: `bytes.size()` (`12.1 MB`).
-/// - [Times] / [Spans]: `now.format('yyyy-MM-dd')`, `wait.human()` (`11 min 5 s`).
 /// - [Pipe]: `transform` `abort`.
 /// - [Closeable]: `close`.
 /// - [Origin]: typed `url()` / `status()` / `name()` / `path()` / `size()` for a reader.
 /// - [ToolkitException]: the base of every failure the toolkit itself reports.
 /// - [ContentException]: a value the toolkit rejects (bad JSON, archive, image…).
 /// Everything else is private.
-///
-/// {@canonicalFor cookies.Cookies}
-/// {@canonicalFor format.Sizes}
-/// {@canonicalFor rate.Rate}
-/// {@canonicalFor time.Spans}
-/// {@canonicalFor time.Times}
 library;
 
 // Origin's named parameters feed private fields, which initializing formals cannot do.
@@ -45,15 +34,10 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'src/cookies.dart';
 import 'src/progress.dart';
 import 'src/resume.dart';
 
-export 'src/cookies.dart' show Cookies;
-export 'src/format.dart' show Sizes;
 export 'src/progress.dart' show Meter, Probe, Task, Watch;
-export 'src/rate.dart' show Rate;
-export 'src/time.dart' show Spans, Times;
 
 /// What a reader knows about its source: URL, status, file name, path, size.
 ///
@@ -119,14 +103,6 @@ abstract mixin class Reader {
   /// UTF-8, malformed bytes replaced; types may refine (charset).
   Future<String> text() async => utf8.decode(await bytes(), allowMalformed: true);
 
-  /// A Netscape `cookies.txt` session (see [Cookies.parse]); [or] when the
-  /// source does not exist (a first run, before any login).
-  ///
-  /// ```dart
-  /// final jar = await Fs.file('.ins.session').cookies(or: Cookies());
-  /// ```
-  Future<Cookies> cookies({Cookies? or}) => _cookies(this, or);
-
   /// The bytes through [pipe]. Lazy: nothing flows yet; null → this
   /// reader, unchanged.
   Reader operator |(Pipe? pipe) => pipe == null ? this : _PipedReader(this, pipe);
@@ -155,15 +131,6 @@ Future<List<int>> _bytes(Reader reader) async {
     out.add(chunk);
   }
   return out.takeBytes();
-}
-
-Future<Cookies> _cookies(Reader reader, Cookies? or) async {
-  try {
-    return Cookies.parse(await reader.text());
-  } on io.PathNotFoundException {
-    if (or != null) return or;
-    rethrow;
-  }
 }
 
 Future<void> _run(Reader self, Writer? writer) async {
@@ -352,27 +319,6 @@ abstract mixin class Writer {
   Origin origin() => const Origin();
 }
 
-/// Unit literals: `3.seconds`, `1.5.seconds`, `250.milliseconds`,
-/// `11.minutes`. Fractions round to the microsecond.
-extension Durations on num {
-  /// This many milliseconds.
-  Duration get milliseconds => _us(Duration.microsecondsPerMillisecond);
-
-  /// This many seconds.
-  Duration get seconds => _us(Duration.microsecondsPerSecond);
-
-  /// This many minutes.
-  Duration get minutes => _us(Duration.microsecondsPerMinute);
-
-  /// This many hours.
-  Duration get hours => _us(Duration.microsecondsPerHour);
-
-  /// This many days.
-  Duration get days => _us(Duration.microsecondsPerDay);
-
-  Duration _us(int per) => Duration(microseconds: this is int ? (this as int) * per : (this * per).round());
-}
-
 /// Something bytes pass through and change: a hash, gzip, a process.
 /// Watching is not a pipe: a [Probe] attaches with `&`.
 ///
@@ -403,7 +349,6 @@ extension ReaderFuture<R extends Reader> on Future<R> {
   Future<List<int>> bytes() async => (await this).bytes();
   Future<String> text() async => (await this).text();
   Stream<String> lines() => Stream.fromFuture(this).asyncExpand((r) => r.lines());
-  Future<Cookies> cookies({Cookies? or}) async => (await this).cookies(or: or);
   Future<Origin> origin() async {
     final r = await this;
     try {

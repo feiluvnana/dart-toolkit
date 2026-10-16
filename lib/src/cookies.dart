@@ -1,5 +1,5 @@
 /// The cookie jar shared by `chrome` (which produces it) and `http` (which
-/// consumes it). `core` exports [Cookies] only; the helpers below are for
+/// consumes it). `utils` exports [Cookies] only; the helpers below are for
 /// the modules that fill a jar from `set-cookie` headers or a browser.
 library;
 

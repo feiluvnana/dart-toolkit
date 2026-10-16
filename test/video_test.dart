@@ -7,6 +7,7 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/src/media_proxy.dart' as proxy;
+import 'package:dart_toolkit/utils.dart';
 import 'package:dart_toolkit/video.dart';
 import 'package:test/test.dart';
 

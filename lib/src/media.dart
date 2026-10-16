@@ -16,6 +16,7 @@ import '../pool.dart' show Pool;
 import '../shell.dart';
 import 'cache.dart' as cache;
 import 'exit.dart' as exit;
+import 'format.dart' show SizeUtils;
 import 'posix.dart' as posix;
 import 'quiet.dart';
 import 'tool.dart';

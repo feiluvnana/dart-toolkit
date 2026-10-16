@@ -1,4 +1,4 @@
-/// [Rate] (exported by `core`) and the cancellable waits behind it, shared by
+/// [Rate] (exported by `utils`) and the cancellable waits behind it, shared by
 /// `http` (paced sends, backoff) and `pool` (backoff).
 library;
 

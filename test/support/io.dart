@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/src/cookies.dart' as cookies;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 /// A [Reader] over [text] encoded as UTF-8, with an optional [Origin].

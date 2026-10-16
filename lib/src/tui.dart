@@ -9,7 +9,7 @@ import 'dart:io' as io;
 import 'dart:isolate';
 import 'dart:math' as math;
 
-import '../core.dart' show Spans, Times, ToolkitException;
+import '../core.dart' show ToolkitException;
 import 'exit.dart' as exit;
 import 'format.dart' as fmt;
 import 'keys.dart' as keys;
@@ -19,6 +19,7 @@ import 'progress.dart' show Meter;
 import 'progress.dart' as progress show paceOf, unitOf;
 import 'terminal.dart' as term;
 import 'terminal.dart' show Color;
+import 'time.dart' show SpanUtils, TimeUtils;
 
 part 'tui/session.dart';
 part 'tui/prompt.dart';

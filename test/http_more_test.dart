@@ -8,6 +8,7 @@ import 'dart:typed_data';
 
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/capture.dart';

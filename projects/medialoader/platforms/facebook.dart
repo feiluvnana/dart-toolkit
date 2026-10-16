@@ -6,6 +6,7 @@ import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/utils.dart';
 
 import '../job.dart';
 import '../platform.dart';

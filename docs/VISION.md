@@ -40,7 +40,7 @@ at its call sites than it adds to the surface.
 | #   | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **One entry class per module, named for it** (`Http`, `Fs`, `Tui`), `abstract final`, statics only, so typing `Http.` lists every way in. When the only value type shares the module's name (`Json`, `Image`), the statics go on that type.                                                                                                                                                                                                                                                 |
-| 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. The exceptions are the unit literals `3.seconds`, `1.5.minutes` (`Durations` on `num`), which spell a constant, and `DateTime.format(…)` / `Duration.human()` (`Times`, `Spans`), which render a value for a person; none reads toolkit state. Sealed results and exceptions (`Compressed`, `Kept`, `Outcome`, `HttpStatusException`) carry public final fields on purpose: they are matched with patterns (`case Kept(:final reason)`). Each library doc says `Public surface is exactly: …`.                          |
+| 2   | **Values are `final class`es with private constructors and private fields.** Every read is a method (`status()`, `text()`), never a getter or a public field. The exceptions are the unit literals `3.seconds`, `1.5.minutes` (`DurationUtils` on `num`, in utils), which spell a constant, and `DateTime.format(…)` / `Duration.human()` (`TimeUtils`, `SpanUtils`), which render a value for a person; none reads toolkit state. Sealed results and exceptions (`Compressed`, `Kept`, `Outcome`, `HttpStatusException`) carry public final fields on purpose: they are matched with patterns (`case Kept(:final reason)`). Each library doc says `Public surface is exactly: …`.                          |
 | 3   | **Short names, one meaning each.** One word when it reads one way, dropping a suffix the receiver already says (`status()` not `statusCode()`, `hex()` not `hexDigest()`). The same idea has the same name in every module (§3), and options too (`limit:` is how many at once, `max:` how many bytes, `dir:`, `cache:`, `or:`). One method with an optional argument beats two. No abbreviation a reader must decode (`markdown`, not `md`). The only symbols are `$` (query), `[]` (index), `\|` (pipe through), `&` (watch) and `>` (pipe into). |
 | 4   | **Chains never need an inner `await`.** Every async value type has a Future mirror: an extension on `Future<T>` that repeats `T`'s members. Mirrors are named `<Type>Future`, because Dart hides unnamed extensions outside their library; nobody writes that name.                                                                                                                                                                                                                         |
 | 5   | **Actions return their receiver** (`page.fill(…).click(…)`). An action that makes something new returns that instead (`copy`, `download`). Readings return data. `close()` and `delete()` return nothing.                                                                                                                                                                                                                                                                                   |
@@ -71,7 +71,6 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   Future<List<int>> bytes();
   Future<String> text();                          // UTF-8, malformed bytes replaced
   Stream<String> lines();                         // the same, line by line as it arrives
-  Future<Cookies> cookies({Cookies? or});         // a cookies.txt session; or: when missing
   Reader operator |(Pipe? pipe);                   // lazy; null = skip
   Reader operator &(Probe? probe);                 // watched; null = skip
   Future<void> operator >(Writer? w);              // run; null = discard
@@ -79,12 +78,6 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   static Reader of(List<int> bytes);
 }
 abstract mixin class Writer { Future<void> consume(Stream<List<int>> input);  Origin origin(); }   // origin: a File's path
-final class Cookies {                             // the jar chrome produces and http consumes
-  Cookies();  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line http sends)
-  String? operator [](String name);  Cookies set(String name, String value, {required String url});
-}
-final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait, bool perHost = false});  Future<void> wait(); }
-extension Durations on num { Duration get milliseconds, seconds, minutes, hours, days; }   // 3.seconds, 1.5.minutes
 abstract mixin class Pipe { Stream<List<int>> transform(Stream<List<int>> input);  void abort(Object error) {} }
 abstract mixin class Probe { void update(int done, int? total); }   // watches; attach with &
 final class Task<T> implements Future<T> { Task<T> operator &(Probe? probe); }   // a future that counts
@@ -134,8 +127,26 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
   `hex()`, and the error is rethrown from `>`.
 - Extending takes one class with one member: `with Reader` + `stream()`, `with Writer` +
   `consume()`, `with Pipe` + `transform()`, `with Probe` + `update()`.
-- `Cookies` and `Rate` live in core because two modules share them: chrome produces a jar and
-  http consumes it; http and pool both pace with a `Rate`.
+
+### 2.1 utils: helpers beside the core
+
+`utils.dart` is a separate import: no module re-exports it, so the core and each module stay
+lean. It holds what scripts use often but no module needs to name: unit literals, human text for
+sizes and times, and the shared values two modules pass along (chrome produces a `Cookies` jar,
+http consumes it; a `Rate` paces http sends or any job). Helper classes are `<Module>Utils`.
+
+```dart
+extension DurationUtils on num { Duration get milliseconds, seconds, minutes, hours, days; }   // 3.seconds, 1.5.minutes
+extension SizeUtils on num { String size(); }                                                  // 12.1 MB
+extension TimeUtils on DateTime { String format(String pattern); }                             // yyyy MM dd HH mm ss SSS
+extension SpanUtils on Duration { String human(); }                                            // 11 min 5 s
+final class Rate { Rate(int count, Duration per, {Duration pause, void Function(Duration)? onWait, bool perHost = false});  Future<void> wait(); }
+final class Cookies {                             // the jar chrome produces and http consumes
+  Cookies();  static Cookies parse(String text);  String encode();   // Netscape cookies.txt (+ a user-agent: line http sends)
+  String? operator [](String name);  Cookies set(String name, String value, {required String url});
+}
+extension ReaderCookies on Reader { Future<Cookies> cookies({Cookies? or}); }   // a cookies.txt session; or: when missing
+```
 
 ## 3. Names
 
@@ -178,7 +189,8 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 
 | Import    | Public surface (core members and Future mirrors not repeated)                                                                                                                                                                                                                                                                                                                                                 | Engine                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `Reader.cookies` · `Cookies` `parse` `encode` `[]` `set` · `Rate` `wait` · `Durations` (`3.seconds`) · `Sizes` (`size()`) · `Times` (`format`) `Spans` (`human`) · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
+| `core`    | `Reader` `Writer` `Pipe` `Probe` `Task` `Watch` `Meter` `done` `total` `rate` `Closeable` `Origin` · `ToolkitException` `ContentException` `PasswordException`                                                                                                                                                                                   | in-house                            |
+| `utils`   | `DurationUtils` (`3.seconds`) · `SizeUtils` (`size()`) · `TimeUtils` (`format`) · `SpanUtils` (`human`) · `Rate` `wait` · `Cookies` `parse` `encode` `[]` `set` · `Reader.cookies` (a separate import)                                                                                                                                                                                   | in-house                            |
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
@@ -328,7 +340,7 @@ final class Response with Reader implements Closeable {
 - **Only a 2xx body can be piped.** `res > file` on a 404 throws what `check()` throws, so an
   error page is never saved. The readings (`text()`, `lines()`, `json()`, `html()`) work on any
   status.
-- **Cookies** live in the client's `Cookies` jar (core; `page.cookies()` produces one).
+- **Cookies** live in the client's `Cookies` jar (utils; `page.cookies()` produces one).
   `set-cookie` (redirect hops too) updates it, parsed leniently like a browser (spaces, quotes, any
   date form); one without `name=` skips only itself; `Domain=` needs a dot, is never an IP or a
   public suffix (`co.uk`, `github.io`); cookies go out longest path first. A per-call `cookie` header merges
@@ -435,7 +447,7 @@ final class Capture with Reader { int status();  String url();  String? header(S
   `await page.run('document.title').or('')`, `.value<int>()`, `.$('a.b')`, `.asList<String>()`. `press` takes the key names of §4.12;
   an unknown name is an `ArgumentError`.
 - `chrome` re-exports `html`, so `page.html().$('a')` needs one import.
-- **The session is a value:** `cookies()` is a core `Cookies` jar (domain, path, expiry kept;
+- **The session is a value:** `cookies()` is a `Cookies` jar (utils) (domain, path, expiry kept;
   another site's jar is `page.go(url).cookies()`), so
   `Http.client(cookies: await page.cookies())` continues the browser session, and
   `file.write(jar.encode())` / `Cookies.parse(...)` persists it. `cookie(name)` waits for a login

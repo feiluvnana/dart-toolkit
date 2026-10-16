@@ -17,6 +17,7 @@ import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/utils.dart';
 
 Future<void> main() async {
   // Settings live on the client: stated once, not on every call.
@@ -51,7 +52,8 @@ A probe shows the whole run it is in: a flow's source bytes against the source's
 
 | Import | For | Highlights |
 |---|---|---|
-| `core` | the shared model | `Reader` (`bytes` `text` `lines` `cookies`), `Writer`, `Pipe`, `Probe` (`&`), `Task`, `Meter`, `Closeable`, `Origin`, `Cookies`, `Rate` (`perHost:`), `3.seconds`, `now.format(…)`, `d.human()` |
+| `core` | the shared model | `Reader` (`bytes` `text` `lines`), `Writer`, `Pipe`, `Probe` (`&`), `Task`, `Meter`, `Closeable`, `Origin` |
+| `utils` | helpers, a separate import | `3.seconds`, `bytes.size()`, `now.format(…)`, `d.human()`, `Rate` (`perHost:`), `Cookies` (`reader.cookies(or:)`) |
 | `http` | requests | `Http.client(base:, headers:, cookies:, rate:, proxy:, resume:, max:, …)` (Chrome user-agent, `socks5://`), `get(u) & bar > file` that skips and resumes, safe retries, `Body.multipart`, `sent()`, `Http.pool`, `Feed` (page a newest-first listing up to what you have, resuming an interrupted run), `browser: .page`/`.api` headers, `login:` paths that throw `SessionException` |
 | `html` | parsing and selectors | in-house HTML5 parser, `$('a').attrs('href')`, `ul.$('> li')`, absolute `srcset`/`og:image`, `json()` `table()` `form()` `markup()`, `text()` that reads like a page; re-exports `json` |
 | `json` | reading JSON | dotted paths with `*`, `**`, `-1`, whole-path `a\|b.c`, typed `value<T>()` (`DateTime` from ISO or Unix time), `or('')`, `text()`, `texts()`, `max`, `reader.ndjson()` |

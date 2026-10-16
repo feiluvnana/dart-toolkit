@@ -257,6 +257,7 @@ Future<void> main() async {
     test('confirm, choose and key give their or when nobody answers', () async {
       final p = await startDart('''
 import 'package:dart_toolkit/console.dart';
+import 'package:dart_toolkit/utils.dart';
 Future<void> main() async {
   final t = 300.milliseconds;
   print('confirm=\${await Console.confirm('ok?', or: true, timeout: t)}');

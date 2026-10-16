@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/chrome_find.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import 'support/io.dart';

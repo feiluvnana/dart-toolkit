@@ -66,6 +66,7 @@
 - `chrome`: a page's waits share one bound, `open(url, timeout:)` (30 s by default): `go`, `back`, `cookie`, `click`, `fill`, `select`, `upload`, `scroll`, `wait`, `idle` and `download` (and their `Future<Page>` mirrors) no longer take `timeout:`. A hand login that may take minutes is `browser.open(url, timeout: 5.minutes).cookie('sessionid')`.
 - `fs`: `Dir.list(match:)` walks as deep as the glob reaches: each `/` is one level more, so `'*/*.jpg'`, `'*/.ins.json'` and `'alice/*'` find what they name (they silently returned nothing without a `**`); `**` still crosses any number of folders.
 - `http`: `client.copy(...)` takes only `headers:`, `timeout:`, `retries:`, `rate:` and `proxy:`; another base, jar or `check:` is a new `Http.client`.
+- `core`: helpers moved to `package:dart_toolkit/utils.dart`, a separate import that no module re-exports: `Durations` as `DurationUtils` (`3.seconds`), `Sizes` as `SizeUtils` (`bytes.size()`), `Times` as `TimeUtils` (`now.format(…)`), `Spans` as `SpanUtils` (`d.human()`), `Rate`, `Cookies`, and `reader.cookies(or:)` as the `ReaderCookies` extension. A script that uses them adds `import 'package:dart_toolkit/utils.dart';`.
 
 **Removed**
 

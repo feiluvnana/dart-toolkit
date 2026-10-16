@@ -10,6 +10,7 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/pool.dart';
+import 'package:dart_toolkit/utils.dart';
 
 const urls = {
   'wikipedia-en': 'https://en.wikipedia.org/wiki/HTML',

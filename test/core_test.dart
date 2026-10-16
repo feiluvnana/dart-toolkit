@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/utils.dart';
 
 import 'support/io.dart';
 import 'package:test/test.dart';
