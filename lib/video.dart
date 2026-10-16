@@ -13,8 +13,8 @@
 /// ```
 ///
 /// Public surface is exactly: [Video], [VideoFormat], [VideoCodec].
-/// - `Video.decode()` takes bytes, `Reader.video()` a stream or a file,
-///   `Video.open()` a path or URL (HLS/DASH manifests, a separate `audio:`).
+/// - `Reader.video()` reads any reader (a file in place, bytes or a stream
+///   spooled once), `Video.open()` a path or URL (HLS/DASH manifests, a separate `audio:`).
 /// - `Video.sniff()` names the format from the header bytes.
 /// - `Video.compress()` re-encodes a file in its own container, replacing
 ///   it only when smaller.
@@ -95,15 +95,6 @@ final class Video {
     if (at(0, [0x49, 0x44, 0x33]) || (bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)) return VideoFormat.mp3;
     if (at(0, [0x4F, 0x67, 0x67, 0x53])) return VideoFormat.opus; // Ogg
     return null;
-  }
-
-  /// Read [bytes]: written to a temp file once, then probed. An unknown
-  /// or broken format is a [ContentException].
-  static Future<Video> decode(List<int> bytes) async {
-    final format = sniff(bytes);
-    if (format == null) throw const ContentException('unknown video format');
-    final temp = media.Temp(await media.spool(Stream.value(bytes), ext: format.name));
-    return _open(temp.path, temp: temp);
   }
 
   /// Probe [source], a path or a URL (`.m3u8`/`.mpd` manifests included);
@@ -229,7 +220,7 @@ final class Video {
       ]),
     );
     try {
-      return await Image.decode(await io.File(out).readAsBytes());
+      return await Reader.of(await io.File(out).readAsBytes()).image();
     } finally {
       await io.File(out).delete().catchError((_) => io.File(out));
     }

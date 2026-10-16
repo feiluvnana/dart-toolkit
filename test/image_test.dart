@@ -18,6 +18,9 @@ List<int> get tinyPng =>
 
 late io.Directory tmp;
 
+/// [bytes] as an image, the way a script reads bytes.
+Future<Image> _image(List<int> bytes) => Reader.of(bytes).image();
+
 /// An image ffmpeg draws from a lavfi source, as bytes.
 Future<Uint8List> draw(String source, String ext, {List<String> args = const []}) async {
   final out = '${tmp.path}/draw-${source.hashCode}-${args.join().hashCode}.$ext';
@@ -97,25 +100,25 @@ void main() {
     });
   });
 
-  group('Image.decode', () {
+  group('Reader.of(bytes).image()', () {
     test('reads the size from the header', () async {
-      final img = await Image.decode(tinyPng);
+      final img = await _image(tinyPng);
       expect((img.width(), img.height(), img.format()), (1, 1, ImageFormat.png));
     });
 
     test('an EXIF orientation is applied: width and height are as displayed', () async {
       final jpeg = await draw('color=red:s=4x2', 'jpg');
-      final turned = await Image.decode(withOrientation(jpeg, 6));
+      final turned = await _image(withOrientation(jpeg, 6));
       expect((turned.width(), turned.height()), (2, 4));
-      final plain = await Image.decode(jpeg);
+      final plain = await _image(jpeg);
       expect((plain.width(), plain.height()), (4, 2));
       // ffmpeg turns the pixels the same way, so an encode keeps the shape.
-      final out = await Image.decode(await turned.encode(ImageFormat.png).bytes());
+      final out = await _image(await turned.encode(ImageFormat.png).bytes());
       expect((out.width(), out.height()), (2, 4));
     });
 
     test('unknown bytes are a FormatException', () async {
-      await expectLater(Image.decode([1, 2, 3]), throwsFormatException);
+      await expectLater(_image([1, 2, 3]), throwsFormatException);
     });
 
     test('a huge declared size is refused before decoding', () async {
@@ -124,14 +127,14 @@ void main() {
         ..setUint32(16, 20000)
         ..setUint32(20, 20000);
       await expectLater(
-        Image.decode(bomb),
+        _image(bomb),
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('too large'))),
       );
     });
 
     test('formats Dart cannot size are probed (TIFF)', () async {
       final tiff = await draw('color=blue:s=6x3', 'tiff');
-      final img = await Image.decode(tiff);
+      final img = await _image(tiff);
       expect((img.width(), img.height(), img.format()), (6, 3, ImageFormat.tiff));
     });
 
@@ -144,7 +147,7 @@ void main() {
       await Shell.run([sips, '-s', 'format', 'heic', jpg, '--out', heic], check: true);
       final img = await Fs.file(heic).image();
       expect((img.width(), img.height(), img.format()), (1200, 900, ImageFormat.heic));
-      final png = await Image.decode(await img.resize(width: 400).encode(ImageFormat.png).bytes());
+      final png = await _image(await img.resize(width: 400).encode(ImageFormat.png).bytes());
       expect((png.width(), png.height()), (400, 300));
     });
   });
@@ -173,7 +176,7 @@ void main() {
 
   group('Image', () {
     late Image photo; // 40x20
-    setUpAll(() async => photo = await Image.decode(await draw('testsrc2=s=40x20', 'png')));
+    setUpAll(() async => photo = await _image(await draw('testsrc2=s=40x20', 'png')));
 
     test('resize keeps the aspect with one side and sets both when given', () {
       expect((photo.resize(width: 20).width(), photo.resize(width: 20).height()), (20, 10));
@@ -197,7 +200,7 @@ void main() {
     });
 
     test('steps chain into one encode', () async {
-      final out = await Image.decode(await photo.crop(0, 0, 20, 20).resize(width: 8).encode(ImageFormat.png).bytes());
+      final out = await _image(await photo.crop(0, 0, 20, 20).resize(width: 8).encode(ImageFormat.png).bytes());
       expect((out.width(), out.height()), (8, 8));
     });
 
@@ -205,7 +208,7 @@ void main() {
       for (final f in ImageFormat.values.where((f) => f != ImageFormat.heic)) {
         final bytes = await photo.encode(f, quality: 60).bytes();
         expect(Image.sniff(bytes), f, reason: f.name);
-        final back = await Image.decode(bytes);
+        final back = await _image(bytes);
         expect((back.width(), back.height()), (40, 20), reason: f.name);
       }
     });
@@ -222,7 +225,7 @@ void main() {
     });
 
     test('pixels decodes RGB, scaled when asked', () async {
-      final red = await Image.decode(await draw('color=0xFF0000:s=8x4', 'png'));
+      final red = await _image(await draw('color=0xFF0000:s=8x4', 'png'));
       final px = await red.pixels();
       expect((px.width(), px.height()), (8, 4));
       final (r, g, b) = px.pixel(3, 2); // lavfi draws in YUV: red comes back near 255

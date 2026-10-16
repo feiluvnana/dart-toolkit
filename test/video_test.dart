@@ -10,6 +10,9 @@ import 'package:dart_toolkit/video.dart';
 import 'package:test/test.dart';
 
 late io.Directory tmp;
+
+/// [bytes] as a video, the way a script reads bytes.
+Future<Video> _video(List<int> bytes) => Reader.of(bytes).video();
 late String clip; // 640x360, 2 s, 30 fps, h264 + aac
 
 /// A file ffmpeg makes from lavfi sources.
@@ -125,13 +128,13 @@ void main() {
 
     test('bytes and streams go through a temp file', () async {
       final bytes = await io.File(clip).readAsBytes();
-      expect((await Video.decode(bytes)).width(), 640);
+      expect((await _video(bytes)).width(), 640);
       expect((await _Mem(bytes).video()).height(), 360);
       expect(await Future<Reader>.value(_Mem(bytes)).video().width(), 640);
     });
 
     test('unknown bytes are a ContentException', () async {
-      await expectLater(Video.decode(List.filled(64, 7)), throwsA(isA<ContentException>()));
+      await expectLater(_video(List.filled(64, 7)), throwsA(isA<ContentException>()));
       await expectLater(_Mem(List.filled(64, 7)).video(), throwsA(isA<ContentException>()));
     });
 

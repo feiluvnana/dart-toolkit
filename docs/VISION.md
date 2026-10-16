@@ -162,8 +162,8 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `cli`     | `Flag` `Opt` `Multi` `Arg` `Rest` (sealed `Param<T>`) · `Command` `run` · `Context` `call` `usage` · `UsageException`                                                                                                                                                                                                                                                                                         | in-house                            |
 | `console` | `Console.ask` `confirm` `choose` `key` `spin` `bar` `log` `table` `notify` `copy` · `Bar` `tick` `update` · `Speed`                                                                                                                                                                                                                                                                         | in-house                            |
 | `tui`     | `Tui.run` · `App` `state` `go` `status` `quit` · `Screen` · `Binding` · `Pick` · `Field` · `Scroll` · `Region` (below, + `picture`) · `Color` · `Style`                                                                                                                                                                                                                                                       | in-house                            |
-| `image`   | `Image.decode` `sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
-| `video`   | `Video.decode` `open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
+| `image`   | `Image.sniff` `compress` · `Reader.image` · `Image` `width` `height` `format` `resize` `crop` `encode` `pixels` · `ImageFormat` | ffmpeg (downloaded, pinned) |
+| `video`   | `Video.open` `sniff` `compress` · `Reader.video` · `Video` `width` `height` `duration` `fps` `codec` `audio` `bitrate` `encode` `frame` · `VideoFormat` `VideoCodec` | ffmpeg, ffprobe (downloaded, pinned) |
 
 A module imports only core and its engine. The exceptions are `video`, which imports `image` for `frame()`, `chrome`, which imports `html`
 for `Elements` and `json` for the `run<T>` coercion rules, and `html`, which imports `json` for
@@ -920,7 +920,6 @@ await Tui.run<Page>(Search(), (page, app) => switch (page) {
 ```dart
 enum ImageFormat { png, jpg, gif, bmp, tiff, ico, webp, avif, heic }
 final class Image {
-  static Future<Image> decode(List<int> bytes);
   static ImageFormat? sniff(List<int> bytes);     // header only; .name is the extension
   static Future<(int, int)?> compress(String path, {int quality = 80});
   int width();  int height();  ImageFormat format();
@@ -928,12 +927,12 @@ final class Image {
   Reader encode(ImageFormat format, {int quality = 90});
   Future<Pixels> pixels({int? width, int? height});
 }
-extension on Reader { Future<Image> image(); }
+extension on Reader { Future<Image> image(); }   // bytes: Reader.of(bytes).image()
 ```
 
 - Engine: ffmpeg (see [Native tools](#native-tools)). `image()` on a file reads it in place; any
   other reader is written to a temp file once. Nothing is held in memory.
-- `decode`/`image()` read the header only (Dart for JPEG/PNG/GIF/WebP/BMP, ffprobe for the rest, HEIC
+- `image()` reads the header only (Dart for JPEG/PNG/GIF/WebP/BMP, ffprobe for the rest, HEIC
   tile grids included), with the EXIF orientation applied. Unknown bytes, or a declared size over
   16384², are a `ContentException`.
 - `resize`/`crop` record a step; `encode` (a lazy `Reader`) runs them all in one ffmpeg call. `resize`
@@ -951,7 +950,6 @@ extension on Reader { Future<Image> image(); }
 enum VideoFormat { mp4, webm, mkv, mov, avi, m4a, mp3, opus }   // avi read only; m4a/mp3/opus audio only
 enum VideoCodec { h264, h265, av1, vp9 }
 final class Video {
-  static Future<Video> decode(List<int> bytes);
   static Future<Video> open(String source, {String? audio, Map<String, String>? headers});   // path or URL, HLS/DASH
   static VideoFormat? sniff(List<int> bytes);     // HEIC/AVIF photos are not video
   static Future<(int, int)?> compress(String path, {int quality = 70, VideoCodec? codec});

@@ -9,8 +9,8 @@
 /// ```
 ///
 /// Public surface is exactly: [Image], [ImageFormat].
-/// - `Image.decode()` takes bytes, `Reader.image()` a stream or a file (read
-///   in place, never copied into memory).
+/// - `Reader.image()` reads any reader: a file in place (never copied into
+///   memory), bytes (`Reader.of(bytes).image()`) or a stream spooled once.
 /// - `Image.sniff()` names the format from the header bytes.
 /// - `Image.compress()` re-encodes a file in its own format, replacing it
 ///   only when smaller.
@@ -90,17 +90,6 @@ final class Image {
       };
     }
     return null;
-  }
-
-  /// Read [bytes] (any [ImageFormat]). The size comes from the header;
-  /// nothing is decoded until [encode] or [pixels]. An unknown or broken
-  /// format is a [ContentException], and so is an image over 16384² pixels.
-  static Future<Image> decode(List<int> bytes) async {
-    final raw = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
-    final format = sniff(raw);
-    if (format == null) throw const ContentException('unknown image format');
-    final temp = media.Temp(await media.spool(Stream.value(raw), ext: format.name));
-    return _open(temp.path, format, raw, temp);
   }
 
   /// [path] read once: Dart's header reader for the common formats,
