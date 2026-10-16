@@ -147,7 +147,7 @@ void main() {
       h.hex();
       // Pipelines are lazy: the StateError surfaces when the run starts.
       expect(_Mem('y') > h, throwsStateError);
-      expect(_Mem('y').pipe(h).bytes(), throwsStateError);
+      expect((_Mem('y') | h).bytes(), throwsStateError);
     });
 
     test('F6: a writer that fails before reading poisons the pipe hasher too', () async {

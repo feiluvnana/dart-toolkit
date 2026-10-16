@@ -58,8 +58,8 @@ abstract mixin class Reader {                     // bytes you can read; impleme
   Future<List<int>> bytes();
   Future<String> text();                          // UTF-8, malformed bytes replaced
   Stream<String> lines();                         // the same, line by line as it arrives
-  Reader pipe(Pipe? pipe);       Reader operator |(Pipe? pipe);         // lazy; null = skip
-  Future<void> to(Writer? w);    Future<void> operator >(Writer? w);    // run; null = discard
+  Reader operator |(Pipe? pipe);                   // lazy; null = skip
+  Future<void> operator >(Writer? w);              // run; null = discard
   Origin origin();                                // where the bytes came from (the base for `html()`)
   static Reader of(List<int> bytes);
 }
@@ -95,15 +95,14 @@ Other modules add readings to `Reader` (and `Future<Reader>`): `html()`, `json()
 
 - `a | p` builds a new `Reader`; nothing flows yet. `a > w` runs everything and completes when
   `w` has stored the last byte.
-- `a | p | q > w` groups like a shell. Wrap an operator chain in `await (…)`; the method forms
-  `pipe`/`to` need no parentheses.
+- `a | p | q > w` groups like a shell; wrap the chain in `await (…)`.
 - Null stages make optional steps inline: `res | (quiet ? null : bar) | (verify ? hash : null) > (dry ? null : file)`.
 - Backpressure is the stream's, so memory stays at a few chunks whatever the size.
 - A response can be streamed once. Everything else (`File`, `Output`, `Download`, lazy readers)
   re-reads.
 - An error anywhere fails the whole run, _including a writer that fails before it reads_. The
   source is cancelled, a `File` keeps its old content, a `Bar` prints `✗`, a `Hasher` refuses
-  `hex()`, and the error is rethrown from `>`/`to`.
+  `hex()`, and the error is rethrown from `>`.
 - Extending takes one class with one member: `with Reader` + `stream()`, `with Writer` +
   `consume()`, `with Pipe` + `transform()`.
 - `Cookies` and `Rate` live in core because two modules share them: chrome produces a jar and
@@ -1033,7 +1032,7 @@ keeps catching it.
 | SDK types (kept on purpose) | engine failures pass through (`SocketException`, `TlsException`, `ProcessException`, `FileSystemException`, `StdinException`/`StdoutException`); Dart-idiom guards stay (`ArgumentError`/`RangeError` for bad arguments, `StateError` for protocol misuse, `TimeoutException` for waits that run out) |
 
 Engine exceptions are rethrown as one of these, naming the subject. An error inside a pipeline
-surfaces from its `>`/`to`, after cleanup. An error in a chain surfaces at its single `await`.
+surfaces from its `>`, after cleanup. An error in a chain surfaces at its single `await`.
 
 ## 6. Performance and testing
 

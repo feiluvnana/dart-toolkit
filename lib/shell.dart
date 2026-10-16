@@ -440,7 +440,7 @@ final class _Filter implements Pipe {
 
   @override
   void abort(Object error) {
-    // Nothing started yet (Reader.to aborts without listening), so
+    // Nothing started yet (`Reader >` aborts without listening), so
     // there is no child to kill. A mid-run failure tears the generator down
     // via its finally, which already kills the child.
   }

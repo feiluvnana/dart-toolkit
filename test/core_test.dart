@@ -34,7 +34,7 @@ void main() {
 
     test('pipe is lazy: nothing flows yet', () async {
       var ran = false;
-      final r = _Mem([1]).pipe(_Tap(() => ran = true));
+      final r = _Mem([1]) | _Tap(() => ran = true);
       expect(ran, isFalse);
       await (r > null);
       expect(ran, isTrue);
@@ -42,7 +42,7 @@ void main() {
 
     test('null pipe returns this reader unchanged', () {
       final r = _Mem([1]);
-      expect(identical(r.pipe(null), r), isTrue);
+      expect(identical(r | null, r), isTrue);
     });
 
     test('| groups like a shell', () async {
@@ -59,7 +59,7 @@ void main() {
 
     test('method chain needs no parentheses', () async {
       final w = _Sink();
-      await _Mem([7]).pipe(null).to(w);
+      await (_Mem([7]) | null > w);
       expect(w.data, [7]);
     });
   });
@@ -137,7 +137,7 @@ void main() {
       expect(await f.text(), 'x');
       expect(await f.bytes(), utf8.encode('x'));
       await (f | null > null);
-      await f.to(null);
+      await (f > null);
     });
 
     test('a writer that fails before reading closes the source', () async {

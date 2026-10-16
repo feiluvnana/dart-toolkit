@@ -1,5 +1,5 @@
 /// The private handshake behind `Http.client(resume: true)`: `core`'s
-/// `Reader.to` hands a pipeline that ends in a path to its source, which can
+/// `Reader >` hands a pipeline that ends in a path to its source, which can
 /// skip or resume the download itself. Not exported.
 library;
 

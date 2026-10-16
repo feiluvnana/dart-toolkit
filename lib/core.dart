@@ -10,7 +10,7 @@
 /// Public surface is exactly: [Reader], [Writer], [Pipe], [Closeable], [Origin],
 /// [Cookies], [Rate], [Durations], [Sizes], [Times], [Spans], [ToolkitException],
 /// [ContentException].
-/// - [Reader]: `stream` `bytes` `text` `lines` `pipe` `|` `to` `>` (+ `origin`, `of`).
+/// - [Reader]: `stream` `bytes` `text` `lines` `|` `>` (+ `origin`, `of`).
 /// - [Writer]: `consume` (+ `origin`).
 /// - [Cookies]: a jar shared by `chrome` and `http`: `parse` `load` `encode` `[]` `header` `set` `agent`.
 /// - [Rate]: paces the work that shares it (`wait`; `perHost:` paces each host apart).
@@ -108,20 +108,18 @@ abstract mixin class Reader {
   /// UTF-8, malformed bytes replaced; types may refine (charset).
   Future<String> text() async => utf8.decode(await bytes(), allowMalformed: true);
 
-  /// Lazy: nothing flows yet; null → this reader, unchanged.
-  Reader pipe(Pipe? pipe) => pipe == null ? this : _PipedReader(this, pipe);
+  /// The bytes through [pipe]. Lazy: nothing flows yet; null → this
+  /// reader, unchanged.
+  Reader operator |(Pipe? pipe) => pipe == null ? this : _PipedReader(this, pipe);
 
-  /// `= pipe(pipe)`.
-  Reader operator |(Pipe? pipe) => this.pipe(pipe);
-
-  /// Runs the pipeline to the end; null → run and discard.
+  /// Runs the pipeline to the end into [writer]; null → run and discard.
   ///
   /// On failure every piped stage is notified via [Pipe.abort] **without
   /// starting anything new**: no probe listen-then-cancel, so a [Pipe] that
   /// would start a child process (shell filter) never starts one just to
   /// kill it, an http source is not marked streaming by the failure path,
   /// and broadcast sources poison their stages too.
-  Future<void> to(Writer? writer) async {
+  Future<void> operator >(Writer? writer) async {
     // Synchronously, before any await: a resumable GET (http `resume: true`)
     // piped into a path through pass-through pipes delivers itself.
     final path = writer?.origin().path();
@@ -168,9 +166,6 @@ abstract mixin class Reader {
       Error.throwWithStackTrace(e, st);
     }
   }
-
-  /// `= to(writer)`.
-  Future<void> operator >(Writer? writer) => to(writer);
 }
 
 /// Walk a [_PipedReader] chain and call [Pipe.abort] on each stage, outermost
@@ -250,7 +245,7 @@ abstract mixin class Pipe {
   Stream<List<int>> transform(Stream<List<int>> input);
 
   /// The run failed: poison the stage (a Hasher refuses `hex`), print
-  /// ✗ (a Bar), release the live line. Called by [Reader.to] on every
+  /// ✗ (a Bar), release the live line. Called by `Reader >` on every
   /// stage without starting anything; also called by a stage's own
   /// `transform`/`consume` error path when the failure happens mid-stream.
   /// The default is a no-op for stateless pipes (gzip).
@@ -300,11 +295,8 @@ extension ReaderFuture on Future<Reader> {
     }
   }
 
-  Reader pipe(Pipe? pipe) => _FutureReader(this).pipe(pipe);
   Reader operator |(Pipe? pipe) => _FutureReader(this) | pipe;
-  Future<void> to(Writer? writer) => _FutureReader(this).to(writer);
-
-  Future<void> operator >(Writer? writer) => _FutureReader(this).to(writer);
+  Future<void> operator >(Writer? writer) => _FutureReader(this) > writer;
 }
 
 /// `Chrome.launch().close()`; one mirror for every type.
@@ -329,7 +321,7 @@ final class _PipedReader with Reader {
 
   @override
   // async* defers `_source.stream()` until listened: building the stream
-  // starts nothing, so [Reader.to]'s abort path has no side effects.
+  // starts nothing, so `Reader >`'s abort path has no side effects.
   Stream<List<int>> stream() async* {
     yield* _pipe.transform(_source.stream());
   }
@@ -359,11 +351,11 @@ final class _FutureReader with Reader {
   Future<String> text() async => (await _get()).text();
 
   @override
-  Future<void> to(Writer? writer) {
+  Future<void> operator >(Writer? writer) {
     final Object source = _future;
     final path = writer?.origin().path();
     if (path != null && source is Resumable && source.claim()) return source.resume(path, const <Pipe>[]);
-    return _get().then((r) => r.to(writer));
+    return _get().then((r) => r > writer);
   }
 }
 

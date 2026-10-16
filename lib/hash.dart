@@ -104,7 +104,7 @@ final class Hasher with Writer implements Pipe, PassThrough {
   }
 
   /// [Pipe.abort]: poison so a later [hex] throws instead of returning
-  /// a wrong digest. Covers broadcast sources too. Wired via [Reader.to]'s abort walk, which
+  /// a wrong digest. Covers broadcast sources too. Wired via `Reader >`'s abort walk, which
   /// calls [abort] without starting the pipeline, and via [_tee]'s finally /
   /// [consume]'s catch mid-run.
   @override
@@ -206,7 +206,7 @@ final class Hasher with Writer implements Pipe, PassThrough {
       _check(); // fails the run at its end, before the writer commits
     } finally {
       if (_state == _State.running) _state = _State.idle;
-      // Input failure or downstream cancel (including Reader.to's
+      // Input failure or downstream cancel (including `Reader >`'s
       // abort on a writer-first failure): the digest is partial, so a later
       // hex()/add() must throw rather than silently use it (or return
       // the empty-input digest when nothing was read).

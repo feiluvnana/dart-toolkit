@@ -1108,7 +1108,7 @@ final class Bar extends _Live implements Pipe, Closeable, PassThrough {
   /// [Pipe.abort]: the run failed (possibly before this stage was ever
   /// read). Print ✗ and release the live line without starting anything.
   /// Covers broadcast sources too. Synchronous: the line is free before
-  /// [Reader.to] rethrows, so the next bar can start at once.
+  /// `Reader >` rethrows, so the next bar can start at once.
   @override
   void abort(Object error) {
     if (_closed) return;

@@ -1258,7 +1258,7 @@ async (selector, mode, ms) => {
     final tmp = await io.Directory.systemTemp.createTemp('dart_toolkit_up');
     final staged = io.File(p.join(tmp.path, name));
     try {
-      await file.to(_FileWriter(staged));
+      await (file > _FileWriter(staged));
     } catch (_) {
       await _delete(tmp);
       rethrow;

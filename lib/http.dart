@@ -1178,7 +1178,7 @@ Stream<List<int>> _concat(Stream<List<int>> first, Stream<List<int>> rest) async
 
 /// A GET of a `resume: true` client: sent at the end of the current
 /// synchronous block, unless a pipeline into a file claims it first
-/// (`Reader.to` asks before awaiting anything) and delivers it itself.
+/// (`Reader >` asks before awaiting anything) and delivers it itself.
 final class _Lazy implements Future<Response>, Resumable {
   _Lazy(this._send, this._fetch) {
     scheduleMicrotask(() {

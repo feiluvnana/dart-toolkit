@@ -6,7 +6,7 @@ part of '../../http.dart';
 /// - A non-2xx status is still a [Response] (unless the client says
 ///   `check:`). [ok] tests 200–299. The readings ([text], [bytes], [lines])
 ///   work on any status, but only a 2xx body can be piped: [stream] (and so
-///   `>`/`to`) throws the same [HttpStatusException] as [check] otherwise.
+///   `>`) throws the same [HttpStatusException] as [check] otherwise.
 /// - [text] decodes with the charset in `content-type`, then
 ///   `<meta charset>` (HTML or an untyped body only), then UTF-8 (WHATWG CJK
 ///   decoders included). Unknown charsets fall back to UTF-8; bad bytes
