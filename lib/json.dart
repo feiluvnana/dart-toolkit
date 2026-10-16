@@ -13,7 +13,7 @@
 /// - [Json] supports `$` (dotted path, `a|b.c` alternatives) `[]` (index the
 ///   iteration) `value` (typed scalar read; `DateTime` from ISO or Unix time)
 ///   `or` (read with a default) `text` (any scalar as a string) `texts`
-///   (every item's) `max`/`min` (the extreme item) `asList`/`asMap` (flat
+///   (every item's) `max` (the largest item) `asList`/`asMap` (flat
 ///   collections).
 /// - `toJson` lets `jsonEncode` read a nested [Json]; `toString` is the
 ///   JSON text; `==` compares values deeply.
@@ -145,18 +145,14 @@ final class Json extends Iterable<Json> {
   };
 
   /// The item (array item or object value) with the largest [by], or a null
-  /// [Json] when there are none; the first wins a tie.
-  Json max(num Function(Json item) by) => _extreme(by, 1);
-
-  /// The item with the smallest [by], or a null [Json] when there are none.
-  Json min(num Function(Json item) by) => _extreme(by, -1);
-
-  Json _extreme(num Function(Json item) by, int sign) {
+  /// [Json] when there are none; the first wins a tie. The smallest is
+  /// `max((i) => -by(i))`.
+  Json max(num Function(Json item) by) {
     Json? best;
     num? score;
     for (final item in this) {
       final s = by(item);
-      if (score == null || (s - score) * sign > 0) {
+      if (score == null || s > score) {
         best = item;
         score = s;
       }
@@ -697,7 +693,6 @@ extension JsonFuture on Future<Json> {
   Future<String?> text() async => (await this).text();
   Future<List<String>> texts() async => (await this).texts();
   Future<Json> max(num Function(Json item) by) async => (await this).max(by);
-  Future<Json> min(num Function(Json item) by) async => (await this).min(by);
   Future<List<T>> asList<T>() async => (await this).asList<T>();
   Future<Map<String, T>> asMap<T>() async => (await this).asMap<T>();
 }

@@ -427,9 +427,9 @@ void valueTests() {
       expect(Json.parse('1.5').text(), '1.5');
     });
 
-    test('max/min return the extreme item, the first on a tie, null when empty', () {
+    test('max returns the largest item, the first on a tie, null when empty', () {
       expect(doc.$('v').max((c) => c.$('w|config_width').or(0)).$('u|src').text(), 'y');
-      expect(doc.$('v').min((c) => c.$('w|config_width').or(0)).$('u').text(), 'x');
+      expect(doc.$('v').max((c) => -c.$('w|config_width').or(0)).$('u').text(), 'x');
       expect(Json.parse('[]').max((c) => 1).value<Object>(), isNull);
     });
 

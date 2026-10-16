@@ -182,7 +182,7 @@ Named parameters, each with one meaning: `headers` `body` `timeout` `base` `head
 | `html`    | `Html.parse` · `Reader.html` · `Elements` `$` `[]` `not` `text` `texts` `markup` `attr` `attrs` `json` `table` `form` · `Element` `$` `text` `markup` `attr` `parent`                                                                                                                                                                                                                                             | in-house HTML5 parser and selectors |
 | `http`    | `Http.client` `pool` · `Client` `copy` `cookies` `sent` `get` `head` `delete` `post` `put` `patch` `close` · `Response` `status` `ok` `check` `header` `url` `size` `name` · `Body` `text` `bytes` `form` `json` `multipart` `stream` · `Feed` `run` · `FeedPage` `items` `add` `stop` · `Browser` · `HttpStatusException` `HttpRequestException` `RequestFailure` `SessionException` | `dart:io`                           |
 | `chrome`  | `Chrome.launch` `connect` · `Browser` `open` `pages` · `Page` (below) · `Download` `name` · `Capture` `status` `url` `header` `name`                                                                                                                                                                                                                                                                                 | in-house DevTools client (`dart:io` WebSocket) |
-| `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `min` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
+| `json`    | `Json.parse` `of` `encode` · `Reader.json` `ndjson` · `Json` `$` `[]` `value` `or` `text` `texts` `max` `asList` `asMap`                                                                                                                                                                                                                                                                                        | `dart:convert`                      |
 | `csv`     | `Csv.parse` `records` `encode` · `Reader.csv(or:)` `rows`                                                                                                                                                                                                                                                                                                                                                          | in-house                            |
 | `yaml`    | `Yaml.parse` · `Reader.yaml`                                                                                                                                                                                                                                                                                                                                                                                  | in-house                            |
 | `fs`      | `Fs.entry` `file` `dir` `link` `sanitize` `tempDir` `homeDir` `scriptDir` · `Entry` `path` `name` `parent` `exists` `modified` `delete` `copy` `move` · `File` `write` `append` `size` `lock` `text(or:)` `bytes(or:)` · `Dir` `file` `dir` `list(match:)` `watch` `create` · `Link` `target` `resolve` `create`                                                                                                                | `dart:io`, `path`                   |
@@ -469,7 +469,7 @@ final class Json extends Iterable<Json> {
   String? text();                                // any scalar as a String; null for null, a miss, a collection
   List<String> texts();                          // every item's text, misses dropped (as Elements.texts)
   // value<DateTime>() reads ISO text and Unix s, ms, µs or ns (told apart by size)
-  Json max(num Function(Json item) by);  Json min(num Function(Json item) by);   // a null Json when empty
+  Json max(num Function(Json item) by);   // a null Json when empty; the smallest is max((i) => -by(i))
   List<T> asList<T>();  Map<String, T> asMap<T>();   // empty when missing or mistyped
 }
 extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }   // or: when the source does not exist
@@ -488,7 +488,7 @@ extension on Reader { Future<Json> json({Json? or});  Stream<Json> ndjson(); }  
   `asList<T>()` and `asMap<T>()` check each element and give `[]` / `{}` when missing or
   mistyped; `asList<Json>()`/`asMap<Json>()` wrap every value; `value<List<T>>()` throws and
   points to them.
-- `max`/`min` return the extreme item (the first on a tie):
+- `max` returns the largest item (the first on a tie):
   `v.$('display_resources').max((c) => c.$('width|config_width').or(0)).$('url|src').text()`.
 - A `Json` iterates an array's items or an object's values; `toString` is the JSON text and `==`
   is deep.

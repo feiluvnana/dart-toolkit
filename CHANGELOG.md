@@ -68,6 +68,7 @@
 - `http`: `Http.client(connections:, idle:, insecure:)` and the same on `copy`: a client keeps at most 6 sockets per host and releases them 100 ms after its last request (`Pool(limit:)` caps concurrency); a self-signed host is trusted through `SecurityContext.defaultContext.setTrustedCertificates`.
 - `http`: `Http.client(cache:, ttl:)` and `copy(cache:, ttl:)`, the GET disk cache; a scraper under development keeps its pages with `get(u) > Fs.file(f)`.
 - `http`: `FeedPage.follow(cursor)`; another start point is a second `Feed` from that cursor, or the `page` function returning it as `next` when its chain ends (medialoader's photo walk does).
+- `json`: `Json.min(by)`; the smallest item is `max((i) => -by(i))`.
 
 ## 0.1.0
 
