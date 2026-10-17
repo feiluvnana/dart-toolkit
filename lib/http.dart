@@ -825,8 +825,17 @@ final class _Client extends Client {
       var uri = first;
       var currentBody = body;
       var currentHeaders = headers;
+      var downgraded = false;
       for (var hop = 0; ; hop++) {
-        final resp = await _single(client, currentMethod, uri, currentBody, currentHeaders, call);
+        final resp = await _single(
+          client,
+          currentMethod,
+          uri,
+          currentBody,
+          currentHeaders,
+          call,
+          downgraded: downgraded,
+        );
         final setCookie = resp.headers[HttpHeaders.setCookieHeader];
         if (setCookie != null) jar.storeSetCookies(_s.cookies, uri, setCookie);
         final raw = _isRedirect(resp.statusCode) ? resp.headers.value('location') : null;
@@ -872,6 +881,7 @@ final class _Client extends Client {
           currentHeaders = _without(currentHeaders, names.isSecretHeader);
         }
         if (uri.scheme == 'https' && next.scheme == 'http') {
+          downgraded = true;
           stderr.writeln('warning: $currentMethod ${names.redact(uri)} redirected from https to ${names.redact(next)}');
         }
         uri = next;
@@ -889,8 +899,9 @@ final class _Client extends Client {
     Uri uri,
     Body? body,
     Map<String, String> headers,
-    _Call call,
-  ) async {
+    _Call call, {
+    bool downgraded = false,
+  }) async {
     final limit = _s.timeout;
     TimeoutException noHeaders() => Timeout('no headers for ${limit.human()}', limit);
     HttpClientRequest req;
@@ -919,10 +930,10 @@ final class _Client extends Client {
       if (!headers.keys.any((k) => k.toLowerCase() == 'user-agent')) {
         req.headers.set('user-agent', jar.agentOf(_s.cookies) ?? _userAgent);
       }
-      final cookie = _cookieHeader(uri, headers);
+      final cookie = downgraded ? null : _cookieHeader(uri, headers);
       if (cookie != null) req.headers.set('cookie', cookie);
       final csrf = _s.csrf;
-      if (csrf != null && req.headers.value(csrf.header) == null) {
+      if (!downgraded && csrf != null && req.headers.value(csrf.header) == null) {
         final token = jar.valueFor(_s.cookies, uri, csrf.cookie);
         if (token != null) req.headers.set(csrf.header, token);
       }
