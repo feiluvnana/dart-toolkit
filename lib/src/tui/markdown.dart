@@ -39,10 +39,15 @@ extension RegionMarkdown on Region {
 const _mdCode = Color.gray;
 
 /// [url] when a click on it only browses (http, https, mailto), else null:
-/// untrusted text must not hand the terminal a `file:` or app link.
+/// untrusted text must not hand the terminal a `file:` or app link, or inject
+/// terminal escape sequences via control characters.
 String? _safeLink(String url) {
-  final scheme = Uri.tryParse(url.trim())?.scheme.toLowerCase();
-  return const {'http', 'https', 'mailto'}.contains(scheme) ? url.trim() : null;
+  final clean = url.trim();
+  if (clean.codeUnits.any((c) => c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f))) {
+    return null;
+  }
+  final scheme = Uri.tryParse(clean)?.scheme.toLowerCase();
+  return const {'http', 'https', 'mailto'}.contains(scheme) ? clean : null;
 }
 
 /// Inline runs for prose [text] (bold/italic/strike/code/links).
