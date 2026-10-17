@@ -28,6 +28,7 @@ final class TwitterExtractor extends Extractor {
   @override
   final loginCookies = const {'auth_token'};
 
+  @override
   late final apiRate = rate(100, 15.minutes);
   late final mediaRate = rate(150, 15.minutes);
 
@@ -104,11 +105,11 @@ final class TwitterExtractor extends Extractor {
 
     if (ctx.wants(Kind.profiles)) {
       if (prof.avatar != null) {
-        ctx.profileAsset(prof.avatar, id: 'avatar');
+        ctx.profileAsset(prof.avatar);
       }
       if (prof.banner != null) {
         final size = Uri.parse(prof.banner!).pathSegments.reversed.skip(1).firstOrNull ?? '';
-        ctx.profileAsset(prof.banner, id: 'banner_${Fs.sanitize(size)}', ext: '.jpg');
+        ctx.profileAsset(prof.banner, id: 'banner_${Fs.sanitize(size)}');
       }
     }
 
@@ -128,13 +129,26 @@ final class TwitterExtractor extends Extractor {
     final owner = t.$('core.user_results.result.core.screen_name|core.user_results.result.legacy.screen_name').text();
     if (owner != null) ctx.userName = owner;
 
+    final postTime = _tweetTime(t);
+    ctx.db.recordPost(
+      platform: code,
+      user: owner ?? ctx.target.user,
+      postId: tweetId,
+      postedAt: postTime,
+      caption: t
+          .$(
+            'note_tweet.note_tweet_results.result.text|legacy.full_text|legacy.retweeted_status_result.result.legacy.full_text',
+          )
+          .text(),
+    );
+
     final assets = _tweetAssets(ctx, t, ctx.folder(Kind.posts));
     await ctx.enqueue(assets);
     ctx.phase(Kind.posts, '1 tweet enqueued', done: true);
   }
 
   Future<void> _extractTimeline(JobCtx ctx, _Profile prof) async {
-    var cursor = ctx.options.all ? null : ctx.cursor(Kind.posts);
+    var cursor = ctx.options.all ? ctx.cursor(Kind.posts) : null;
     ctx.phase(Kind.posts, cursor == null ? 'fetching tweets' : 'resuming tweets from cursor');
 
     var pageCount = 0;
@@ -157,11 +171,11 @@ final class TwitterExtractor extends Extractor {
           continue;
         }
 
-        ctx.db.recordPost(platform: code, user: prof.name, postId: id, postedAt: postTime);
-
         final assets = _tweetAssets(ctx, t, ctx.folder(Kind.posts));
         newAssets.addAll(assets);
         tweetCount++;
+
+        ctx.db.recordPost(platform: code, user: prof.name, postId: id, postedAt: postTime, itemCount: assets.length);
       }
 
       if (newAssets.isNotEmpty) {
@@ -185,7 +199,7 @@ final class TwitterExtractor extends Extractor {
   List<MediaAsset> _tweetAssets(JobCtx ctx, Json tweet, Dir dir) {
     final id = _tweetId(tweet);
     final at = _tweetTime(tweet);
-    final month = dir.dir(at.format('yyyy-MM'));
+    final month = dir / at.format('yyyy-MM');
     final out = <MediaAsset>[];
 
     final mediaList = _mediaOf(tweet);

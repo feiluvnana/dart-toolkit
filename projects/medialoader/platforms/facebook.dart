@@ -22,19 +22,12 @@ final class FacebookExtractor extends Extractor {
   final site = _web;
 
   @override
-  final kinds = const [
-    Kind.posts,
-    Kind.photos,
-    Kind.videos,
-    Kind.albums,
-    Kind.stories,
-    Kind.highlights,
-    Kind.profiles,
-  ];
+  final kinds = const [Kind.posts, Kind.photos, Kind.videos, Kind.albums, Kind.stories, Kind.highlights, Kind.profiles];
 
   @override
   final loginCookies = const {'c_user', 'xs'};
 
+  @override
   late final apiRate = rate(120, 5.minutes, pause: 500.milliseconds);
 
   final _photoCache = <String, _Photo>{};
@@ -86,7 +79,7 @@ final class FacebookExtractor extends Extractor {
     String tab(String t) => _digits.hasMatch(p.name) ? '/profile.php?id=${p.name}&sk=$t' : '/${p.name}/$t/';
 
     if (ctx.wants(Kind.profiles)) {
-      if (p.avatar != null) ctx.profileAsset(p.avatar, id: 'avatar');
+      if (p.avatar != null) ctx.profileAsset(p.avatar);
       if (p.cover != null) {
         final last = Uri.parse(p.cover!).pathSegments.lastOrNull ?? '';
         ctx.profileAsset(p.cover, id: 'cover_${Fs.sanitize(last)}');
@@ -120,15 +113,8 @@ final class FacebookExtractor extends Extractor {
       if (!ctx.options.all && ctx.db.isPostSeen(code, ctx.userName ?? ctx.target.user, post.id)) {
         continue;
       }
-      ctx.db.recordPost(
-        platform: code,
-        user: ctx.userName ?? ctx.target.user,
-        postId: post.id,
-        postedAt: post.at,
-        caption: post.caption,
-      );
 
-      final dir = ctx.folder(Kind.posts).dir(post.at.format('yyyy-MM'));
+      final dir = ctx.folder(Kind.posts) / post.at.format('yyyy-MM');
       String name(_Item i) {
         final same = [
           for (final o in post.items)
@@ -139,7 +125,8 @@ final class FacebookExtractor extends Extractor {
 
       final assets = <MediaAsset>[];
       for (final i in post.items) {
-        final url = i.url ??
+        final url =
+            i.url ??
             (i.video
                 ? (_videoCache[i.id] ?? await _video(ctx.api, i.id))?.url
                 : (_photoCache[i.id] ?? await _photo(ctx.api, i.id))?.url);
@@ -176,6 +163,15 @@ final class FacebookExtractor extends Extractor {
         );
       }
 
+      ctx.db.recordPost(
+        platform: code,
+        user: ctx.userName ?? ctx.target.user,
+        postId: post.id,
+        postedAt: post.at,
+        caption: post.caption,
+        itemCount: assets.length,
+      );
+
       if (assets.isNotEmpty) {
         await ctx.enqueue(assets);
         n++;
@@ -201,7 +197,14 @@ final class FacebookExtractor extends Extractor {
       set = _profileSet(all);
     }
     ctx.phase(Kind.photos, 'listing photos');
-    final n = await _walk(ctx, ids, set ?? '', 'photo', (ph) => ctx.folder(Kind.photos).dir(ph.at.format('yyyy-MM')));
+    final n = await _walk(
+      ctx,
+      ids,
+      set ?? '',
+      'photo',
+      Kind.photos,
+      (ph) => ctx.folder(Kind.photos) / ph.at.format('yyyy-MM'),
+    );
     ctx.phase(Kind.photos, '$n photos listed', done: true);
   }
 
@@ -223,7 +226,7 @@ final class FacebookExtractor extends Extractor {
       if (!ctx.options.all && ctx.db.isPostSeen(code, ctx.userName ?? ctx.target.user, 'video:$id')) continue;
       final v = _videoCache[id] ?? await _video(ctx.api, id);
       if (v == null) continue;
-      final dir = ctx.folder(Kind.videos).dir(v.at.format('yyyy-MM'));
+      final dir = ctx.folder(Kind.videos) / v.at.format('yyyy-MM');
       ctx.db.recordPost(
         platform: code,
         user: ctx.userName ?? ctx.target.user,
@@ -283,8 +286,8 @@ final class FacebookExtractor extends Extractor {
           page.data.$('**').where((n) => n.$('__isMediaSet').text() == 'Album').firstOrNull?.$('title.text').text() ??
           page.data.$('**.title.text').text() ??
           title;
-      final dir = ctx.folder(Kind.albums).dir(Fs.sanitize(name));
-      n += await _walk(ctx, _photoIds(page), set, 'album:$set', (_) => dir);
+      final dir = ctx.folder(Kind.albums) / Fs.sanitize(name);
+      n += await _walk(ctx, _photoIds(page), set, 'album:$set', Kind.albums, (_) => dir);
       ctx.phase(Kind.albums, '${albums.length} albums, $n photos');
     }
     ctx.phase(Kind.albums, '${albums.length} albums, $n photos', done: true);
@@ -304,7 +307,7 @@ final class FacebookExtractor extends Extractor {
       final items = _storyItems((await _load(ctx.api, path)).data);
       for (final s in items) {
         final now = DateTime.now();
-        final dir = ctx.folder(Kind.stories).dir(now.format('yyyy-MM'));
+        final dir = ctx.folder(Kind.stories) / now.format('yyyy-MM');
         final ext = s.video ? 'mp4' : _ext(s.url);
         assets.add(
           MediaAsset(
@@ -331,7 +334,7 @@ final class FacebookExtractor extends Extractor {
     final assets = <MediaAsset>[];
     for (final s in items) {
       final now = DateTime.now();
-      final dir = ctx.folder(Kind.highlights).dir(now.format('yyyy-MM'));
+      final dir = ctx.folder(Kind.highlights) / now.format('yyyy-MM');
       final ext = s.video ? 'mp4' : _ext(s.url);
       assets.add(
         MediaAsset(
@@ -354,6 +357,7 @@ final class FacebookExtractor extends Extractor {
     List<String> start,
     String set,
     String key,
+    Kind category,
     Dir Function(_Photo) dir,
   ) async {
     if (start.isEmpty) return 0;
@@ -381,7 +385,7 @@ final class FacebookExtractor extends Extractor {
           id: '${ph.id}.${_ext(ph.url)}',
           platform: code,
           user: ctx.userName ?? ctx.target.user,
-          category: Kind.photos,
+          category: category,
           to: file,
           url: ph.url,
           at: ph.at,
@@ -394,7 +398,7 @@ final class FacebookExtractor extends Extractor {
             id: '${ph.id}.txt',
             platform: code,
             user: ctx.userName ?? ctx.target.user,
-            category: Kind.photos,
+            category: category,
             to: dir(ph).file('${ph.id}.txt'),
             text: c,
             at: ph.at,
@@ -434,11 +438,7 @@ final class FacebookExtractor extends Extractor {
       final id = n.$('id|photo_id|legacy_photo_id').text();
       if (id == null || !_digits.hasMatch(id)) continue;
       final url =
-          n
-              .$(
-                'viewer_image.uri|large_share_image.uri|photo_image.uri|image.uri',
-              )
-              .text() ??
+          n.$('viewer_image.uri|large_share_image.uri|photo_image.uri|image.uri').text() ??
           n.$('image.*.uri').texts().firstOrNull ??
           n.$('prefetch_uris_v2.*.uri').texts().firstOrNull;
       if (url == null) continue;
@@ -470,19 +470,12 @@ final class FacebookExtractor extends Extractor {
               ?.$('progressive_url')
               .text() ??
           n
-              .$(
-                'browser_native_hd_url|playable_url_quality_hd|browser_native_sd_url|playable_url|progressive_url',
-              )
+              .$('browser_native_hd_url|playable_url_quality_hd|browser_native_sd_url|playable_url|progressive_url')
               .text();
       if (url == null) continue;
       final at = n.$('publish_time|created_time|creation_time').value<int>();
       final dt = at != null ? DateTime.fromMillisecondsSinceEpoch(at * 1000) : DateTime.now();
-      videos[id] = (
-        id: id,
-        url: url,
-        title: n.$('savable_title.text|message.text|name').text(),
-        at: dt,
-      );
+      videos[id] = (id: id, url: url, title: n.$('savable_title.text|message.text|name').text(), at: dt);
     }
     return videos;
   }
@@ -525,7 +518,7 @@ final class FacebookExtractor extends Extractor {
     if (url == null) return null;
     final ph = (
       id:
-      d.data.$('**').where((n) => n.$('__isNode').text() == 'Photo').firstOrNull?.$('id').text() ??
+          d.data.$('**').where((n) => n.$('__isNode').text() == 'Photo').firstOrNull?.$('id').text() ??
           d.data.$('**.photo_id').text() ??
           id,
       url: url,
@@ -548,8 +541,8 @@ final class FacebookExtractor extends Extractor {
             .text() ??
         d.data
             .$(
-          '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url',
-        )
+              '**.progressive_url|**.browser_native_hd_url|**.browser_native_sd_url|**.playable_url_quality_hd|**.playable_url',
+            )
             .text() ??
         RegExp(r'(?:<|\\u003C)BaseURL>(https:[^<\\"]+)')
             .firstMatch(d.text)?[1]
@@ -595,23 +588,13 @@ final class FacebookExtractor extends Extractor {
               ?.$('progressive_url')
               .text() ??
           n
-              .$(
-            'browser_native_hd_url|playable_url_quality_hd|browser_native_sd_url|playable_url|progressive_url',
-          )
+              .$('browser_native_hd_url|playable_url_quality_hd|browser_native_sd_url|playable_url|progressive_url')
               .text();
       final photoUrl =
-          n
-              .$(
-            'viewer_image.uri|large_share_image.uri|photo_image.uri|image.uri',
-          )
-              .text() ??
+          n.$('viewer_image.uri|large_share_image.uri|photo_image.uri|image.uri').text() ??
           n.$('image.*.uri').texts().firstOrNull ??
           n.$('prefetch_uris_v2.*.uri').texts().firstOrNull;
-      items[id] ??= (
-        id: id,
-        video: video,
-        url: video ? videoUrl : photoUrl,
-      );
+      items[id] ??= (id: id, video: video, url: video ? videoUrl : photoUrl);
     }
     final caption = story.$(message).text() ?? story.$('comet_sections.content.story').$(message).text();
     final id =
@@ -636,13 +619,13 @@ final class FacebookExtractor extends Extractor {
     final seen = <String>{};
     return [
       for (final url
-      in data.$('**.progressive_url').texts() +
-          data.$('**.browser_native_hd_url').texts() +
-          data.$('**.playable_url').texts())
+          in data.$('**.progressive_url').texts() +
+              data.$('**.browser_native_hd_url').texts() +
+              data.$('**.playable_url').texts())
         if (RegExp(r'xpv_asset_id%22%3A(\d+)').firstMatch(url)?[1] ??
-            RegExp(r'/m\d+/([\w-]+)\.mp4').firstMatch(url)?[1] ??
-            Uri.parse(url).pathSegments.last.split('.').first
-        case final id when seen.add(id))
+                RegExp(r'/m\d+/([\w-]+)\.mp4').firstMatch(url)?[1] ??
+                Uri.parse(url).pathSegments.last.split('.').first
+            case final id when seen.add(id))
           (id: id, video: true, url: url),
       for (final url in [
         ...data.$('**.uri').texts().where((u) => u.contains('t39.30808-6')),

@@ -60,12 +60,19 @@ import 'src/retry.dart' as retry;
 /// for one of its `n` lanes. Nothing to close: an idle pool holds nothing.
 final class Pool {
   /// [limit] lanes shared by every [run] on this pool (4 by default).
-  Pool({int limit = 4}) : _free = limit {
+  Pool({int limit = 4}) : _limit = limit, _free = limit {
     if (limit < 1) throw ArgumentError.value(limit, 'limit', 'must be at least 1');
   }
 
+  final int _limit;
   int _free;
   final _waiting = Queue<Completer<void>>();
+
+  /// Number of worker lanes currently executing jobs.
+  int get active => _limit - _free;
+
+  /// Number of jobs queued waiting for an available lane.
+  int get waiting => _waiting.length;
 
   /// Run [job] once a lane is free, first come first served, and return
   /// what it returns (or rethrow what it throws). The lane is freed either way.

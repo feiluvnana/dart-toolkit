@@ -41,9 +41,9 @@ Future<void> main(List<String> args) async {
       await bar.close();
     case 'keep':
       Console.bar('kept').update(2, 2);
-      Console.bar('gone', keep: false).update(2, 2);
+      Console.bar('gone', false).update(2, 2);
       try {
-        await (Reader.of([1, 2, 3]) & Console.bar('broken', keep: false) > _Failing());
+        await (Reader.of([1, 2, 3]) & Console.bar('broken', false) > _Failing());
       } catch (_) {}
       await Future<void>.delayed(const Duration(milliseconds: 50));
       stdout.writeln('done');

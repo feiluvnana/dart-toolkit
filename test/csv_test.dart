@@ -126,6 +126,15 @@ void streaming() {
     expect(await http.get(url).csv(), want);
     expect(await http.get(url).rows().toList(), want);
   });
+
+  test('CsvUtils.encodeMaps encodes maps into CSV with headers', () {
+    final maps = [
+      {'name': 'Alice', 'age': 30},
+      {'name': 'Bob', 'age': 25},
+    ];
+    final csv = CsvUtils.encodeMaps(maps);
+    expect(csv, 'name,age\r\nAlice,30\r\nBob,25\r\n');
+  });
 }
 
 final class _Chunks with Reader {

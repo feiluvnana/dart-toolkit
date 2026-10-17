@@ -6,6 +6,8 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 
+import 'time.dart' show SpanUtils;
+
 /// Paces the work that shares it, for APIs that ban bursts: at most [count]
 /// starts per [per] (a sliding window), each after a random pause of up to
 /// [pause]. A 429 on a paced request waits until the window frees (or the
@@ -50,6 +52,59 @@ final class Rate {
   final Duration _pause; // upper bound of the random pause before each start
   final void Function(Duration wait)? _onWait; // hears every wait of a second or more
   final bool _perHost;
+
+  /// Starts allowed per window.
+  int get count => _count;
+
+  /// The sliding window duration.
+  Duration get per => _per;
+
+  /// Upper bound of the random pause before each start.
+  Duration get pause => _pause;
+
+  DateTime? _waitEnd;
+
+  /// Number of starts currently recorded in the active sliding window.
+  int get current {
+    final w = _window(null);
+    w.trim(DateTime.now(), _per);
+    return w.sent.length;
+  }
+
+  /// Whether a start would proceed immediately without waiting.
+  bool get isFree => free(this);
+
+  /// Estimated duration until the oldest slot expires, or zero if free.
+  Duration get currentWait {
+    final w = _window(null);
+    final now = DateTime.now();
+    w.trim(now, _per);
+    if (w.sent.length < _count) return Duration.zero;
+    final wait = w.sent.first.add(_per).difference(now);
+    return wait > Duration.zero ? wait : Duration.zero;
+  }
+
+  /// Active pause or rate limit wait duration remaining, if currently cooling down.
+  Duration? get activeWait {
+    final end = _waitEnd;
+    if (end == null) return null;
+    final remaining = end.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _waitEnd = null;
+      return null;
+    }
+    return remaining;
+  }
+
+  /// Format status as `current/count (per)` and optional active pause countdown.
+  String status() {
+    final wait = activeWait ?? (current >= count ? currentWait : null);
+    final perStr = per.human();
+    if (wait != null && wait > Duration.zero) {
+      return '$current/$count ($perStr) · ⏸ ${wait.human()}';
+    }
+    return '$current/$count ($perStr)';
+  }
 
   final _shared = _Window();
   final _hosts = <String, _Window>{};
@@ -151,7 +206,10 @@ Future<void> _slot(Rate rate, _Window w, Halt? halt) async {
       return;
     }
     final wait = w.sent.first.add(rate._per).difference(now);
-    if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
+    if (wait >= const Duration(seconds: 1)) {
+      rate._waitEnd = now.add(wait);
+      rate._onWait?.call(wait);
+    }
     await sleep(wait, halt);
   }
 }
@@ -174,6 +232,9 @@ Duration ban(Rate rate, Duration? server, {String? host}) {
   if (server != null && server > cap) server = cap;
   if (server != null && server > wait) wait = server;
   if (wait < Duration.zero) wait = Duration.zero;
-  if (wait >= const Duration(seconds: 1)) rate._onWait?.call(wait);
+  if (wait >= const Duration(seconds: 1)) {
+    rate._waitEnd = DateTime.now().add(wait);
+    rate._onWait?.call(wait);
+  }
   return wait;
 }

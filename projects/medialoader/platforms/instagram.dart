@@ -28,6 +28,7 @@ final class InstagramExtractor extends Extractor {
   @override
   final loginCookies = const {'sessionid'};
 
+  @override
   late final apiRate = rate(75, 11.minutes, pause: 3.seconds);
   late final feedRate = rate(200, 11.minutes, pause: 3.seconds);
 
@@ -92,7 +93,7 @@ final class InstagramExtractor extends Extractor {
     ctx.db.recordTarget(platform: code, user: prof.name, displayName: prof.name);
 
     if (ctx.wants(Kind.profiles) && prof.picture != null) {
-      ctx.profileAsset(prof.picture, id: 'avatar');
+      ctx.profileAsset(prof.picture);
     }
 
     final tasks = <Future<void>>[];
@@ -124,7 +125,15 @@ final class InstagramExtractor extends Extractor {
     final user = p.$('user.username').text() ?? ctx.target.user;
     ctx.userName = user;
     final postTime = _time(p);
-    final postDir = ctx.folder(Kind.posts).dir(postTime.format('yyyy-MM'));
+    final postDir = ctx.folder(Kind.posts) / postTime.format('yyyy-MM');
+
+    ctx.db.recordPost(
+      platform: this.code,
+      user: user,
+      postId: code,
+      postedAt: postTime,
+      caption: p.$('caption.text|edge_media_to_caption.edges.0.node.text').text(),
+    );
 
     final assets = _postAssets(ctx, p, postDir, code);
     await ctx.enqueue(assets);
@@ -133,7 +142,7 @@ final class InstagramExtractor extends Extractor {
 
   Future<void> _extractPosts(JobCtx ctx, _Profile prof, _FeedPage? first) async {
     final user = prof.name;
-    var cursor = ctx.options.all ? null : ctx.cursor(Kind.posts);
+    var cursor = ctx.options.all ? ctx.cursor(Kind.posts) : null;
     ctx.phase(Kind.posts, cursor == null ? 'fetching posts' : 'resuming posts from cursor');
 
     var pageCount = 0;
@@ -162,12 +171,12 @@ final class InstagramExtractor extends Extractor {
           continue;
         }
 
-        ctx.db.recordPost(platform: code, user: user, postId: shortcode, postedAt: postTime);
-
-        final targetDir = ctx.folder(Kind.posts).dir(postTime.format('yyyy-MM'));
+        final targetDir = ctx.folder(Kind.posts) / postTime.format('yyyy-MM');
         final assets = _postAssets(ctx, item, targetDir, shortcode);
         newAssets.addAll(assets);
         postCount++;
+
+        ctx.db.recordPost(platform: code, user: user, postId: shortcode, postedAt: postTime, itemCount: assets.length);
       }
 
       if (newAssets.isNotEmpty) {
@@ -197,7 +206,7 @@ final class InstagramExtractor extends Extractor {
     for (final item in items) {
       final itemId = item.$('id').or('story');
       final takenAt = _time(item);
-      final dir = ctx.folder(Kind.stories).dir(takenAt.format('yyyy-MM'));
+      final dir = ctx.folder(Kind.stories) / takenAt.format('yyyy-MM');
       final itemAssets = _mediaAssets(
         ctx,
         item,
@@ -224,7 +233,7 @@ final class InstagramExtractor extends Extractor {
       final reels = await _fetchReels(ctx.api, chunk, prof.name);
       for (final r in reels) {
         final title = r.title.isEmpty ? r.id : r.title;
-        final dir = ctx.folder(Kind.highlights).dir(Fs.sanitize(title));
+        final dir = ctx.folder(Kind.highlights) / Fs.sanitize(title);
         final assets = <MediaAsset>[];
         for (final item in r.items) {
           final itemId = item.$('id').or('hl');
@@ -419,11 +428,9 @@ final class InstagramExtractor extends Extractor {
     ];
   }
 
-  List<Json> _children(Json item) =>
-      [...item.$('carousel_media'), ...item.$('edge_sidecar_to_children.edges.*.node')];
+  List<Json> _children(Json item) => [...item.$('carousel_media'), ...item.$('edge_sidecar_to_children.edges.*.node')];
 
-  DateTime _time(Json item) =>
-      DateTime.fromMillisecondsSinceEpoch(item.$('taken_at|taken_at_timestamp').or(0) * 1000);
+  DateTime _time(Json item) => DateTime.fromMillisecondsSinceEpoch(item.$('taken_at|taken_at_timestamp').or(0) * 1000);
 
   String _postCode(Json post) => Fs.sanitize(post.$('code|shortcode').text() ?? 'post');
 

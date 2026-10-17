@@ -139,6 +139,26 @@ sealed class Entry {
   /// The last segment.
   String name() => p.basename(_path);
 
+  /// Lowercased extension without leading dot (e.g. "jpg", "mp4").
+  /// Returns empty string if no extension exists.
+  String ext() {
+    final ext = p.extension(_path);
+    return ext.startsWith('.') ? ext.substring(1).toLowerCase() : ext.toLowerCase();
+  }
+
+  /// Filename stem without extension.
+  ///
+  /// ```dart
+  /// Fs.file('video.mp4').stem() == 'video';
+  /// ```
+  String stem() => p.basenameWithoutExtension(_path);
+
+  /// True if extension matches standard image formats.
+  bool isImage() => const {'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic'}.contains(ext());
+
+  /// True if extension matches standard video formats.
+  bool isVideo() => const {'mp4', 'mov', 'webm', 'mkv', 'avi'}.contains(ext());
+
   /// The containing folder. The root's parent is the root.
   Dir parent() => Dir._(p.dirname(_path));
 
@@ -492,6 +512,13 @@ final class Dir extends Entry with Writer implements Folder {
   /// A folder handle under this folder. No I/O.
   Dir dir(String name) => Dir._(p.join(_path, name));
 
+  /// Child folder under this folder using forward-slash navigation.
+  ///
+  /// ```dart
+  /// final art = box / 'Others/KeyBOX';
+  /// ```
+  Dir operator /(String subpath) => Dir._(p.join(_path, subpath));
+
   /// Typed entries, sorted by relative path (depth-first). Never descends
   /// through links. Without [match], the children; [match] keeps the
   /// entries whose path relative to this folder matches a glob, and its
@@ -817,6 +844,10 @@ extension EntryFuture on Future<Entry> {
   Future<String> get path async => (await this).path;
   Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
+  Future<String> ext() async => (await this).ext();
+  Future<String> stem() async => (await this).stem();
+  Future<bool> isImage() async => (await this).isImage();
+  Future<bool> isVideo() async => (await this).isVideo();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
@@ -833,6 +864,10 @@ extension FileFuture on Future<File> {
   Future<String> get path async => (await this).path;
   Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
+  Future<String> ext() async => (await this).ext();
+  Future<String> stem() async => (await this).stem();
+  Future<bool> isImage() async => (await this).isImage();
+  Future<bool> isVideo() async => (await this).isVideo();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
@@ -846,10 +881,15 @@ extension FileFuture on Future<File> {
 
 /// Future mirrors for [Dir].
 extension DirFuture on Future<Dir> {
+  Future<Dir> operator /(String subpath) async => (await this) / subpath;
   Future<DateTime> modified() async => (await this).modified();
   Future<String> get path async => (await this).path;
   Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
+  Future<String> ext() async => (await this).ext();
+  Future<String> stem() async => (await this).stem();
+  Future<bool> isImage() async => (await this).isImage();
+  Future<bool> isVideo() async => (await this).isVideo();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();
@@ -868,6 +908,10 @@ extension LinkFuture on Future<Link> {
   Future<String> get path async => (await this).path;
   Future<String> relative(Dir dir) async => (await this).relative(dir);
   Future<String> name() async => (await this).name();
+  Future<String> ext() async => (await this).ext();
+  Future<String> stem() async => (await this).stem();
+  Future<bool> isImage() async => (await this).isImage();
+  Future<bool> isVideo() async => (await this).isVideo();
   Future<Dir> parent() async => (await this).parent();
   Future<bool> exists() async => (await this).exists();
   Future<void> delete() async => (await this).delete();

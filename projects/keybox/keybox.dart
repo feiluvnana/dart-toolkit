@@ -18,11 +18,11 @@ const soundtrack = 'https://downloads.khinsider.com/game-soundtracks/album/key-b
 const scans = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
 final http = Http.client(headers: HttpUtils.page, timeout: 60.seconds, resume: true);
 
-final box = Fs.scriptDir().dir('Key BOX -for two decades- (2019)');
-final keyBoxArt = box.dir('Others').dir('KeyBOX');
-final anniversary = box.dir('Others').dir('Key 20th Anniversary');
-final events = box.dir('Others').dir('Events & Topics');
-final tributes = box.dir('Others').dir('Messages & Tributes');
+final box = Fs.scriptDir() / 'Key BOX -for two decades- (2019)';
+final keyBoxArt = box / 'Others/KeyBOX';
+final anniversary = box / 'Others/Key 20th Anniversary';
+final events = box / 'Others/Events & Topics';
+final tributes = box / 'Others/Messages & Tributes';
 
 final discNumber = RegExp(r'DISC\.?(\d+)');
 final trackLine = RegExp(r'^(\d+)\.(.*)$');
@@ -36,8 +36,8 @@ final class Disc {
   Disc(this.name, this.tracks);
   final String name;
   final Map<int, String> tracks;
-  Dir get folder => box.dir(name);
-  File track(int number, String title) => folder.dir('mp3').file('$number. $title.mp3');
+  Dir get folder => box / name;
+  File track(int number, String title) => (folder / 'mp3').file('$number. $title.mp3');
 }
 
 Future<void> main(List<String> args) =>
@@ -58,7 +58,7 @@ Future<void> download() async {
 
   await (Pool.map(assets, (a) async {
         final (url, to) = a;
-        await (http.get(url) & Console.bar('  ${Uri.parse(url).pathSegments.last}', keep: false) > to);
+        await (http.get(url) & Console.bar('', false) > to);
       }) &
       Console.bar('files done'));
   final zip = Fs.file('${box.path}.zip');
@@ -68,38 +68,28 @@ Future<void> download() async {
 
 Future<Elements> page(String url) => http.get(url).html();
 
-Map<int, Disc> readDiscs(Elements page) {
-  final discs = <int, Disc>{};
-  for (final item in page.$('.key_cd_track_box ul li')) {
-    final title = item.$('.track_disc_title').text();
-    final match = discNumber.firstMatch(title);
-    if (match == null) continue;
-    final disc = int.parse(match[1]!);
-    final tracks = <int, String>{};
-    for (final line in item.$('.track_disc_text_style1').text().split('\n')) {
-      if (trackLine.firstMatch(line.trim()) case final m?) {
-        tracks[int.parse(m[1]!)] = Fs.sanitize(disc == 22 && m[1] == '13' ? '小さなてのひら' : m[2]!);
-      }
-    }
-    discs[disc] = Disc(Fs.sanitize(title), tracks);
-  }
-  return discs;
-}
+Map<int, Disc> readDiscs(Elements page) => {
+  for (final item in page.$('.key_cd_track_box ul li'))
+    if (discNumber.firstMatch(item.$('.track_disc_title').text())?[1] case final d?)
+      int.parse(d): Disc(
+        Fs.sanitize(item.$('.track_disc_title').text()),
+        {
+          for (final line in item.$('.track_disc_text_style1').text().split('\n'))
+            if (trackLine.firstMatch(line.trim()) case final m?)
+              int.parse(m[1]!): Fs.sanitize(d == '22' && m[1] == '13' ? '小さなてのひら' : m[2]!),
+        },
+      ),
+};
 
-List<Asset> discArtwork(Elements page, Map<int, Disc> discs) {
-  final out = <Asset>[];
-  for (final item in page.$('.key_cd_artworks_box')) {
-    final url = item.$('a').attr('href');
-    if (url == null) continue;
-    final text = item.text();
-    if (discNumber.firstMatch(text)?[1] case final disc?) {
-      if (discs[int.parse(disc)] case final d?) out.add((url, d.folder));
-    } else if (text.contains('ALL')) {
-      out.add((url, keyBoxArt));
-    }
-  }
-  return out;
-}
+List<Asset> discArtwork(Elements page, Map<int, Disc> discs) => [
+  for (final item in page.$('.key_cd_artworks_box'))
+    if (item.$('a').attr('href') case final url?)
+      if (discNumber.firstMatch(item.text())?[1] case final d?) ...[
+        if (discs[int.parse(d)] case final disc?) (url, disc.folder),
+      ] else if (item.text().contains('ALL')) ...[
+        (url, keyBoxArt),
+      ],
+];
 
 List<Asset> boxArtwork() {
   final singers = 'kai tanaka minami na-ga suzukikeiko sakurai kohara orito suzuki yurika'.split(' ');
@@ -146,7 +136,7 @@ List<Asset> messages(Elements page) {
   Asset tribute(String group, int i, Element a) {
     final url = a.attr('href')!;
     final title = a.attr('title') ?? a.text().replaceAll('[New Message]', '');
-    return (url, tributes.dir(group).file('${studio(url)}${'${i + 1}'.padLeft(2, '0')}_${Fs.sanitize(title)}.jpg'));
+    return (url, (tributes / group).file('${studio(url)}${'${i + 1}'.padLeft(2, '0')}_${Fs.sanitize(title)}.jpg'));
   }
 
   return [

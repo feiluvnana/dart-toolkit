@@ -1,5 +1,7 @@
 // Tests for MediaLoader core, database, extractors, and engine.
 import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/utils.dart';
 import 'package:test/test.dart';
 
 import '../projects/medialoader/dashboard.dart';
@@ -91,6 +93,38 @@ void main() {
 
       db.close();
     });
+
+    test('isPostSeen ensures interruption resilience by verifying completed item count', () {
+      final db = MediaDb.memory();
+
+      db.recordPost(platform: 'ins', user: 'nature', postId: 'post_multi', itemCount: 2);
+      // 0/2 assets recorded -> considered NOT seen yet so it resumes cleanly if interrupted
+      expect(db.isPostSeen('ins', 'nature', 'post_multi'), isFalse);
+
+      db.recordAsset(
+        id: 'img_part1.jpg',
+        postId: 'post_multi',
+        platform: 'ins',
+        user: 'nature',
+        category: Kind.posts,
+        filePath: 'downloads/ins/nature/posts/img_part1.jpg',
+      );
+      // 1/2 assets recorded -> still not complete
+      expect(db.isPostSeen('ins', 'nature', 'post_multi'), isFalse);
+
+      db.recordAsset(
+        id: 'img_part2.jpg',
+        postId: 'post_multi',
+        platform: 'ins',
+        user: 'nature',
+        category: Kind.posts,
+        filePath: 'downloads/ins/nature/posts/img_part2.jpg',
+      );
+      // 2/2 assets recorded -> now fully complete!
+      expect(db.isPostSeen('ins', 'nature', 'post_multi'), isTrue);
+
+      db.close();
+    });
   });
 
   group('Extractors & Target parsing', () {
@@ -170,15 +204,7 @@ void main() {
   group('IngestionEngine', () {
     test('enqueues and drains assets in dry-run mode without downloading', () async {
       final db = MediaDb.memory();
-      final engine = IngestionEngine(
-        db: db,
-        options: (
-          all: false,
-          dry: true,
-          compress: false,
-          since: null,
-        ),
-      );
+      final engine = IngestionEngine(db: db, options: (all: false, dry: true, compress: false, since: null));
 
       final asset = MediaAsset(
         id: 'sample.jpg',
@@ -203,18 +229,13 @@ void main() {
     test('pipes logs directly to downloads logFile without memory buffering', () async {
       final tempDir = Fs.dir('test_tmp/loader_log_test');
       await tempDir.create();
-      final logFile = tempDir.file('medialoader.log');
+      final logFile = tempDir.file('.medialoader.log');
       if (await logFile.exists()) await logFile.delete();
 
       final db = MediaDb.memory();
       final engine = IngestionEngine(
         db: db,
-        options: (
-          all: false,
-          dry: false,
-          compress: false,
-          since: null,
-        ),
+        options: (all: false, dry: false, compress: false, since: null),
         logFile: logFile,
       );
 
@@ -230,20 +251,143 @@ void main() {
       db.close();
       await tempDir.delete();
     });
+    test('flags deduplicated files with [dedupe] prefix instead of removing', () async {
+      final tempDir = Fs.dir('test_tmp/loader_dedupe_test');
+      await tempDir.create();
+      final db = MediaDb.memory();
+
+      // Record an existing asset with known sha256
+      const existingSha = 'a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e';
+      db.recordAsset(
+        id: 'orig.txt',
+        platform: 'twt',
+        user: 'author',
+        category: Kind.posts,
+        filePath: 'test_tmp/loader_dedupe_test/orig.txt',
+        sha256: existingSha,
+        fileSize: 11,
+      );
+
+      final engine = IngestionEngine(
+        db: db,
+        options: (all: false, dry: false, compress: false, since: null),
+        logFile: tempDir.file('.medialoader.log'),
+      );
+
+      // Asset with same content (Hello World) to trigger deduplication
+      final newFile = tempDir.file('new_item.txt');
+      final asset = MediaAsset(
+        id: 'new_item.txt',
+        platform: 'twt',
+        user: 'author',
+        category: Kind.posts,
+        to: newFile,
+        text: 'Hello World', // sha256 is a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e
+        at: DateTime.now(),
+      );
+
+      await engine.enqueue([asset]);
+      await engine.drain();
+
+      // The duplicate file should NOT be deleted, but renamed with [dedupe] prefix
+      final dedupePrefixedFile = tempDir.file('[dedupe] new_item.txt');
+      expect(await dedupePrefixedFile.exists(), isTrue);
+      expect(await newFile.exists(), isFalse); // original moved to prefixed
+      expect(await dedupePrefixedFile.text(), 'Hello World'); // content preserved, NOT deleted!
+      expect(engine.deduplicatedCount, 1);
+
+      // Database should record the asset with status 'dedupe' and prefixed path
+      final relPrefixed = dedupePrefixedFile.path.replaceAll(r'\', '/');
+      expect(db.hasFile(relPrefixed), isTrue);
+
+      await engine.close();
+      db.close();
+      await tempDir.delete();
+    });
+
+    test('JobCtx.init pre-populates category stats from database so files/bytes do not start at 0', () async {
+      final db = MediaDb.memory();
+      db.recordAsset(
+        id: 'photo1.jpg',
+        platform: 'ins',
+        user: 'photographer',
+        category: Kind.posts,
+        filePath: 'downloads/ins/photographer/posts/photo1.jpg',
+        fileSize: 1048576, // 1 MB
+      );
+      db.recordAsset(
+        id: 'photo2.jpg',
+        platform: 'ins',
+        user: 'photographer',
+        category: Kind.posts,
+        filePath: 'downloads/ins/photographer/posts/photo2.jpg',
+        fileSize: 2097152, // 2 MB
+      );
+
+      final engine = IngestionEngine(db: db, options: (all: false, dry: false, compress: false, since: null));
+      final ctx = JobCtx(
+        target: const Target('ins', 'photographer'),
+        kinds: {Kind.posts},
+        api: Http.client(),
+        root: Fs.dir('test_tmp/ins'),
+        options: (all: false, dry: false, compress: false, since: null),
+        db: db,
+        engine: engine,
+      );
+
+      await ctx.init();
+
+      final user = engine.getOrCreateUser('photographer', 'ins');
+      final cat = user.category('posts');
+
+      // Baseline stats must count existing downloaded files and memory
+      expect(cat.had, 2);
+      expect(cat.queued, 2);
+      expect(cat.stored, 3145728); // 3 MB
+
+      final dash = Dashboard(engine: engine, db: db);
+      expect(dash.total.had, 2);
+      expect(dash.total.bytes, 3145728);
+
+      await engine.close();
+      db.close();
+    });
+
+    test('JobCtx.profileAsset preserves original name from URL and saves without extension', () async {
+      final db = MediaDb.memory();
+      final engine = IngestionEngine(db: db, options: (all: false, dry: true, compress: false, since: null));
+      final tmp = Fs.dir('test_tmp/profile_test');
+      final ctx = JobCtx(
+        target: const Target('ins', 'bigbadgirlt'),
+        kinds: {Kind.profiles},
+        api: Http.client(),
+        root: tmp,
+        options: (all: false, dry: true, compress: false, since: null),
+        db: db,
+        engine: engine,
+      );
+
+      ctx.profileAsset('https://instagram.f...net/v/t51.2885-19/44884218_3456789_n.jpg?stp=dst-jpg_s150x150');
+      await engine.drain();
+
+      final user = engine.getOrCreateUser('bigbadgirlt', 'ins');
+      final cat = user.category('profiles');
+      expect(cat.added, 1);
+
+      final today = DateTime.now().format('yyyy-MM-dd');
+      final expectedFile = ctx.folder(Kind.profiles).file('${today}_44884218_3456789_n');
+      expect(expectedFile.name(), '${today}_44884218_3456789_n');
+      expect(expectedFile.name().contains('.jpg'), isFalse);
+
+      await engine.close();
+      db.close();
+    });
   });
 
   group('Dashboard', () {
     test('formats title string with metrics accurately', () {
       final db = MediaDb.memory();
-      final engine = IngestionEngine(
-        db: db,
-        options: (
-          all: false,
-          dry: false,
-          compress: false,
-          since: null,
-        ),
-      );
+      final engine = IngestionEngine(db: db, options: (all: false, dry: false, compress: false, since: null));
 
       final dashboard = Dashboard(engine: engine, db: db);
       expect(dashboard.title(), contains('medialoader'));

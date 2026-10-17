@@ -173,6 +173,17 @@ void main() {
       // Not the empty-input digest: the run never delivered the bytes.
       expect(() => h.hex(), throwsStateError);
     });
+
+    test('File.sha256 and File.md5 compute correct digests on files', () async {
+      await Fs.tempDir((tmp) async {
+        final f = tmp.file('test.txt');
+        await f.write('hello world');
+        final sha = await f.sha256();
+        final md5 = await f.md5();
+        expect(sha, 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9');
+        expect(md5, '5eb63bbbe01eeed093cb22bb8f5acdc3');
+      });
+    });
   });
 }
 

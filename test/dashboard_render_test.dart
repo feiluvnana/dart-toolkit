@@ -9,15 +9,7 @@ import '../projects/medialoader/engine.dart';
 void main() {
   test('medialoader dashboard layout renders with decoupled lanes and targets', () async {
     final db = MediaDb.memory();
-    final engine = IngestionEngine(
-      db: db,
-      options: (
-        all: false,
-        dry: false,
-        compress: false,
-        since: null,
-      ),
-    );
+    final engine = IngestionEngine(db: db, options: (all: false, dry: false, compress: false, since: null));
 
     final u1 = engine.getOrCreateUser('chunmomo0127', 'twt');
     u1.id = 'chunmomo0127';
@@ -57,7 +49,12 @@ void main() {
     lane2.status = LaneStatus.transcoding;
 
     final dash = Dashboard(engine: engine, db: db);
-    final t = testSession<Dashboard>(dash, (state, app) => Screen(state.draw, title: state.title()), width: 100, height: 24);
+    final t = testSession<Dashboard>(
+      dash,
+      (state, app) => Screen(state.draw, title: state.title()),
+      width: 100,
+      height: 24,
+    );
     await t.pump();
 
     // Check title
@@ -73,7 +70,15 @@ void main() {
     expect(rendered, contains('#1'));
     expect(rendered, contains('#2'));
     expect(rendered, contains('#8'));
+    expect(rendered, contains('#10'));
     expect(rendered, contains('— idle —'));
+
+    // Check status bar panel with rate limits and RAM
+    expect(rendered, contains('status'));
+    expect(rendered, contains('rate limit:'));
+    expect(rendered, contains('RAM:'));
+    expect(rendered, contains('[twt]'));
+    expect(rendered, contains('[ins]'));
 
     db.close();
   });

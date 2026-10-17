@@ -67,7 +67,7 @@ export 'src/console_utils.dart' show ConsoleUtils;
 export 'src/cookies.dart' show Cookies;
 export 'src/csv.dart' show CsvUtils, ReaderCsv, ReaderFutureCsv;
 export 'src/format.dart' show SizeUtils;
-export 'src/hash.dart' show HashUtils, Hasher;
+export 'src/hash.dart' show FileHashUtils, FutureFileHashUtils, HashUtils, Hasher;
 export 'src/rate.dart' show Rate;
 export 'src/shell_utils.dart' show ShellUtils;
 export 'src/time.dart' show DurationUtils, SpanUtils, TimeUtils;

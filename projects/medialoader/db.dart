@@ -1,7 +1,6 @@
 // SQLite storage, WAL ledger, and perceptual deduplication for MediaLoader.
 library;
 
-import 'package:dart_toolkit/fs.dart' as fs;
 import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/sqlite.dart';
 
@@ -14,13 +13,7 @@ final class MediaDb {
 
   /// Open or create database at [path], applying WAL mode and schema tables.
   static Future<MediaDb> open(String path) async {
-    final parent = fs.Fs.file(path).parent();
-    if (!await parent.exists()) {
-      await parent.create();
-    }
     final db = Sqlite.open(path);
-    db.execute('PRAGMA journal_mode = WAL;');
-    db.execute('PRAGMA synchronous = NORMAL;');
     _initSchema(db);
     return MediaDb._(db);
   }
@@ -123,33 +116,37 @@ final class MediaDb {
   }
 
   /// Check whether [filePath] has already been recorded.
-  bool hasFile(String filePath) {
-    final rows = _db.select('SELECT 1 FROM assets WHERE file_path = ? LIMIT 1;', [filePath]);
-    return rows.isNotEmpty;
-  }
+  bool hasFile(String filePath) => _db.exists('SELECT 1 FROM assets WHERE file_path = ? LIMIT 1;', [filePath]);
 
   /// Check whether an asset by [id] is recorded.
   bool hasAsset(String id, {String? platform, String? user}) {
     if (platform != null && user != null) {
-      final rows = _db.select(
-        'SELECT 1 FROM assets WHERE id = ? AND platform = ? AND user = ? LIMIT 1;',
-        [id, platform, user],
-      );
-      return rows.isNotEmpty;
+      return _db.exists('SELECT 1 FROM assets WHERE id = ? AND platform = ? AND user = ? LIMIT 1;', [
+        id,
+        platform,
+        user,
+      ]);
     }
-    final rows = _db.select('SELECT 1 FROM assets WHERE id = ? LIMIT 1;', [id]);
-    return rows.isNotEmpty;
+    return _db.exists('SELECT 1 FROM assets WHERE id = ? LIMIT 1;', [id]);
   }
 
   /// Check whether an asset matches an existing entry by SHA-256 or pHash Hamming distance.
-  String? findDuplicate({String? sha256, String? phash, int threshold = 5}) {
+  String? findDuplicate({String? sha256, String? phash, int threshold = 5, String? excludePath}) {
     if (sha256 != null && sha256.isNotEmpty) {
-      final exact = _db.select('SELECT file_path FROM assets WHERE sha256 = ? LIMIT 1;', [sha256]);
-      if (exact.isNotEmpty) return exact.first['file_path'] as String?;
+      final sql = excludePath != null
+          ? 'SELECT file_path FROM assets WHERE sha256 = ? AND file_path != ? LIMIT 1;'
+          : 'SELECT file_path FROM assets WHERE sha256 = ? LIMIT 1;';
+      final params = excludePath != null ? [sha256, excludePath] : [sha256];
+      final match = _db.get<String?>(sql, params);
+      if (match != null) return match;
     }
 
     if (phash != null && phash.length == 16) {
-      final rows = _db.select('SELECT file_path, phash FROM assets WHERE phash IS NOT NULL;');
+      final sql = excludePath != null
+          ? 'SELECT file_path, phash FROM assets WHERE phash IS NOT NULL AND file_path != ?;'
+          : 'SELECT file_path, phash FROM assets WHERE phash IS NOT NULL;';
+      final params = excludePath != null ? [excludePath] : const <Object?>[];
+      final rows = _db.select(sql, params);
       for (final row in rows) {
         final existingPhash = row['phash'] as String?;
         if (existingPhash != null && existingPhash.length == 16) {
@@ -165,6 +162,15 @@ final class MediaDb {
     return null;
   }
 
+  /// Get counts and total bytes for a given user's category.
+  ({int files, int bytes}) categoryStats({required String platform, required String user, required Kind category}) {
+    final row = _db.row(
+      'SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size), 0) AS total_bytes FROM assets WHERE platform = ? AND user = ? AND category = ?;',
+      [platform, user, category.name],
+    );
+    return (files: (row?['cnt'] as int?) ?? 0, bytes: (row?['total_bytes'] as int?) ?? 0);
+  }
+
   /// Record an asset to the database using file_path as unique key.
   void recordAsset({
     required String id,
@@ -178,44 +184,34 @@ final class MediaDb {
     String? phash,
     int? fileSize,
     String status = 'done',
-  }) {
-    _db.execute(
-      '''
-      INSERT INTO assets (file_path, id, post_id, platform, user, category, url, sha256, phash, file_size, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(file_path) DO UPDATE SET
-        id = excluded.id,
-        post_id = excluded.post_id,
-        platform = excluded.platform,
-        user = excluded.user,
-        category = excluded.category,
-        url = excluded.url,
-        sha256 = excluded.sha256,
-        phash = excluded.phash,
-        file_size = excluded.file_size,
-        status = excluded.status;
-    ''',
-      [
-        filePath,
-        id,
-        postId,
-        platform,
-        user,
-        category.name,
-        url,
-        sha256,
-        phash,
-        fileSize,
-        status,
-        DateTime.now().millisecondsSinceEpoch,
-      ],
-    );
-  }
+  }) => _db.upsert(
+    'assets',
+    {
+      'file_path': filePath,
+      'id': id,
+      'post_id': postId,
+      'platform': platform,
+      'user': user,
+      'category': category.name,
+      'url': url,
+      'sha256': sha256,
+      'phash': phash,
+      'file_size': fileSize,
+      'status': status,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+    },
+    keys: ['file_path'],
+  );
 
-  /// Check whether a post has already been recorded.
+  /// Check whether a post has already been recorded and completed.
   bool isPostSeen(String platform, String user, String postId) {
-    final rows = _db.select('SELECT 1 FROM posts WHERE platform = ? AND id = ? LIMIT 1;', [platform, postId]);
-    return rows.isNotEmpty;
+    final row = _db.row('SELECT item_count FROM posts WHERE platform = ? AND id = ? LIMIT 1;', [platform, postId]);
+    if (row == null) return false;
+    final itemCount = row['item_count'] as int?;
+    if (itemCount == null || itemCount == 0) return true;
+    final downloaded =
+        _db.get<int>('SELECT COUNT(*) FROM assets WHERE platform = ? AND post_id = ?;', [platform, postId]) ?? 0;
+    return downloaded >= itemCount;
   }
 
   /// Record a post to the database.
@@ -272,54 +268,36 @@ final class MediaDb {
   }
 
   /// Save pagination cursor for clean restarts.
-  void saveCursor({
-    required String platform,
-    required String user,
-    required Kind category,
-    required String cursor,
-  }) {
-    _db.execute(
-      '''
-      INSERT INTO cursors (platform, user, category, cursor, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(platform, user, category) DO UPDATE SET
-        cursor = excluded.cursor,
-        updated_at = excluded.updated_at;
-    ''',
-      [platform, user, category.name, cursor, DateTime.now().millisecondsSinceEpoch],
-    );
-  }
+  void saveCursor({required String platform, required String user, required Kind category, required String cursor}) =>
+      _db.upsert(
+        'cursors',
+        {
+          'platform': platform,
+          'user': user,
+          'category': category.name,
+          'cursor': cursor,
+          'updated_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        keys: ['platform', 'user', 'category'],
+      );
 
   /// Get saved cursor for clean restarts.
-  String? getCursor({
-    required String platform,
-    required String user,
-    required Kind category,
-  }) {
-    final rows = _db.select(
-      'SELECT cursor FROM cursors WHERE platform = ? AND user = ? AND category = ? LIMIT 1;',
-      [platform, user, category.name],
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['cursor'] as String?;
-  }
+  String? getCursor({required String platform, required String user, required Kind category}) => _db.get<String?>(
+    'SELECT cursor FROM cursors WHERE platform = ? AND user = ? AND category = ? LIMIT 1;',
+    [platform, user, category.name],
+  );
 
   ResultSet select(String sql, [List<Object?> parameters = const []]) => _db.select(sql, parameters);
 
   void execute(String sql, [List<Object?> parameters = const []]) => _db.execute(sql, parameters);
 
   /// Summary statistics for the database.
-  ({int assets, int totalBytes, int users, int uniqueHashes}) stats() {
-    final a = _db.select('SELECT COUNT(*) as count, SUM(file_size) as bytes FROM assets;').first;
-    final u = _db.select('SELECT COUNT(*) as count FROM targets;').first;
-    final h = _db.select('SELECT COUNT(DISTINCT sha256) as count FROM assets WHERE sha256 IS NOT NULL;').first;
-    return (
-      assets: (a['count'] as int?) ?? 0,
-      totalBytes: (a['bytes'] as int?) ?? 0,
-      users: (u['count'] as int?) ?? 0,
-      uniqueHashes: (h['count'] as int?) ?? 0,
-    );
-  }
+  ({int assets, int totalBytes, int users, int uniqueHashes}) stats() => (
+    assets: _db.get<int>('SELECT COUNT(*) FROM assets;') ?? 0,
+    totalBytes: _db.get<int>('SELECT SUM(file_size) FROM assets;') ?? 0,
+    users: _db.get<int>('SELECT COUNT(*) FROM targets;') ?? 0,
+    uniqueHashes: _db.get<int>('SELECT COUNT(DISTINCT phash) FROM assets WHERE phash IS NOT NULL;') ?? 0,
+  );
 
   void close() {
     _db.close();

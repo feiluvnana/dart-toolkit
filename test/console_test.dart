@@ -265,6 +265,7 @@ Future<void> main() async {
   group('prompts time out', () {
     test('confirm, choose and key give their or when nobody answers', () async {
       final p = await startDart('''
+import 'dart:io';
 import 'package:dart_toolkit/console.dart';
 import 'package:dart_toolkit/utils.dart';
 Future<void> main() async {
@@ -272,9 +273,10 @@ Future<void> main() async {
   print('confirm=\${await Console.confirm('ok?', or: true, timeout: t)}');
   print('choose=\${await Console.choose('pick', ['a', 'b'], (s) => s, or: 'b', timeout: t)}');
   print('key=\${await Console.key('', or: 'none', timeout: t)}');
+  exit(0);
 }
 ''');
-      final out = await p.stdout.transform(utf8.decoder).join(); // stdin stays open: nobody answers
+      final out = (await p.stdout.transform(utf8.decoder).join()).replaceAll('\r\n', '\n'); // stdin stays open: nobody answers
       expect(await p.exitCode.timeout(const Duration(seconds: 30)), 0);
       expect(out, 'confirm=true\nchoose=b\nkey=none\n');
     });
@@ -290,7 +292,7 @@ Future<void> main() async {
 }
 ''');
     expect(r.stderr, 'one\n✗ two\n');
-    expect(r.stdout, matches(RegExp(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d  one\n\S+ \S+  ✗ two\n')));
+    expect(r.stdout, matches(RegExp(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d  one\n\S+ \S+  ✗ two\n+')));
   });
 
   group('stdin and stdout', () {

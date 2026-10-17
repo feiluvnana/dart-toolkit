@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as c;
 
 import '../core.dart';
+import '../fs.dart' show File;
 import 'resume.dart' show PassThrough;
 
 /// Entry point: one method per algorithm. With [expect] (hex) the hasher
@@ -212,4 +213,31 @@ final class _DigestCapture implements Sink<c.Digest> {
 
   @override
   void close() {}
+}
+
+/// One-line streaming hashing on [File].
+extension FileHashUtils on File {
+  /// Computes the SHA-256 hexadecimal digest in streaming 64 KiB chunks.
+  ///
+  /// ```dart
+  /// final sha256 = await file.sha256();
+  /// ```
+  Future<String> sha256() async {
+    final h = HashUtils.sha256();
+    await (this > h);
+    return h.hex();
+  }
+
+  /// Computes the MD5 hexadecimal digest in streaming 64 KiB chunks.
+  Future<String> md5() async {
+    final h = HashUtils.md5();
+    await (this > h);
+    return h.hex();
+  }
+}
+
+/// Future mirror for [FileHashUtils].
+extension FutureFileHashUtils on Future<File> {
+  Future<String> sha256() async => (await this).sha256();
+  Future<String> md5() async => (await this).md5();
 }

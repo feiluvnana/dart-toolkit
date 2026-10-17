@@ -1,6 +1,7 @@
 // High-throughput, decoupled download and processing engine for MediaLoader.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
@@ -26,8 +27,10 @@ enum Kind {
   albums,
   profiles;
 
-  static Kind parse(String name) =>
-      Kind.values.firstWhere((k) => k.name == name.toLowerCase(), orElse: () => throw FormatException('Unknown category: $name'));
+  static Kind parse(String name) => Kind.values.firstWhere(
+    (k) => k.name == name.toLowerCase(),
+    orElse: () => throw FormatException('Unknown category: $name'),
+  );
 }
 
 /// Download target representation.
@@ -84,12 +87,7 @@ final class MediaAsset {
 enum LaneStatus { idle, downloading, transcoding, hashing }
 
 /// Global loader configuration.
-typedef LoaderOptions = ({
-  bool all,
-  bool dry,
-  bool compress,
-  DateTime? since,
-});
+typedef LoaderOptions = ({bool all, bool dry, bool compress, DateTime? since});
 
 /// UI representation of a concurrency lane.
 final class WorkerLane {
@@ -144,7 +142,7 @@ final class CategoryStats {
 /// Target state tracking in dashboard.
 final class TargetState {
   TargetState(this.name, this.platform);
-  final String name;
+  String name;
   final String platform;
   String? id;
   String? error;
@@ -179,11 +177,40 @@ final class JobCtx {
   final IngestionEngine engine;
 
   String? userId;
-  String? userName;
+  String? _userName;
+  String? get userName => _userName;
+  set userName(String? value) {
+    _userName = value;
+    if (value != null && value != target.user) {
+      engine.aliasUser(target.user, value, target.platformCode);
+    }
+  }
+
   String? avatarUrl;
 
-  Dir get targetDir => root.dir(Fs.sanitize(userName ?? target.user));
-  Dir folder(Kind kind) => targetDir.dir(kind.name);
+  Dir get targetDir => root / Fs.sanitize(userName ?? target.user);
+  Dir folder(Kind kind) => targetDir / kind.name;
+
+  Future<void> init() async {
+    final userState = engine.getOrCreateUser(target.user, target.platformCode);
+    for (final kind in kinds) {
+      final cat = userState.category(kind.name);
+      final stats = db.categoryStats(platform: target.platformCode, user: target.user, category: kind);
+      var files = stats.files;
+      var bytes = stats.bytes;
+      if (files == 0) {
+        final f = folder(kind);
+        if (await f.exists()) {
+          final s = await f.size();
+          files = s.files;
+          bytes = s.bytes;
+        }
+      }
+      cat.had = files;
+      cat.queued = files;
+      cat.stored = bytes;
+    }
+  }
 
   bool wants(Kind kind) => kinds.contains(kind);
 
@@ -209,11 +236,19 @@ final class JobCtx {
     }
   }
 
-  void profileAsset(String? url, {String? id, String ext = '', String? change}) {
+  void profileAsset(String? url, {String? id, String? change}) {
     if (url == null) return;
-    id ??= Fs.sanitize(Uri.parse(url).pathSegments.last);
+    if (id == null || id == 'avatar') {
+      final rawName = Uri.parse(url).pathSegments.isNotEmpty ? Uri.parse(url).pathSegments.last : 'avatar';
+      final nameWithoutExt = rawName.contains('.') ? rawName.substring(0, rawName.lastIndexOf('.')) : rawName;
+      id = Fs.sanitize(nameWithoutExt);
+      if (id.isEmpty) id = 'avatar';
+    } else {
+      final nameWithoutExt = id.contains('.') ? id.substring(0, id.lastIndexOf('.')) : id;
+      id = Fs.sanitize(nameWithoutExt);
+    }
     final dateStr = DateTime.now().format('yyyy-MM-dd');
-    final file = folder(Kind.profiles).file('${dateStr}_$id$ext');
+    final file = folder(Kind.profiles).file('${dateStr}_$id');
     enqueue([
       MediaAsset(
         id: id,
@@ -237,6 +272,8 @@ abstract class Extractor {
   String get site;
   List<Kind> get kinds;
 
+  Rate get apiRate;
+
   bool matches(String input);
   Target parse(String input);
 
@@ -252,8 +289,20 @@ abstract class Extractor {
     return loginCookies.any((c) => jar[c] != null) ? client(jar) : null;
   }
 
-  Rate rate(int calls, Duration per, {Duration pause = const Duration(seconds: 2)}) =>
-      Rate(calls, per, pause: pause);
+  Rate rate(
+    int calls,
+    Duration per, {
+    Duration pause = const Duration(seconds: 2),
+    void Function(Duration wait)? onWait,
+  }) => Rate(
+    calls,
+    per,
+    pause: pause,
+    onWait: (w) {
+      onWait?.call(w);
+      activeEngine?.holdPause(code, '$name rate limit: waiting ${w.human()}', w);
+    },
+  );
 
   String explain(Object error) => switch (error) {
     HttpStatusException(status: 404, :final url) => 'not found: $url',
@@ -303,6 +352,9 @@ Target parseTarget(String input) {
   );
 }
 
+/// Active ingestion engine instance.
+IngestionEngine? activeEngine;
+
 /// Decoupled download and transcoding ingestion engine.
 final class IngestionEngine {
   IngestionEngine({
@@ -311,15 +363,44 @@ final class IngestionEngine {
     File? logFile,
     int downloadLanes = 8,
     int transcodeLanes = 2,
-  }) : logFile = logFile ?? Fs.scriptDir().dir('downloads').file('medialoader.log'),
+  }) : logFile = logFile ?? (Fs.scriptDir() / 'downloads').file('.medialoader.log'),
        _downloadPool = Pool(limit: downloadLanes),
-       _transcodePool = Pool(limit: transcodeLanes) {
+       _transcodePool = Pool(limit: transcodeLanes),
+       lanes = List.generate(downloadLanes + transcodeLanes, (i) => WorkerLane(i + 1)) {
     _idleLanes.addAll(lanes);
+    activeEngine = this;
   }
 
   final MediaDb db;
   final LoaderOptions options;
   final File logFile;
+
+  final rateLimits = <String, Rate>{};
+  String? activePause;
+  Timer? _pauseTimer;
+
+  void holdPause(String platform, String why, Duration wait) {
+    activePause = '[$platform] $why';
+    log('rate limit: $why', platform: platform);
+    _pauseTimer?.cancel();
+    _pauseTimer = Timer(wait, () => activePause = null);
+  }
+
+  void clearPause() {
+    _pauseTimer?.cancel();
+    _pauseTimer = null;
+    activePause = null;
+  }
+
+  Rate? getRate(String platform) {
+    if (rateLimits.containsKey(platform)) return rateLimits[platform];
+    try {
+      final ext = findExtractor(platform);
+      return rateLimits[platform] = ext.apiRate;
+    } catch (_) {
+      return null;
+    }
+  }
 
   io.IOSink? _sink;
   io.IOSink get _logSink {
@@ -332,7 +413,7 @@ final class IngestionEngine {
   }
 
   // Resumable HTTP client ensures partially downloaded .part files resume upon restart
-  final Client cdn = Http.client(resume: true);
+  final Client cdn = Http.client(resume: true, headers: HttpUtils.page);
 
   final Pool _downloadPool;
   final Pool _transcodePool;
@@ -344,12 +425,14 @@ final class IngestionEngine {
   final overallItemMeter = Meter();
   final allUsersMeter = Meter();
 
-  final lanes = List.generate(8, (i) => WorkerLane(i + 1));
+  final List<WorkerLane> lanes;
   final _idleLanes = <WorkerLane>[];
 
   final failures = <FailureEntry>[];
-  var activeDownloads = 0;
-  var activeTranscodes = 0;
+  int get activeDownloads => _downloadPool.active;
+  int get activeTranscodes => _transcodePool.active;
+  int get downloadWaiting => _downloadPool.waiting;
+  int get transcodeWaiting => _transcodePool.waiting;
   var deduplicatedCount = 0;
   var done = false;
   var retrying = 0;
@@ -367,6 +450,15 @@ final class IngestionEngine {
     final u = TargetState(name, platform);
     users.add(u);
     return u;
+  }
+
+  void aliasUser(String oldName, String newName, String platform) {
+    for (final u in users) {
+      if (u.platform == platform && u.name == oldName) {
+        u.name = newName;
+        return;
+      }
+    }
   }
 
   void updatePhase(String platform, String user, Kind kind, String phase, {bool done = false}) {
@@ -397,7 +489,9 @@ final class IngestionEngine {
   }
 
   WorkerLane _acquireLane(String platform, String user, String file, LaneStatus status) {
-    final lane = _idleLanes.isNotEmpty ? _idleLanes.removeAt(0) : lanes.firstWhere((l) => !l.busy, orElse: () => lanes.first);
+    final lane = _idleLanes.isNotEmpty
+        ? _idleLanes.removeAt(0)
+        : lanes.firstWhere((l) => !l.busy, orElse: () => lanes.first);
     lane.start(platform: platform, user: user, file: file, status: status);
     return lane;
   }
@@ -422,21 +516,24 @@ final class IngestionEngine {
 
   Future<void> _processAsset(MediaAsset a) async {
     final relPath = a.to.path.replaceAll(r'\', '/');
+    final parentDir = a.to.parent();
+    final dedupePrefixed = parentDir.file('[dedupe] ${a.to.name()}');
+    final dedupeRelPath = dedupePrefixed.path.replaceAll(r'\', '/');
+
     final u = getOrCreateUser(a.user, a.platform);
-    final cat = u.categories.putIfAbsent(a.category.name, () => CategoryStats(a.category.name));
-    cat.queued++;
+    final cat = u.category(a.category.name);
 
     // 1. Check if older than since filter
     if (options.since != null && a.at != null && a.at!.isBefore(options.since!)) {
-      cat.had++;
       return;
     }
 
     // 2. Check if already exists in DB or on disk (Clean Restart Guarantee)
-    if (db.hasFile(relPath) || await a.to.exists()) {
-      cat.had++;
+    if (db.hasFile(relPath) || db.hasFile(dedupeRelPath) || await a.to.exists() || await dedupePrefixed.exists()) {
       return;
     }
+
+    cat.queued++;
 
     if (options.dry) {
       log('[@${a.user}] would save ${a.to.name()}', platform: a.platform);
@@ -449,7 +546,6 @@ final class IngestionEngine {
     WorkerLane? lane;
     try {
       await _downloadPool.run(() async {
-        activeDownloads++;
         lane = _acquireLane(a.platform, a.user, a.to.name(), LaneStatus.downloading);
         try {
           if (a.text case final text?) {
@@ -461,11 +557,9 @@ final class IngestionEngine {
         } finally {
           _releaseLane(lane!);
           lane = null;
-          activeDownloads--;
         }
       });
     } catch (e) {
-      cat.stored -= gotMeter.done();
       if (e is InterruptedException) rethrow;
       cat.failed++;
       failures.add((
@@ -480,19 +574,31 @@ final class IngestionEngine {
       return;
     }
 
-    // 3. Post-Download: Hashing, Deduplication & Recording
     cat.added++;
+
+    final isImage = a.to.isImage();
+    final isVideo = a.to.isVideo();
+
+    // 3. Transcoding Phase (CPU Pool, Bounded)
+    if (options.compress) {
+      final quality = isVideo ? 80 : 85;
+      await _transcodePool.run(() async {
+        final transcodeLane = _acquireLane(a.platform, a.user, a.to.name(), LaneStatus.transcoding);
+        try {
+          final comp = await _compress(a.to.path, isVideo, quality, transcodeLane);
+          log('[@${a.user}] ${a.to.name()}  $comp', platform: a.platform);
+        } finally {
+          _releaseLane(transcodeLane);
+        }
+      });
+    }
+
+    // 4. Post-Download: Hashing, Deduplication & Recording
     a.sizeOnDisk = await a.to.size();
 
     try {
-      final h = HashUtils.sha256();
-      await (a.to > h);
-      a.sha256 = h.hex();
+      a.sha256 = await a.to.sha256();
     } catch (_) {}
-
-    final ext = a.to.name().split('.').last.toLowerCase();
-    final isImage = const {'jpg', 'jpeg', 'png', 'webp'}.contains(ext);
-    final isVideo = const {'mp4', 'mov', 'webm', 'mkv'}.contains(ext);
 
     if (isImage) {
       try {
@@ -501,10 +607,22 @@ final class IngestionEngine {
       } catch (_) {}
     }
 
-    final duplicatePath = db.findDuplicate(sha256: a.sha256, phash: a.phash);
-    if (duplicatePath != null && duplicatePath != relPath) {
+    var finalRelPath = relPath;
+    var assetStatus = 'done';
+
+    final duplicatePath = db.findDuplicate(sha256: a.sha256, phash: a.phash, excludePath: relPath);
+    if (duplicatePath != null && duplicatePath != relPath && duplicatePath != dedupeRelPath) {
       deduplicatedCount++;
       log('dedupe: ${a.to.name()} matches $duplicatePath', platform: a.platform);
+
+      // Flag with [dedupe] prefix - DO NOT silently remove!
+      try {
+        await a.to.move(dedupePrefixed.path);
+        finalRelPath = dedupeRelPath;
+        assetStatus = 'dedupe';
+      } catch (e) {
+        log('dedupe rename failed: $e', platform: a.platform, failed: true);
+      }
     }
 
     db.recordAsset(
@@ -512,29 +630,14 @@ final class IngestionEngine {
       platform: a.platform,
       user: a.user,
       category: a.category,
-      filePath: relPath,
+      filePath: finalRelPath,
       postId: a.sourcePostId,
       url: a.url,
       sha256: a.sha256,
       phash: a.phash,
       fileSize: a.sizeOnDisk,
+      status: assetStatus,
     );
-
-    // 4. Transcoding Phase (CPU Pool, Bounded)
-    if (options.compress) {
-      final quality = isVideo ? 80 : 85;
-      await _transcodePool.run(() async {
-        activeTranscodes++;
-        final transcodeLane = _acquireLane(a.platform, a.user, a.to.name(), LaneStatus.transcoding);
-        try {
-          final comp = await _compress(a.to.path, isVideo, quality, transcodeLane);
-          log('[@${a.user}] ${a.to.name()}  $comp', platform: a.platform);
-        } finally {
-          _releaseLane(transcodeLane);
-          activeTranscodes--;
-        }
-      });
-    }
   }
 
   Future<String> _compress(String path, bool isVideo, int quality, WorkerLane lane) async {
@@ -557,7 +660,8 @@ final class IngestionEngine {
     for (final f in toRetry) {
       try {
         await f.retry();
-      } catch (_) {} finally {
+      } catch (_) {
+      } finally {
         retrying--;
       }
     }
@@ -570,6 +674,8 @@ final class IngestionEngine {
   }
 
   Future<void> close() async {
+    clearPause();
+    if (activeEngine == this) activeEngine = null;
     await cdn.close();
     for (final a in apis) {
       await a.close();

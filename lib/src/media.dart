@@ -78,7 +78,7 @@ Exception failure(String what, String stderr) {
 }
 
 final _network = RegExp(
-  r'Connection (refused|reset|timed out)|Failed to resolve hostname|Network is unreachable|No route to host|'
+  r'Connection (refused|reset|timed out|to .* failed)|Error number -138|Failed to resolve hostname|Network is unreachable|No route to host|'
   r'Operation timed out|Server returned (5XX|429)|Broken pipe',
 );
 

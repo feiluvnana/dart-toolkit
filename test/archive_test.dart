@@ -368,7 +368,9 @@ void main() {
     test('our 7z round-trips, with and without a password, and bsdtar reads it', () async {
       await Fs.file(p('src/a.txt')).write('seven ' * 4000);
       await Fs.file(p('src/d/run.sh')).write('#!/bin/sh\n');
-      await Process.run('chmod', ['755', p('src/d/run.sh')]);
+      if (!Platform.isWindows) {
+        await Process.run('chmod', ['755', p('src/d/run.sh')]);
+      }
       await Fs.file(p('src/d/empty.txt')).write('');
       await Fs.dir(p('src/e')).create();
       await (Archive.archive(['.'], dir: p('src'), format: ArchiveFormat.sevenzip) > Fs.file(p('ours.7z')));
@@ -376,7 +378,9 @@ void main() {
       expect(await Fs.file(p('o1/a.txt')).text(), 'seven ' * 4000);
       expect(await Fs.file(p('o1/d/empty.txt')).text(), '');
       expect(await Fs.dir(p('o1/e')).exists(), isTrue);
-      expect((await FileStat.stat(p('o1/d/run.sh'))).mode & 0x1ff, 0x1ed);
+      if (!Platform.isWindows) {
+        expect((await FileStat.stat(p('o1/d/run.sh'))).mode & 0x1ff, 0x1ed);
+      }
       if (await has('bsdtar')) {
         await Fs.dir(p('o2')).create();
         final r = await Process.run('bsdtar', ['-xf', p('ours.7z'), '-C', p('o2')]);

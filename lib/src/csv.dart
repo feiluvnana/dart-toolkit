@@ -43,6 +43,17 @@ abstract final class CsvUtils {
     }
     return out.toString();
   }
+
+  /// Encodes a list of maps into CSV format, extracting headers from [maps] keys or explicit [columns].
+  static String encodeMaps(List<Map<String, Object?>> maps, {List<String>? columns, String sep = ','}) {
+    if (maps.isEmpty) return '';
+    final cols = columns ?? {for (final m in maps) ...m.keys}.toList();
+    final rows = <List<Object?>>[
+      cols,
+      for (final m in maps) [for (final col in cols) m[col]],
+    ];
+    return encode(rows, sep: sep);
+  }
 }
 
 /// `reader.csv()`: the rows of any [Reader] (`Fs.file`, an http response);

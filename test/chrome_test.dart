@@ -15,6 +15,17 @@ import 'package:test/test.dart';
 
 import 'support/io.dart';
 
+Future<void> _safeDelete(Directory dir) async {
+  for (var i = 0; i < 10; i++) {
+    try {
+      if (await dir.exists()) await dir.delete(recursive: true);
+      break;
+    } catch (_) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+}
+
 void main() {
   late Browser browser;
   late HttpServer server;
@@ -266,7 +277,7 @@ void main() {
     test('S10: a launched Chrome talks over a pipe and listens on no TCP port', () async {
       if (Platform.isWindows) return markTestSkipped('Windows keeps the debugging port');
       final profile = await Directory.systemTemp.createTemp('chrome_nolisten');
-      addTearDown(() => profile.delete(recursive: true));
+      addTearDown(() => _safeDelete(profile));
       final b = await Chrome.launch(profile: profile.path);
       addTearDown(b.close);
       expect((await b.open('$base/')).url(), '$base/');
@@ -285,7 +296,7 @@ void main() {
 
     test('a reused profile keeps its cookies but not its tabs', () async {
       final profile = await Directory.systemTemp.createTemp('chrome_profile');
-      addTearDown(() => profile.delete(recursive: true));
+      addTearDown(() => _safeDelete(profile));
       final first = await Chrome.launch(profile: profile.path);
       await first.open('$base/cookie');
       await first.close();

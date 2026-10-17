@@ -6,6 +6,7 @@ import 'dart:io' as io;
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/src/posix.dart' as posix;
 import 'package:dart_toolkit/utils.dart';
+import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -25,7 +26,7 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  String p(String name) => '${tmp.path}/$name';
+  String p(String name) => path.join(tmp.path, name);
 
   group('Fs', () {
     test('sanitize makes one portable name that never leaves its folder', () {
@@ -63,9 +64,9 @@ void main() {
 
     test('dir().dir().file() builds a path', () async {
       final f = Fs.dir(p('a')).dir('b').file('c.txt');
-      expect(f.path, p('a/b/c.txt'));
+      expect(f.path, path.join(p('a'), 'b', 'c.txt'));
       await f.write('deep');
-      expect(await Fs.file(p('a/b/c.txt')).text(), 'deep');
+      expect(await Fs.file(path.join(p('a'), 'b', 'c.txt')).text(), 'deep');
     });
   });
 
@@ -528,7 +529,7 @@ Future<void> main() async {
     });
 
     test('Fs.home is HOME', () {
-      expect(Fs.homeDir().path, Platform.environment['HOME']);
+      expect(Fs.homeDir().path, Platform.isWindows ? Platform.environment['USERPROFILE'] : Platform.environment['HOME']);
     });
 
     test('modified() reads the mtime; a missing entry throws', () async {
@@ -643,8 +644,8 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
     });
 
     test('file/dir navigate without I/O', () {
-      expect(Fs.dir(p('d')).file('a').path, '${p('d')}/a');
-      expect(Fs.dir(p('d')).dir('e').path, '${p('d')}/e');
+      expect(Fs.dir(p('d')).file('a').path, path.join(p('d'), 'a'));
+      expect(Fs.dir(p('d')).dir('e').path, path.join(p('d'), 'e'));
     });
 
     test('list returns typed children sorted by name', () async {
@@ -659,7 +660,9 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       await Fs.file(p('o/a/b')).write('1');
       await Fs.file(p('o/a-b')).write('2');
       await Fs.file(p('o/a.c')).write('3');
-      final names = [for (final e in await Fs.dir(p('o')).list(match: '**')) e.path.substring(p('o').length + 1)];
+      final names = [
+        for (final e in await Fs.dir(p('o')).list(match: '**')) e.path.substring(p('o').length + 1).replaceAll(r'\', '/'),
+      ];
       expect(names, ['a', 'a/b', 'a-b', 'a.c']);
     });
 
@@ -681,7 +684,7 @@ Future<void> main(List<String> a) => Fs.file(a[0]).lock(() async {
       final d = Future.value(Fs.dir(p('md')));
       await d.create();
       expect(await d.exists(), isTrue);
-      expect((await d.file('a')).path, '${p('md')}/a');
+      expect((await d.file('a')).path, path.join(p('md'), 'a'));
       expect(await d.list(), isEmpty);
     });
   });
@@ -859,6 +862,33 @@ Future<void> expectThrows(Future<void> f, String what) async {
       expect(await f.bytes(), chunks.expand((c) => c).toList());
       final leftovers = await Directory(tmp.path).list().where((e) => e.path.contains('.tmp')).toList();
       expect(leftovers, isEmpty);
+    });
+
+    test('Dir operator / navigates child folders seamlessly', () {
+      final base = Fs.dir(p('base'));
+      final sub = base / 'sub/folder';
+      expect(sub.name(), 'folder');
+      expect(sub.parent().name(), 'sub');
+    });
+
+    test('Entry ext, stem, isImage, and isVideo inspect names correctly', () {
+      final img = Fs.file(p('photos/vacation.JPEG'));
+      expect(img.ext(), 'jpeg');
+      expect(img.stem(), 'vacation');
+      expect(img.isImage(), isTrue);
+      expect(img.isVideo(), isFalse);
+
+      final vid = Fs.file(p('movies/clip.MP4'));
+      expect(vid.ext(), 'mp4');
+      expect(vid.stem(), 'clip');
+      expect(vid.isImage(), isFalse);
+      expect(vid.isVideo(), isTrue);
+
+      final noExt = Fs.file(p('docs/Makefile'));
+      expect(noExt.ext(), '');
+      expect(noExt.stem(), 'Makefile');
+      expect(noExt.isImage(), isFalse);
+      expect(noExt.isVideo(), isFalse);
     });
   });
 }

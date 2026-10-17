@@ -44,8 +44,8 @@ Future<ProcessResult> runDart(
       await p.stdin.close();
     }().catchError((_) {}),
   );
-  final out = p.stdout.transform(utf8.decoder).join();
-  final err = p.stderr.transform(utf8.decoder).join();
+  final out = (await p.stdout.transform(utf8.decoder).join()).replaceAll('\r\n', '\n');
+  final err = (await p.stderr.transform(utf8.decoder).join()).replaceAll('\r\n', '\n');
   final code = await p.exitCode.timeout(
     timeout,
     onTimeout: () {
@@ -53,7 +53,7 @@ Future<ProcessResult> runDart(
       return -1;
     },
   );
-  return ProcessResult(p.pid, code, await out, await err);
+  return ProcessResult(p.pid, code, out, err);
 }
 
 /// Start [source] as a child Dart script (see [runDart]) and return the
@@ -61,7 +61,16 @@ Future<ProcessResult> runDart(
 /// prints, never a fixed delay, before acting on it.
 Future<Process> startDart(String source, {List<String> args = const [], String? cwd, Map<String, String>? env}) async {
   final dir = await Directory.systemTemp.createTemp('child');
-  addTearDown(() => dir.delete(recursive: true));
+  addTearDown(() async {
+    for (var i = 0; i < 10; i++) {
+      try {
+        if (await dir.exists()) await dir.delete(recursive: true);
+        break;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+  });
   final script = File('${dir.path}/main.dart');
   await script.writeAsString(source);
   return Process.start(

@@ -400,6 +400,9 @@ sealed class Client implements Closeable {
   /// redirect hop. A pool counts its members.
   int sent();
 
+  /// The [Rate] pacing this client's requests, if configured.
+  Rate? get rateLimit;
+
   /// GET [url] (relative to `base:`), [query] appended; completes when the
   /// headers arrive. With `resume: true`, `get(u) > file` skips and resumes.
   Future<Response> get(String url, {Map<String, Object?>? query, Map<String, String>? headers});
@@ -585,6 +588,9 @@ final class _Client extends Client {
 
   @override
   int sent() => _copies.fold(_sent, (n, c) => n + c.sent());
+
+  @override
+  Rate? get rateLimit => _s.rate;
 
   /// Until when [_Pool] skips this member after a 429.
   DateTime? _benched;
@@ -1035,6 +1041,9 @@ final class _Pool extends Client {
 
   @override
   int sent() => _members.fold(0, (n, m) => n + m._sent);
+
+  @override
+  Rate? get rateLimit => _members.firstOrNull?._s.rate;
 
   /// The member with the fewest requests in flight whose [Rate] has a free
   /// slot and which is not benched; ties round-robin.

@@ -16,7 +16,10 @@ import 'dashboard.dart';
 import 'db.dart';
 import 'engine.dart';
 
-final targetArgs = Rest<String>('target', 'Usernames with platform prefix (fbk:user, twt:user, ins:user) or full URLs.');
+final targetArgs = Rest<String>(
+  'target',
+  'Usernames with platform prefix (fbk:user, twt:user, ins:user) or full URLs.',
+);
 final outOpt = Opt<String?>(
   'out',
   'Destination directory for downloaded media, database, and logs (default: <script-dir>/downloads).',
@@ -36,18 +39,11 @@ final compressFlag = Flag('compress', 'Compress media using recommended qualitie
 final allFlag = Flag('all', 'Scan from the beginning of the feed, ignoring stored cursors.', short: 'a');
 final dryRunFlag = Flag('dry-run', 'List what would download; write nothing to disk or DB.', short: 'n');
 
-final sharedOptions = <Param<Object?>>[
-  outOpt,
-  categoryOpt,
-  sinceOpt,
-  compressFlag,
-  allFlag,
-  dryRunFlag,
-];
+final sharedOptions = <Param<Object?>>[outOpt, categoryOpt, sinceOpt, compressFlag, allFlag, dryRunFlag];
 
 Dir resolveTargetDir(Context c) {
   final path = c(outOpt);
-  return path != null ? Fs.dir(path) : Fs.scriptDir().dir('downloads');
+  return path != null ? Fs.dir(path) : Fs.scriptDir() / 'downloads';
 }
 
 Future<String> resolveDbPath(Dir root, String? customDbPath) async {
@@ -60,12 +56,8 @@ Future<String> resolveDbPath(Dir root, String? customDbPath) async {
   return standard.path;
 }
 
-LoaderOptions makeOptions(Context c) => (
-  all: c(allFlag),
-  dry: c(dryRunFlag),
-  compress: c(compressFlag),
-  since: c(sinceOpt),
-);
+LoaderOptions makeOptions(Context c) =>
+    (all: c(allFlag), dry: c(dryRunFlag), compress: c(compressFlag), since: c(sinceOpt));
 
 Future<void> main(List<String> args) async {
   await Command(
@@ -85,19 +77,11 @@ Future<void> main(List<String> args) async {
         params: sharedOptions,
         handler: handleUpdate,
       ),
-      Command(
-        'stats',
-        'Display statistics from the SQLite media database.',
-        params: [outOpt],
-        handler: handleStats,
-      ),
+      Command('stats', 'Display statistics from the SQLite media database.', params: [outOpt], handler: handleStats),
       Command(
         'duplicate',
         'Check if an image matches any tracked asset by SHA-256 or pHash.',
-        params: [
-          outOpt,
-          Rest<String>('file', 'Path to image file to check.', required: true),
-        ],
+        params: [outOpt, Rest<String>('file', 'Path to image file to check.', required: true)],
         handler: handleFindDuplicate,
       ),
       Command(
@@ -208,9 +192,7 @@ Future<void> handleFindDuplicate(Context c) async {
   final dbPath = await resolveDbPath(root, null);
   final db = await MediaDb.open(dbPath);
 
-  final h = HashUtils.sha256();
-  await (targetFile > h);
-  final sha256 = h.hex();
+  final sha256 = await targetFile.sha256();
   String? phash;
   try {
     phash = await targetFile.phash();
@@ -221,7 +203,12 @@ Future<void> handleFindDuplicate(Context c) async {
   if (phash != null) Console.log('  pHash:   $phash');
 
   const threshold = 5;
-  final match = db.findDuplicate(sha256: sha256, phash: phash, threshold: threshold);
+  final match = db.findDuplicate(
+    sha256: sha256,
+    phash: phash,
+    threshold: threshold,
+    excludePath: targetFile.path.replaceAll(r'\', '/'),
+  );
   db.close();
 
   if (match != null) {
@@ -246,7 +233,10 @@ Future<void> handlePrune(Context c) async {
 
   for (final row in rows) {
     final filePath = row['file_path'] as String;
-    if (!await Fs.file(filePath).exists()) {
+    final file = (filePath.contains(':') || filePath.startsWith('/') || filePath.startsWith(r'\'))
+        ? Fs.file(filePath)
+        : root.file(filePath);
+    if (!await file.exists()) {
       db.execute('DELETE FROM assets WHERE file_path = ?;', [filePath]);
       pruned++;
     }
@@ -274,11 +264,7 @@ Future<void> handleExport(Context c) async {
   final String content;
   if (format == 'csv') {
     final headers = ['id', 'platform', 'user', 'category', 'file_path', 'sha256', 'phash', 'file_size', 'status'];
-    final lines = <String>[headers.join(',')];
-    for (final row in rows) {
-      lines.add(headers.map((h) => '"${row[h]?.toString().replaceAll('"', '""') ?? ''}"').join(','));
-    }
-    content = lines.join('\n');
+    content = CsvUtils.encodeMaps(rows, columns: headers);
   } else {
     final records = [
       for (final row in rows) {for (final col in row.keys) col: row[col]},
@@ -302,7 +288,7 @@ Future<void> runLoader({
 }) async {
   final sessionDir = Fs.scriptDir();
   final dbPath = await resolveDbPath(root, null);
-  final logFile = root.file('medialoader.log');
+  final logFile = root.file('.medialoader.log');
 
   final db = await MediaDb.open(dbPath);
   final engine = IngestionEngine(db: db, options: options, logFile: logFile);
@@ -338,7 +324,7 @@ Future<void> runLoader({
         for (final MapEntry(key: target, value: kinds) in targets.entries) {
           final ext = platformExtractors[target.platformCode]!;
           final api = apis[ext.code]!;
-          final platformRoot = root.dir(ext.code);
+          final platformRoot = root / ext.code;
 
           final ctx = JobCtx(
             target: target,
@@ -350,17 +336,16 @@ Future<void> runLoader({
             engine: engine,
           );
 
-          jobs.add(
-            () async {
-              final userState = engine.getOrCreateUser(target.user, target.platformCode);
-              try {
-                await ext.extract(ctx);
-              } catch (e) {
-                userState.error = ext.explain(e);
-                engine.log('✗ [@${target.user}] ${userState.error}', platform: target.platformCode, failed: true);
-              }
-            }(),
-          );
+          jobs.add(() async {
+            await ctx.init();
+            final userState = engine.getOrCreateUser(target.user, target.platformCode);
+            try {
+              await ext.extract(ctx);
+            } catch (e) {
+              userState.error = ext.explain(e);
+              engine.log('✗ [@${target.user}] ${userState.error}', platform: target.platformCode, failed: true);
+            }
+          }());
         }
 
         await Future.wait(jobs);
@@ -369,6 +354,7 @@ Future<void> runLoader({
     );
   } finally {
     await engine.close();
+    db.close();
   }
 }
 
@@ -394,7 +380,7 @@ Future<Map<Target, Set<Kind>>> discoverTargets(Dir root, {String? dbPath}) async
 
   // Fallback: scan disk folders
   for (final ext in extractors) {
-    final pDir = root.dir(ext.code);
+    final pDir = root / ext.code;
     if (!await pDir.exists()) continue;
     for (final entity in await pDir.list()) {
       if (entity is Dir) {
