@@ -92,7 +92,7 @@ Future<void> _copyFile(String from, String to, void Function(int)? onBytes) asyn
 /// The OS copy of [from] to [to], or with [onBytes] a streamed one that
 /// reports each chunk.
 Future<void> copyFile(String from, String to, {void Function(int bytes)? onBytes}) async {
-  final source = io.Platform.isWindows && io.FileSystemEntity.isLinkSync(from)
+  final source = io.Platform.isWindows && await io.FileSystemEntity.isLink(from)
       ? await io.File(from).resolveSymbolicLinks()
       : from;
   if (onBytes == null) {
