@@ -91,6 +91,9 @@ abstract final class Chrome {
     // POSIX: CDP over fds 3 and 4 (two FIFOs in an owner-only folder), so
     // no TCP port any local process could drive. Windows keeps the port.
     final pipes = io.Platform.isWindows ? null : await io.Directory.systemTemp.createTemp('dart_toolkit_cdp');
+    if (pipes != null) {
+      await io.Process.run('chmod', ['0700', pipes.path]);
+    }
     final args = [
       ..._flags,
       if (headless) ...['--headless', '--hide-scrollbars', '--mute-audio'],
