@@ -29,8 +29,15 @@ void initSqlite() {
       p.join(p.dirname(Platform.resolvedExecutable), 'sqlite3.dll'),
       p.join(p.dirname(Platform.script.toFilePath()), 'sqlite3.dll'),
       'sqlite3.dll',
-      // Scoop Python install
-      r'D:\dev\scoop\apps\python\current\DLLs\sqlite3.dll',
+      // Scoop installs (via %SCOOP% or %USERPROFILE%\scoop)
+      if (Platform.environment['SCOOP'] case final scoop?) ...[
+        p.join(scoop, 'apps', 'python', 'current', 'DLLs', 'sqlite3.dll'),
+        p.join(scoop, 'apps', 'sqlite', 'current', 'sqlite3.dll'),
+      ],
+      if (Platform.environment['USERPROFILE'] case final profile?) ...[
+        p.join(profile, 'scoop', 'apps', 'python', 'current', 'DLLs', 'sqlite3.dll'),
+        p.join(profile, 'scoop', 'apps', 'sqlite', 'current', 'sqlite3.dll'),
+      ],
       // Standard Python installs in AppData or Program Files
       if (Platform.environment['LOCALAPPDATA'] case final appData?) ...[
         p.join(appData, 'dart_toolkit', 'sqlite3.dll'),
