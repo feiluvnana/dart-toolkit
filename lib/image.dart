@@ -508,12 +508,6 @@ extension ReaderImage on Reader {
     final bytes = format == ImageFormat.gif ? await io.File(temp.path).readAsBytes() : first;
     return Image._open(temp.path, format, bytes, origin().name(), temp);
   }
-
-  /// 64-bit difference hash (dHash) as a 16-character hex string.
-  Future<String> dhash() async => (await image()).dhash();
-
-  /// 64-bit Discrete Cosine Transform perceptual hash (pHash) as a 16-character hex string.
-  Future<String> phash() async => (await image()).phash();
 }
 
 /// The first bytes of [path]: enough for every header [media.header] reads
@@ -535,12 +529,6 @@ Future<Uint8List> _head(String path) async {
 extension ReaderFutureImage on Future<Reader> {
   /// Read the image (see [ReaderImage.image]).
   Future<Image> image() async => (await this).image();
-
-  /// 64-bit difference hash (dHash) as a 16-character hex string.
-  Future<String> dhash() async => (await image()).dhash();
-
-  /// 64-bit Discrete Cosine Transform perceptual hash (pHash) as a 16-character hex string.
-  Future<String> phash() async => (await image()).phash();
 }
 
 /// Future mirrors (rule 4). The extension name is import-only; never reference it.
