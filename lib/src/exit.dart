@@ -297,12 +297,13 @@ void _install() {
   try {
     _sigintSub ??= io.ProcessSignal.sigint.watch().listen((_) => _handle(130, isSigint: true), onError: (_) {});
   } catch (_) {}
+  // Windows delivers SIGHUP when the console window closes.
+  try {
+    _sighupSub ??= io.ProcessSignal.sighup.watch().listen((_) => _handle(129, isSigint: false), onError: (_) {});
+  } catch (_) {}
   if (io.Platform.isWindows) return;
   try {
     _sigtermSub ??= io.ProcessSignal.sigterm.watch().listen((_) => _handle(143, isSigint: false), onError: (_) {});
-  } catch (_) {}
-  try {
-    _sighupSub ??= io.ProcessSignal.sighup.watch().listen((_) => _handle(129, isSigint: false), onError: (_) {});
   } catch (_) {}
 }
 
@@ -389,9 +390,10 @@ Future<void> _finish(int code) async {
   _idle?.cancel();
   // Hooks run in reverse registration order.
   final hooks = List.of(_hooks.values).reversed;
+  final hookTimeout = Duration(seconds: io.Platform.isWindows ? 2 : 5);
   for (final (hook, _) in hooks) {
     try {
-      await Future.sync(hook).timeout(const Duration(seconds: 5), onTimeout: () {});
+      await Future.sync(hook).timeout(hookTimeout, onTimeout: () {});
     } catch (_) {}
   }
   io.exit(code);

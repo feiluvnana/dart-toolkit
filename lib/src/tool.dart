@@ -145,7 +145,13 @@ Future<String> _locate(Tool t, Set<String> needs) async {
   if (await io.File(pinned).exists()) return pinned;
   for (final name in _onPath(t)) {
     final onPath = await paths.which([name]);
-    if (onPath != null && (needs.isEmpty || (await _encoders(onPath)).containsAll(needs))) return onPath;
+    if (onPath != null) {
+      if (io.Platform.isWindows) {
+        final lower = onPath.toLowerCase();
+        if (lower.endsWith('.bat') || lower.endsWith('.cmd')) continue;
+      }
+      if (needs.isEmpty || (await _encoders(onPath)).containsAll(needs)) return onPath;
+    }
   }
   await _download(t, pinned);
   return pinned;
@@ -188,6 +194,23 @@ Future<void> _download(Tool t, String target) async {
           await io.File(src).rename(dest);
         }
       }
+      // Prune superseded pinned builds
+      final toolPrefix = t == Tool.sevenzip ? '7zip-' : 'ffmpeg-';
+      final parentDir = p.dirname(home);
+      final keepName = p.basename(home);
+      try {
+        final parent = io.Directory(parentDir);
+        if (await parent.exists()) {
+          await for (final entity in parent.list(followLinks: false)) {
+            final name = p.basename(entity.path);
+            if (name.startsWith(toolPrefix) && name != keepName && !name.endsWith('.lock')) {
+              try {
+                await entity.delete(recursive: true);
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
     } finally {
       await tmp.delete(recursive: true).catchError((_) => tmp);
     }

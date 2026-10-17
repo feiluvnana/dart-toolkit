@@ -140,3 +140,26 @@ Future<bool> copyTreeWithCp(String from, String to) async {
 bool isTmpName(String name) => _tmpName.hasMatch(name);
 
 final _tmpName = RegExp(r'^\..*\.tmp\d+\.\d+\.\d+$');
+
+/// Retry an operation on Windows if it hits transient sharing or lock violations.
+Future<T> renameRetry<T>(Future<T> Function() op) async {
+  if (isPosix) return await op();
+  io.FileSystemException? last;
+  var wait = 20;
+  for (var i = 0; i < 5; i++) {
+    try {
+      return await op();
+    } on io.FileSystemException catch (e) {
+      final code = e.osError?.errorCode;
+      // 5: ERROR_ACCESS_DENIED, 32: ERROR_SHARING_VIOLATION, 33: ERROR_LOCK_VIOLATION
+      if (code == 5 || code == 32 || code == 33) {
+        last = e;
+        await Future<void>.delayed(Duration(milliseconds: wait));
+        wait *= 2;
+        continue;
+      }
+      rethrow;
+    }
+  }
+  throw last!;
+}

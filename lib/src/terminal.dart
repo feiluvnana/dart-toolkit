@@ -61,7 +61,8 @@ Stream<List<int>>? _stdinFallback;
 
 /// Piped stdin's bytes (`Console.input()`), shared with the prompts that
 /// read it after: one subscription per process is all `dart:io` allows.
-Stream<List<int>> stdinBytes() => _stdinFallback ??= io.stdin.asBroadcastStream();
+Stream<List<int>> stdinBytes() =>
+    _stdinFallback ??= io.stdin.asBroadcastStream(onCancel: (sub) => sub.cancel());
 
 /// True while no listener has taken stdin itself (the piped fallback), so a
 /// synchronous `readLineSync` is still allowed and loses nothing.
@@ -184,6 +185,7 @@ Future<void> _stopInput() async {
   _ttySub = null;
   final tty = _tty;
   _tty = null;
+  _stdinFallback = null;
   // Bounded: a tty child that never closes its stdout must not keep the
   // process alive after the TUI is gone; its stdin pipe is still closed
   // below so the child can exit on its own.
@@ -350,7 +352,11 @@ String barLine(
   final lab = label ?? '';
   final labW = lab.isEmpty ? 0 : displayWidth(lab) + 1;
   final tailW = displayWidth(tail);
-  final barW = known ? (cols - labW - tailW - 2).clamp(0, 20) : 0;
+  var barW = known ? (cols - labW - tailW - 2).clamp(0, 20) : 0;
+  if (known && barW < 6 && cols - tailW - 2 >= 8) {
+    final avail = cols - tailW - 2;
+    barW = (avail < 10 ? avail : 10).clamp(6, 20);
+  }
   final body = barW > 0 ? '${barGlyphs(done, total, barW, ascii: ascii)}  $tail' : tail;
   final bodyW = barW > 0 ? barW + 2 + tailW : tailW;
   if (lab.isEmpty) return truncateWidth(body, cols);
@@ -381,7 +387,8 @@ final class TerminalCaps {
   /// Detect from [env] plus whether stderr/stdout are terminals.
   /// [hasTerminal] is stderr's (console) or stdout's (tui) terminal check;
   /// pass the stream the facade draws on.
-  static TerminalCaps of(Map<String, String> env, {required bool hasTerminal}) {
+  static TerminalCaps of(Map<String, String> env, {required bool hasTerminal, bool? windows}) {
+    final isWin = windows ?? io.Platform.isWindows;
     // no-color.org: set and not empty. FORCE_COLOR: any level (1-3, true)
     // but empty, 0 or false.
     final noColor = (env['NO_COLOR'] ?? '').isNotEmpty;
@@ -396,7 +403,9 @@ final class TerminalCaps {
     ].firstWhere((v) => v != null && v.isNotEmpty, orElse: () => '')!.toLowerCase();
     final truecolor = colorterm.contains('truecolor') || colorterm.contains('24bit');
     final color256 = truecolor || tm.contains('256color');
-    final ascii = !locale.contains('utf');
+    final ascii = isWin
+        ? !locale.contains('utf') && !(env.containsKey('WT_SESSION') || env['TERM_PROGRAM'] == 'vscode' || env.containsKey('ConEmuANSI'))
+        : !locale.contains('utf');
     // TERM=dumb (Emacs shell, some CI viewers) takes no escapes: no styling
     // unless forced, and no \r/erase animation.
     final dumb = tm == 'dumb';

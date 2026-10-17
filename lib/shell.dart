@@ -97,6 +97,7 @@ abstract final class Shell {
     bool terminal,
   ) async {
     if (exit.interrupted) throw const InterruptedException();
+    _checkBatchArgs(command[0], command.sublist(1));
     io.Process proc;
     try {
       proc = await io.Process.start(
@@ -203,10 +204,15 @@ abstract final class Shell {
   static Map<String, String>? _resolveEnv(Map<String, String?>? env) {
     if (env == null) return null;
     final merged = Map<String, String>.of(io.Platform.environment);
+    final windows = io.Platform.isWindows;
     env.forEach((key, value) {
-      if (value == null) {
-        merged.remove(key);
+      if (windows) {
+        final upper = key.toUpperCase();
+        merged.removeWhere((k, _) => k.toUpperCase() == upper);
       } else {
+        merged.remove(key);
+      }
+      if (value != null) {
         merged[key] = value;
       }
     });
@@ -323,9 +329,24 @@ final class _Program with Reader {
 /// terminal's Ctrl-C, which may reach our watcher only after the run ended:
 /// interrupt the script now, as the signal would.
 bool _diedOfCtrlC(int code) {
-  if (code != -2 || io.Platform.isWindows || !exit.onTerminal) return false;
+  // On POSIX, SIGINT exit is -2; on Windows, STATUS_CONTROL_C_EXIT is -1073741510 (0xC000013A).
+  final match = io.Platform.isWindows ? code == -1073741510 : code == -2;
+  if (!match || !exit.onTerminal) return false;
   exit.interrupt();
   return true;
+}
+
+void _checkBatchArgs(String exe, List<String> args) {
+  if (!io.Platform.isWindows) return;
+  final lower = exe.toLowerCase();
+  if (lower.endsWith('.bat') || lower.endsWith('.cmd')) {
+    final bad = RegExp(r'["&|<>\^%!\r\n]');
+    for (final a in args) {
+      if (bad.hasMatch(a)) {
+        throw ArgumentError('argument "$a" contains unsafe shell characters for batch script $exe');
+      }
+    }
+  }
 }
 
 /// Which started processes have exited (and been reaped), for [_killTree].
@@ -335,32 +356,38 @@ void _watch(io.Process proc) => unawaited(proc.exitCode.then((_) => _reaped[proc
 
 /// Signal [proc] and every process below it, deepest first, so a `sh -c`
 /// or a build tool cannot leave grandchildren running under init. The tree
-/// is read before anything dies (an orphan loses its parent link). Windows
-/// has no `ps`: only [proc] is signalled there.
+/// is read before anything dies (an orphan loses its parent link). On Windows,
+/// taskkill /F /T terminates the whole process tree.
 Future<void> _killTree(io.Process proc, io.ProcessSignal signal) async {
   // Once reaped, its pid may belong to someone else: never signal it then.
   if (_reaped[proc] ?? false) return;
-  final below = <int>[];
-  if (!io.Platform.isWindows) {
+  if (io.Platform.isWindows) {
     try {
-      final ps = await io.Process.run('ps', ['-A', '-o', 'pid=,ppid=']);
-      final kids = <int, List<int>>{};
-      for (final line in (ps.stdout as String).split('\n')) {
-        final f = line.trim().split(RegExp(r'\s+'));
-        if (f.length != 2) continue;
-        final pid = int.tryParse(f[0]), parent = int.tryParse(f[1]);
-        if (pid != null && parent != null) (kids[parent] ??= []).add(pid);
-      }
-      void walk(int pid) {
-        for (final k in kids[pid] ?? const <int>[]) {
-          walk(k);
-          below.add(k);
-        }
-      }
-
-      walk(proc.pid);
-    } catch (_) {}
+      await io.Process.run('taskkill', ['/F', '/T', '/PID', '${proc.pid}']);
+    } catch (_) {
+      proc.kill(signal);
+    }
+    return;
   }
+  final below = <int>[];
+  try {
+    final ps = await io.Process.run('ps', ['-A', '-o', 'pid=,ppid=']);
+    final kids = <int, List<int>>{};
+    for (final line in (ps.stdout as String).split('\n')) {
+      final f = line.trim().split(RegExp(r'\s+'));
+      if (f.length != 2) continue;
+      final pid = int.tryParse(f[0]), parent = int.tryParse(f[1]);
+      if (pid != null && parent != null) (kids[parent] ??= []).add(pid);
+    }
+    void walk(int pid) {
+      for (final k in kids[pid] ?? const <int>[]) {
+        walk(k);
+        below.add(k);
+      }
+    }
+
+    walk(proc.pid);
+  } catch (_) {}
   for (final pid in below) {
     if (pid > 1 && pid != io.pid) io.Process.killPid(pid, signal);
   }
@@ -390,6 +417,7 @@ final class _Filter implements Pipe {
   Stream<List<int>> transform(Stream<List<int>> input) => exit.guard(_transform(input), outside: true);
 
   Stream<List<int>> _transform(Stream<List<int>> input) async* {
+    _checkBatchArgs(_command[0], _command.sublist(1));
     io.Process proc;
     try {
       proc = await io.Process.start(

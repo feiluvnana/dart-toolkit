@@ -317,5 +317,23 @@ void main() {
       expect(await Image.compress(junk), isA<Kept>().having((k) => k.reason, 'reason', KeptReason.broken));
       expect(io.Directory(tmp.path).listSync().where((e) => e.path.endsWith('.compress')), isEmpty);
     });
+
+    test('perceptual hashing: dhash and phash compute 16-hex strings and distance', () async {
+      final imgBytes = await draw('testsrc=s=64x64', 'png');
+      final img = await _image(imgBytes);
+
+      final dhash = await img.dhash();
+      final phash = await img.phash();
+
+      expect(dhash.length, 16);
+      expect(phash.length, 16);
+      expect(RegExp(r'^[0-9a-f]{16}$').hasMatch(dhash), isTrue);
+      expect(RegExp(r'^[0-9a-f]{16}$').hasMatch(phash), isTrue);
+
+      expect(Image.distance(dhash, dhash), 0);
+      expect(Image.distance(phash, phash), 0);
+      expect(Image.distance('0000000000000000', '0000000000000001'), 1);
+      expect(Image.distance('0000000000000000', 'ffffffffffffffff'), 64);
+    });
   });
 }

@@ -16,6 +16,7 @@ environment:
 dependencies:
   crypto: ^3.0.7
   path: ^1.9.1
+  sqlite3: ^3.7.1
 
 dev_dependencies:
   html: ^0.15.7 # the reference engine for test/html_corpus_test.dart

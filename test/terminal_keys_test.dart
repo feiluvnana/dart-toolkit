@@ -139,6 +139,12 @@ void main() {
         expect(styled({'FORCE_COLOR': v}), isFalse, reason: v);
       }
     });
+
+    test('W8: Windows Terminal and VS Code support UTF-8 glyphs; default conhost is ASCII', () {
+      expect(TerminalCaps.of({'WT_SESSION': '1'}, hasTerminal: true, windows: true).ascii, isFalse);
+      expect(TerminalCaps.of({'TERM_PROGRAM': 'vscode'}, hasTerminal: true, windows: true).ascii, isFalse);
+      expect(TerminalCaps.of({}, hasTerminal: true, windows: true).ascii, isTrue);
+    });
   });
 
   test('combining marks, ZWSP and medial jamo take no cell (as wcwidth)', () {

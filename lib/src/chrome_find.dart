@@ -68,6 +68,7 @@ Future<String?> installedChrome() async {
       ? [
           for (final root in ['/Applications', '${env['HOME']}/Applications']) ...[
             '$root/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '$root/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
             '$root/Chromium.app/Contents/MacOS/Chromium',
           ],
         ]
@@ -88,6 +89,7 @@ String? testingPlatform() => switch (Abi.current()) {
   Abi.macosX64 => 'mac-x64',
   Abi.linuxX64 => 'linux64',
   Abi.windowsX64 => 'win64',
+  Abi.windowsArm64 => 'win64',
   Abi.windowsIA32 => 'win32',
   _ => null,
 };
@@ -130,6 +132,8 @@ Future<String> _testingChrome({required bool headless}) async {
     if (failed != null || !io.File(exe).existsSync()) {
       throw BrowserException('Chrome for Testing download failed: ${failed ?? 'no $exe'}', cause: failed);
     }
+    // Prune superseded Chrome versions
+    await pruneOld(p.join(userCacheDir(), 'dart_toolkit', 'chrome'), _version);
     return exe;
   });
 }

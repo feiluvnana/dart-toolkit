@@ -10,10 +10,16 @@ import 'dart:io' as io;
 /// Starts no process.
 Future<String?> which(List<String> programs) async {
   final windows = io.Platform.isWindows;
-  final exts = windows
-      ? ['', ...(io.Platform.environment['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').where((e) => e.isNotEmpty)]
-      : const [''];
+  final pathext = windows
+      ? (io.Platform.environment['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD')
+          .split(';')
+          .where((e) => e.isNotEmpty)
+          .toList()
+      : const <String>[];
   Future<String?> probe(String base) async {
+    final exts = !windows
+        ? const ['']
+        : (base.contains('.') ? ['', ...pathext] : [...pathext, '']);
     for (final ext in exts) {
       final path = '$base$ext';
       final st = await io.FileStat.stat(path);

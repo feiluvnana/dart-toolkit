@@ -38,7 +38,8 @@ abstract final class ShellUtils {
     if (io.Platform.isMacOS) {
       cmd = ['open', target];
     } else if (io.Platform.isWindows) {
-      cmd = ['rundll32', 'url.dll,FileProtocolHandler', target];
+      final sysRoot = io.Platform.environment['SystemRoot'] ?? r'C:\Windows';
+      cmd = ['$sysRoot\\System32\\rundll32.exe', 'url.dll,FileProtocolHandler', target];
     } else {
       cmd = ['xdg-open', target];
     }

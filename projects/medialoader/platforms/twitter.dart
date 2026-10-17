@@ -1,5 +1,4 @@
-// Twitter's web API, as the website calls it: the media timeline (posts)
-// and the avatar and banner (profiles).
+// Twitter/X extractor for MediaLoader.
 library;
 
 import 'package:dart_toolkit/fs.dart';
@@ -7,19 +6,21 @@ import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/utils.dart';
 
-import '../feed.dart';
-import '../job.dart';
-import '../platform.dart';
+import '../engine.dart';
 
-const web = 'https://x.com';
-const bearer =
+const _web = 'https://x.com';
+const _bearer =
     'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
-final platform = Twitter();
-
-final class Twitter extends Platform {
+final class TwitterExtractor extends Extractor {
   @override
-  final code = 'twt', name = 'Twitter', site = web;
+  final code = 'twt';
+
+  @override
+  final name = 'Twitter';
+
+  @override
+  final site = _web;
 
   @override
   final kinds = const [Kind.posts, Kind.profiles];
@@ -27,24 +28,35 @@ final class Twitter extends Platform {
   @override
   final loginCookies = const {'auth_token'};
 
-  // Rate limits: 100 calls per 15 minutes, 150 for the user media timeline.
-  late final apiRate = rate(100, 15.minutes), mediaRate = rate(150, 15.minutes);
+  late final apiRate = rate(100, 15.minutes);
+  late final mediaRate = rate(150, 15.minutes);
 
   static final _url = RegExp(
     r'^(?:https?://)?(?:www\.|mobile\.)?(?:(?:[fv]x)?twitter|(?:fix(?:up|v))?x)\.com/([^/?#]+)(?:/status/(\d+))?',
   );
 
   @override
-  bool matches(String input) => _url.hasMatch(input.trim());
+  bool matches(String input) {
+    final s = input.trim();
+    if (_url.hasMatch(s)) return true;
+    if (s.toLowerCase().startsWith('twt:')) return true;
+    return false;
+  }
 
   @override
   Target parse(String input) {
-    final s = input.trim();
+    var s = input.trim();
+    if (s.toLowerCase().startsWith('twt:')) {
+      s = s.substring(4).trim();
+    }
     for (final re in [r'[?&]screen_name=([^&#]+)', r'[?&]user_id=(\d+)', r'/i/user/(\d+)']) {
-      if (RegExp(re).firstMatch(s) case final m?) return Target(this, m[1]!);
+      if (RegExp(re).firstMatch(s) case final m?) return Target(code, m[1]!);
     }
     final m = _url.firstMatch(s);
-    if (m == null) return Target(this, username(s, name));
+    if (m == null) {
+      final sanitized = s.replaceAll('@', '');
+      return Target(code, sanitized);
+    }
     if (const {
       'home',
       'explore',
@@ -57,20 +69,19 @@ final class Twitter extends Platform {
     }.contains(m[1]!.toLowerCase())) {
       throw FormatException('"$input" is not a Twitter profile or tweet.');
     }
-    return Target(this, m[1]!, post: m[2]);
+    return Target(code, m[1]!, post: m[2]);
   }
 
   @override
   Client client(Cookies jar) => Http.client(
-    base: web,
+    base: _web,
     rate: apiRate,
     cookies: jar,
     csrf: (cookie: 'ct0', header: 'x-csrf-token'),
-    // A lost session is redirected to the login flow.
     login: const ['/i/flow/login', '/account/access'],
     headers: {
       ...HttpUtils.api,
-      'authorization': bearer,
+      'authorization': _bearer,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
       'x-twitter-client-language': 'en',
@@ -78,83 +89,254 @@ final class Twitter extends Platform {
   );
 
   @override
-  Future<void> explore(Job j) async {
-    if (j.target.post case final id?) {
-      final t = await tweet(j.api, id);
-      final owner = t.$('core.user_results.result.core.screen_name|core.user_results.result.legacy.screen_name');
-      await j.open(owner.or(j.target.user), track: false);
-      j.add(tweetFiles(t, j.folder(Kind.posts), j.index.posts[id]));
-      return j.phase(Kind.posts, '1 tweet', done: true);
+  Future<void> extract(JobCtx ctx) async {
+    if (ctx.target.post case final tweetId?) {
+      await _extractSingleTweet(ctx, tweetId);
+      return;
     }
-    final p = await profile(j.api, j.target.user);
-    await j.open(p.name, id: p.id);
-    late final mediaApi = j.client(mediaRate);
-    if (j.wants(Kind.profiles)) {
-      j.profile(p.avatar, 'new profile avatar');
-      final size = Uri.parse(p.banner ?? '').pathSegments.reversed.skip(1).firstOrNull ?? '';
-      j.profile(p.banner, 'new profile banner', id: 'banner_${Fs.sanitize(size)}', ext: '.jpg');
+
+    final prof = await _fetchProfile(ctx.api, ctx.target.user);
+    ctx.userId = prof.id;
+    ctx.userName = prof.name;
+    ctx.avatarUrl = prof.avatar;
+
+    ctx.db.recordTarget(platform: code, user: prof.name, id: prof.id, displayName: prof.name, avatarUrl: prof.avatar);
+
+    if (ctx.wants(Kind.profiles)) {
+      if (prof.avatar != null) {
+        ctx.profileAsset(prof.avatar, id: 'avatar');
+      }
+      if (prof.banner != null) {
+        final size = Uri.parse(prof.banner!).pathSegments.reversed.skip(1).firstOrNull ?? '';
+        ctx.profileAsset(prof.banner, id: 'banner_${Fs.sanitize(size)}', ext: '.jpg');
+      }
     }
-    await Future.wait([
-      if (j.wants(Kind.posts))
-        feed(
-          j,
-          noun: 'tweet',
-          page: (cursor) => mediaTimeline(mediaApi, p.id, cursor),
-          id: tweetId,
-          items: tweetItems,
-          time: tweetTime,
-          files: (page) => [for (final t in page) ...tweetFiles(t, j.folder(Kind.posts), j.index.posts[tweetId(t)])],
+
+    if (ctx.wants(Kind.posts)) {
+      try {
+        await _extractTimeline(ctx, prof);
+      } catch (e) {
+        ctx.phase(Kind.posts, 'unavailable: ${explain(e)}', done: true);
+        ctx.log('posts unavailable: ${explain(e)}');
+      }
+    }
+  }
+
+  Future<void> _extractSingleTweet(JobCtx ctx, String tweetId) async {
+    ctx.phase(Kind.posts, 'fetching tweet $tweetId');
+    final t = await _fetchTweet(ctx.api, tweetId);
+    final owner = t.$('core.user_results.result.core.screen_name|core.user_results.result.legacy.screen_name').text();
+    if (owner != null) ctx.userName = owner;
+
+    final assets = _tweetAssets(ctx, t, ctx.folder(Kind.posts));
+    await ctx.enqueue(assets);
+    ctx.phase(Kind.posts, '1 tweet enqueued', done: true);
+  }
+
+  Future<void> _extractTimeline(JobCtx ctx, _Profile prof) async {
+    var cursor = ctx.options.all ? null : ctx.cursor(Kind.posts);
+    ctx.phase(Kind.posts, cursor == null ? 'fetching tweets' : 'resuming tweets from cursor');
+
+    var pageCount = 0;
+    var tweetCount = 0;
+
+    while (true) {
+      final page = await _fetchMediaTimeline(ctx.api, prof.id, cursor);
+      if (page.items.isEmpty) break;
+      pageCount++;
+
+      final newAssets = <MediaAsset>[];
+      var duplicatesInPage = 0;
+
+      for (final t in page.items) {
+        final id = _tweetId(t);
+        final postTime = _tweetTime(t);
+
+        if (!ctx.options.all && ctx.db.isPostSeen(code, prof.name, id)) {
+          duplicatesInPage++;
+          continue;
+        }
+
+        ctx.db.recordPost(platform: code, user: prof.name, postId: id, postedAt: postTime);
+
+        final assets = _tweetAssets(ctx, t, ctx.folder(Kind.posts));
+        newAssets.addAll(assets);
+        tweetCount++;
+      }
+
+      if (newAssets.isNotEmpty) {
+        await ctx.enqueue(newAssets);
+      }
+
+      if (page.next == null || (!ctx.options.all && duplicatesInPage == page.items.length)) {
+        break;
+      }
+
+      cursor = page.next;
+      if (cursor != null) {
+        ctx.saveCursor(Kind.posts, cursor);
+      }
+      ctx.phase(Kind.posts, '$tweetCount tweets ($pageCount pages)');
+    }
+
+    ctx.phase(Kind.posts, '$tweetCount tweets discovered', done: true);
+  }
+
+  List<MediaAsset> _tweetAssets(JobCtx ctx, Json tweet, Dir dir) {
+    final id = _tweetId(tweet);
+    final at = _tweetTime(tweet);
+    final month = dir.dir(at.format('yyyy-MM'));
+    final out = <MediaAsset>[];
+
+    final mediaList = _mediaOf(tweet);
+    for (final (i, m) in mediaList.indexed) {
+      final name = '${id}_${i + 1}';
+      final type = m.$('type').text();
+      if (type == 'video' || type == 'animated_gif') {
+        final mp4s = Json.of([
+          for (final v in m.$('video_info.variants'))
+            if (v.$('content_type').text() == 'video/mp4') v,
+        ]);
+        if (mp4s.max((v) => v.$('bitrate').or(0)).$('url').text() case final url?) {
+          out.add(
+            MediaAsset(
+              id: '$name.mp4',
+              platform: code,
+              user: ctx.userName ?? ctx.target.user,
+              category: Kind.posts,
+              to: month.file('$name.mp4'),
+              url: url,
+              at: at,
+              sourcePostId: id,
+            ),
+          );
+        }
+      } else if (m.$('media_url_https').text() case final url?) {
+        final ext = Uri.parse(url).path.split('.').lastOrNull ?? 'jpg';
+        out.add(
+          MediaAsset(
+            id: '$name.$ext',
+            platform: code,
+            user: ctx.userName ?? ctx.target.user,
+            category: Kind.posts,
+            to: month.file('$name.$ext'),
+            url: '$url?name=orig',
+            at: at,
+            sourcePostId: id,
+          ),
+        );
+      }
+    }
+
+    final caption = tweet
+        .$(
+          'note_tweet.note_tweet_results.result.text|legacy.full_text|legacy.retweeted_status_result.result.legacy.full_text',
+        )
+        .text();
+    if (out.isNotEmpty && caption != null && caption.trim().isNotEmpty) {
+      out.add(
+        MediaAsset(
+          id: '$id.txt',
+          platform: code,
+          user: ctx.userName ?? ctx.target.user,
+          category: Kind.posts,
+          to: month.file('$id.txt'),
+          text: caption,
+          at: at,
+          sourcePostId: id,
         ),
-    ]);
-  }
-}
+      );
+    }
 
-typedef Profile = ({String id, String name, String? avatar, String? banner});
-
-// A screen name (or user id) as their id, avatar, and banner.
-Future<Profile> profile(Client api, String name) async {
-  if (RegExp(r'^\d+$').hasMatch(name)) {
-    // /i/user/<id> redirects to /<screen name>.
-    final res = await api.get('/i/user/$name');
-    await res.close();
-    final seg = Uri.parse(res.url()).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
-    if (seg != null && seg != 'user' && !RegExp(r'^\d+$').hasMatch(seg)) name = seg;
+    return out;
   }
-  final response = await api
-      .get(
-        '/i/api/graphql/ck5KkZ8t5cOmoLssopN99Q/UserByScreenName',
-        query: {
-          'variables': {'screen_name': name, 'withSafetyModeUserFields': true},
-          'features': {
-            'hidden_profile_subscriptions_enabled': true,
-            'rweb_tipjar_consumption_enabled': true,
-            'responsive_web_graphql_exclude_directive_enabled': true,
-            'verified_phone_label_enabled': false,
-            'subscriptions_verification_info_is_identity_verified_enabled': true,
-            'subscriptions_verification_info_verified_since_enabled': true,
-            'highlights_tweets_tab_ui_enabled': true,
-            'responsive_web_twitter_article_notes_tab_enabled': true,
-            'creator_subscriptions_tweet_preview_api_enabled': true,
-            'responsive_web_graphql_skip_user_profile_image_extensions_enabled': false,
-            'responsive_web_graphql_timeline_navigation_enabled': true,
+
+  // ── API calls ────────────────────────────────────────────────────────────
+
+  Future<_Profile> _fetchProfile(Client api, String name) async {
+    if (RegExp(r'^\d+$').hasMatch(name)) {
+      final res = await api.get('/i/user/$name');
+      await res.close();
+      final seg = Uri.parse(res.url()).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
+      if (seg != null && seg != 'user' && !RegExp(r'^\d+$').hasMatch(seg)) name = seg;
+    }
+    final response = await api
+        .get(
+          '/i/api/graphql/ck5KkZ8t5cOmoLssopN99Q/UserByScreenName',
+          query: {
+            'variables': {'screen_name': name, 'withSafetyModeUserFields': true},
+            'features': _features,
+            'fieldToggles': {'withAuxiliaryUserLabels': true},
           },
-          'fieldToggles': {'withAuxiliaryUserLabels': true},
-        },
-      )
-      .json();
-  final user = response.$('data.user.result');
-  if (user.isEmpty || user.$('__typename').text() == 'UserUnavailable') {
-    throw Exception('user not found or unavailable: "$name"');
+        )
+        .json();
+    final user = response.$('data.user.result');
+    if (user.isEmpty || user.$('__typename').text() == 'UserUnavailable') {
+      throw Exception('user not found or unavailable: "$name"');
+    }
+    final banner = user.$('legacy.profile_banner_url').text();
+    return (
+      id: user.$('rest_id').text() ?? (throw Exception('no user id for "$name"')),
+      name: user.$('core.screen_name|legacy.screen_name').or(name),
+      avatar: user
+          .$('avatar.image_url|legacy.profile_image_url_https|core.avatar.image_url')
+          .text()
+          ?.replaceAll('_normal.', '.'),
+      banner: banner == null ? null : '$banner/1500x500',
+    );
   }
-  final banner = user.$('legacy.profile_banner_url').text();
-  return (
-    id: user.$('rest_id').text() ?? (throw Exception('no user id for "$name"')),
-    name: user.$('core.screen_name|legacy.screen_name').or(name),
-    avatar: user
-        .$('avatar.image_url|legacy.profile_image_url_https|core.avatar.image_url')
-        .text()
-        ?.replaceAll('_normal.', '.'),
-    banner: banner == null ? null : '$banner/1500x500',
+
+  Future<_FeedPage> _fetchMediaTimeline(Client api, String userId, String? cursor) async {
+    final response = await api
+        .get(
+          '/i/api/graphql/jCRhbOzdgOHp6u9H4g2tEg/UserMedia',
+          query: {
+            'variables': {
+              'userId': userId,
+              'count': 20,
+              'cursor': ?cursor,
+              'includePromotedContent': false,
+              'withClientEventToken': false,
+              'withBirdwatchNotes': false,
+              'withVoice': true,
+            },
+            'features': _features,
+            'fieldToggles': {'withArticlePlainText': false},
+          },
+        )
+        .json();
+    final timeline = response.$('data.user.result.timeline.timeline|data.user.result.timeline_v2.timeline');
+    final tweets = [for (final t in timeline.$('**.tweet_results.result')) _unwrap(t)];
+    final next = timeline.$('**').where((n) => n.$('cursorType').text() == 'Bottom').firstOrNull?.$('value').text();
+    return (items: tweets, next: tweets.isEmpty ? null : next);
+  }
+
+  Future<Json> _fetchTweet(Client api, String id) async {
+    final response = await api
+        .get(
+          '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
+          query: {
+            'variables': {'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false},
+            'features': _features,
+          },
+        )
+        .json();
+    final t = _unwrap(response.$('data.tweetResult.result'));
+    return t.isEmpty ? throw Exception('tweet not found: $id') : t;
+  }
+
+  Json _unwrap(Json t) => t.$('tweet').isEmpty ? t : t.$('tweet');
+
+  String _tweetId(Json tweet) => tweet.$('rest_id|legacy.id_str').or('tweet');
+
+  DateTime _tweetTime(Json tweet) {
+    final id = BigInt.tryParse(_tweetId(tweet));
+    return id == null ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch((id >> 22).toInt() + 1288834974657);
+  }
+
+  Json _mediaOf(Json tweet) => tweet.$(
+    'legacy.extended_entities.media|legacy.retweeted_status_result.result.legacy.extended_entities.media'
+    '|legacy.retweeted_status_result.result.tweet.legacy.extended_entities.media',
   );
 }
 
@@ -181,93 +363,5 @@ const _features = {
   'responsive_web_enhance_cards_enabled': false,
 };
 
-// One page (up to 20 tweets) of the user's media timeline.
-Future<Page> mediaTimeline(Client api, String userId, String? cursor) async {
-  final response = await api
-      .get(
-        '/i/api/graphql/jCRhbOzdgOHp6u9H4g2tEg/UserMedia',
-        query: {
-          'variables': {
-            'userId': userId,
-            'count': 20,
-            'cursor': ?cursor,
-            'includePromotedContent': false,
-            'withClientEventToken': false,
-            'withBirdwatchNotes': false,
-            'withVoice': true,
-          },
-          'features': _features,
-          'fieldToggles': {'withArticlePlainText': false},
-        },
-      )
-      .json();
-  final timeline = response.$('data.user.result.timeline.timeline|data.user.result.timeline_v2.timeline');
-  final tweets = [for (final t in timeline.$('**.tweet_results.result')) unwrap(t)];
-  final next = timeline.$('**').where((n) => n.$('cursorType').text() == 'Bottom').firstOrNull?.$('value').text();
-  return (items: tweets, next: tweets.isEmpty ? null : next);
-}
-
-// One tweet by id.
-Future<Json> tweet(Client api, String id) async {
-  final response = await api
-      .get(
-        '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId',
-        query: {
-          'variables': {'tweetId': id, 'withCommunity': false, 'includePromotedContent': false, 'withVoice': false},
-          'features': _features,
-        },
-      )
-      .json();
-  final t = unwrap(response.$('data.tweetResult.result'));
-  return t.isEmpty ? throw Exception('tweet not found: $id') : t;
-}
-
-// A tweet with visibility results wraps the tweet.
-Json unwrap(Json t) => t.$('tweet').isEmpty ? t : t.$('tweet');
-
-String tweetId(Json tweet) => tweet.$('rest_id|legacy.id_str').or('tweet');
-
-// When it was posted, from the id (a snowflake).
-DateTime tweetTime(Json tweet) {
-  final id = BigInt.tryParse(tweetId(tweet));
-  return id == null ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch((id >> 22).toInt() + 1288834974657);
-}
-
-Json mediaOf(Json tweet) => tweet.$(
-  'legacy.extended_entities.media|legacy.retweeted_status_result.result.legacy.extended_entities.media'
-  '|legacy.retweeted_status_result.result.tweet.legacy.extended_entities.media',
-);
-
-List<String> tweetItems(Json tweet) => [for (final m in mediaOf(tweet)) m.$('id_str').or('')];
-
-// <month>/<id>_<n>.jpg|mp4 in [dir] and <id>.txt beside them when there is
-// a file to go with; [order] numbers the items by id.
-List<Download> tweetFiles(Json tweet, Dir dir, [List<String>? order]) {
-  final id = tweetId(tweet), at = tweetTime(tweet), month = dir.dir(at.format('yyyy-MM'));
-  final out = <Download>[];
-  for (final (i, m) in mediaOf(tweet).indexed) {
-    final pos = order?.indexOf(m.$('id_str').or('')) ?? -1;
-    final name = '${id}_${(pos < 0 ? i : pos) + 1}';
-    if (const {'video', 'animated_gif'}.contains(m.$('type').text())) {
-      final mp4s = Json.of([
-        for (final v in m.$('video_info.variants'))
-          if (v.$('content_type').text() == 'video/mp4') v,
-      ]);
-      if (mp4s.max((v) => v.$('bitrate').or(0)).$('url').text() case final url?) {
-        out.add(Download(month.file('$name.mp4'), url: url, at: at));
-      }
-    } else if (m.$('media_url_https').text() case final url?) {
-      out.add(Download(month.file('$name.${url.split('.').last}'), url: '$url?name=orig', at: at));
-    }
-  }
-  final caption = tweet
-      .$(
-        'note_tweet.note_tweet_results.result.text|legacy.full_text|legacy.retweeted_status_result.result.legacy.full_text',
-      )
-      .text();
-  return [
-    ...out,
-    if (out.isNotEmpty && caption != null && caption.trim().isNotEmpty)
-      Download(month.file('$id.txt'), text: caption, at: at),
-  ];
-}
+typedef _Profile = ({String id, String name, String? avatar, String? banner});
+typedef _FeedPage = ({List<Json> items, String? next});

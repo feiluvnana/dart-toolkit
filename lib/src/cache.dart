@@ -131,3 +131,18 @@ Future<T> downloadLock<T>(String path, Future<T> Function() body) async {
     await sentinel.delete().catchError((_) => sentinel);
   }
 }
+
+/// Prune older versions/builds in [parentDir], preserving [keepName] and any active lock files.
+Future<void> pruneOld(String parentDir, String keepName) async {
+  try {
+    final parent = io.Directory(parentDir);
+    if (!await parent.exists()) return;
+    await for (final entity in parent.list(followLinks: false)) {
+      final name = p.basename(entity.path);
+      if (name == keepName || name.endsWith('.lock') || name.contains('.lock.')) continue;
+      try {
+        await entity.delete(recursive: true);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}

@@ -17,7 +17,7 @@
 /// - `Image.compress()` re-encodes a file in its own format, replacing it
 ///   only when smaller.
 /// - [Image] supports `width` `height` `format` `resize` `crop` `encode`
-///   `pixels`. `resize`/`crop` only record a step: `encode` runs them all
+///   `pixels` `dhash` `phash` and `Image.distance`. `resize`/`crop` only record a step: `encode` runs them all
 ///   in one ffmpeg call.
 /// Everything else is private.
 library;
@@ -279,6 +279,98 @@ final class Image {
     return _Rgb(img._width, img._height, rgb is Uint8List ? rgb : Uint8List.fromList(rgb));
   }
 
+  /// 64-bit difference hash (dHash) as a 16-character hex string.
+  /// Fast and scale-invariant perceptual hash.
+  Future<String> dhash() async {
+    final p = await pixels(width: 9, height: 8);
+    var hi = 0, lo = 0;
+    for (var y = 0; y < 8; y++) {
+      for (var x = 0; x < 8; x++) {
+        final (r1, g1, b1) = p.pixel(x, y);
+        final (r2, g2, b2) = p.pixel(x + 1, y);
+        final l1 = (r1 * 299 + g1 * 587 + b1 * 114) ~/ 1000;
+        final l2 = (r2 * 299 + g2 * 587 + b2 * 114) ~/ 1000;
+        final bit = y * 8 + x;
+        if (l1 > l2) {
+          if (bit < 32) {
+            lo |= 1 << bit;
+          } else {
+            hi |= 1 << (bit - 32);
+          }
+        }
+      }
+    }
+    return '${hi.toRadixString(16).padLeft(8, '0')}${lo.toRadixString(16).padLeft(8, '0')}';
+  }
+
+  /// 64-bit Discrete Cosine Transform perceptual hash (pHash) as a 16-character hex string.
+  /// Frequency-domain perceptual hash robust to scaling, minor crops and compression.
+  Future<String> phash() async {
+    final p = await pixels(width: 32, height: 32);
+    final matrix = List.generate(32, (y) => List<double>.generate(32, (x) {
+      final (r, g, b) = p.pixel(x, y);
+      return (r * 0.299 + g * 0.587 + b * 0.114);
+    }));
+
+    final dct = List.generate(8, (_) => List<double>.filled(8, 0));
+    final c = List<double>.generate(32, (i) => i == 0 ? 1.0 / math.sqrt(2) : 1.0);
+
+    for (var u = 0; u < 8; u++) {
+      for (var v = 0; v < 8; v++) {
+        var sum = 0.0;
+        for (var x = 0; x < 32; x++) {
+          for (var y = 0; y < 32; y++) {
+            sum += matrix[y][x] *
+                math.cos((2 * x + 1) * u * math.pi / 64.0) *
+                math.cos((2 * y + 1) * v * math.pi / 64.0);
+          }
+        }
+        dct[v][u] = 0.25 * c[u] * c[v] * sum;
+      }
+    }
+
+    final acValues = <double>[];
+    for (var v = 0; v < 8; v++) {
+      for (var u = 0; u < 8; u++) {
+        if (u != 0 || v != 0) acValues.add(dct[v][u]);
+      }
+    }
+    acValues.sort();
+    final median = acValues[acValues.length ~/ 2];
+
+    var hi = 0, lo = 0;
+    for (var v = 0; v < 8; v++) {
+      for (var u = 0; u < 8; u++) {
+        final bit = v * 8 + u;
+        if (dct[v][u] > median) {
+          if (bit < 32) {
+            lo |= 1 << bit;
+          } else {
+            hi |= 1 << (bit - 32);
+          }
+        }
+      }
+    }
+    return '${hi.toRadixString(16).padLeft(8, '0')}${lo.toRadixString(16).padLeft(8, '0')}';
+  }
+
+  /// Hamming distance between two 16-character hex perceptual hashes.
+  /// 0 means identical; 1-10 indicates near-duplicate or minor variation.
+  static int distance(String h1, String h2) {
+    if (h1.length != h2.length) throw ArgumentError('Hash length mismatch ($h1 vs $h2)');
+    var dist = 0;
+    for (var i = 0; i < h1.length; i++) {
+      final v1 = int.parse(h1[i], radix: 16);
+      final v2 = int.parse(h2[i], radix: 16);
+      var x = v1 ^ v2;
+      while (x > 0) {
+        dist += x & 1;
+        x >>= 1;
+      }
+    }
+    return dist;
+  }
+
   /// Input and filter graph: a tile grid is fed from its stream group,
   /// which ffmpeg only allows in a complex graph, so every call uses one.
   List<String> _graph(List<String> steps) => [
@@ -416,6 +508,12 @@ extension ReaderImage on Reader {
     final bytes = format == ImageFormat.gif ? await io.File(temp.path).readAsBytes() : first;
     return Image._open(temp.path, format, bytes, origin().name(), temp);
   }
+
+  /// 64-bit difference hash (dHash) as a 16-character hex string.
+  Future<String> dhash() async => (await image()).dhash();
+
+  /// 64-bit Discrete Cosine Transform perceptual hash (pHash) as a 16-character hex string.
+  Future<String> phash() async => (await image()).phash();
 }
 
 /// The first bytes of [path]: enough for every header [media.header] reads
@@ -437,6 +535,12 @@ Future<Uint8List> _head(String path) async {
 extension ReaderFutureImage on Future<Reader> {
   /// Read the image (see [ReaderImage.image]).
   Future<Image> image() async => (await this).image();
+
+  /// 64-bit difference hash (dHash) as a 16-character hex string.
+  Future<String> dhash() async => (await image()).dhash();
+
+  /// 64-bit Discrete Cosine Transform perceptual hash (pHash) as a 16-character hex string.
+  Future<String> phash() async => (await image()).phash();
 }
 
 /// Future mirrors (rule 4). The extension name is import-only; never reference it.
@@ -447,6 +551,8 @@ extension ImageFuture on Future<Image> {
   Future<Image> resize({int? width, int? height}) async => (await this).resize(width: width, height: height);
   Future<Image> crop(int x, int y, int width, int height) async => (await this).crop(x, y, width, height);
   Future<Pixels> pixels({int? width, int? height}) async => (await this).pixels(width: width, height: height);
+  Future<String> dhash() async => (await this).dhash();
+  Future<String> phash() async => (await this).phash();
   Reader encode(ImageFormat format, {int quality = 90}) {
     _checkEncode(format, quality, null);
     return _Encoded(() => this, format, quality, 'image');

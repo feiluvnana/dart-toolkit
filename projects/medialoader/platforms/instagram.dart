@@ -1,5 +1,4 @@
-// Instagram's web API, as the website calls it: posts, stories, highlights
-// and profile pictures.
+// Instagram extractor for MediaLoader.
 library;
 
 import 'dart:math';
@@ -9,17 +8,19 @@ import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/utils.dart';
 
-import '../feed.dart';
-import '../job.dart';
-import '../platform.dart';
+import '../engine.dart';
 
-const web = 'https://www.instagram.com';
+const _web = 'https://www.instagram.com';
 
-final platform = Instagram();
-
-final class Instagram extends Platform {
+final class InstagramExtractor extends Extractor {
   @override
-  final code = 'ins', name = 'Instagram', site = web;
+  final code = 'ins';
+
+  @override
+  final name = 'Instagram';
+
+  @override
+  final site = _web;
 
   @override
   final kinds = const [Kind.posts, Kind.stories, Kind.highlights, Kind.profiles];
@@ -27,20 +28,31 @@ final class Instagram extends Platform {
   @override
   final loginCookies = const {'sessionid'};
 
-  // Instaloader's limits: 75 calls per 11 minutes, 200 for the post feed.
-  late final apiRate = rate(75, 11.minutes, pause: 3.seconds), feedRate = rate(200, 11.minutes, pause: 3.seconds);
+  late final apiRate = rate(75, 11.minutes, pause: 3.seconds);
+  late final feedRate = rate(200, 11.minutes, pause: 3.seconds);
 
   @override
-  bool matches(String input) => RegExp(r'^(?:https?://)?(?:www\.)?instagram\.com/').hasMatch(input.trim());
+  bool matches(String input) {
+    final s = input.trim();
+    if (RegExp(r'^(?:https?://)?(?:www\.)?instagram\.com/').hasMatch(s)) return true;
+    if (s.toLowerCase().startsWith('ins:')) return true;
+    return false;
+  }
 
   @override
   Target parse(String input) {
-    final s = input.trim();
+    var s = input.trim();
+    if (s.toLowerCase().startsWith('ins:')) {
+      s = s.substring(4).trim();
+    }
     if (RegExp(r'instagram\.com/(?:[^/?#]+/)?(?:p|reels?|tv)/([^/?#]+)').firstMatch(s) case final m?) {
-      return Target(this, m[1]!, post: m[1]);
+      return Target(code, m[1]!, post: m[1]);
     }
     final m = RegExp(r'instagram\.com/(?:stories/)?([^/?#]+)').firstMatch(s);
-    if (m == null) return Target(this, username(s, name));
+    if (m == null) {
+      final sanitized = s.replaceAll('@', '');
+      return Target(code, sanitized);
+    }
     if (const {
       'explore',
       'direct',
@@ -52,258 +64,372 @@ final class Instagram extends Platform {
     }.contains(m[1]!.toLowerCase())) {
       throw FormatException('"$input" is not an Instagram profile or post.');
     }
-    return Target(this, m[1]!);
+    return Target(code, m[1]!);
   }
 
   @override
   Client client(Cookies jar) => Http.client(
-    base: web,
+    base: _web,
     rate: apiRate,
     cookies: jar,
-    // Without the csrftoken echoed as a header, Instagram treats you as a bot.
     csrf: (cookie: 'csrftoken', header: 'x-csrftoken'),
-    // Asking you to log in again, or to verify the account, it redirects there.
     login: const ['/accounts/login', '/challenge/'],
     headers: {...HttpUtils.api, 'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest'},
   );
 
   @override
-  Object explain(Object e) => switch (e) {
-    HttpStatusException(status: final status && (401 || 403 || 429), :final method, :final url) =>
-      'Instagram refused $method $url (HTTP $status): probably rate limited, try again in 15 minutes',
-    SessionException(:final url) when url.contains('/challenge/') =>
-      'Instagram wants you to verify the account. Do it in the browser or the app, then run again.\n$url',
-    _ => super.explain(e),
-  };
-
-  @override
-  Future<void> explore(Job j) async {
-    if (j.target.post case final code?) {
-      final p = await post(j.api, code);
-      await j.open(p.$('user.username').or(code), id: p.$('user.pk|user.id').text(), track: false);
-      j.add(postFiles(p, j.folder(Kind.posts).dir(time(p).format('yyyy-MM')), j.index.posts[postCode(p)]));
-      return j.phase(Kind.posts, '1 post', done: true);
+  Future<void> extract(JobCtx ctx) async {
+    if (ctx.target.post case final postCode?) {
+      await _extractSinglePost(ctx, postCode);
+      return;
     }
-    final (profile: p, :first) = await profile(j.api, j.target.user);
-    await j.open(p.name, id: p.id);
-    late final feedApi = j.client(feedRate);
-    if (j.wants(Kind.profiles)) j.profile(p.picture, 'new profile picture');
-    await Future.wait([
-      if (j.wants(Kind.posts))
-        feed(
-          j,
-          noun: 'post',
-          // The profile lookup already read the first page.
-          page: (cursor) => cursor == null && first != null ? Future.value(first) : posts(feedApi, p.name, cursor),
-          id: postCode,
-          items: postItems,
-          time: time,
-          files: (page) => [
-            for (final x in page)
-              ...postFiles(x, j.folder(Kind.posts).dir(time(x).format('yyyy-MM')), j.index.posts[postCode(x)]),
-          ],
+
+    final (profile: prof, :first) = await _fetchProfile(ctx.api, ctx.target.user);
+    ctx.userId = prof.id;
+    ctx.userName = prof.name;
+    ctx.avatarUrl = prof.picture;
+
+    ctx.db.recordTarget(platform: code, user: prof.name, displayName: prof.name);
+
+    if (ctx.wants(Kind.profiles) && prof.picture != null) {
+      ctx.profileAsset(prof.picture, id: 'avatar');
+    }
+
+    final tasks = <Future<void>>[];
+    Future<void> safeRun(Kind kind, Future<void> Function() run) async {
+      try {
+        await run();
+      } catch (e) {
+        ctx.phase(kind, 'unavailable: ${explain(e)}', done: true);
+        ctx.log('${kind.name} unavailable: ${explain(e)}');
+      }
+    }
+
+    if (ctx.wants(Kind.posts)) {
+      tasks.add(safeRun(Kind.posts, () => _extractPosts(ctx, prof, first)));
+    }
+    if (ctx.wants(Kind.stories)) {
+      tasks.add(safeRun(Kind.stories, () => _extractStories(ctx, prof)));
+    }
+    if (ctx.wants(Kind.highlights)) {
+      tasks.add(safeRun(Kind.highlights, () => _extractHighlights(ctx, prof)));
+    }
+
+    await Future.wait(tasks);
+  }
+
+  Future<void> _extractSinglePost(JobCtx ctx, String code) async {
+    ctx.phase(Kind.posts, 'fetching post $code');
+    final p = await _fetchPost(ctx.api, code);
+    final user = p.$('user.username').text() ?? ctx.target.user;
+    ctx.userName = user;
+    final postTime = _time(p);
+    final postDir = ctx.folder(Kind.posts).dir(postTime.format('yyyy-MM'));
+
+    final assets = _postAssets(ctx, p, postDir, code);
+    await ctx.enqueue(assets);
+    ctx.phase(Kind.posts, '1 post enqueued', done: true);
+  }
+
+  Future<void> _extractPosts(JobCtx ctx, _Profile prof, _FeedPage? first) async {
+    final user = prof.name;
+    var cursor = ctx.options.all ? null : ctx.cursor(Kind.posts);
+    ctx.phase(Kind.posts, cursor == null ? 'fetching posts' : 'resuming posts from cursor');
+
+    var pageCount = 0;
+    var postCount = 0;
+
+    while (true) {
+      final _FeedPage page;
+      if (pageCount == 0 && cursor == null && first != null) {
+        page = first;
+      } else {
+        page = await _fetchPostsPage(ctx.api, user, cursor);
+      }
+
+      if (page.items.isEmpty) break;
+      pageCount++;
+
+      final newAssets = <MediaAsset>[];
+      var duplicatesInPage = 0;
+
+      for (final item in page.items) {
+        final shortcode = _postCode(item);
+        final postTime = _time(item);
+
+        if (!ctx.options.all && ctx.db.isPostSeen(code, user, shortcode)) {
+          duplicatesInPage++;
+          continue;
+        }
+
+        ctx.db.recordPost(platform: code, user: user, postId: shortcode, postedAt: postTime);
+
+        final targetDir = ctx.folder(Kind.posts).dir(postTime.format('yyyy-MM'));
+        final assets = _postAssets(ctx, item, targetDir, shortcode);
+        newAssets.addAll(assets);
+        postCount++;
+      }
+
+      if (newAssets.isNotEmpty) {
+        await ctx.enqueue(newAssets);
+      }
+
+      if (page.next == null || (!ctx.options.all && duplicatesInPage == page.items.length)) {
+        break;
+      }
+
+      cursor = page.next;
+      if (cursor != null) {
+        ctx.saveCursor(Kind.posts, cursor);
+      }
+      ctx.phase(Kind.posts, '$postCount posts ($pageCount pages)');
+    }
+
+    ctx.phase(Kind.posts, '$postCount posts discovered', done: true);
+  }
+
+  Future<void> _extractStories(JobCtx ctx, _Profile prof) async {
+    ctx.phase(Kind.stories, 'fetching current stories');
+    final reels = await _fetchReels(ctx.api, [prof.id], prof.name);
+    final items = [for (final r in reels) ...r.items];
+
+    final assets = <MediaAsset>[];
+    for (final item in items) {
+      final itemId = item.$('id').or('story');
+      final takenAt = _time(item);
+      final dir = ctx.folder(Kind.stories).dir(takenAt.format('yyyy-MM'));
+      final itemAssets = _mediaAssets(
+        ctx,
+        item,
+        name: '${takenAt.millisecondsSinceEpoch ~/ 1000}_${Fs.sanitize(itemId)}',
+        dir: dir,
+        category: Kind.stories,
+        parentTime: takenAt,
+      );
+      assets.addAll(itemAssets);
+    }
+
+    await ctx.enqueue(assets);
+    ctx.phase(Kind.stories, '${assets.length} story items', done: true);
+  }
+
+  Future<void> _extractHighlights(JobCtx ctx, _Profile prof) async {
+    ctx.phase(Kind.highlights, 'listing highlights');
+    final ids = await _fetchHighlights(ctx.api, prof);
+    ctx.phase(Kind.highlights, 'fetching ${ids.length} highlights');
+
+    var count = 0;
+    for (var i = 0; i < ids.length; i += 10) {
+      final chunk = ids.sublist(i, min(i + 10, ids.length));
+      final reels = await _fetchReels(ctx.api, chunk, prof.name);
+      for (final r in reels) {
+        final title = r.title.isEmpty ? r.id : r.title;
+        final dir = ctx.folder(Kind.highlights).dir(Fs.sanitize(title));
+        final assets = <MediaAsset>[];
+        for (final item in r.items) {
+          final itemId = item.$('id').or('hl');
+          final takenAt = _time(item);
+          assets.addAll(
+            _mediaAssets(
+              ctx,
+              item,
+              name: '${takenAt.millisecondsSinceEpoch ~/ 1000}_${Fs.sanitize(itemId)}',
+              dir: dir,
+              category: Kind.highlights,
+              parentTime: takenAt,
+            ),
+          );
+        }
+        await ctx.enqueue(assets);
+        count += assets.length;
+      }
+      ctx.phase(Kind.highlights, '$count highlight items enqueued');
+    }
+
+    ctx.phase(Kind.highlights, '$count highlight items', done: true);
+  }
+
+  List<MediaAsset> _postAssets(JobCtx ctx, Json p, Dir dir, String code) {
+    final postTime = _time(p);
+    final caption = p.$('caption.text|edge_media_to_caption.edges.0.node.text').text();
+
+    final result = _mediaAssets(ctx, p, name: code, dir: dir, category: Kind.posts, parentTime: postTime);
+
+    if (caption != null && caption.trim().isNotEmpty && result.isNotEmpty) {
+      result.add(
+        MediaAsset(
+          id: '$code.txt',
+          platform: this.code,
+          user: ctx.userName ?? ctx.target.user,
+          category: Kind.posts,
+          to: dir.file('$code.txt'),
+          text: caption,
+          at: postTime,
+          sourcePostId: code,
         ),
-      if (j.wants(Kind.stories)) _stories(j, p),
-      if (j.wants(Kind.highlights)) _highlights(j, p),
-    ]);
-  }
-
-  Future<void> _stories(Job j, Profile p) async {
-    j.phase(Kind.stories, 'fetching the stories up now');
-    final items = [
-      for (final r in await reels(j.api, [p.id], p.name)) ...r.items,
-    ];
-    for (final i in items) {
-      j.index.stories[i.$('id').or('')] = i.$('taken_at').or(0);
+      );
     }
-    j.add(storyFiles(items, (i) => j.folder(Kind.stories).dir(time(i).format('yyyy-MM'))));
-    j.phase(Kind.stories, '${items.length} up now', done: true);
+
+    return result;
   }
 
-  Future<void> _highlights(Job j, Profile p) async {
-    final index = j.index;
-    j.phase(Kind.highlights, 'listing highlights');
-    final ids = await highlights(j.api, p);
-    final now = <String, Set<String>>{};
-    j.phase(Kind.highlights, 'fetching ${ids.length} highlights');
-    await Future.wait([
-      for (var i = 0; i < ids.length; i += 10)
-        reels(j.api, ids.sublist(i, min(i + 10, ids.length)), p.name).then((reels) {
-          for (final r in reels) {
-            final title = r.title.isEmpty ? r.id : r.title;
-            final items = {for (final item in r.items) item.$('id').or('')};
-            if (index.highlights[title] case final before?) {
-              final (added, removed) = (items.difference(before).length, before.difference(items).length);
-              if (added + removed > 0) j.changed('highlight "$title": $added added, $removed removed');
-            } else if (index.highlights.isNotEmpty) {
-              j.changed('new highlight "$title"');
-            }
-            now[title] = items;
-            j.add(storyFiles(r.items, (_) => j.folder(Kind.highlights).dir(Fs.sanitize(title))));
-          }
-          j.phase(Kind.highlights, 'fetched ${now.length} of ${ids.length} highlights');
-        }),
-    ]);
-    for (final title in index.highlights.keys.where((t) => !now.containsKey(t))) {
-      j.changed('highlight "$title" gone, files kept');
+  List<MediaAsset> _mediaAssets(
+    JobCtx ctx,
+    Json item, {
+    required String name,
+    required Dir dir,
+    required Kind category,
+    DateTime? parentTime,
+  }) {
+    final list = _children(item);
+    final itemTime = item.$('taken_at|taken_at_timestamp').isNotEmpty ? _time(item) : parentTime ?? DateTime.now();
+
+    if (list.isNotEmpty) {
+      final out = <MediaAsset>[];
+      for (final (i, child) in list.indexed) {
+        out.addAll(
+          _mediaAssets(ctx, child, name: '${name}_${i + 1}', dir: dir, category: category, parentTime: itemTime),
+        );
+      }
+      return out;
     }
-    index.highlights = now;
-    j.phase(Kind.highlights, '${ids.length} ${ids.length == 1 ? 'highlight' : 'highlights'}', done: true);
-  }
-}
 
-// ── the API ──────────────────────────────────────────────────────────────
+    final video = _largest(item.$('video_versions|video_resources')) ?? item.$('video_url').text();
+    final image =
+        _largest(item.$('image_versions2.candidates')) ??
+        _largest(item.$('display_resources')) ??
+        item.$('display_url|display_uri').text();
 
-typedef Profile = ({String id, String name, String? picture});
-typedef Reel = ({String id, String title, List<Json> items});
-
-// A user id or name as a profile, and the first feed page when that is
-// what carried it (one call instead of two), else the profile info.
-Future<({Profile profile, Page? first})> profile(Client api, String name) async {
-  Json u;
-  Page? first;
-  if (RegExp(r'^\d+$').hasMatch(name)) {
-    u = (await api.get('/api/v1/users/$name/info/').json()).$('user');
-  } else {
-    first = await posts(api, name, null);
-    u = first.items.firstOrNull?.$('user') ?? Json.of(null);
-    if (u.isEmpty) {
-      u = (await api.get('/api/v1/users/web_profile_info/', query: {'username': name}).json()).$('data.user');
+    final out = <MediaAsset>[];
+    if (video != null) {
+      out.add(
+        MediaAsset(
+          id: '$name.mp4',
+          platform: code,
+          user: ctx.userName ?? ctx.target.user,
+          category: category,
+          to: dir.file('$name.mp4'),
+          url: video,
+          at: itemTime,
+        ),
+      );
+    } else if (image != null && !image.contains('/null.jpg')) {
+      out.add(
+        MediaAsset(
+          id: '$name.jpg',
+          platform: code,
+          user: ctx.userName ?? ctx.target.user,
+          category: category,
+          to: dir.file('$name.jpg'),
+          url: image,
+          at: itemTime,
+        ),
+      );
     }
+    return out;
   }
-  return (
-    profile: (
-      id: u.$('pk|id').text() ?? (throw Exception('user not found: "$name"')),
-      name: u.$('username').or(name),
-      picture: u.$('hd_profile_pic_url_info.url|profile_pic_url_hd|profile_pic_url').text(),
-    ),
-    first: first,
-  );
-}
 
-// One page (12 posts) of the profile grid.
-Future<Page> posts(Client api, String user, String? cursor) async {
-  final response = await api
-      .post(
-        '/graphql/query',
-        headers: {'referer': '$web/$user/'},
-        body: .form({
-          'doc_id': '28975909992013618', // PolarisProfilePostsTabContentQuery
-          'server_timestamps': true,
-          'variables': {
-            'after': ?cursor,
-            'data': {
-              'count': 12,
-              'include_reel_media_seen_timestamp': true,
-              'include_relationship_info': true,
-              'latest_besties_reel_media': true,
-              'latest_reel_media': true,
+  // ── API calls ────────────────────────────────────────────────────────────
+
+  Future<({_Profile profile, _FeedPage? first})> _fetchProfile(Client api, String name) async {
+    Json u;
+    _FeedPage? first;
+    if (RegExp(r'^\d+$').hasMatch(name)) {
+      u = (await api.get('/api/v1/users/$name/info/').json()).$('user');
+    } else {
+      first = await _fetchPostsPage(api, name, null);
+      u = first.items.firstOrNull?.$('user') ?? Json.of(null);
+      if (u.isEmpty) {
+        u = (await api.get('/api/v1/users/web_profile_info/', query: {'username': name}).json()).$('data.user');
+      }
+    }
+    return (
+      profile: (
+        id: u.$('pk|id').text() ?? (throw Exception('user not found: "$name"')),
+        name: u.$('username').or(name),
+        picture: u.$('hd_profile_pic_url_info.url|profile_pic_url_hd|profile_pic_url').text(),
+      ),
+      first: first,
+    );
+  }
+
+  Future<_FeedPage> _fetchPostsPage(Client api, String user, String? cursor) async {
+    final response = await api
+        .post(
+          '/graphql/query',
+          headers: {'referer': '$_web/$user/'},
+          body: .form({
+            'doc_id': '28975909992013618',
+            'server_timestamps': true,
+            'variables': {
+              'after': ?cursor,
+              'data': {
+                'count': 12,
+                'include_reel_media_seen_timestamp': true,
+                'include_relationship_info': true,
+                'latest_besties_reel_media': true,
+                'latest_reel_media': true,
+              },
+              'first': 12,
+              'include_multi_captions': true,
+              'username': user,
+              '__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider': true,
+              '__relay_internal__pv__PolarisShortDramaEnabledrelayprovider': false,
+              '__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider': false,
             },
-            'first': 12,
-            'include_multi_captions': true,
-            'username': user,
-            '__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider': true,
-            '__relay_internal__pv__PolarisShortDramaEnabledrelayprovider': false,
-            '__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider': false,
+          }),
+        )
+        .json();
+    final feed = response.$('data.xdt_api__v1__feed__user_timeline_graphql_connection');
+    final more = feed.$('page_info.has_next_page').or(false);
+    return (items: feed.$('edges.*.node').toList(), next: more ? feed.$('page_info.end_cursor').text() : null);
+  }
+
+  Future<Json> _fetchPost(Client api, String code) async {
+    const digits = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    final id = code
+        .substring(0, min(11, code.length))
+        .split('')
+        .fold(BigInt.zero, (n, c) => n * BigInt.from(64) + BigInt.from(digits.indexOf(c)));
+    final item = (await api.get('/api/v1/media/$id/info/').json()).$('items.0');
+    return item.isEmpty ? throw Exception('post not found: $code') : item;
+  }
+
+  Future<List<String>> _fetchHighlights(Client api, _Profile p) async {
+    final response = await api
+        .get(
+          '/graphql/query/',
+          query: {
+            'query_hash': 'd4d88dc1500312af6f937f7b804c68c3',
+            'variables': {'user_id': p.id, 'include_highlight_reels': true},
           },
-        }),
-      )
-      .json();
-  final feed = response.$('data.xdt_api__v1__feed__user_timeline_graphql_connection');
-  final more = feed.$('page_info.has_next_page').or(false);
-  return (items: feed.$('edges.*.node').toList(), next: more ? feed.$('page_info.end_cursor').text() : null);
-}
-
-// One post by its shortcode: the first 11 characters are its media id in base 64.
-Future<Json> post(Client api, String code) async {
-  const digits = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-  final id = code
-      .substring(0, min(11, code.length))
-      .split('')
-      .fold(BigInt.zero, (n, c) => n * BigInt.from(64) + BigInt.from(digits.indexOf(c)));
-  final item = (await api.get('/api/v1/media/$id/info/').json()).$('items.0');
-  return item.isEmpty ? throw Exception('post not found: $code') : item;
-}
-
-// Every highlight as "highlight:<id>" (the profile page embeds few or none).
-Future<List<String>> highlights(Client api, Profile p) async {
-  final response = await api
-      .get(
-        '/graphql/query/',
-        query: {
-          'query_hash': 'd4d88dc1500312af6f937f7b804c68c3',
-          'variables': {'user_id': p.id, 'include_highlight_reels': true},
-        },
-        headers: {'referer': '$web/${p.name}/'},
-      )
-      .json();
-  return [for (final id in response.$('data.user.edge_highlight_reels.edges.*.node.id')) 'highlight:${id.text()}'];
-}
-
-// Several reels in one call: a user id is their current stories,
-// "highlight:<id>" one highlight.
-Future<List<Reel>> reels(Client api, List<String> ids, String user) async {
-  final response = await api
-      .get('/api/v1/feed/reels_media/', query: {'reel_ids': ids}, headers: {'referer': '$web/$user/'})
-      .json();
-  return [
-    for (final r in response.$('reels_media'))
-      (id: r.$('id').or(''), title: r.$('title').or(''), items: r.$('items').toList()),
-  ];
-}
-
-// ── posts and stories as files ───────────────────────────────────────────
-
-// A post's shortcode: its file names and its index key.
-String postCode(Json post) => Fs.sanitize(post.$('code|shortcode').text() ?? 'post');
-
-// A post's item ids in order: its carousel's, or its own.
-List<String> postItems(Json post) => [
-  for (final item in children(post).isEmpty ? [post] : children(post)) item.$('pk|id').or(''),
-];
-
-List<Json> children(Json item) => [...item.$('carousel_media'), ...item.$('edge_sidecar_to_children.edges.*.node')];
-
-// <code>_<n>.jpg and <code>.mp4 in [dir], with the caption as <code>.txt.
-// [order] numbers a carousel's items by id (default: their position), so
-// an edited album keeps its file names.
-List<Download> postFiles(Json p, Dir dir, [List<String>? order]) {
-  final out = files(p, postCode(p), dir, order).toList();
-  final caption = p.$('caption.text|edge_media_to_caption.edges.0.node.text').text();
-  return [
-    ...out,
-    if (caption != null && caption.trim().isNotEmpty && out.isNotEmpty)
-      Download(dir.file('${postCode(p)}.txt'), text: caption, at: time(p)),
-  ];
-}
-
-// Story items as <taken_at>_<id>.jpg/.mp4 in [dir]'s folder for each.
-List<Download> storyFiles(List<Json> items, Dir Function(Json item) dir) => [
-  for (final i in items) ...files(i, '${i.$('taken_at').or(0)}_${Fs.sanitize(i.$('id').or('item'))}', dir(i)),
-];
-
-// An item is a carousel of other items, a video, or an image.
-Iterable<Download> files(Json item, String name, Dir dir, [List<String>? order]) sync* {
-  final list = children(item);
-  for (final (i, child) in list.indexed) {
-    final at = order?.indexOf(child.$('pk|id').or('')) ?? -1;
-    yield* files(child, '${name}_${(at < 0 ? i : at) + 1}', dir);
+          headers: {'referer': '$_web/${p.name}/'},
+        )
+        .json();
+    return [for (final id in response.$('data.user.edge_highlight_reels.edges.*.node.id')) 'highlight:${id.text()}'];
   }
-  if (list.isNotEmpty) return;
-  final video = largest(item.$('video_versions|video_resources')) ?? item.$('video_url').text();
-  final image =
-      largest(item.$('image_versions2.candidates')) ??
-      largest(item.$('display_resources')) ??
-      item.$('display_url|display_uri').text();
-  if (video != null) {
-    yield Download(dir.file('$name.mp4'), url: video, at: time(item));
-  } else if (image != null && !image.contains('/null.jpg')) {
-    yield Download(dir.file('$name.jpg'), url: image, at: time(item));
+
+  Future<List<_Reel>> _fetchReels(Client api, List<String> ids, String user) async {
+    final response = await api
+        .get('/api/v1/feed/reels_media/', query: {'reel_ids': ids}, headers: {'referer': '$_web/$user/'})
+        .json();
+    return [
+      for (final r in response.$('reels_media'))
+        (id: r.$('id').or(''), title: r.$('title').or(''), items: r.$('items').toList()),
+    ];
   }
+
+  List<Json> _children(Json item) =>
+      [...item.$('carousel_media'), ...item.$('edge_sidecar_to_children.edges.*.node')];
+
+  DateTime _time(Json item) =>
+      DateTime.fromMillisecondsSinceEpoch(item.$('taken_at|taken_at_timestamp').or(0) * 1000);
+
+  String _postCode(Json post) => Fs.sanitize(post.$('code|shortcode').text() ?? 'post');
+
+  String? _largest(Json versions) => versions.max((v) => v.$('width|config_width').or(0)).$('url|src').text();
 }
 
-// When an item was posted.
-DateTime time(Json item) => DateTime.fromMillisecondsSinceEpoch(item.$('taken_at|taken_at_timestamp').or(0) * 1000);
-
-// The API uses url/width, the data embedded in pages uses src/config_width.
-String? largest(Json versions) => versions.max((v) => v.$('width|config_width').or(0)).$('url|src').text();
+typedef _Profile = ({String id, String name, String? picture});
+typedef _Reel = ({String id, String title, List<Json> items});
+typedef _FeedPage = ({List<Json> items, String? next});

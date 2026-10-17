@@ -218,7 +218,7 @@ final class File extends Entry with Reader, Writer {
     await _ensureParent(to);
     await _removeDestLink(to);
     try {
-      await io.File(_path).rename(to);
+      await posix.renameRetry(() => io.File(_path).rename(to));
     } on io.FileSystemException catch (e) {
       // Rename across devices; anything else (missing source, occupied
       // destination, permissions) must surface.
@@ -632,7 +632,7 @@ final class Dir extends Entry with Writer implements Folder {
     await _ensureParent(to);
     await _removeDestLink(to);
     try {
-      await io.Directory(_path).rename(to);
+      await posix.renameRetry(() => io.Directory(_path).rename(to));
     } on io.FileSystemException catch (e) {
       // Only a cross-device move falls back to copy-then-delete. Anything
       // else (e.g. moving into a non-empty folder, permissions) must
@@ -878,8 +878,9 @@ extension LinkFuture on Future<Link> {
 }
 
 /// The errors besides not-found that mean a link chain is broken: ENOTDIR
-/// and ELOOP (macOS 62, Linux 40). Windows: see docs/PLAN.md W14.
-final _broken = io.Platform.isWindows ? const <int>{} : {20, io.Platform.isMacOS ? 62 : 40};
+/// and ELOOP (macOS 62, Linux 40); Windows ERROR_CANT_RESOLVE_FILENAME (1921),
+/// ERROR_PATH_NOT_FOUND (3), ERROR_DIRECTORY (267).
+final _broken = io.Platform.isWindows ? const <int>{1921, 3, 267} : {20, io.Platform.isMacOS ? 62 : 40};
 
 Future<void> _ensureParent(String path) async {
   final dir = p.dirname(path);
@@ -908,26 +909,8 @@ final class _Mutex {
 
 /// Rename the temp file over [target]. Atomic on POSIX; on Windows a target
 /// held open elsewhere (an editor, antivirus, the indexer) can fail with a
-/// sharing violation, so retry briefly (3 attempts, 50 ms apart) there.
-Future<void> _renameOver(io.File tmp, String target) async {
-  try {
-    await tmp.rename(target);
-    return;
-  } on io.FileSystemException catch (first) {
-    if (posix.isPosix) rethrow;
-    var last = first;
-    for (var i = 0; i < 2; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      try {
-        await tmp.rename(target);
-        return;
-      } on io.FileSystemException catch (e) {
-        last = e;
-      }
-    }
-    throw last;
-  }
-}
+/// sharing violation, so retry briefly with exponential backoff on Windows.
+Future<void> _renameOver(io.File tmp, String target) => posix.renameRetry(() => tmp.rename(target));
 
 /// Replace a dest symlink with nothing, so a file/dir copy replaces the
 /// link instead of following it to a target outside the tree.

@@ -8,3 +8,4 @@ coverage/
 projects/*/*
 !projects/*/*.dart
 !projects/*/platforms/
+!projects/*/extractors/

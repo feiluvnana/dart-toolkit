@@ -1451,6 +1451,7 @@ final class _Session<S> implements term.TuiBridge {
 
   Object? _exitToken;
   Object? _resizeToken;
+  Timer? _winResizeTimer;
 
   Future<void> _enter() async {
     try {
@@ -1484,6 +1485,21 @@ final class _Session<S> implements term.TuiBridge {
       _repaint = true;
       _dirtyAndWake();
     });
+    // Windows has no SIGWINCH; poll terminal size while running.
+    if (io.Platform.isWindows && io.stdout.hasTerminal) {
+      _winResizeTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+        if (_done) return;
+        try {
+          final cols = io.stdout.terminalColumns;
+          final lines = io.stdout.terminalLines;
+          if (cols != _w || lines != _h) {
+            term.TerminalCaps.invalidate();
+            _repaint = true;
+            _dirtyAndWake();
+          }
+        } catch (_) {}
+      });
+    }
     // POSIX clears ISIG, so Ctrl-C is the byte 0x03; Windows still raises
     // SIGINT, which `exit.dart` hands to this claim instead of exiting (an
     // external `kill -INT` lands here too). After [_leave] SIGINT terminates.
@@ -1496,6 +1512,8 @@ final class _Session<S> implements term.TuiBridge {
   }
 
   void _unwatchSignals() {
+    _winResizeTimer?.cancel();
+    _winResizeTimer = null;
     final exitToken = _exitToken;
     _exitToken = null;
     if (exitToken != null) exit.offExit(exitToken);
