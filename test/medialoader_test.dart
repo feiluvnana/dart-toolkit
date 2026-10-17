@@ -382,6 +382,22 @@ void main() {
       await engine.close();
       db.close();
     });
+
+    test('IngestionEngine initializes cdn client and worker lanes with high concurrency settings', () async {
+      final db = MediaDb.memory();
+      final engine = IngestionEngine(
+        db: db,
+        options: (all: false, dry: true, compress: false, since: null),
+        downloadLanes: 8,
+        transcodeLanes: 2,
+      );
+
+      expect(engine.lanes.length, 10);
+      expect(engine.cdn, isNotNull);
+
+      await engine.close();
+      db.close();
+    });
   });
 
   group('Dashboard', () {

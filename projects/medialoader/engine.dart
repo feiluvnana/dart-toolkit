@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:math' as math;
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
@@ -366,7 +367,14 @@ final class IngestionEngine {
   }) : logFile = logFile ?? (Fs.scriptDir() / 'downloads').file('.medialoader.log'),
        _downloadPool = Pool(limit: downloadLanes),
        _transcodePool = Pool(limit: transcodeLanes),
-       lanes = List.generate(downloadLanes + transcodeLanes, (i) => WorkerLane(i + 1)) {
+       lanes = List.generate(downloadLanes + transcodeLanes, (i) => WorkerLane(i + 1)),
+       cdn = Http.client(
+         resume: true,
+         headers: HttpUtils.page,
+         timeout: const Duration(seconds: 15),
+         retries: 1,
+         maxConnectionsPerHost: math.max(32, downloadLanes * 2),
+       ) {
     _idleLanes.addAll(lanes);
     activeEngine = this;
   }
@@ -413,7 +421,7 @@ final class IngestionEngine {
   }
 
   // Resumable HTTP client ensures partially downloaded .part files resume upon restart
-  final Client cdn = Http.client(resume: true, headers: HttpUtils.page);
+  final Client cdn;
 
   final Pool _downloadPool;
   final Pool _transcodePool;

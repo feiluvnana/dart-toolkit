@@ -327,6 +327,9 @@ abstract final class Http {
   /// - [login]: paths of the site's sign-in pages (`/accounts/login`); a
   ///   response that lands on one, after redirects, throws
   ///   [SessionException]: the session in [cookies] has run out.
+  /// - [maxConnectionsPerHost]: maximum concurrent open connections to a
+  ///   single host (defaults to 32); prevents connection pool starvation when
+  ///   multiple download lanes hit the same CDN host.
   static Client client({
     String? base,
     Map<String, String> headers = const {},
@@ -340,9 +343,13 @@ abstract final class Http {
     bool resume = false,
     int max = 256 << 20,
     List<String> login = const [],
+    int? maxConnectionsPerHost,
   }) {
     if (max < 0) throw ArgumentError.value(max, 'max', 'must not be negative');
     if (retries < 0) throw ArgumentError.value(retries, 'retries', 'must not be negative');
+    if (maxConnectionsPerHost != null && maxConnectionsPerHost <= 0) {
+      throw ArgumentError.value(maxConnectionsPerHost, 'maxConnectionsPerHost', 'must be positive');
+    }
     final settings = _Settings(
       base: base == null ? null : Uri.parse(base),
       headers: headers,
@@ -356,7 +363,10 @@ abstract final class Http {
       max: max,
       login: login,
     );
-    return _Client(settings, _Conn(proxy: proxy, timeout: timeout));
+    return _Client(
+      settings,
+      _Conn(proxy: proxy, timeout: timeout, maxConnectionsPerHost: maxConnectionsPerHost),
+    );
   }
 
   /// One [Client] over several: each request goes to the member with the
@@ -463,13 +473,15 @@ final class _Settings {
 /// 0 the sockets close after [_idle], so a sequential loop keeps one
 /// connection while a finished script exits.
 final class _Conn {
-  _Conn({required this.proxy, required this.timeout}) : _proxy = proxy == null ? null : _Proxy.parse(proxy);
+  _Conn({required this.proxy, required this.timeout, this.maxConnectionsPerHost})
+      : _proxy = proxy == null ? null : _Proxy.parse(proxy);
 
   static const _idle = Duration(milliseconds: 100);
-  static const _perHost = 6;
+  static const _defaultPerHost = 32;
 
   final String? proxy;
   final Duration timeout;
+  final int? maxConnectionsPerHost;
   final _Proxy? _proxy;
 
   HttpClient? _client;
@@ -515,7 +527,7 @@ final class _Conn {
 
   HttpClient _build() {
     final c = HttpClient()
-      ..maxConnectionsPerHost = _perHost
+      ..maxConnectionsPerHost = maxConnectionsPerHost ?? _defaultPerHost
       ..connectionTimeout = timeout;
     final p = _proxy;
     if (p == null) {
@@ -526,8 +538,10 @@ final class _Conn {
     return c;
   }
 
-  bool sameAs({String? proxy, Duration? timeout}) =>
-      (timeout == null || timeout == this.timeout) && (proxy == null || proxy == this.proxy);
+  bool sameAs({String? proxy, Duration? timeout, int? maxConnectionsPerHost}) =>
+      (timeout == null || timeout == this.timeout) &&
+      (proxy == null || proxy == this.proxy) &&
+      (maxConnectionsPerHost == null || maxConnectionsPerHost == this.maxConnectionsPerHost);
 }
 
 /// One send's own backoffs, rate waits and requests: Ctrl-C or a cancelled
@@ -600,7 +614,11 @@ final class _Client extends Client {
     final s = _s;
     final conn = _conn.sameAs(proxy: proxy, timeout: timeout)
         ? _conn
-        : _Conn(proxy: proxy ?? _conn.proxy, timeout: timeout ?? _conn.timeout);
+        : _Conn(
+            proxy: proxy ?? _conn.proxy,
+            timeout: timeout ?? _conn.timeout,
+            maxConnectionsPerHost: _conn.maxConnectionsPerHost,
+          );
     final copy = _Client(
       _Settings(
         base: s.base,
@@ -1248,7 +1266,7 @@ Future<void> _deliver(Future<Response> Function(Map<String, String> extra) fetch
   if (await file.exists()) {
     first ??= await fetch(const {});
     final size = first.size();
-    if (first.ok() && (size == null || size == await file.length())) {
+    if (first.ok() && size != null && size == await file.length()) {
       await first.close();
       return replay(file);
     }
