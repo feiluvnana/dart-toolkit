@@ -437,10 +437,10 @@ final class IngestionEngine {
   final _idleLanes = <WorkerLane>[];
 
   final failures = <FailureEntry>[];
-  int get activeDownloads => _downloadPool.active;
-  int get activeTranscodes => _transcodePool.active;
-  int get downloadWaiting => _downloadPool.waiting;
-  int get transcodeWaiting => _transcodePool.waiting;
+  int get activeDownloads => _downloadPool.active();
+  int get activeTranscodes => _transcodePool.active();
+  int get downloadWaiting => _downloadPool.waiting();
+  int get transcodeWaiting => _transcodePool.waiting();
   var deduplicatedCount = 0;
   var done = false;
   var retrying = 0;

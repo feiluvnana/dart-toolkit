@@ -69,10 +69,10 @@ final class Pool {
   final _waiting = Queue<Completer<void>>();
 
   /// Number of worker lanes currently executing jobs.
-  int get active => _limit - _free;
+  int active() => _limit - _free;
 
   /// Number of jobs queued waiting for an available lane.
-  int get waiting => _waiting.length;
+  int waiting() => _waiting.length;
 
   /// Run [job] once a lane is free, first come first served, and return
   /// what it returns (or rethrow what it throws). The lane is freed either way.

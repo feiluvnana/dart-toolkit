@@ -338,8 +338,8 @@ Future<void> main() async => print(await Pool.map([1, 2, 3], sq, isolates: true)
 
     test('active and waiting reflect concurrency lanes observability', () async {
       final pool = Pool(limit: 2);
-      expect(pool.active, 0);
-      expect(pool.waiting, 0);
+      expect(pool.active(), 0);
+      expect(pool.waiting(), 0);
 
       final c1 = Completer<void>();
       final c2 = Completer<void>();
@@ -350,15 +350,15 @@ Future<void> main() async => print(await Pool.map([1, 2, 3], sq, isolates: true)
       final f3 = pool.run(() => c3.future);
 
       await pumpEventQueue();
-      expect(pool.active, 2);
-      expect(pool.waiting, 1);
+      expect(pool.active(), 2);
+      expect(pool.waiting(), 1);
 
       c1.complete();
       await f1;
       await pumpEventQueue();
 
-      expect(pool.active, 2);
-      expect(pool.waiting, 0);
+      expect(pool.active(), 2);
+      expect(pool.waiting(), 0);
 
       c2.complete();
       c3.complete();
@@ -366,8 +366,8 @@ Future<void> main() async => print(await Pool.map([1, 2, 3], sq, isolates: true)
       await f3;
       await pumpEventQueue();
 
-      expect(pool.active, 0);
-      expect(pool.waiting, 0);
+      expect(pool.active(), 0);
+      expect(pool.waiting(), 0);
     });
   });
 }
