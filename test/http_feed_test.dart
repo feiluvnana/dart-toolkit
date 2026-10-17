@@ -49,8 +49,7 @@ void main() {
       (c) async => _page(c, 9),
       cursor: cursor,
     ).run((page) => n < 4 ? page.add(work[n++].future) : page.stop());
-    await pumpEventQueue();
-    expect(n, 4, reason: 'pages are listed while earlier work still runs');
+    expect(await eventually(() => n == 4), isTrue, reason: 'pages are listed while earlier work still runs');
     work[0].complete(true);
     expect(await eventually(() => File(cursor).existsSync() && File(cursor).readAsStringSync() == 'p1'), isTrue);
     work[1].complete(false); // a failed download: a rerun starts from here
