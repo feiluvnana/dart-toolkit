@@ -314,23 +314,38 @@ Future<void> main() async {
     expect(r.exitCode, 0, reason: 'still running 10 s later: \${r.stderr}');
   });
 
+bool hasOpenssl() {
+  try {
+    return Process.runSync('openssl', ['version']).exitCode == 0;
+  } on ProcessException {
+    return false;
+  }
+}
+
   group('tls', () {
     late SecurityContext ctx;
     late Directory dir;
     setUpAll(() async {
       dir = await Directory.systemTemp.createTemp('tls');
-      final made = await Process.run('openssl', [
-        'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', //
-        '-addext', 'subjectAltName=DNS:localhost', '-addext', 'extendedKeyUsage=serverAuth', //
-        '-keyout', '${dir.path}/key.pem', '-out', '${dir.path}/cert.pem',
-      ]);
+      ProcessResult made;
+      try {
+        made = await Process.run('openssl', [
+          'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', //
+          '-addext', 'subjectAltName=DNS:localhost', '-addext', 'extendedKeyUsage=serverAuth', //
+          '-keyout', '${dir.path}/key.pem', '-out', '${dir.path}/cert.pem',
+        ]);
+      } on ProcessException {
+        return;
+      }
       if (made.exitCode != 0) return;
       ctx = SecurityContext()
         ..useCertificateChain('${dir.path}/cert.pem')
         ..usePrivateKey('${dir.path}/key.pem');
       SecurityContext.defaultContext.setTrustedCertificates('${dir.path}/cert.pem'); // what every client trusts
     });
-    tearDownAll(() => dir.delete(recursive: true));
+    tearDownAll(() async {
+      if (await dir.exists()) await dir.delete(recursive: true);
+    });
 
     Future<HttpServer> tls(void Function(HttpRequest r) answer) async {
       final s = await HttpServer.bindSecure(InternetAddress.loopbackIPv4, 0, ctx);
@@ -363,7 +378,7 @@ Future<void> main() async {
       expect(await c.get('https://localhost:${s.port}/').text(), 'tls localhost:${s.port}');
       expect(proxy.targets, ['localhost:${s.port}']);
     });
-  });
+  }, skip: hasOpenssl() ? null : 'needs openssl');
 
   group('socks5', () {
     test('plain http through the proxy, with a login', () async {

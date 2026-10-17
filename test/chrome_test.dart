@@ -644,7 +644,7 @@ void main() {
       await page.press('ctrl+a');
       expect(await page.run('JSON.stringify(window.ks)').value<String>(), contains('a|true'));
       await page.press('backspace');
-      expect(await page.run("document.querySelector('#q').value").value<String>(), 'a');
+      expect(await page.run("document.querySelector('#q').value").value<String>(), Platform.isMacOS ? 'a' : '');
       await page.press('enter');
       await page.close();
     });

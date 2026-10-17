@@ -203,7 +203,7 @@ void main() {
       await expectLater(
         Pool.map([1], (x) async {
           calls++;
-          (await Shell.run(['false'])).check();
+          (await Shell.run(Platform.isWindows ? ['cmd', '/c', 'exit 1'] : ['false'])).check();
         }, retries: 1),
         throwsA(isA<ExitException>()),
       );

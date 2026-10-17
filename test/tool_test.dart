@@ -11,6 +11,7 @@ import 'package:dart_toolkit/src/media.dart' as media;
 import 'package:dart_toolkit/src/retry.dart' as retry;
 import 'package:dart_toolkit/src/tool.dart' as tool;
 import 'package:dart_toolkit/utils.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -35,7 +36,7 @@ void main() {
     for (var k = 1; k < spans.length; k++) {
       expect(spans[k].$1, greaterThanOrEqualTo(spans[k - 1].$2), reason: '$spans');
     }
-    expect(dir.listSync().map((e) => e.path.split('/').last), ['.lock']); // no sentinel left
+    expect(dir.listSync().map((e) => p.basename(e.path)), ['.lock']); // no sentinel left
   });
 
   late Directory tmp;

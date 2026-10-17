@@ -243,6 +243,7 @@ void main() {
     }
 
     test('our zip passes unzip -t and keeps modes and unicode names', () async {
+      if (Platform.isWindows) return markTestSkipped('needs POSIX modes');
       if (!await has('unzip')) return markTestSkipped('needs unzip');
       await Fs.file(p('src/run.sh')).write('#!/bin/sh\n');
       await Process.run('chmod', ['755', p('src/run.sh')]);
@@ -1857,6 +1858,7 @@ if (ProcessInfo.maxRss - before > (80 << 20)) throw 'rss ${ProcessInfo.maxRss - 
     }, tags: 'media');
 
     test('zips with symlinks (zip -y) unpack the link', () async {
+      if (Platform.isWindows) return markTestSkipped('symlinks need privileges');
       if (!await has('zip')) return markTestSkipped('needs zip');
       await Fs.file(p('src/real.txt')).write('r');
       await io.Link(p('src/ln')).create('real.txt');

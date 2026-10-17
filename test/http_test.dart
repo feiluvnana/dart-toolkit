@@ -8,6 +8,7 @@ import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/src/cookies.dart' as jar;
 import 'package:dart_toolkit/src/resume.dart' show PassThrough, replays;
 import 'package:dart_toolkit/utils.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'support/child.dart';
@@ -1039,6 +1040,14 @@ void clientTests() {
       expect((seen['x-a'], seen['x-b']), ('copy', '2'));
     });
 
+    test('maxConnectionsPerHost configures connection limit and rejects non-positive', () async {
+      expect(() => Http.client(maxConnectionsPerHost: 0), throwsArgumentError);
+      expect(() => Http.client(maxConnectionsPerHost: -1), throwsArgumentError);
+      final c = Http.client(maxConnectionsPerHost: 16);
+      expect(await c.get('$url/file').status(), 200);
+      await c.close();
+    });
+
     test('csrf copies a cookie into a header on every send', () async {
       final c = Http.client(csrf: (cookie: 'csrftoken', header: 'x-csrf'));
       await c.get('$url/token').status();
@@ -1267,7 +1276,7 @@ Future<void> main() async {
         await (c.get('$url/file?as=report.bin') > out);
         expect(seen['range'], 'bytes=600-');
         expect(await File('${dir.path}/out/report.bin').readAsBytes(), body);
-        expect(Directory('${dir.path}/out').listSync().map((e) => e.path.split('/').last), ['report.bin']);
+        expect(Directory('${dir.path}/out').listSync().map((e) => p.basename(e.path)), ['report.bin']);
       });
 
       test('M3: into a folder without resume, piped, named by the URL tail', () async {

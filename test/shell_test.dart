@@ -21,10 +21,10 @@ void main() {
     });
 
     test('text() drops one trailing newline; bytes() stays verbatim', () async {
-      final out = await Shell.run(['printf', 'a\n']);
+      final out = await Shell.run(['sh', '-c', 'printf "a\n"']);
       expect(await out.text(), 'a');
       expect(await out.bytes(), [97, 10]);
-      final crlf = await Shell.run(['printf', 'a\r\n']);
+      final crlf = await Shell.run(['sh', '-c', 'printf "a\r\n"']);
       expect(await crlf.text(), 'a');
     });
 
@@ -40,8 +40,9 @@ void main() {
     });
 
     test('env overlays the parent; null unsets', () async {
-      final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'], dir: '/tmp', env: {'MARK': 'here'});
-      expect(await out.text(), contains('/tmp'));
+      final tmp = Directory.systemTemp.path;
+      final out = await Shell.run(['sh', '-c', 'pwd; echo \$MARK'], dir: tmp, env: {'MARK': 'here'});
+      expect(await out.text(), anyOf(contains(tmp), contains('/tmp')));
       expect(await out.text(), contains('here'));
     });
 
@@ -101,8 +102,11 @@ Future<void> main() async {
     });
 
     test('a null env value unsets the variable', () async {
-      // HOME is set in any real parent; null must hide it from the child.
-      final unset = await Shell.run(['sh', '-c', 'echo "[\$HOME]"'], env: {'HOME': null});
+      final key = Platform.environment.keys.firstWhere(
+        (k) => k.toUpperCase() != 'PATH' && k.toUpperCase() != 'SYSTEMROOT',
+        orElse: () => 'HOME',
+      );
+      final unset = await Shell.run(['sh', '-c', 'echo "[\$$key]"'], env: {key: null});
       expect(await unset.text(), '[]');
       final kept = await Shell.run(['sh', '-c', 'echo "[\$MARK]"'], env: {'MARK': 'here'});
       expect(await kept.text(), '[here]');
@@ -237,8 +241,7 @@ Future<void> main() async {
 
   group('Shell.filter', () {
     test('a process as a Pipe', () async {
-      final out = await Shell.run(['printf', 'a\nb\nc\n']);
-      final filtered = Mem(await out.text()) | Shell.filter(['grep', 'b']);
+      final filtered = Mem('a\nb\nc\n') | Shell.filter(['grep', 'b']);
       expect((await filtered.text()).trim(), 'b');
     });
 
@@ -356,10 +359,14 @@ Future<void> main() async {
     });
 
     test('which finds installed programs on PATH, null otherwise', () async {
-      expect(await ShellUtils.which('sh'), endsWith('/sh'));
+      final sh = await ShellUtils.which('sh');
+      expect(sh, isNotNull);
+      expect(sh!.replaceAll(r'\', '/').toLowerCase(), anyOf(endsWith('/sh'), endsWith('/sh.exe')));
       expect(await ShellUtils.which('definitely-not-a-program-x9'), isNull);
-      expect(await ShellUtils.which('/bin/sh'), '/bin/sh');
-      expect(await ShellUtils.which('/etc/hosts'), isNull, reason: 'not executable');
+      if (!Platform.isWindows) {
+        expect(await ShellUtils.which('/bin/sh'), '/bin/sh');
+        expect(await ShellUtils.which('/etc/hosts'), isNull, reason: 'not executable');
+      }
     });
   });
 
