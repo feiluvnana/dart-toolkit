@@ -332,23 +332,30 @@ final class File extends Entry with Reader, Writer {
     }
     try {
       await _ensureParent(_path);
-      final raf = await io.File(_path).open(mode: io.FileMode.append);
-      try {
-        while (true) {
-          try {
-            await raf.lock(io.FileLock.exclusive);
-            break;
-          } on io.FileSystemException {
-            await retry('another process');
-          }
-        }
+      io.RandomAccessFile? raf;
+      while (true) {
         try {
-          return await body();
-        } finally {
-          await raf.unlock();
+          raf = await io.File(_path).open(mode: io.FileMode.append);
+          await raf.lock(io.FileLock.exclusive);
+          break;
+        } on io.FileSystemException {
+          if (raf != null) {
+            try {
+              await raf.close();
+            } catch (_) {}
+            raf = null;
+          }
+          await retry('another process');
         }
+      }
+      try {
+        return await body();
       } finally {
-        await raf.close();
+        try {
+          await raf.unlock();
+        } finally {
+          await raf.close();
+        }
       }
     } finally {
       _locked.remove(key);
