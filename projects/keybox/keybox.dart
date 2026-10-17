@@ -58,7 +58,7 @@ Future<void> download() async {
 
   await (Pool.map(assets, (a) async {
         final (url, to) = a;
-        await (http.get(url) & Console.bar('', false) > to);
+        await (http.get(url) & Console.bar('', keep: false) > to);
       }) &
       Console.bar('files done'));
   final zip = Fs.file('${box.path}.zip');

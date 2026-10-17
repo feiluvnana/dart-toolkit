@@ -572,7 +572,7 @@ abstract final class Console {
   /// `Tui.run` is active, draws in its status row instead (several at
   /// once), or in the screen's `Region.bars()` when it draws one. When [keep] is false the line vanishes when the bar finishes (a
   /// failed one still prints ✗).
-  static Bar bar([String label = '', bool keep = true]) {
+  static Bar bar(String label, {bool keep = true}) {
     final shown = label.isEmpty ? null : term.plainLabel(label);
     final bridge = term.TuiBridge.current;
     if (bridge != null) return Bar._bridged(bridge, shown, keep: keep);
