@@ -198,7 +198,9 @@ Future<void> _stopInput() async {
   _endTty(tty);
   try {
     await tty.exitCode.timeout(const Duration(seconds: 1));
-  } catch (_) {}
+  } catch (_) {
+    tty.kill(io.ProcessSignal.sigkill);
+  }
 }
 
 /// Saved stdin terminal modes, best-effort (a non-terminal stdin throws on
