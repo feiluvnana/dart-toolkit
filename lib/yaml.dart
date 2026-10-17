@@ -14,7 +14,8 @@
 library;
 
 import 'json.dart';
-export 'json.dart';
+export 'core.dart';
+export 'json.dart' show Json, JsonFuture, ReaderJson, ReaderFutureJson;
 
 import 'src/missing.dart';
 import 'src/names.dart' as names;
