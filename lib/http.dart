@@ -411,7 +411,7 @@ sealed class Client implements Closeable {
   int sent();
 
   /// The [Rate] pacing this client's requests, if configured.
-  Rate? get rateLimit;
+  Rate? rateLimit();
 
   /// GET [url] (relative to `base:`), [query] appended; completes when the
   /// headers arrive. With `resume: true`, `get(u) > file` skips and resumes.
@@ -604,7 +604,7 @@ final class _Client extends Client {
   int sent() => _copies.fold(_sent, (n, c) => n + c.sent());
 
   @override
-  Rate? get rateLimit => _s.rate;
+  Rate? rateLimit() => _s.rate;
 
   /// Until when [_Pool] skips this member after a 429.
   DateTime? _benched;
@@ -1072,7 +1072,7 @@ final class _Pool extends Client {
   int sent() => _members.fold(0, (n, m) => n + m._sent);
 
   @override
-  Rate? get rateLimit => _members.firstOrNull?._s.rate;
+  Rate? rateLimit() => _members.firstOrNull?._s.rate;
 
   /// The member with the fewest requests in flight whose [Rate] has a free
   /// slot and which is not benched; ties round-robin.
