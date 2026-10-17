@@ -35,6 +35,7 @@ import 'src/progress.dart' show task;
 import 'src/quiet.dart';
 import 'src/time.dart' show SpanUtils;
 import 'src/timeout.dart';
+import 'src/which.dart' as paths;
 export 'core.dart';
 
 /// A program that ran and exited non-zero: [errorCode] is its exit code and
@@ -97,11 +98,12 @@ abstract final class Shell {
     bool terminal,
   ) async {
     if (exit.interrupted) throw const InterruptedException();
-    _checkBatchArgs(command[0], command.sublist(1));
+    final exe = await _resolveExe(command[0]);
+    _checkBatchArgs(exe, command.sublist(1));
     io.Process proc;
     try {
       proc = await io.Process.start(
-        command[0],
+        exe,
         command.sublist(1),
         workingDirectory: dir,
         environment: _resolveEnv(env),
@@ -336,6 +338,12 @@ bool _diedOfCtrlC(int code) {
   return true;
 }
 
+Future<String> _resolveExe(String exe) async {
+  if (!io.Platform.isWindows) return exe;
+  final hit = await paths.which([exe]);
+  return hit ?? exe;
+}
+
 void _checkBatchArgs(String exe, List<String> args) {
   if (!io.Platform.isWindows) return;
   final lower = exe.toLowerCase();
@@ -418,11 +426,12 @@ final class _Filter implements Pipe {
   Stream<List<int>> transform(Stream<List<int>> input) => exit.guard(_transform(input), outside: true);
 
   Stream<List<int>> _transform(Stream<List<int>> input) async* {
-    _checkBatchArgs(_command[0], _command.sublist(1));
+    final exe = await _resolveExe(_command[0]);
+    _checkBatchArgs(exe, _command.sublist(1));
     io.Process proc;
     try {
       proc = await io.Process.start(
-        _command[0],
+        exe,
         _command.sublist(1),
         workingDirectory: _dir,
         environment: Shell._resolveEnv(_env),
