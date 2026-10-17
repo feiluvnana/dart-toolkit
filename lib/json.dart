@@ -109,20 +109,8 @@ final class Json extends Iterable<Json> {
     return Json._(none, none != null);
   }
 
-  /// Indexes an array by integer or reads an object property by string key.
-  /// Conforms to Rule 3 (short names) and Rule 4 (no inner await).
-  ///
-  /// ```dart
-  /// final username = post['user']['username'].text();
-  /// final firstItem = items[0]['id'].text();
-  /// ```
-  Json operator [](Object key) => switch (key) {
-    int index => _stepIndex(index),
-    String prop => $(prop),
-    _ => throw ArgumentError.value(key, 'key', 'must be int or String'),
-  };
-
-  Json _stepIndex(int index) {
+  /// Indexes an array or values by integer.
+  Json operator [](int index) {
     final v = _v;
     if (v is List) return Json._(v[index]);
     if (v is Map) {
@@ -753,7 +741,7 @@ extension ReaderFutureJson on Future<Reader> {
 /// The Future mirror (rule 4). The extension name is import-only; never reference it.
 extension JsonFuture on Future<Json> {
   Future<Json> $(String path) async => (await this).$(path);
-  Future<Json> operator [](Object key) async => (await this)[key];
+  Future<Json> operator [](int index) async => (await this)[index];
   Future<T?> value<T>() async => (await this).value<T>();
   Future<T> or<T>(T fallback) async => (await this).or(fallback);
   Future<String?> text() async => (await this).text();

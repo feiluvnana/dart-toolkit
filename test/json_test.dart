@@ -519,12 +519,11 @@ void valueTests() {
       await expectLater(_Page('{', const Origin()).json(or: Json.of(1)), throwsA(isA<ContentException>()));
     });
 
-    test('operator [] supports polymorphic indexing by int index and string property', () {
+    test('operator [] indexes array by integer', () {
       final data = Json.parse('{"users": [{"id": "u1", "name": "Alice"}, {"id": "u2", "name": "Bob"}]}');
-      expect(data['users'][0]['name'].text(), 'Alice');
-      expect(data['users'][1]['id'].text(), 'u2');
-      expect(data['users'][0]['missing'].text(), isNull);
-      expect(() => data[3.14], throwsArgumentError);
+      expect(data.$('users')[0].$('name').text(), 'Alice');
+      expect(() => data[99], throwsRangeError);
+      expect(() => Json.of(42)[0], throwsRangeError);
     });
   });
 }
