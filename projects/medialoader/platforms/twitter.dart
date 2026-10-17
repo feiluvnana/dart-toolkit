@@ -226,7 +226,10 @@ final class TwitterExtractor extends Extractor {
           );
         }
       } else if (m.$('media_url_https').text() case final url?) {
-        final ext = Uri.parse(url).path.split('.').lastOrNull ?? 'jpg';
+        final ext = detectMediaExtension(url);
+        final downloadUrl = url.contains('?')
+            ? (url.contains('name=') ? url : '$url&name=orig')
+            : '$url?name=orig';
         out.add(
           MediaAsset(
             id: '$name.$ext',
@@ -234,7 +237,7 @@ final class TwitterExtractor extends Extractor {
             user: ctx.userName ?? ctx.target.user,
             category: Kind.posts,
             to: month.file('$name.$ext'),
-            url: '$url?name=orig',
+            url: downloadUrl,
             at: at,
             sourcePostId: id,
           ),

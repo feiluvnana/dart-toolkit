@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
@@ -74,7 +75,7 @@ final class MediaAsset {
   final String platform;
   final String user;
   final Kind category;
-  final File to;
+  File to;
   final String? url;
   final String? text;
   final DateTime? at;
@@ -239,6 +240,7 @@ final class JobCtx {
 
   void profileAsset(String? url, {String? id, String? change}) {
     if (url == null) return;
+    final ext = detectMediaExtension(url, id);
     if (id == null || id == 'avatar') {
       final rawName = Uri.parse(url).pathSegments.isNotEmpty ? Uri.parse(url).pathSegments.last : 'avatar';
       final nameWithoutExt = rawName.contains('.') ? rawName.substring(0, rawName.lastIndexOf('.')) : rawName;
@@ -249,10 +251,11 @@ final class JobCtx {
       id = Fs.sanitize(nameWithoutExt);
     }
     final dateStr = DateTime.now().format('yyyy-MM-dd');
-    final file = folder(Kind.profiles).file('${dateStr}_$id');
+    final fileName = '${dateStr}_$id.$ext';
+    final file = folder(Kind.profiles).file(fileName);
     enqueue([
       MediaAsset(
-        id: id,
+        id: '$id.$ext',
         platform: target.platformCode,
         user: target.user,
         category: Kind.profiles,
@@ -264,6 +267,61 @@ final class JobCtx {
     if (change != null) changed(change);
     phase(Kind.profiles, 'profile asset updated', done: true);
   }
+}
+
+const _knownMediaExtensions = {
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'avif',
+  'heic',
+  'mp4',
+  'webm',
+  'mov',
+  'mkv',
+  'avi',
+};
+
+/// Sniff or parse the media file extension from a [url], falling back to [fallback] or 'jpg'.
+String detectMediaExtension(String? url, [String? fallback]) {
+  if (url != null && url.isNotEmpty) {
+    try {
+      final uri = Uri.parse(url);
+      // 1. Check format/ext query parameters (common on Twitter/X, CDNs: ?format=jpg, ?ext=png)
+      final formatParam = uri.queryParameters['format'] ?? uri.queryParameters['ext'] ?? uri.queryParameters['f'];
+      if (formatParam != null && formatParam.isNotEmpty) {
+        final clean = formatParam.toLowerCase().replaceAll('.', '').trim();
+        if (_knownMediaExtensions.contains(clean)) {
+          return clean == 'jpeg' ? 'jpg' : clean;
+        }
+      }
+      // 2. Check path extension
+      final path = uri.path;
+      final lastDot = path.lastIndexOf('.');
+      if (lastDot != -1) {
+        final ext = path.substring(lastDot + 1).toLowerCase().trim();
+        if (_knownMediaExtensions.contains(ext)) {
+          return ext == 'jpeg' ? 'jpg' : ext;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Check fallback if provided
+  if (fallback != null && fallback.isNotEmpty) {
+    final lastDot = fallback.lastIndexOf('.');
+    if (lastDot != -1) {
+      final ext = fallback.substring(lastDot + 1).toLowerCase().trim();
+      if (_knownMediaExtensions.contains(ext)) {
+        return ext == 'jpeg' ? 'jpg' : ext;
+      }
+    }
+  }
+
+  // 4. Default extension for media
+  return 'jpg';
 }
 
 /// Pluggable media extractor base class.
@@ -523,10 +581,10 @@ final class IngestionEngine {
   }
 
   Future<void> _processAsset(MediaAsset a) async {
-    final relPath = a.to.path.replaceAll(r'\', '/');
+    var relPath = a.to.path.replaceAll(r'\', '/');
     final parentDir = a.to.parent();
-    final dedupePrefixed = parentDir.file('[dedupe] ${a.to.name()}');
-    final dedupeRelPath = dedupePrefixed.path.replaceAll(r'\', '/');
+    var dedupePrefixed = parentDir.file('[dedupe] ${a.to.name()}');
+    var dedupeRelPath = dedupePrefixed.path.replaceAll(r'\', '/');
 
     final u = getOrCreateUser(a.user, a.platform);
     final cat = u.category(a.category.name);
@@ -534,6 +592,16 @@ final class IngestionEngine {
     // 1. Check if older than since filter
     if (options.since != null && a.at != null && a.at!.isBefore(options.since!)) {
       return;
+    }
+
+    // Clean restart check: also handle migration of legacy extensionless files on disk/DB
+    final stemFile = parentDir.file(a.to.stem());
+    final stemRelPath = stemFile.path.replaceAll(r'\', '/');
+    if (!await a.to.exists() && await stemFile.exists() && a.to.stem() != a.to.name()) {
+      try {
+        await stemFile.move(a.to.path);
+        db.updateFilePath(stemRelPath, relPath, newId: a.id);
+      } catch (_) {}
     }
 
     // 2. Check if already exists in DB or on disk (Clean Restart Guarantee)
@@ -582,6 +650,41 @@ final class IngestionEngine {
       return;
     }
 
+    // Sniff downloaded file to ensure correct extension (fixes extensionless or mismatched files)
+    if (a.text == null && await a.to.exists()) {
+      try {
+        final f = io.File(a.to.path);
+        final raf = await f.open();
+        Uint8List head;
+        try {
+          head = await raf.read(64);
+        } finally {
+          await raf.close();
+        }
+        final imgFmt = Image.sniff(head);
+        final vidFmt = imgFmt == null ? Video.sniff(head) : null;
+        final sniffedExt = (imgFmt?.name ?? vidFmt?.name);
+        if (sniffedExt != null) {
+          final curExt = a.to.ext();
+          final normCur = curExt == 'jpeg' ? 'jpg' : curExt;
+          final normSniff = sniffedExt == 'jpeg' ? 'jpg' : sniffedExt;
+          if (normCur.isEmpty ||
+              (normCur != normSniff &&
+                  const {'jpg', 'png', 'webp', 'gif', 'bmp', 'avif', 'heic'}.contains(normCur))) {
+            final newName = normCur.isEmpty ? '${a.to.name()}.$normSniff' : '${a.to.stem()}.$normSniff';
+            final newFile = a.to.parent().file(newName);
+            if (!await newFile.exists()) {
+              await a.to.move(newFile.path);
+              a.to = newFile;
+              relPath = newFile.path.replaceAll(r'\', '/');
+              dedupePrefixed = parentDir.file('[dedupe] ${a.to.name()}');
+              dedupeRelPath = dedupePrefixed.path.replaceAll(r'\', '/');
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
     cat.added++;
 
     final isImage = a.to.isImage();
@@ -618,8 +721,8 @@ final class IngestionEngine {
     var finalRelPath = relPath;
     var assetStatus = 'done';
 
-    final duplicatePath = db.findDuplicate(sha256: a.sha256, phash: a.phash, excludePath: relPath);
-    if (duplicatePath != null && duplicatePath != relPath && duplicatePath != dedupeRelPath) {
+    final duplicatePath = db.findDuplicate(sha256: a.sha256, phash: a.phash, excludePath: finalRelPath);
+    if (duplicatePath != null && duplicatePath != finalRelPath && duplicatePath != dedupeRelPath) {
       deduplicatedCount++;
       log('dedupe: ${a.to.name()} matches $duplicatePath', platform: a.platform);
 
@@ -679,6 +782,43 @@ final class IngestionEngine {
     while (_activeTasks.isNotEmpty) {
       await Future.wait(_activeTasks.toList());
     }
+  }
+
+  /// Scan [root] for any files missing extensions, sniff their format,
+  /// rename them with the proper extension, and update database records.
+  Future<void> migrateLegacyFiles(Dir root) async {
+    try {
+      if (!await root.exists()) return;
+      await for (final entity in io.Directory(root.path).list(recursive: true, followLinks: false)) {
+        if (entity is io.File) {
+          final entry = Fs.file(entity.path);
+          if (entry.ext().isEmpty && !entry.name().startsWith('.')) {
+            try {
+              final raf = await entity.open();
+              Uint8List head;
+              try {
+                head = await raf.read(64);
+              } finally {
+                await raf.close();
+              }
+              final imgFmt = Image.sniff(head);
+              final vidFmt = imgFmt == null ? Video.sniff(head) : null;
+              final ext = imgFmt?.name ?? vidFmt?.name;
+              if (ext != null) {
+                final normExt = ext == 'jpeg' ? 'jpg' : ext;
+                final newFile = entry.parent().file('${entry.name()}.$normExt');
+                if (!await newFile.exists()) {
+                  await entry.move(newFile.path);
+                  final oldRel = entry.path.replaceAll(r'\', '/');
+                  final newRel = newFile.path.replaceAll(r'\', '/');
+                  db.updateFilePath(oldRel, newRel);
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> close() async {

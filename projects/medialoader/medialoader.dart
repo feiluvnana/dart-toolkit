@@ -195,7 +195,7 @@ Future<void> handleFindDuplicate(Context c) async {
   final sha256 = await targetFile.sha256();
   String? phash;
   try {
-    phash = await targetFile.phash();
+    phash = await (await targetFile.image()).phash();
   } catch (_) {}
 
   Console.log('Checking ${targetFile.name()}');
@@ -292,6 +292,7 @@ Future<void> runLoader({
 
   final db = await MediaDb.open(dbPath);
   final engine = IngestionEngine(db: db, options: options, logFile: logFile);
+  await engine.migrateLegacyFiles(root);
 
   // 1. Resolve and authenticate extractors needed for target platforms
   final platformExtractors = <String, Extractor>{};

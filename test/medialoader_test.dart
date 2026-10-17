@@ -1,4 +1,5 @@
 // Tests for MediaLoader core, database, extractors, and engine.
+import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/utils.dart';
@@ -353,7 +354,7 @@ void main() {
       db.close();
     });
 
-    test('JobCtx.profileAsset preserves original name from URL and saves without extension', () async {
+    test('JobCtx.profileAsset preserves original name from URL and saves with proper extension', () async {
       final db = MediaDb.memory();
       final engine = IngestionEngine(db: db, options: (all: false, dry: true, compress: false, since: null));
       final tmp = Fs.dir('test_tmp/profile_test');
@@ -375,12 +376,81 @@ void main() {
       expect(cat.added, 1);
 
       final today = DateTime.now().format('yyyy-MM-dd');
-      final expectedFile = ctx.folder(Kind.profiles).file('${today}_44884218_3456789_n');
-      expect(expectedFile.name(), '${today}_44884218_3456789_n');
-      expect(expectedFile.name().contains('.jpg'), isFalse);
+      final expectedFile = ctx.folder(Kind.profiles).file('${today}_44884218_3456789_n.jpg');
+      expect(expectedFile.name(), '${today}_44884218_3456789_n.jpg');
+      expect(expectedFile.name().endsWith('.jpg'), isTrue);
 
       await engine.close();
       db.close();
+    });
+
+    test('JobCtx.profileAsset handles URLs without extension and format parameters', () async {
+      final db = MediaDb.memory();
+      final engine = IngestionEngine(db: db, options: (all: false, dry: true, compress: false, since: null));
+      final tmp = Fs.dir('test_tmp/profile_ext_test');
+      final ctx = JobCtx(
+        target: const Target('twt', 'chunmomo0127'),
+        kinds: {Kind.profiles},
+        api: Http.client(),
+        root: tmp,
+        options: (all: false, dry: true, compress: false, since: null),
+        db: db,
+        engine: engine,
+      );
+
+      // Twitter banner URL has no extension in path, should default to .jpg
+      ctx.profileAsset('https://pbs.twimg.com/profile_banners/123/1650723873/1500x500', id: 'banner_1650723873');
+
+      // Twitter image URL with format=png parameter
+      ctx.profileAsset('https://pbs.twimg.com/profile_images/123/avatar?format=png', id: 'avatar');
+      await engine.drain();
+
+      final today = DateTime.now().format('yyyy-MM-dd');
+      final bannerFile = ctx.folder(Kind.profiles).file('${today}_banner_1650723873.jpg');
+      expect(bannerFile.name().endsWith('.jpg'), isTrue);
+
+      final avatarFile = ctx.folder(Kind.profiles).file('${today}_avatar.png');
+      expect(avatarFile.name().endsWith('.png'), isTrue);
+
+      await engine.close();
+      db.close();
+    });
+
+    test('IngestionEngine migrateLegacyFiles renames extensionless image files based on magic bytes', () async {
+      final db = MediaDb.memory();
+      final engine = IngestionEngine(db: db, options: (all: false, dry: false, compress: false, since: null));
+      final tmp = Fs.dir('test_tmp/legacy_migration_test');
+      await tmp.create();
+
+      // Create a mock extensionless JPEG file with JPEG magic bytes (FF D8 FF E0)
+      final legacyFile = tmp.file('2026-10-17_old_avatar');
+      await (Reader.of([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]) > legacyFile);
+      final oldRel = legacyFile.path.replaceAll(r'\', '/');
+
+      db.recordAsset(
+        id: 'old_avatar',
+        platform: 'ins',
+        user: 'testuser',
+        category: Kind.profiles,
+        filePath: oldRel,
+        fileSize: 10,
+      );
+      expect(db.hasFile(oldRel), isTrue);
+
+      // Run migration
+      await engine.migrateLegacyFiles(tmp);
+
+      final migratedFile = tmp.file('2026-10-17_old_avatar.jpg');
+      final newRel = migratedFile.path.replaceAll(r'\', '/');
+
+      expect(await legacyFile.exists(), isFalse);
+      expect(await migratedFile.exists(), isTrue);
+      expect(db.hasFile(oldRel), isFalse);
+      expect(db.hasFile(newRel), isTrue);
+
+      await engine.close();
+      db.close();
+      await tmp.delete();
     });
 
     test('IngestionEngine initializes cdn client and worker lanes with high concurrency settings', () async {

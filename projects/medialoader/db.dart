@@ -203,6 +203,23 @@ final class MediaDb {
     keys: ['file_path'],
   );
 
+  /// Update the file path of an asset (e.g. when an extension is added or corrected).
+  void updateFilePath(String oldPath, String newPath, {String? newId}) {
+    if (oldPath == newPath) return;
+    _db.execute('DELETE FROM assets WHERE file_path = ?;', [newPath]);
+    if (newId != null) {
+      _db.execute(
+        'UPDATE assets SET file_path = ?, id = ? WHERE file_path = ?;',
+        [newPath, newId, oldPath],
+      );
+    } else {
+      _db.execute(
+        'UPDATE assets SET file_path = ? WHERE file_path = ?;',
+        [newPath, oldPath],
+      );
+    }
+  }
+
   /// Check whether a post has already been recorded and completed.
   bool isPostSeen(String platform, String user, String postId) {
     final row = _db.row('SELECT item_count FROM posts WHERE platform = ? AND id = ? LIMIT 1;', [platform, postId]);

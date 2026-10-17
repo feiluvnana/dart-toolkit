@@ -482,10 +482,7 @@ final class FacebookExtractor extends Extractor {
 
   List<String> _links(_Doc d) => [...d.data.$('**').texts(), ...d.page.$('a[href]').attrs('href')];
 
-  String _ext(String url) {
-    final e = Uri.parse(url).path.split('.').last.toLowerCase();
-    return e.length <= 4 && e.isNotEmpty ? e : 'jpg';
-  }
+  String _ext(String url) => detectMediaExtension(url);
 
   Future<_Profile> _fetchProfile(Client c, String name) async {
     final d = await _load(c, _digits.hasMatch(name) ? '/profile.php?id=$name' : '/$name/');
