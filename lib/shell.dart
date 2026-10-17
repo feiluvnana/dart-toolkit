@@ -363,7 +363,8 @@ Future<void> _killTree(io.Process proc, io.ProcessSignal signal) async {
   if (_reaped[proc] ?? false) return;
   if (io.Platform.isWindows) {
     try {
-      await io.Process.run('taskkill', ['/F', '/T', '/PID', '${proc.pid}']);
+      final res = await io.Process.run('taskkill', ['/F', '/T', '/PID', '${proc.pid}']);
+      if (res.exitCode != 0) proc.kill(signal);
     } catch (_) {
       proc.kill(signal);
     }
@@ -527,7 +528,7 @@ final class _Filter implements Pipe {
     }
     final code = await proc.exitCode;
     try {
-      await stderrDone;
+      await stderrDone.timeout(const Duration(seconds: 2));
     } catch (_) {}
     if (code != 0) {
       if (_diedOfCtrlC(code)) throw const InterruptedException();
