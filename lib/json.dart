@@ -43,13 +43,13 @@ final class Json extends Iterable<Json> {
   /// Parse [json]. Throws [ContentException] on invalid JSON, and on a
   /// document nested deeper than 1,000 levels (`toString` would overflow).
   static Json parse(String json) {
+    if (_tooDeep(json)) throw const ContentException('invalid JSON: nested deeper than $_maxDepth levels');
     final Object? v;
     try {
       v = jsonDecode(json);
     } on FormatException catch (e) {
       throw ContentException('invalid JSON: ${e.message}', e.source, e.offset, e);
     }
-    if (_tooDeep(json)) throw const ContentException('invalid JSON: nested deeper than $_maxDepth levels');
     return Json._(v);
   }
 
