@@ -61,11 +61,12 @@ void main() {
     expect(t.row(0), contains('medialoader'));
     expect(t.row(0), contains('2 users'));
 
-    // Check targets panel
-    expect(t.row(1), contains('targets (2)'));
-
     // Check lanes rendered
     final rendered = [for (var i = 0; i < 24; i++) t.row(i)].join('\n');
+
+    // Check status panel on top
+    expect(t.row(1), contains('status'));
+    expect(rendered, contains('targets (2)'));
     expect(rendered, contains('lanes:'));
     expect(rendered, contains('#1'));
     expect(rendered, contains('#2'));

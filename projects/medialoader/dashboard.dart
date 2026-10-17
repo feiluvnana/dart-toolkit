@@ -102,16 +102,16 @@ final class Dashboard {
   }
 
   void draw(Region r) {
-    // Download panel height equals the number of rows drawn (1 overall bar + lanes + 2 border)
+    // Status & insights panel placed prominently on top: 6 rows on tall screens, 5 on medium, 4 on small
+    final statusH = (r.height() >= 32) ? 6 : ((r.height() >= 24) ? 5 : 4);
     final downloadH = engine.lanes.length + 3;
-    final statusH = (r.height() >= 24) ? 5 : 4;
-    final maxDownloadH = math.max(3, r.height() - statusH - 3);
+    final maxDownloadH = math.max(3, r.height() - statusH - 4);
     final lanesH = downloadH.clamp(3, maxDownloadH);
-    final [top, downloadPanel, statusBar] = r.rows([0, lanesH, statusH]);
+    final [statusPanel, targetsPanel, downloadPanel] = r.rows([statusH, 0, lanesH]);
 
-    _drawUsers(top.box('targets (${engine.users.length})', color: border).scroll(usersScroll));
+    _drawStatus(statusPanel);
+    _drawUsers(targetsPanel.box('targets (${engine.users.length})', color: border).scroll(usersScroll));
     _drawLanes(downloadPanel);
-    _drawStatus(statusBar);
   }
 
   void _drawUsers(Region r) {
@@ -218,14 +218,20 @@ final class Dashboard {
   }
 
   void _drawStatus(Region r) {
-    final inner = r.box('status', color: border);
+    final inner = r.box('status & insights', color: border);
     final t = total;
     final stats = dbStats;
     final ram = io.ProcessInfo.currentRss.size();
     final rate = engine.overallByteMeter.rate();
     final speed = rate > 0 ? '${rate.size()}/s' : 'idle';
-    final waiting = engine.downloadWaiting + engine.transcodeWaiting;
     final logName = engine.logFile.path.replaceAll(r'\', '/').split('/').last;
+    final elapsed = DateTime.now().difference(engine.started).human();
+    final done = t.added + t.had + t.failed;
+    final dlActive = engine.activeDownloads;
+    final transActive = engine.activeTranscodes;
+    final dlWait = engine.downloadWaiting;
+    final transWait = engine.transcodeWaiting;
+    final totalWait = dlWait + transWait;
 
     // Collect active platforms
     final platformSet = <String>{for (final u in engine.users) u.platform, ...engine.rateLimits.keys};
@@ -237,78 +243,119 @@ final class Dashboard {
 
     final h = inner.height();
     final lines = <void Function(Region)>[
-      // Row 1: Rate limits, active pauses, RAM, live throughput, API calls
+      // Row 1: Throughput speed, live workers concurrency, RAM, uptime
       (r) {
-        r.write('rate limit: ', inline: true, style: {.bold});
-        var first = true;
-        for (final code in platformSet) {
-          final pRate = engine.getRate(code);
-          if (pRate == null) continue;
-          if (!first) r.write('  ', inline: true);
-          first = false;
-          _drawTag(r, code);
-          final wait = pRate.activeWait;
-          if (wait != null && wait > Duration.zero) {
-            r.write('${pRate.current}/${pRate.count} (${pRate.per.human()})', inline: true);
-            r.write(' ⏸ wait ${wait.human()}', inline: true, color: warn, style: {.bold});
-          } else {
-            r.write('${pRate.current}/${pRate.count} (${pRate.per.human()})', inline: true, color: handle);
-          }
-        }
+        r.write('speed: ', inline: true, style: {.bold});
+        r.write(speed, inline: true, color: rate > 0 ? flow : textDim);
+        r.write('  ·  ', inline: true, color: textDim);
+        r.write('workers: ', inline: true, style: {.bold});
+        r.write('$dlActive dl', inline: true, color: dlActive > 0 ? flow : textDim);
+        if (dlWait > 0) r.write(' ($dlWait queued)', inline: true, color: busy);
+        r.write(', $transActive trans', inline: true, color: transActive > 0 ? warn : textDim);
+        if (transWait > 0) r.write(' ($transWait queued)', inline: true, color: busy);
         r.write('  ·  ', inline: true, color: textDim);
         r.write('RAM: ', inline: true, style: {.bold});
         r.write(ram, inline: true, color: flow);
-        r.write('  ·  speed: ', inline: true, style: {.bold});
-        r.write(speed, inline: true, color: handle);
         r.write('  ·  ', inline: true, color: textDim);
-        r.write('${engine.requests} API calls', inline: true, color: textDim);
+        r.write('uptime: ', inline: true, style: {.bold});
+        r.write(elapsed, inline: true, color: handle);
+        if (engine.activePause case final pause?) {
+          r.write('  ·  ', inline: true, color: textDim);
+          r.write('⏸ $pause', inline: true, color: warn, style: {.bold});
+        }
       },
 
       if (h >= 3) ...[
-        // Row 2: Workers concurrency, queue, in-flight assets, uptime
+        // Row 2: Tasks breakdown, database assets library, perceptual deduplication
         (r) {
-          r.write('workers: ', inline: true, style: {.bold});
-          r.write('${engine.activeDownloads} dl, ${engine.activeTranscodes} trans', inline: true, color: handle);
-          if (waiting > 0) {
-            r.write(' ($waiting queued)', inline: true, color: busy);
-          } else {
-            r.write(' (0 queued)', inline: true, color: textDim);
+          r.write('tasks: ', inline: true, style: {.bold});
+          r.write('$done/${t.queued} files', inline: true, color: handle);
+          r.write(' (', inline: true, color: textDim);
+          r.write('${t.added} new', inline: true, color: t.added > 0 ? good : textDim);
+          r.write(' · ${t.had} had', inline: true, color: textDim);
+          if (t.failed > 0) {
+            r.write(' · ${t.failed} failed', inline: true, color: bad, style: {.bold});
           }
-          final done = t.added + t.had + t.failed;
-          r.write('  ·  tasks: $done/${t.queued} files', inline: true, color: textDim);
-          final elapsed = DateTime.now().difference(engine.started).human();
-          r.write('  ·  uptime: $elapsed', inline: true, color: textDim);
-        },
-        // Row 3: Database assets, storage bytes, deduplicated files, unique pHashes, log file
-        (r) {
-          r.write('database: ', inline: true, style: {.bold});
-          r.write('${stats.assets} assets (${stats.totalBytes.size()})', inline: true, color: handle);
-          r.write('  ·  deduped: ', inline: true, style: {.bold});
-          r.write(
-            '${engine.deduplicatedCount} [dedupe]',
-            inline: true,
-            color: engine.deduplicatedCount > 0 ? good : textDim,
-          );
-          r.write('  ·  unique pHashes: ${stats.uniqueHashes}', inline: true, color: textDim);
-          r.write('  ·  log: $logName', inline: true, color: textDim);
-        },
-      ] else ...[
-        // Row 2 for 2-row panel: Storage, database, workers, and log
-        (r) {
+          r.write(')', inline: true, color: textDim);
+          r.write('  ·  ', inline: true, color: textDim);
           r.write('database: ', inline: true, style: {.bold});
           r.write('${stats.assets} assets (${stats.totalBytes.size()})', inline: true, color: handle);
           r.write('  ·  ', inline: true, color: textDim);
+          r.write('deduped: ', inline: true, style: {.bold});
           r.write(
-            '${engine.deduplicatedCount} deduped',
+            '${engine.deduplicatedCount} caught',
             inline: true,
             color: engine.deduplicatedCount > 0 ? good : textDim,
           );
-          r.write(
-            '  ·  workers: ${engine.activeDownloads} dl, ${engine.activeTranscodes} trans ($waiting queued)',
-            inline: true,
-            color: textDim,
-          );
-          r.write('  ·  log: $logName', inline: true, color: textDim);
+          r.write(' (${stats.uniqueHashes} pHashes)', inline: true, color: textDim);
+        },
+
+        // Row 3: API rate limits per platform, request count, log file
+        (r) {
+          r.write('rate limit: ', inline: true, style: {.bold});
+          var first = true;
+          for (final code in platformSet) {
+            final pRate = engine.getRate(code);
+            if (pRate == null) continue;
+            if (!first) r.write('  ', inline: true);
+            first = false;
+            _drawTag(r, code);
+            final wait = pRate.activeWait;
+            if (wait != null && wait > Duration.zero) {
+              r.write('${pRate.current}/${pRate.count} (${pRate.per.human()})', inline: true);
+              r.write(' ⏸ wait ${wait.human()}', inline: true, color: warn, style: {.bold});
+            } else {
+              r.write('${pRate.current}/${pRate.count} (${pRate.per.human()})', inline: true, color: handle);
+            }
+          }
+          r.write('  ·  ', inline: true, color: textDim);
+          r.write('API: ', inline: true, style: {.bold});
+          r.write('${engine.requests} calls', inline: true, color: handle);
+          r.write('  ·  ', inline: true, color: textDim);
+          r.write('log: ', inline: true, style: {.bold});
+          r.write(logName, inline: true, color: textDim);
+        },
+
+        if (h >= 4)
+          // Row 4 (tall screen): Pipeline health & alert banner
+          (r) {
+            if (t.failed > 0) {
+              r.write('✗ Alert: ', inline: true, color: bad, style: {.bold});
+              r.write('${t.failed} item${t.failed == 1 ? '' : 's'} failed ', inline: true, color: bad);
+              r.write("(press 'r' to retry failures)", inline: true, color: handle, style: {.bold});
+            } else if (engine.finished) {
+              r.write('✓ Pipeline: ', inline: true, color: good, style: {.bold});
+              r.write('all targets completed successfully · press "q" to exit', inline: true, color: good);
+            } else if (engine.activePause case final pause?) {
+              r.write('⏸ Paused: ', inline: true, color: warn, style: {.bold});
+              r.write(pause, inline: true, color: warn);
+            } else {
+              r.write('● Pipeline: ', inline: true, color: good, style: {.bold});
+              r.write(
+                'active ingestion · $totalWait queued · SQLite WAL active · ${stats.users} targets tracked',
+                inline: true,
+                color: textDim,
+              );
+            }
+          },
+      ] else ...[
+        // Compact Row 2 for 2-row inner panel: Tasks, database, rate limits, log
+        (r) {
+          r.write('tasks: ', inline: true, style: {.bold});
+          r.write('$done/${t.queued} (${t.added} new)', inline: true, color: handle);
+          r.write('  ·  ', inline: true, color: textDim);
+          r.write('database: ', inline: true, style: {.bold});
+          r.write('${stats.assets} assets (${stats.totalBytes.size()})', inline: true, color: handle);
+          r.write('  ·  ', inline: true, color: textDim);
+          r.write('rate limit: ', inline: true, style: {.bold});
+          for (final code in platformSet) {
+            final pRate = engine.getRate(code);
+            if (pRate != null) {
+              _drawTag(r, code);
+              r.write('${pRate.current}/${pRate.count} ', inline: true, color: handle);
+            }
+          }
+          r.write('·  log: $logName', inline: true, color: textDim);
         },
       ],
     ];
