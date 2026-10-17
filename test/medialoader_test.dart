@@ -1,5 +1,4 @@
 // Tests for MediaLoader core, database, extractors, and engine.
-import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/utils.dart';
