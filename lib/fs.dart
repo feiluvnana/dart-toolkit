@@ -271,7 +271,7 @@ final class File extends Entry with Reader, Writer {
     await _appendMutex.run(() async {
       final raf = await io.File(_path).open(mode: io.FileMode.append);
       try {
-        await raf.lock(io.FileLock.exclusive);
+        await raf.lock(io.FileLock.blockingExclusive);
         try {
           // The file offset is captured per open, so seek to the end
           // inside the lock: concurrent opens would otherwise all write
