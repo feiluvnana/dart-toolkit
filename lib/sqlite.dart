@@ -82,14 +82,14 @@ extension DatabaseHelpers on s.Database {
     final placeholders = List.filled(cols.length, '?').join(', ');
     final updates = cols
         .where((c) => !conflictCols.contains(c))
-        .map((c) => '$c = excluded.$c')
+        .map((c) => '"$c" = excluded."$c"')
         .join(', ');
 
     final updateClause = updates.isNotEmpty ? 'DO UPDATE SET $updates' : 'DO NOTHING';
     final sql = '''
-      INSERT INTO $table (${cols.join(', ')})
+      INSERT INTO "$table" (${cols.map((c) => '"$c"').join(', ')})
       VALUES ($placeholders)
-      ON CONFLICT(${conflictCols.join(', ')}) $updateClause;
+      ON CONFLICT(${conflictCols.map((c) => '"$c"').join(', ')}) $updateClause;
     ''';
     execute(sql, values.values.toList());
   }
@@ -103,7 +103,9 @@ extension DatabaseHelpers on s.Database {
       execute('COMMIT;');
       return result;
     } catch (_) {
-      execute('ROLLBACK;');
+      try {
+        execute('ROLLBACK;');
+      } catch (_) {}
       rethrow;
     }
   }
