@@ -246,7 +246,11 @@ final class Response with Reader implements Closeable {
     final ready = _preReady;
     if (ready != null) {
       _closed = true;
-      if (_preEnded || _preTaken) return;
+      if (_preEnded) return;
+      if (_preTaken) {
+        if (!_done) await _abandon();
+        return;
+      }
       // A short body still arriving gets the drain budget, then is dropped.
       if (_preBuf.length <= _prefix) await ready.future.timeout(_drainBudget, onTimeout: () {});
       if (!_preEnded) {
