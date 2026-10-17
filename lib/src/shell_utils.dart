@@ -39,7 +39,14 @@ abstract final class ShellUtils {
       cmd = ['open', target];
     } else if (io.Platform.isWindows) {
       final sysRoot = io.Platform.environment['SystemRoot'] ?? r'C:\Windows';
-      cmd = ['$sysRoot\\System32\\rundll32.exe', 'url.dll,FileProtocolHandler', target];
+      final String winTarget;
+      final uri = Uri.tryParse(target);
+      if (uri != null && uri.hasScheme && uri.scheme.length > 1) {
+        winTarget = Uri.encodeFull(target);
+      } else {
+        winTarget = Uri.file(io.File(target).absolute.path).toString();
+      }
+      cmd = ['$sysRoot\\System32\\rundll32.exe', 'url.dll,FileProtocolHandler', winTarget];
     } else {
       cmd = ['xdg-open', target];
     }
