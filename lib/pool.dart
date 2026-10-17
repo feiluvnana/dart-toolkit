@@ -277,9 +277,10 @@ final class _Unsendable {
 
 /// One long-lived worker isolate: receives the job once, then items.
 final class _Worker {
-  _Worker._(this._isolate, this._send, this._replies);
+  _Worker._(this._isolate, this._port, this._send, this._replies);
 
   final Isolate _isolate;
+  final ReceivePort _port;
   final SendPort _send;
   final StreamIterator<Object?> _replies;
 
@@ -307,7 +308,7 @@ final class _Worker {
       port.close();
       throw RemoteError('worker isolate died while starting', '');
     }
-    return _Worker._(isolate, replies.current! as SendPort, replies);
+    return _Worker._(isolate, port, replies.current! as SendPort, replies);
   }
 
   Future<Object?> run(Object? item, int index) async {
@@ -339,6 +340,7 @@ final class _Worker {
   void stop() {
     _isolate.kill(priority: Isolate.immediate);
     unawaited(_replies.cancel());
+    _port.close();
   }
 }
 
